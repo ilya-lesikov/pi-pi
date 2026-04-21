@@ -14,7 +14,7 @@ import { planningSystemPrompt, spawnPlanners, spawnPlanReviewers } from "./phase
 import { implementationSystemPrompt } from "./phases/implementation.js";
 import { reviewSystemPrompt, spawnCodeReviewers } from "./phases/review.js";
 import { runAfterEdit, runAfterImplement, autoCommit } from "./commands.js";
-import { writeAgentFile, cleanupAgentFiles } from "./agents/registry.js";
+import { registerAgentDefinitions, unregisterAgentDefinitions, disableDefaultAgents } from "./agents/registry.js";
 import { createExploreAgent } from "./agents/explore.js";
 import { createLibrarianAgent } from "./agents/librarian.js";
 import { createTaskAgent } from "./agents/task.js";
@@ -264,7 +264,7 @@ export default function (pi: ExtensionAPI) {
       ctx.ui.notify(`Model "${modelConfig.model}" not found — using current model`, "warning");
     }
 
-    writeAgentDefinitions();
+    registerAgents();
     pi.setSessionName(active.description.slice(0, 50));
 
     const phasePrompt = getPhasePrompt(ctx);
@@ -368,6 +368,8 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
+    disableDefaultAgents(pi);
+
     const found = getActiveTask(cwd, config.timeouts.lockStale);
     if (found && !active) {
       try {
@@ -383,7 +385,7 @@ export default function (pi: ExtensionAPI) {
           reviewRound,
           description: found.state.description,
         };
-        writeAgentDefinitions();
+        registerAgents();
         updateStatus(ctx);
         ctx.ui.notify(`Restored task: "${taskName(found.dir)}" (phase: ${found.state.phase})`, "info");
       } catch (err: any) {
@@ -410,14 +412,16 @@ export default function (pi: ExtensionAPI) {
     };
   });
 
-  function writeAgentDefinitions(): void {
+  function registerAgents(): void {
     if (!active) return;
     const explore = createExploreAgent(config);
-    writeAgentFile(cwd, active.taskId, "explore", null, explore.frontmatter, explore.prompt);
     const librarian = createLibrarianAgent(config);
-    writeAgentFile(cwd, active.taskId, "librarian", null, librarian.frontmatter, librarian.prompt);
     const taskAgent = createTaskAgent(config, "{{subtask}}", { userRequest: "", synthesizedPlan: "" });
-    writeAgentFile(cwd, active.taskId, "task", null, taskAgent.frontmatter, taskAgent.prompt);
+    registerAgentDefinitions(pi, active.taskId, [
+      { type: "explore", variant: null, ...explore },
+      { type: "librarian", variant: null, ...librarian },
+      { type: "task", variant: null, ...taskAgent },
+    ]);
   }
 
   pi.on("tool_call", async (event, _ctx) => {
@@ -617,7 +621,7 @@ export default function (pi: ExtensionAPI) {
 
       active.state.phase = "done";
       saveTask(active.dir, active.state);
-      cleanupAgentFiles(cwd, active.taskId);
+      unregisterAgentDefinitions(pi, active.taskId);
       await cleanupActive();
 
       updateStatus(ctx);
@@ -699,7 +703,7 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify(`Model "${modelConfig.model}" not found — using current model`, "warning");
       }
 
-      writeAgentDefinitions();
+      registerAgents();
       pi.setSessionName(active.description.slice(0, 50));
 
       const resumePrompt = getPhasePrompt(ctx);
@@ -810,7 +814,7 @@ export default function (pi: ExtensionAPI) {
 
       if (next === "done") {
         abortAllSubagents();
-        cleanupAgentFiles(cwd, active.taskId);
+        unregisterAgentDefinitions(pi, active.taskId);
         await cleanupActive();
         updateStatus(ctx);
         ctx.ui.notify("Task completed!", "info");

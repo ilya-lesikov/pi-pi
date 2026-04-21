@@ -2,7 +2,7 @@ import { readFileSync, existsSync, mkdirSync, readdirSync } from "fs";
 import { join } from "path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { PiPiConfig } from "../config.js";
-import { writeAgentFile, spawnViaRpc, waitForCompletion } from "../agents/registry.js";
+import { registerAgentDefinitions, spawnViaRpc, waitForCompletion } from "../agents/registry.js";
 import { createCodeReviewerAgent } from "../agents/code-reviewer.js";
 import { getLatestSynthesizedPlan } from "../context.js";
 
@@ -59,7 +59,7 @@ export async function spawnCodeReviewers(
     const outputPath = join(reviewsDir, `${timestamp}_${variant}_round-${round}.md`);
     const agent = createCodeReviewerAgent(variant, config, { userRequest, research, synthesizedPlan }, outputPath);
 
-    writeAgentFile(cwd, taskId, "code_reviewer", variant, agent.frontmatter, agent.prompt);
+    registerAgentDefinitions(pi, taskId, [{ type: "code_reviewer", variant, ...agent }]);
 
     results.push(
       (async () => {

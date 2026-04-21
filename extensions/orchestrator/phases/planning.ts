@@ -2,7 +2,7 @@ import { readFileSync, existsSync, mkdirSync, readdirSync } from "fs";
 import { join } from "path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { PiPiConfig } from "../config.js";
-import { writeAgentFile, spawnViaRpc, waitForCompletion } from "../agents/registry.js";
+import { registerAgentDefinitions, spawnViaRpc, waitForCompletion } from "../agents/registry.js";
 import { createPlannerAgent } from "../agents/planner.js";
 import { createPlanReviewerAgent } from "../agents/plan-reviewer.js";
 import { getLatestSynthesizedPlan } from "../context.js";
@@ -60,7 +60,7 @@ export async function spawnPlanners(
     const outputPath = join(plansDir, `${timestamp}_${variant}.md`);
     const agent = createPlannerAgent(variant, config, { userRequest, research }, outputPath);
 
-    writeAgentFile(cwd, taskId, "planner", variant, agent.frontmatter, agent.prompt);
+    registerAgentDefinitions(pi, taskId, [{ type: "planner", variant, ...agent }]);
 
     results.push(
       (async () => {
@@ -144,7 +144,7 @@ export async function spawnPlanReviewers(
 
     const agent = createPlanReviewerAgent(variant, config, { userRequest, research, synthesizedPlan }, outputPath);
 
-    writeAgentFile(cwd, taskId, "plan_reviewer", variant, agent.frontmatter, agent.prompt);
+    registerAgentDefinitions(pi, taskId, [{ type: "plan_reviewer", variant, ...agent }]);
 
     results.push(
       (async () => {

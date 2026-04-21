@@ -1,5 +1,3 @@
-import { writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from "fs";
-import { join } from "path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 interface AgentFrontmatter {
@@ -11,52 +9,60 @@ interface AgentFrontmatter {
   prompt_mode?: string;
 }
 
-export function writeAgentFile(
-  cwd: string,
+export function registerAgentDefinitions(
+  pi: ExtensionAPI,
   taskId: string,
-  agentType: string,
-  variant: string | null,
-  frontmatter: AgentFrontmatter,
-  prompt: string,
-): string {
-  const agentsDir = join(cwd, ".pi", "agents");
-  if (!existsSync(agentsDir)) {
-    mkdirSync(agentsDir, { recursive: true });
+  agents: Array<{ type: string; variant: string | null; frontmatter: AgentFrontmatter; prompt: string }>,
+): void {
+  const agentMap = new Map<string, any>();
+
+  for (const agent of agents) {
+    const suffix = agent.variant ? `_${agent.variant}` : "";
+    const name = `pp_${taskId}_${agent.type}${suffix}`;
+    const toolNames = agent.frontmatter.tools === "none" ? [] : agent.frontmatter.tools.split(",").map((t: string) => t.trim()).filter(Boolean);
+
+    agentMap.set(name, {
+      name,
+      description: agent.frontmatter.description,
+      builtinToolNames: toolNames,
+      extensions: true,
+      skills: true,
+      model: agent.frontmatter.model,
+      thinking: agent.frontmatter.thinking,
+      maxTurns: agent.frontmatter.max_turns,
+      systemPrompt: agent.prompt,
+      promptMode: agent.frontmatter.prompt_mode ?? "replace",
+      inheritContext: false,
+      runInBackground: true,
+      isolated: false,
+      enabled: true,
+      source: "project",
+    });
   }
 
-  const suffix = variant ? `_${variant}` : "";
-  const filename = `pp_${taskId}_${agentType}${suffix}.md`;
-  const filepath = join(agentsDir, filename);
-
-  const lines = [
-    "---",
-    `description: ${frontmatter.description}`,
-    `tools: ${frontmatter.tools}`,
-    `model: ${frontmatter.model}`,
-    `thinking: ${frontmatter.thinking}`,
-  ];
-  if (frontmatter.max_turns !== undefined) {
-    lines.push(`max_turns: ${frontmatter.max_turns}`);
-  }
-  if (frontmatter.prompt_mode) {
-    lines.push(`prompt_mode: ${frontmatter.prompt_mode}`);
-  }
-  lines.push("---", "", prompt);
-
-  writeFileSync(filepath, lines.join("\n"), "utf-8");
-  return filename;
+  pi.events.emit("subagents:register-agents", { agents: agentMap });
 }
 
-export function cleanupAgentFiles(cwd: string, taskId: string): void {
-  const agentsDir = join(cwd, ".pi", "agents");
-  if (!existsSync(agentsDir)) return;
+export function unregisterAgentDefinitions(pi: ExtensionAPI, taskId: string): void {
+  pi.events.emit("subagents:unregister-agents", { prefix: `pp_${taskId}_` });
+}
 
-  const prefix = `pp_${taskId}_`;
-  for (const file of readdirSync(agentsDir)) {
-    if (file.startsWith(prefix)) {
-      unlinkSync(join(agentsDir, file));
-    }
+export function disableDefaultAgents(pi: ExtensionAPI): void {
+  const defaults = new Map<string, any>();
+  for (const name of ["general-purpose", "Explore", "Plan"]) {
+    defaults.set(name, {
+      name,
+      description: "",
+      builtinToolNames: [],
+      extensions: false,
+      skills: false,
+      systemPrompt: "",
+      promptMode: "replace",
+      enabled: false,
+      isDefault: true,
+    });
   }
+  pi.events.emit("subagents:register-agents", { agents: defaults });
 }
 
 export function spawnViaRpc(
