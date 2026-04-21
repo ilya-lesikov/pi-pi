@@ -204,10 +204,14 @@ export default function (pi: ExtensionAPI) {
   ): Promise<void> {
     if (active) {
       ctx.ui.notify(
-        `Task "${active.description}" is active (phase: ${active.state.phase}). Run /pp:done to finish it, or /pp:resume to continue.`,
-        "error",
+        `Finishing previous task "${active.description}" (phase: ${active.state.phase})…`,
+        "info",
       );
-      return;
+      abortAllSubagents();
+      active.state.phase = "done";
+      saveTask(active.dir, active.state);
+      unregisterAgentDefinitions(pi, active.taskId);
+      await cleanupActive();
     }
 
     try {
