@@ -270,6 +270,7 @@ export default function (pi: ExtensionAPI) {
     pi.setSessionName(active.description.slice(0, 50));
 
     const phasePrompt = getPhasePrompt(ctx);
+    ownSessionSwitch = true;
     const result = await ctx.newSession({
       setup: async (sm) => {
         const contextFiles = loadContextFiles(cwd, "main", "context");
@@ -290,6 +291,7 @@ export default function (pi: ExtensionAPI) {
         }
       },
     });
+    ownSessionSwitch = false;
 
     if (result.cancelled) {
       await cleanupActive();
@@ -308,6 +310,8 @@ export default function (pi: ExtensionAPI) {
   }
 
 
+
+  let ownSessionSwitch = false;
 
   function setManagedSession(managed: boolean): void {
     pi.events.emit("tasks:set-managed", { managed });
@@ -355,6 +359,13 @@ export default function (pi: ExtensionAPI) {
     }
     return [...seen.entries()].filter(([, count]) => count > 1).map(([name]) => name);
   }
+
+  pi.on("session_before_switch" as any, async () => {
+    if (!active || ownSessionSwitch) return;
+    abortAllSubagents();
+    unregisterAgentDefinitions(pi, active.taskId);
+    await cleanupActive();
+  });
 
   pi.on("session_start", async (_event, ctx) => {
     cwd = ctx.cwd;
@@ -718,6 +729,7 @@ export default function (pi: ExtensionAPI) {
       pi.setSessionName(active.description.slice(0, 50));
 
       const resumePrompt = getPhasePrompt(ctx);
+      ownSessionSwitch = true;
       const resumeResult = await ctx.newSession({
         setup: async (sm) => {
           const contextFiles = loadContextFiles(cwd, "main", "context");
@@ -738,6 +750,7 @@ export default function (pi: ExtensionAPI) {
           }
         },
       });
+      ownSessionSwitch = false;
 
       if (resumeResult.cancelled) {
         await cleanupActive();
@@ -833,6 +846,7 @@ export default function (pi: ExtensionAPI) {
       }
 
       const nextPhasePrompt = getPhasePrompt(ctx);
+      ownSessionSwitch = true;
       const nsResult = await ctx.newSession({
         setup: async (sm) => {
           const contextFiles = loadContextFiles(cwd, "main", "context");
@@ -853,6 +867,7 @@ export default function (pi: ExtensionAPI) {
           }
         },
       });
+      ownSessionSwitch = false;
 
       if (nsResult.cancelled) return;
 
