@@ -395,27 +395,12 @@ export default function (pi: ExtensionAPI) {
     setExtensionOnlyMode(pi);
 
     const found = getActiveTask(cwd, config.timeouts.lockStale);
-    if (found && !active && found.type === "implement") {
-      try {
-        const release = await lockTask(found.dir, config.timeouts);
-        const reviewRound = found.state.reviewRound ?? 1;
-        active = {
-          dir: found.dir,
-          type: found.type,
-          state: found.state,
-          release,
-          taskId: taskIdFromDir(found.dir),
-          modifiedFiles: new Set(),
-          reviewRound,
-          description: found.state.description,
-        };
-        setManagedSession(true);
-        registerAgents();
-        updateStatus(ctx);
-        ctx.ui.notify(`Restored task: "${taskName(found.dir)}" (phase: ${found.state.phase})`, "info");
-      } catch (err: any) {
-        console.error(`[pi-pi] Failed to restore task "${taskName(found.dir)}": ${err.message}`);
-      }
+    if (found) {
+      const taskRelPath = relative(join(cwd, ".pp", "state"), found.dir);
+      ctx.ui.notify(
+        `Paused task: "${taskName(found.dir)}" (${found.type}, phase: ${found.state.phase}). Run /pp:resume to continue.`,
+        "info",
+      );
     }
   });
 
