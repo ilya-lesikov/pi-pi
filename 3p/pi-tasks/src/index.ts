@@ -951,6 +951,7 @@ Set up task dependencies:
     description: "Manage tasks — view, create, clear completed",
     handler: async (_args: string, ctx: ExtensionCommandContext) => {
       const ui = ctx.ui;
+      upgradeStoreIfNeeded(ctx);
 
       const mainMenu = async (): Promise<void> => {
         const tasks = store.list();
