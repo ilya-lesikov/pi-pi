@@ -18,7 +18,7 @@ import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { AgentManager } from "./agent-manager.js";
 import { getAgentConversation, getDefaultMaxTurns, getGraceTurns, normalizeMaxTurns, setDefaultMaxTurns, setGraceTurns, steerAgent } from "./agent-runner.js";
-import { BUILTIN_TOOL_NAMES, getAgentConfig, getAllTypes, getAvailableTypes, getDefaultAgentNames, getUserAgentNames, registerAgents, resolveType } from "./agent-types.js";
+import { BUILTIN_TOOL_NAMES, getAgentConfig, getAllTypes, getAvailableTypes, getDefaultAgentNames, getUserAgentNames, registerAgents, registerExtensionAgents, unregisterExtensionAgents, unregisterExtensionAgentsByPrefix, resolveType } from "./agent-types.js";
 import { registerRpcHandlers } from "./cross-extension-rpc.js";
 import { loadCustomAgents } from "./custom-agents.js";
 import { GroupJoinManager } from "./group-join.js";
@@ -437,6 +437,24 @@ export default function (pi: ExtensionAPI) {
     pi,
     getCtx: () => currentCtx,
     manager,
+  });
+
+  // Allow other extensions to register in-memory agent types
+  pi.events.on("subagents:register-agents", (data: any) => {
+    if (data?.agents && data.agents instanceof Map) {
+      registerExtensionAgents(data.agents);
+      reloadCustomAgents();
+    }
+  });
+
+  pi.events.on("subagents:unregister-agents", (data: any) => {
+    if (data?.names && Array.isArray(data.names)) {
+      unregisterExtensionAgents(data.names);
+      reloadCustomAgents();
+    } else if (data?.prefix && typeof data.prefix === "string") {
+      unregisterExtensionAgentsByPrefix(data.prefix);
+      reloadCustomAgents();
+    }
   });
 
   // Broadcast readiness so extensions loaded after us can discover us
