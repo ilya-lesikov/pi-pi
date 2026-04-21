@@ -266,11 +266,37 @@ export default function (pi: ExtensionAPI) {
 
     registerAgents();
     pi.setSessionName(active.description.slice(0, 50));
-    updateStatus(ctx);
 
-    injectContextAndArtifacts(active.dir, active.state.phase);
+    const phasePrompt = getPhasePrompt(ctx);
+    const result = await ctx.newSession({
+      setup: async (sm) => {
+        const contextFiles = loadContextFiles(cwd, "main", "context");
+        for (const cf of contextFiles) {
+          sm.appendMessage({
+            role: "user" as const,
+            content: [{ type: "text" as const, text: cf.content }],
+            timestamp: Date.now(),
+          });
+        }
+        const artifacts = getPhaseArtifacts(active!.dir, active!.state.phase);
+        for (const artifact of artifacts) {
+          sm.appendMessage({
+            role: "user" as const,
+            content: [{ type: "text" as const, text: `=== ${artifact.name} ===\n${artifact.content}` }],
+            timestamp: Date.now(),
+          });
+        }
+      },
+    });
+
+    if (result.cancelled) {
+      await cleanupActive();
+      return;
+    }
+
+    updateStatus(ctx);
     createPhaseTasks();
-    pi.sendUserMessage(getPhasePrompt(ctx));
+    pi.sendUserMessage(phasePrompt);
 
     if (active.state.phase === "planning") {
       spawnPlanners(pi, cwd, active.dir, active.taskId, config).catch((err) => {
@@ -396,23 +422,6 @@ export default function (pi: ExtensionAPI) {
       { type: "librarian", variant: null, ...librarian },
       { type: "task", variant: null, ...taskAgent },
     ]);
-  }
-
-  function injectContextAndArtifacts(taskDir: string, phase: Phase): void {
-    const contextFiles = loadContextFiles(cwd, "main", "context");
-    for (const cf of contextFiles) {
-      pi.sendMessage(
-        { customType: "pp-context", content: cf.content, display: false },
-        { deliverAs: "steer" },
-      );
-    }
-    const artifacts = getPhaseArtifacts(taskDir, phase);
-    for (const artifact of artifacts) {
-      pi.sendMessage(
-        { customType: "pp-artifact", content: `=== ${artifact.name} ===\n${artifact.content}`, display: false },
-        { deliverAs: "steer" },
-      );
-    }
   }
 
   pi.on("tool_call", async (event, _ctx) => {
@@ -696,10 +705,36 @@ export default function (pi: ExtensionAPI) {
 
       registerAgents();
       pi.setSessionName(active.description.slice(0, 50));
-      updateStatus(ctx);
 
-      injectContextAndArtifacts(active.dir, active.state.phase);
-      pi.sendUserMessage(getPhasePrompt(ctx));
+      const resumePrompt = getPhasePrompt(ctx);
+      const resumeResult = await ctx.newSession({
+        setup: async (sm) => {
+          const contextFiles = loadContextFiles(cwd, "main", "context");
+          for (const cf of contextFiles) {
+            sm.appendMessage({
+              role: "user" as const,
+              content: [{ type: "text" as const, text: cf.content }],
+              timestamp: Date.now(),
+            });
+          }
+          const artifacts = getPhaseArtifacts(active!.dir, active!.state.phase);
+          for (const artifact of artifacts) {
+            sm.appendMessage({
+              role: "user" as const,
+              content: [{ type: "text" as const, text: `=== ${artifact.name} ===\n${artifact.content}` }],
+              timestamp: Date.now(),
+            });
+          }
+        },
+      });
+
+      if (resumeResult.cancelled) {
+        await cleanupActive();
+        return;
+      }
+
+      updateStatus(ctx);
+      pi.sendUserMessage(resumePrompt);
     },
   });
 
@@ -786,10 +821,33 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
+      const nextPhasePrompt = getPhasePrompt(ctx);
+      const nsResult = await ctx.newSession({
+        setup: async (sm) => {
+          const contextFiles = loadContextFiles(cwd, "main", "context");
+          for (const cf of contextFiles) {
+            sm.appendMessage({
+              role: "user" as const,
+              content: [{ type: "text" as const, text: cf.content }],
+              timestamp: Date.now(),
+            });
+          }
+          const artifacts = getPhaseArtifacts(active!.dir, active!.state.phase);
+          for (const artifact of artifacts) {
+            sm.appendMessage({
+              role: "user" as const,
+              content: [{ type: "text" as const, text: `=== ${artifact.name} ===\n${artifact.content}` }],
+              timestamp: Date.now(),
+            });
+          }
+        },
+      });
+
+      if (nsResult.cancelled) return;
+
       updateStatus(ctx);
       updatePhaseTasks();
-      injectContextAndArtifacts(active.dir, active.state.phase);
-      pi.sendUserMessage(getPhasePrompt(ctx));
+      pi.sendUserMessage(nextPhasePrompt);
 
       if (next === "planning") {
         spawnPlanners(pi, cwd, active.dir, active.taskId, config).catch((err) => {
