@@ -331,8 +331,36 @@ export default function (pi: ExtensionAPI) {
 
   // ─── Event Handlers ─────────────────────────────────────────────────────
 
+  const BUNDLED_TOOLS = new Set([
+    "Agent", "get_subagent_result", "steer_subagent",
+    "TaskCreate", "TaskList", "TaskGet", "TaskUpdate", "TaskOutput", "TaskStop", "TaskExecute",
+    "ask_user",
+  ]);
+
+  function checkForConflictingExtensions(): string[] {
+    const allTools = pi.getAllTools();
+    const seen = new Map<string, number>();
+    for (const tool of allTools) {
+      if (BUNDLED_TOOLS.has(tool.name)) {
+        seen.set(tool.name, (seen.get(tool.name) ?? 0) + 1);
+      }
+    }
+    return [...seen.entries()].filter(([, count]) => count > 1).map(([name]) => name);
+  }
+
   pi.on("session_start", async (_event, ctx) => {
     cwd = ctx.cwd;
+
+    const duplicates = checkForConflictingExtensions();
+    if (duplicates.length > 0) {
+      const msg = `pi-pi bundles its own versions of pi-subagents, pi-tasks, and pi-ask-user. ` +
+        `Duplicate tools detected: ${duplicates.join(", ")}. ` +
+        `Remove the conflicting packages: pi remove npm:@tintinweb/pi-subagents npm:@tintinweb/pi-tasks npm:pi-ask-user`;
+      ctx.ui.notify(msg, "error");
+      console.error(`[pi-pi] FATAL: ${msg}`);
+      return;
+    }
+
     try {
       config = loadConfig(cwd);
     } catch (err: any) {
