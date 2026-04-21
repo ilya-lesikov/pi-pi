@@ -39,22 +39,33 @@ const agents = new Map<string, AgentConfig>();
 /** Extension-injected agents (highest priority, survive reloads). */
 const extensionAgents = new Map<string, AgentConfig>();
 
+/** When true, only extension-registered agents are used. Defaults and user .md files are skipped. */
+let extensionOnlyMode = false;
+
+/** Enable extension-only mode: skip defaults and user .md agents entirely. */
+export function setExtensionOnlyMode(enabled: boolean): void {
+  extensionOnlyMode = enabled;
+}
+
 /**
  * Register agents into the unified registry.
  * Priority (highest wins): extension agents > user .md files > defaults.
+ * In extension-only mode, defaults and user agents are skipped entirely.
  * Disabled agents (enabled === false) are kept in the registry but excluded from spawning.
  */
 export function registerAgents(userAgents: Map<string, AgentConfig>): void {
   agents.clear();
 
-  // Start with defaults
-  for (const [name, config] of DEFAULT_AGENTS) {
-    agents.set(name, config);
-  }
+  if (!extensionOnlyMode) {
+    // Start with defaults
+    for (const [name, config] of DEFAULT_AGENTS) {
+      agents.set(name, config);
+    }
 
-  // Overlay user agents (overrides defaults with same name)
-  for (const [name, config] of userAgents) {
-    agents.set(name, config);
+    // Overlay user agents (overrides defaults with same name)
+    for (const [name, config] of userAgents) {
+      agents.set(name, config);
+    }
   }
 
   // Overlay extension-injected agents (highest priority)

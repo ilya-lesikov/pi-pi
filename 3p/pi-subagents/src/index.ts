@@ -18,7 +18,7 @@ import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { AgentManager } from "./agent-manager.js";
 import { getAgentConversation, getDefaultMaxTurns, getGraceTurns, normalizeMaxTurns, setDefaultMaxTurns, setGraceTurns, steerAgent } from "./agent-runner.js";
-import { BUILTIN_TOOL_NAMES, getAgentConfig, getAllTypes, getAvailableTypes, getDefaultAgentNames, getUserAgentNames, registerAgents, registerExtensionAgents, unregisterExtensionAgents, unregisterExtensionAgentsByPrefix, resolveType } from "./agent-types.js";
+import { BUILTIN_TOOL_NAMES, getAgentConfig, getAllTypes, getAvailableTypes, getDefaultAgentNames, getUserAgentNames, registerAgents, registerExtensionAgents, unregisterExtensionAgents, unregisterExtensionAgentsByPrefix, setExtensionOnlyMode, resolveType } from "./agent-types.js";
 import { registerRpcHandlers } from "./cross-extension-rpc.js";
 import { loadCustomAgents } from "./custom-agents.js";
 import { GroupJoinManager } from "./group-join.js";
@@ -437,6 +437,14 @@ export default function (pi: ExtensionAPI) {
     pi,
     getCtx: () => currentCtx,
     manager,
+  });
+
+  // Allow other extensions to take full control of agent registry
+  pi.events.on("subagents:set-extension-only", (data: any) => {
+    if (typeof data?.enabled === "boolean") {
+      setExtensionOnlyMode(data.enabled);
+      reloadCustomAgents();
+    }
   });
 
   // Allow other extensions to register in-memory agent types

@@ -47,22 +47,8 @@ export function unregisterAgentDefinitions(pi: ExtensionAPI, taskId: string): vo
   pi.events.emit("subagents:unregister-agents", { prefix: `pp_${taskId}_` });
 }
 
-export function disableDefaultAgents(pi: ExtensionAPI): void {
-  const defaults = new Map<string, any>();
-  for (const name of ["general-purpose", "Explore", "Plan"]) {
-    defaults.set(name, {
-      name,
-      description: "",
-      builtinToolNames: [],
-      extensions: false,
-      skills: false,
-      systemPrompt: "",
-      promptMode: "replace",
-      enabled: false,
-      isDefault: true,
-    });
-  }
-  pi.events.emit("subagents:register-agents", { agents: defaults });
+export function setExtensionOnlyMode(pi: ExtensionAPI): void {
+  pi.events.emit("subagents:set-extension-only", { enabled: true });
 }
 
 export function spawnViaRpc(

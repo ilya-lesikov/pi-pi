@@ -14,7 +14,7 @@ import { planningSystemPrompt, spawnPlanners, spawnPlanReviewers } from "./phase
 import { implementationSystemPrompt } from "./phases/implementation.js";
 import { reviewSystemPrompt, spawnCodeReviewers } from "./phases/review.js";
 import { runAfterEdit, runAfterImplement, autoCommit } from "./commands.js";
-import { registerAgentDefinitions, unregisterAgentDefinitions, disableDefaultAgents } from "./agents/registry.js";
+import { registerAgentDefinitions, unregisterAgentDefinitions, setExtensionOnlyMode } from "./agents/registry.js";
 import { createExploreAgent } from "./agents/explore.js";
 import { createLibrarianAgent } from "./agents/librarian.js";
 import { createTaskAgent } from "./agents/task.js";
@@ -368,7 +368,7 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
-    disableDefaultAgents(pi);
+    setExtensionOnlyMode(pi);
 
     const found = getActiveTask(cwd, config.timeouts.lockStale);
     if (found && !active) {
