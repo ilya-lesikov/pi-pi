@@ -318,6 +318,7 @@ export default function (pi: ExtensionAPI) {
   let ownSessionSwitch = false;
 
   function setManagedSession(managed: boolean): void {
+    console.error(`[pi-pi] setManagedSession(${managed}) at ${new Date().toISOString()}`);
     pi.events.emit("tasks:set-managed", { managed });
     pi.events.emit("subagents:set-managed", { managed });
   }
@@ -394,7 +395,7 @@ export default function (pi: ExtensionAPI) {
     setExtensionOnlyMode(pi);
 
     const found = getActiveTask(cwd, config.timeouts.lockStale);
-    if (found && !active) {
+    if (found && !active && found.type === "implement") {
       try {
         const release = await lockTask(found.dir, config.timeouts);
         const reviewRound = found.state.reviewRound ?? 1;
