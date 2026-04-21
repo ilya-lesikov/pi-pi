@@ -1,0 +1,299 @@
+name: Test
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Generate Pi extension shared copies
+        run: bash apps/pi-extension/vendor.sh
+
+      - name: Type check
+        run: bun run typecheck
+
+      - name: Run tests
+        run: bun test
+
+  install-cmd-windows:
+    # End-to-end integration test for scripts/install.cmd on real cmd.exe.
+    # The unit tests in scripts/install.test.ts are file-content string checks
+    # that run on Linux and never exercise cmd's delayed-expansion parser or
+    # the embedded `node -e` Gemini merge — exactly where issue #506 lived.
+    # This job runs install.cmd end-to-end on Windows with a seeded ~/.gemini
+    # settings.json fixture so the Gemini merge path actually executes and
+    # any regression of #506 (or similar cmd-parser bugs) fails CI.
+    name: install.cmd (Windows integration)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Seed fake ~/.gemini/settings.json with pre-existing hook
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.gemini" | Out-Null
+          # Fixture mirrors the shape of a real Gemini settings.json (top-level
+          # `hooks.BeforeTool` array plus unrelated sibling keys) but uses only
+          # obviously-fake values. Must NOT contain the literal string
+          # "plannotator" anywhere — install.cmd's Gemini block is gated on
+          # `findstr /c:"plannotator"` returning non-zero and would otherwise
+          # skip the merge entirely.
+          $fixture = @'
+          {
+            "theme": "ci-fixture-theme",
+            "hooks": {
+              "BeforeTool": [
+                {
+                  "matcher": "ci-fixture-existing-matcher",
+                  "hooks": [
+                    {
+                      "type": "command",
+                      "command": "ci-fixture-existing-command",
+                      "timeout": 1000
+                    }
+                  ]
+                }
+              ]
+            },
+            "general": {
+              "ciFixtureSentinel": true
+            }
+          }
+          '@
+          Set-Content -Path "$env:USERPROFILE\.gemini\settings.json" -Value $fixture -NoNewline
+
+      - name: Run install.cmd end-to-end
+        shell: cmd
+        # v0.17.1 is pinned intentionally. This test needs a real binary
+        # to download so it can exercise install.cmd end-to-end — SHA256
+        # verification, skills sparse-checkout, and (critically) the
+        # embedded `node -e` Gemini merge path that was the site of
+        # issue #506. Using `latest` would couple the Windows regression
+        # test to whatever version is currently released, so a bad
+        # release would retroactively break CI on every branch.
+        #
+        # v0.17.1 was the current release when the test was added and is
+        # locked in place by GitHub Immutable Releases. If you ever need
+        # to bump it (e.g. this version becomes too old to represent the
+        # install flow we care about), verify the replacement has:
+        #   - plannotator-win32-x64.exe attached
+        #   - plannotator-win32-x64.exe.sha256 attached
+        #   - the install.cmd and packages/shared/ layout your branch
+        #     under test expects to find in apps/skills/
+        # A missing or mismatched release asset surfaces as a curl 404
+        # in this step with no obvious connection to the test's purpose.
+        run: scripts\install.cmd v0.17.1 --skip-attestation
+
+      - name: Verify Gemini settings.json was merged correctly
+        shell: pwsh
+        run: |
+          $path = "$env:USERPROFILE\.gemini\settings.json"
+          if (-not (Test-Path $path)) { throw "settings.json missing after install" }
+
+          # Must still parse as JSON after the merge (regression for #506,
+          # where cmd's delayed expansion corrupted the embedded node script
+          # and left settings.json in a broken state).
+          $s = Get-Content $path -Raw | ConvertFrom-Json
+
+          # The plannotator hook must have been added.
+          $plannotatorEntries = $s.hooks.BeforeTool | Where-Object {
+            $_.matcher -eq 'exit_plan_mode'
+          }
+          if (-not $plannotatorEntries) {
+            throw "plannotator hook was not added to BeforeTool"
+          }
+          $planCmd = $plannotatorEntries[0].hooks | Where-Object {
+            $_.command -eq 'plannotator'
+          }
+          if (-not $planCmd) {
+            throw "plannotator command entry missing inside the new hook"
+          }
+
+          # The pre-existing (fixture) hook must have survived the merge.
+          # The original buggy JS was `if(!s.hooks.BeforeTool)s.hooks.BeforeTool=[]`
+          # which — after cmd ate the `!` — wiped existing arrays. The fix
+          # (`s.hooks.BeforeTool = s.hooks.BeforeTool || []`) must preserve them.
+          $fixtureHook = $s.hooks.BeforeTool | Where-Object {
+            $_.matcher -eq 'ci-fixture-existing-matcher'
+          }
+          if (-not $fixtureHook) {
+            throw "pre-existing hook was wiped — merge clobbered existing data"
+          }
+
+          # Unrelated top-level keys must survive the merge.
+          if ($s.theme -ne 'ci-fixture-theme') {
+            throw "unrelated top-level field 'theme' was mangled"
+          }
+          if ($s.general.ciFixtureSentinel -ne $true) {
+            throw "unrelated top-level field 'general' was mangled"
+          }
+
+          Write-Host "✓ Gemini settings.json merge verified (issue #506 regression guard)"
+
+      - name: Attestation pre-flight rejects v0.17.1 on real cmd.exe
+        shell: pwsh
+        run: |
+          # Regression guard: the main feature of this PR (three-layer
+          # verification opt-in + MIN_ATTESTED_VERSION pre-flight +
+          # injection-safe $env:-based PowerShell version comparison) had
+          # no runtime coverage on Windows because the previous
+          # integration step passes --skip-attestation.
+          #
+          # We can't test the SUCCESS path (valid attested release)
+          # because v0.17.1 is the current latest and it predates the
+          # release.yml attestation step. Until the first post-merge
+          # release exists, the only realistic end-to-end test is the
+          # REJECTION path: invoke install.cmd with --verify-attestation
+          # against v0.17.1 and assert the pre-flight rejects with
+          # exit != 0 and stderr containing "predates".
+          #
+          # This exercises on a real cmd.exe:
+          #   - setlocal enabledelayedexpansion parser under the guard
+          #   - three-layer resolution reaching the CLI flag layer
+          #   - the :~1 substring (instead of :v= global substitution)
+          #   - the pre-release tag detection (negative — v0.17.1 is stable)
+          #   - the PowerShell shell-out with $env:TAG_NUM / $env:MIN_NUM
+          #     (injection-safe — the previous interpolation would have
+          #     allowed arbitrary PS execution via --version)
+          #   - the `[version] -ge` comparison returning false
+          #   - the "predates" error message block
+          $installedBinary = "$env:USERPROFILE\.local\bin\plannotator.exe"
+
+          # Capture the currently-installed binary's hash BEFORE running
+          # the rejection test. The earlier Gemini-merge integration step
+          # installed v0.17.1 at this path; we use the captured hash as
+          # a baseline so we can prove the rejected invocation left it
+          # untouched (no wasted download, no overwrite).
+          if (-not (Test-Path $installedBinary)) {
+            throw "Expected $installedBinary to exist from the earlier install.cmd step, but it's missing. Cannot baseline the preservation check."
+          }
+          $baselineHash = (Get-FileHash $installedBinary -Algorithm SHA256).Hash
+          $baselineWriteTime = (Get-Item $installedBinary).LastWriteTime
+
+          $stderrFile = New-TemporaryFile
+          $p = Start-Process -Wait -PassThru -NoNewWindow cmd `
+            -ArgumentList '/c','scripts\install.cmd v0.17.1 --verify-attestation' `
+            -RedirectStandardError $stderrFile.FullName
+          $stderr = Get-Content $stderrFile.FullName -Raw -ErrorAction SilentlyContinue
+          Remove-Item $stderrFile.FullName -ErrorAction SilentlyContinue
+
+          if ($p.ExitCode -eq 0) {
+            throw "install.cmd v0.17.1 --verify-attestation should have been rejected by the MIN_ATTESTED_VERSION pre-flight, but exited 0. stderr: $stderr"
+          }
+          if ($stderr -notmatch 'predates') {
+            throw "install.cmd rejected with exit $($p.ExitCode), but not via the pre-flight guard. Expected 'predates' in stderr, got: $stderr"
+          }
+
+          # Assert the pre-flight ran BEFORE any download / install step.
+          # If the binary's hash or mtime changed, something downloaded
+          # and moved a new file into place — meaning the pre-flight
+          # rejection happened late (after the download step) instead
+          # of early (before it). Catches future regressions that re-
+          # introduce the post-download pre-flight pattern.
+          $postHash = (Get-FileHash $installedBinary -Algorithm SHA256).Hash
+          $postWriteTime = (Get-Item $installedBinary).LastWriteTime
+          if ($postHash -ne $baselineHash) {
+            throw "Binary at $installedBinary was overwritten during the rejected --verify-attestation run. Baseline SHA256 $baselineHash, post SHA256 $postHash. The pre-flight must run before any download."
+          }
+          if ($postWriteTime -ne $baselineWriteTime) {
+            throw "Binary at $installedBinary had its LastWriteTime modified during the rejected --verify-attestation run. Baseline $baselineWriteTime, post $postWriteTime."
+          }
+
+          Write-Host "✓ MIN_ATTESTED_VERSION pre-flight rejected v0.17.1 via the expected code path"
+          Write-Host "✓ Installed binary was preserved (SHA256 and LastWriteTime both unchanged)"
+
+      - name: Verify Claude Code slash command files contain the shell-invocation prefix
+        shell: pwsh
+        run: |
+          # Regression guard: install.cmd previously wrote `echo !`plannotator
+          # review $ARGUMENTS`` (note the unescaped `!`) under
+          # setlocal enabledelayedexpansion, which silently stripped the `!`
+          # from the written .md file. Without the `!` prefix, Claude Code
+          # renders the backtick block as inline markdown code and the slash
+          # command is a silent no-op when invoked — the install appears
+          # successful but the command does nothing.
+          #
+          # install.sh and install.ps1 already write the `!` correctly via
+          # single-quoted heredocs / here-strings. This step checks that
+          # install.cmd now matches (via `echo ^!`) and catches future
+          # regressions of the same class.
+          # Claude Code slash commands — `.md` files with `!`\`plannotator ...\`` invocation syntax
+          $cmdDir = "$env:USERPROFILE\.claude\commands"
+          foreach ($file in @("plannotator-review.md", "plannotator-annotate.md", "plannotator-last.md")) {
+            $path = Join-Path $cmdDir $file
+            if (-not (Test-Path $path)) {
+              throw "Expected slash command file missing: $path"
+            }
+            $content = Get-Content $path -Raw
+            if ($content -notmatch '!`plannotator') {
+              throw "Slash command file $file is missing the '!' shell-invocation prefix. Content: $content"
+            }
+          }
+          Write-Host "✓ All three Claude Code slash command files contain the '!' prefix"
+
+          # Gemini slash commands — `.toml` files with `!{plannotator ...}` invocation syntax.
+          # Same `^^!` cmd-escape class as the Claude Code files. The earlier integration
+          # step seeded `~/.gemini/settings.json`, so install.cmd's Gemini block fired and
+          # wrote these two files alongside the Claude Code ones. They use a different
+          # invocation form (`!{...}` instead of `!\`...\``) but the regression risk is
+          # identical — a future revision that drops a `^` from the echo would silently
+          # produce broken Gemini commands.
+          $geminiDir = "$env:USERPROFILE\.gemini\commands"
+          foreach ($file in @("plannotator-review.toml", "plannotator-annotate.toml")) {
+            $path = Join-Path $geminiDir $file
+            if (-not (Test-Path $path)) {
+              throw "Expected Gemini command file missing: $path"
+            }
+            $content = Get-Content $path -Raw
+            if ($content -notmatch '!\{plannotator') {
+              throw "Gemini command file $file is missing the '!' shell-invocation prefix. Content: $content"
+            }
+          }
+          Write-Host "✓ Both Gemini slash command files contain the '!' prefix"
+
+      - name: Unknown flag is rejected with non-zero exit
+        shell: pwsh
+        run: |
+          # Regression guard for the review finding that install.cmd silently
+          # reinterpreted typoed flags as version strings. A leading-dash token
+          # that doesn't match a known flag must now produce a non-zero exit
+          # AND emit "Unknown option:" on stderr — the latter is the real
+          # discriminator between the guard triggering and some other failure
+          # mode (network, gh auth, pre-PR release without an attestation)
+          # that also happens to exit non-zero.
+          #
+          # `--verify-attesttion` below is INTENTIONALLY MISSPELLED. Do not
+          # "correct" it during a typo sweep — the valid spelling is a real
+          # flag and would bypass this guard. The stderr assertion below
+          # would catch the drift, but the comment is the first line of
+          # defense for future maintainers.
+          $stderrFile = New-TemporaryFile
+          $p = Start-Process -Wait -PassThru -NoNewWindow cmd `
+            -ArgumentList '/c','scripts\install.cmd --verify-attesttion' `
+            -RedirectStandardError $stderrFile.FullName
+          $stderr = Get-Content $stderrFile.FullName -Raw -ErrorAction SilentlyContinue
+          Remove-Item $stderrFile.FullName -ErrorAction SilentlyContinue
+
+          if ($p.ExitCode -eq 0) {
+            throw "install.cmd should have rejected --verify-attesttion but exited 0. stderr: $stderr"
+          }
+          if ($stderr -notmatch 'Unknown option:') {
+            throw "install.cmd exited $($p.ExitCode) but not via the unknown-flag guard. Expected 'Unknown option:' in stderr but got: $stderr"
+          }
+          Write-Host "✓ Unknown flag rejected with exit code $($p.ExitCode) via the unknown-flag guard"

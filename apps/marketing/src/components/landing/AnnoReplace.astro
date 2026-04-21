@@ -1,0 +1,54 @@
+---
+interface Props {
+  crossed: string;
+  replacement: string;
+}
+const { crossed, replacement } = Astro.props;
+---
+<span class="anno-replace-wrap" id="anno-replace">
+  <span class="anno-replace-crossed anno-shimmer" id="anno-replace-trigger">{crossed}</span>
+  <img
+    src="/assets/whiteglove.png"
+    alt=""
+    class="anno-glove"
+    id="anno-glove"
+    aria-hidden="true"
+  />
+  <span class="anno-replace-popover" id="anno-replace-popover">
+    <span class="anno-replace-popover-header">
+      <span class="anno-replace-popover-context" style="display:none">Comment</span>
+      <button class="anno-replace-popover-close" id="anno-replace-close" aria-label="Close">&times;</button>
+    </span>
+    <span class="anno-replace-popover-body">
+      <span class="anno-replace-popover-input">{replacement}</span>
+      <span class="anno-replace-popover-cursor"></span>
+    </span>
+  </span>
+</span>
+
+<script is:inline>
+  (function() {
+    var trigger = document.getElementById('anno-replace-trigger');
+    var popover = document.getElementById('anno-replace-popover');
+    if (!trigger || !popover) return;
+
+    var glove = document.getElementById('anno-glove');
+    var closeBtn = document.getElementById('anno-replace-close');
+
+    trigger.addEventListener('click', function() {
+      trigger.classList.remove('anno-shimmer');
+      trigger.classList.add('clicked');
+      if (glove) glove.classList.add('hidden');
+      popover.classList.add('visible');
+    });
+
+    if (closeBtn) {
+      closeBtn.addEventListener('click', function() {
+        popover.classList.remove('visible');
+        trigger.classList.remove('clicked');
+        trigger.classList.add('anno-shimmer');
+        if (glove) glove.classList.remove('hidden');
+      });
+    }
+  })();
+</script>

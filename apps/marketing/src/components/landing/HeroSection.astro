@@ -1,0 +1,321 @@
+---
+import AnnoReplace from './AnnoReplace.astro';
+---
+<section class="relative min-h-[85vh] flex flex-col justify-center px-8 pt-20 pb-16 overflow-visible">
+  <!-- Dot grid overlay -->
+  <div class="absolute inset-0 bg-dots opacity-[0.18] pointer-events-none"></div>
+
+  <!-- Noise grain texture -->
+  <div class="bg-noise"></div>
+
+  <!-- Single subtle horizon line -->
+  <div class="hero-horizon" aria-hidden="true"></div>
+
+  <div class="relative z-10">
+    <!-- Headline -->
+    <h1 class="animate-fade-up font-display text-4xl sm:text-5xl md:text-6xl font-bold tracking-[-0.04em] leading-[1.06]">
+      Plan and code review
+      <br />
+      for <span class="text-primary">your agents</span>.
+    </h1>
+
+    <!-- Subhead -->
+    <p class="animate-fade-up animate-delay-1 mt-6 text-base text-muted-foreground max-w-[42ch] leading-relaxed">
+      <AnnoReplace crossed="Annotate" replacement="Own your" /> agent plans before they run. Review agent-written code
+      with a full diff viewer. Share with your team. Your feedback goes
+      straight back to the agent.
+    </p>
+
+    <!-- Trust signal -->
+    <p class="animate-fade-up animate-delay-1 mt-3 text-[11px] text-muted-foreground/50 tracking-wide">
+      Runs locally | natively integrates with agents | free & open source
+    </p>
+
+    <!-- Agent selector + install area -->
+    <div class="animate-fade-up animate-delay-2 mt-10">
+      <!-- Agent selector buttons -->
+      <div class="flex flex-wrap items-center gap-2 mb-4" id="agent-selector">
+        <button
+          class="agent-btn active"
+          data-agent="claude"
+          data-command="curl -fsSL https://plannotator.ai/install.sh | bash"
+          data-video="https://www.youtube.com/watch?v=a_AT7cEN_9I"
+        >
+          <img src="/assets/icon-claude.svg" alt="" class="w-4 h-4" />
+          <span>Claude Code</span>
+        </button>
+        <button
+          class="agent-btn"
+          data-agent="codex"
+          data-command="curl -fsSL https://plannotator.ai/install.sh | bash"
+          data-video="https://x.com/backnotprop/status/2031201677987164572"
+        >
+          <img src="/assets/icon-codex.png" alt="" class="w-4 h-4 rounded-sm" />
+          <span>Codex</span>
+        </button>
+        <button
+          class="agent-btn"
+          data-agent="copilot"
+          data-command="curl -fsSL https://plannotator.ai/install.sh | bash"
+          data-video=""
+        >
+          <img src="/assets/icon-copilot.svg" alt="" class="w-4 h-4 icon-copilot" />
+          <span>Copilot</span>
+        </button>
+        <button
+          class="agent-btn"
+          data-agent="gemini"
+          data-command="curl -fsSL https://plannotator.ai/install.sh | bash"
+          data-video="https://youtu.be/KRi7hdxikx4"
+        >
+          <img src="/assets/icon-gemini.png" alt="" class="w-4 h-4" />
+          <span>Gemini</span>
+        </button>
+        <button
+          class="agent-btn"
+          data-agent="opencode"
+          data-command="curl -fsSL https://plannotator.ai/install.sh | bash"
+          data-video="https://youtu.be/_N7uo0EFI-U"
+        >
+          <img src="/assets/icon-opencode-dark.svg" alt="" class="w-4 h-4 icon-opencode" />
+          <span>OpenCode</span>
+        </button>
+        <button
+          class="agent-btn"
+          data-agent="pi"
+          data-command="pi install npm:@plannotator/pi-extension"
+          data-video="https://www.youtube.com/watch?v=XqFun9XCXPw"
+        >
+          <img src="/assets/icon-pi.svg" alt="" class="w-4 h-4 icon-pi" />
+          <span>Pi</span>
+        </button>
+        <button
+          class="agent-btn"
+          data-agent="vscode"
+          data-command="curl -fsSL https://plannotator.ai/install.sh | bash"
+          data-video=""
+        >
+          <img src="/assets/icon-vscode.svg" alt="" class="w-4 h-4" />
+          <span>VS Code</span>
+        </button>
+      </div>
+
+      <!-- Install command block (desktop only) -->
+      <div class="hero-install group px-5 pr-12 py-3.5 text-sm max-w-xl hidden sm:flex" id="install-block">
+        <span class="text-muted-foreground select-none mr-2">$</span>
+        <span class="text-foreground select-all" id="install-command">curl -fsSL https://plannotator.ai/install.sh | bash</span>
+        <button
+          class="copy-btn"
+          id="install-copy-btn"
+          aria-label="Copy install command"
+        >
+          <svg class="copy-icon w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="9" y="9" width="13" height="13" rx="2" />
+            <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+          </svg>
+          <svg class="check-icon w-3.5 h-3.5 hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M20 6L9 17l-5-5" />
+          </svg>
+        </button>
+      </div>
+
+      <!-- Detail lines (desktop only) -->
+      <div class="mt-2 max-w-lg hidden sm:block" id="install-detail-wrap">
+        <p class="text-[11px] text-muted-foreground/50" id="install-detail"></p>
+        <div class="hero-detail-steps hidden mt-1.5 space-y-1" id="install-steps">
+          <div class="hero-detail-step" id="install-step-1" style="display:none"></div>
+          <div class="hero-detail-step" id="install-step-2" style="display:none"></div>
+          <div class="hero-detail-step" id="install-step-3" style="display:none"></div>
+        </div>
+      </div>
+
+      <!-- CTAs — video is primary on mobile -->
+      <div class="flex flex-wrap items-center gap-3 mt-5">
+        <a
+          id="watch-demo-link"
+          href="https://www.youtube.com/watch?v=a_AT7cEN_9I"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="hero-cta-btn inline-flex items-center gap-2 px-4 py-2.5 sm:py-2 rounded-lg bg-primary text-primary-foreground sm:bg-transparent sm:text-foreground border border-primary sm:border-border text-sm font-medium hover:bg-primary/90 sm:hover:bg-muted/50 transition-colors"
+        >
+          <svg class="w-4 h-4 sm:text-primary" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M8 5.14v14l11-7-11-7z" />
+          </svg>
+          Watch the demo
+        </a>
+        <a
+          href="https://share.plannotator.ai"
+          class="hero-cta-btn inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-border text-sm text-foreground font-medium hover:bg-muted/50 transition-colors"
+        >
+          Try the demo
+          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
+          </svg>
+        </a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script is:inline>
+  (function() {
+    var buttons = document.querySelectorAll('.agent-btn');
+    var commandEl = document.getElementById('install-command');
+    var detailEl = document.getElementById('install-detail');
+    var stepsEl = document.getElementById('install-steps');
+    var step1El = document.getElementById('install-step-1');
+    var step2El = document.getElementById('install-step-2');
+    var step3El = document.getElementById('install-step-3');
+    var videoLink = document.getElementById('watch-demo-link');
+    var copyBtn = document.getElementById('install-copy-btn');
+
+    var copyIcon = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>';
+    var checkIcon = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>';
+
+    function makeStep(el, text) {
+      el.innerHTML = '';
+      var code = document.createElement('code');
+      code.textContent = text;
+      var btn = document.createElement('button');
+      btn.className = 'step-copy-btn';
+      btn.innerHTML = copyIcon;
+      btn.setAttribute('aria-label', 'Copy');
+      btn.addEventListener('click', function() {
+        navigator.clipboard.writeText(text).then(function() {
+          btn.innerHTML = checkIcon;
+          setTimeout(function() { btn.innerHTML = copyIcon; }, 1500);
+        });
+      });
+      el.appendChild(code);
+      el.appendChild(btn);
+    }
+
+    // Agent configs: steps array means show detail steps, detail string means simple text
+    var agents = {
+      claude: {
+        steps: [
+          '/plugin marketplace add backnotprop/plannotator',
+          '/plugin install plannotator@plannotator',
+          'Restart Claude Code to activate hooks'
+        ],
+        detail: 'Then run in Claude Code:'
+      },
+      codex: {
+        steps: [
+          '!plannotator review',
+          '!plannotator annotate <file>',
+          '!plannotator last'
+        ],
+        detail: 'Then use in Codex:'
+      },
+      opencode: {
+        steps: [
+          '"plugin": ["@plannotator/opencode@latest"]',
+          'Restart OpenCode to load the plugin'
+        ],
+        detail: 'Then add to opencode.json:'
+      },
+      copilot: {
+        steps: [
+          '/plugin marketplace add backnotprop/plannotator',
+          '/plugin install plannotator-copilot@plannotator',
+          'Restart Copilot CLI to activate hooks'
+        ],
+        detail: 'Then run in Copilot CLI:'
+      },
+      gemini: {
+        steps: [
+          '/plannotator-review',
+          '/plannotator-annotate <file.md>',
+          'Use /plan for plan review with browser approval'
+        ],
+        detail: 'Then use in Gemini CLI:'
+      },
+      pi: {
+        detail: 'Or try without installing: pi -e npm:@plannotator/pi-extension'
+      },
+      vscode: {
+        detail: 'Then install the VS Code extension for an integrated experience:',
+        steps: [
+          '/plugin marketplace add backnotprop/plannotator',
+          'Restart Claude Code to activate hooks'
+        ],
+        link: {
+          text: 'Install VS Code Extension from Marketplace',
+          url: 'https://marketplace.visualstudio.com/items?itemName=backnotprop.plannotator-webview'
+        }
+      }
+    };
+
+    var installBlock = document.getElementById('install-block');
+    var linkEl = document.getElementById('install-link');
+
+    function setAgent(btn) {
+      buttons.forEach(function(b) { b.classList.remove('active'); });
+      btn.classList.add('active');
+      commandEl.textContent = btn.dataset.command;
+      if (videoLink) {
+        if (btn.dataset.video) {
+          videoLink.href = btn.dataset.video;
+          videoLink.style.display = '';
+        } else {
+          videoLink.style.display = 'none';
+        }
+      }
+
+      var config = agents[btn.dataset.agent] || {};
+      detailEl.textContent = config.detail || '';
+
+      // Show install command block
+      installBlock.style.display = '';
+
+      // Clear all steps completely, then rebuild
+      var allSteps = [step1El, step2El, step3El];
+      allSteps.forEach(function(el) { el.innerHTML = ''; el.style.display = 'none'; });
+
+      if (config.steps && config.steps.length) {
+        stepsEl.classList.remove('hidden');
+        for (var i = 0; i < config.steps.length && i < allSteps.length; i++) {
+          allSteps[i].style.display = '';
+          makeStep(allSteps[i], config.steps[i]);
+        }
+      } else {
+        stepsEl.classList.add('hidden');
+      }
+
+      // Handle marketplace link
+      if (linkEl) { linkEl.remove(); linkEl = null; }
+      if (config.link) {
+        var a = document.createElement('a');
+        a.id = 'install-link';
+        a.href = config.link.url;
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        a.className = 'mt-3 text-sm hidden sm:inline-flex items-center gap-1.5 text-muted-foreground hover:text-foreground transition-colors';
+        a.innerHTML = config.link.text + ' <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>';
+        installBlock.parentNode.insertBefore(a, installBlock.nextSibling);
+        linkEl = a;
+      }
+    }
+
+    buttons.forEach(function(btn) {
+      btn.addEventListener('click', function() { setAgent(btn); });
+    });
+
+    // Init default (first button)
+    setAgent(buttons[0]);
+
+    if (copyBtn) {
+      copyBtn.addEventListener('click', function() {
+        navigator.clipboard.writeText(commandEl.textContent).then(function() {
+          copyBtn.querySelector('.copy-icon').classList.add('hidden');
+          copyBtn.querySelector('.check-icon').classList.remove('hidden');
+          setTimeout(function() {
+            copyBtn.querySelector('.copy-icon').classList.remove('hidden');
+            copyBtn.querySelector('.check-icon').classList.add('hidden');
+          }, 1500);
+        });
+      });
+    }
+  })();
+</script>

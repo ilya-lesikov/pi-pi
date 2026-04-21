@@ -1,0 +1,132 @@
+---
+title: "Code Review"
+description: "The /plannotator-review slash command for reviewing local changes, comparing branches, or reviewing GitHub pull requests."
+sidebar:
+  order: 11
+section: "Commands"
+---
+
+The `/plannotator-review` command opens an interactive code review UI for your local changes or a GitHub pull request.
+
+## Usage
+
+**Review local changes:**
+
+```
+/plannotator-review
+```
+
+**Review a GitHub pull request:**
+
+```
+/plannotator-review https://github.com/owner/repo/pull/123
+```
+
+PR review uses the `gh` CLI for authentication, so private repos work automatically if you're authenticated with `gh auth login`.
+
+## How it works
+
+**Local review:**
+
+```
+User runs /plannotator-review
+        ↓
+Agent runs: plannotator review
+        ↓
+git diff captures changes
+        ↓
+Review server starts, opens browser with diff viewer
+        ↓
+User annotates code, provides feedback
+        ↓
+Send Feedback → feedback sent to agent
+Approve → "LGTM" sent to agent
+```
+
+**PR review:**
+
+```
+User runs /plannotator-review <github-url>
+        ↓
+Agent runs: plannotator review <github-url>
+        ↓
+gh CLI fetches PR diff and metadata
+        ↓
+Review server starts, opens browser with diff viewer
+        ↓
+User annotates code, provides feedback
+        ↓
+Send Feedback → PR context included in feedback
+Approve → "LGTM" sent to agent
+```
+
+## Switching diff types
+
+By default the review opens showing uncommitted changes, but you can switch what you're comparing using the diff type dropdown in the toolbar. The available options are:
+
+- **Uncommitted changes** - everything that differs from HEAD, including untracked files
+- **Staged changes** - only what's in the staging area (what `git commit` would include)
+- **Unstaged changes** - working tree changes that haven't been staged yet, plus untracked files
+- **Last commit** - the diff introduced by the most recent commit
+- **vs main** (or your default branch) - all committed changes on your branch compared to the base branch. This gives you the same view you'd see on a pull request, without needing to push or create one. Only appears when you're on a branch other than the default.
+
+If you're working on a feature branch and want to see everything you've done before opening a PR, switch to the "vs main" option. It's a good way to do a self-review of your full branch diff.
+
+## The diff viewer
+
+The review UI shows your changes in a familiar diff format:
+
+- **File tree sidebar** for navigating between changed files
+- **Viewed tracking** to mark files as reviewed and track your progress
+- **Unified diff** showing additions and deletions in context
+- **Annotation tools** with the same annotation types as plan review (delete, replace, comment, insert)
+
+## Annotating code
+
+Select any text in the diff to annotate it, just like in plan review. Your annotations are exported as structured feedback referencing specific lines and files.
+
+## Ask AI
+
+When an AI provider is available, the diff viewer includes inline AI chat. Select lines in the diff and choose "Ask AI" to ask questions about the code. Responses stream into a sidebar panel grouped by file.
+
+### Supported providers
+
+Plannotator supports multiple AI providers. Providers are auto-detected based on which CLI tools are installed on your system:
+
+- **Claude** requires the `claude` CLI ([Claude Code](https://docs.anthropic.com/en/docs/claude-code))
+- **Codex** requires the `codex` CLI ([OpenAI Codex](https://github.com/openai/codex))
+- **Pi** requires the `pi` CLI ([Pi](https://github.com/mariozechner/pi-coding-agent))
+- **OpenCode** requires the `opencode` CLI ([OpenCode](https://opencode.ai))
+
+All providers can be available simultaneously. Plannotator does not manage API keys, so you must be authenticated with each CLI independently (`claude` uses `~/.claude/` credentials, `codex` uses `OPENAI_API_KEY`, `pi` and `opencode` use their own local configuration).
+
+### Choosing a provider
+
+When multiple providers are available, set your default in **Settings → AI**. The AI tab shows all detected providers as selectable cards. Your choice persists across sessions.
+
+If only one provider is installed, it's used automatically with no configuration needed.
+
+## How review agents prompt the CLI
+
+The review agents (Claude, Codex, Code Tour) shell out to external CLIs. Plannotator controls the user message and output schema; the CLI's own harness owns the system prompt. See the [Prompts reference](/docs/reference/prompts/) for the full breakdown of what each provider sends, how the pieces join, and which knobs you can tune per job.
+
+## Submitting feedback
+
+- **Send Feedback** formats your annotations and sends them to the agent
+- **Approve** sends "LGTM" to the agent, indicating the changes look good
+
+After submission, the agent receives your feedback and can act on it, whether that's fixing issues, explaining decisions, or making the requested changes.
+
+## Server API
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/diff` | GET | Returns `{ rawPatch, gitRef, origin }` |
+| `/api/feedback` | POST | Submit review feedback |
+| `/api/image` | GET | Serve image by path |
+| `/api/upload` | POST | Upload image attachment |
+| `/api/ai/capabilities` | GET | Check available AI providers |
+| `/api/ai/session` | POST | Create AI chat session |
+| `/api/ai/query` | POST | Send prompt, stream SSE response |
+| `/api/ai/abort` | POST | Abort current AI query |
+| `/api/ai/permission` | POST | Respond to tool approval request |

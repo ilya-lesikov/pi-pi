@@ -1,0 +1,65 @@
+---
+title: "Troubleshooting"
+description: "Common issues and how to resolve them."
+sidebar:
+  order: 24
+section: "Guides"
+---
+
+## Lost a Plannotator tab?
+
+If you accidentally close a Plannotator browser tab, the server is still running in the background. You can find and reopen it:
+
+```bash
+plannotator sessions
+```
+
+This lists all active sessions with their mode, project, URL, and how long they've been running:
+
+```
+Active Plannotator sessions:
+
+  #1  review    my-project           http://localhost:54321    3m ago
+  #2  plan      my-project           http://localhost:12345    15m ago
+
+Reopen with: plannotator sessions --open [N]
+```
+
+To reopen one:
+
+```bash
+plannotator sessions --open       # reopens the most recent
+plannotator sessions --open 2     # reopens session #2
+```
+
+Stale sessions from crashed processes are cleaned up automatically. You can also force cleanup with `plannotator sessions --clean`.
+
+## Where does Plannotator store data?
+
+All local data lives under `~/.plannotator/`:
+
+| Directory | What's in it |
+|-----------|-------------|
+| `plans/` | Snapshots of approved and denied plans. Controlled by the "Save plans" toggle in Settings. |
+| `history/` | Automatic version history for every plan, organized by project and heading. Powers the plan diff and version browser. |
+| `drafts/` | Auto-saved annotation drafts. If a server crashes mid-review, your in-progress annotations are recovered on the next session. |
+| `sessions/` | Temporary session files for active servers. Cleaned up automatically when a server exits. |
+
+Plan saving is enabled by default. You can change the save directory or disable it entirely in the Plannotator UI settings (gear icon).
+
+## Browser doesn't open
+
+If the UI doesn't open automatically, check:
+
+- **Remote/SSH session?** Set `PLANNOTATOR_REMOTE=1` and `PLANNOTATOR_PORT` to a port you'll forward. See the [remote guide](/docs/guides/remote-and-devcontainers/).
+- **Wrong browser?** Set `PLANNOTATOR_BROWSER` to the app name or path, or use `--browser` for a one-off override.
+- **URL still works** — even if the browser didn't open, the server is running. Check `plannotator sessions` for the URL and open it manually.
+
+## Hook doesn't fire
+
+If `ExitPlanMode` doesn't trigger Plannotator:
+
+1. Make sure the plugin is installed: `/plugin install plannotator@plannotator`
+2. Restart Claude Code after installing (hooks load on startup)
+3. Verify `plannotator` is on your PATH: `which plannotator`
+4. Check that plan mode is enabled in your Claude Code session

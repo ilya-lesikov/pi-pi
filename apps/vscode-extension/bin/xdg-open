@@ -1,0 +1,14 @@
+#!/bin/sh
+# xdg-open wrapper — routes localhost URLs to the Plannotator VS Code extension.
+# Non-URL or external-URL calls delegate to the real xdg-open.
+
+case "$1" in
+  http://localhost:*|http://localhost/*|http://127.0.0.1:*|http://127.0.0.1/*)
+    exec "$(dirname "$0")/open-in-vscode" "$1"
+    ;;
+  *)
+    SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+    PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -v "^${SELF_DIR}$" | paste -sd:)
+    exec xdg-open "$@"
+    ;;
+esac

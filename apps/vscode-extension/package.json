@@ -1,0 +1,111 @@
+{
+  "name": "plannotator-webview",
+  "displayName": "Plannotator",
+  "description": "Opens Plannotator plan reviews inside VS Code tabs instead of an external browser",
+  "version": "0.16.5",
+  "publisher": "backnotprop",
+  "license": "MIT",
+  "homepage": "https://plannotator.ai",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/backnotprop/plannotator.git",
+    "directory": "apps/vscode-extension"
+  },
+  "bugs": {
+    "url": "https://github.com/backnotprop/plannotator/issues"
+  },
+  "icon": "images/icon.png",
+  "galleryBanner": {
+    "color": "#1e1e2e",
+    "theme": "dark"
+  },
+  "categories": ["AI"],
+  "keywords": ["plannotator", "plan review", "claude", "ai", "webview"],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "extensionKind": ["workspace", "ui"],
+  "main": "./dist/extension.cjs",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "plannotator-webview.openUrl",
+        "title": "Plannotator: Open URL in Editor"
+      },
+      {
+        "command": "plannotator-webview.addEditorAnnotation",
+        "title": "Plannotator: Add Annotation"
+      },
+      {
+        "command": "plannotator-webview.submitComment",
+        "title": "Submit Annotation",
+        "icon": "$(check)"
+      },
+      {
+        "command": "plannotator-webview.deleteEditorAnnotation",
+        "title": "Delete Annotation",
+        "icon": "$(trash)"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "plannotator-webview.addEditorAnnotation",
+        "key": "ctrl+shift+.",
+        "mac": "cmd+shift+.",
+        "when": "editorHasSelection"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "plannotator-webview.addEditorAnnotation",
+          "when": "editorHasSelection",
+          "group": "plannotator"
+        }
+      ],
+      "comments/commentThread/title": [
+        {
+          "command": "plannotator-webview.deleteEditorAnnotation",
+          "group": "inline",
+          "when": "commentController == plannotator && commentThread == plannotator-thread"
+        }
+      ],
+      "comments/commentThread/context": [
+        {
+          "command": "plannotator-webview.submitComment",
+          "group": "inline",
+          "when": "commentController == plannotator"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Plannotator",
+      "properties": {
+        "plannotatorWebview.injectBrowser": {
+          "type": "boolean",
+          "default": true,
+          "description": "Inject PLANNOTATOR_BROWSER env var into integrated terminals to redirect plannotator to VS Code."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "bun run ./scripts/build.ts",
+    "watch": "bun run ./scripts/watch.ts",
+    "test": "bun test",
+    "lint": "tsc --noEmit",
+    "vsce-package": "vsce package --no-dependencies",
+    "package": "bun run build && bun run vsce-package",
+    "clean": "rm -rf ./dist"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.7.1",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.0.0"
+  }
+}

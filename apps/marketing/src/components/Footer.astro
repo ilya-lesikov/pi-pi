@@ -1,0 +1,77 @@
+---
+import { getContributors } from '../lib/contributors';
+
+const year = new Date().getFullYear();
+const contributors = await getContributors();
+---
+<footer class="py-10 px-8 border-t border-border/30">
+  <div class="grid grid-cols-2 sm:grid-cols-3 gap-6 mb-6 text-sm">
+    <div>
+      <h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Product</h4>
+      <ul class="space-y-1.5">
+        <li><a href="/docs/commands/plan-review/" class="text-muted-foreground hover:text-foreground transition-colors">Plan Review</a></li>
+        <li><a href="/docs/commands/code-review/" class="text-muted-foreground hover:text-foreground transition-colors">Code Review</a></li>
+        <li><a href="/docs/getting-started/installation/" class="text-muted-foreground hover:text-foreground transition-colors">Install</a></li>
+      </ul>
+    </div>
+    <div>
+      <h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Resources</h4>
+      <ul class="space-y-1.5">
+        <li><a href="/docs/getting-started/quickstart/" class="text-muted-foreground hover:text-foreground transition-colors">Quickstart</a></li>
+        <li><a href="/docs/guides/claude-code/" class="text-muted-foreground hover:text-foreground transition-colors">Claude Code</a></li>
+        <li><a href="/docs/guides/opencode/" class="text-muted-foreground hover:text-foreground transition-colors">OpenCode</a></li>
+        <li><a href="/blog/" class="text-muted-foreground hover:text-foreground transition-colors">Blog</a></li>
+      </ul>
+    </div>
+    <div>
+      <h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Community</h4>
+      <ul class="space-y-1.5">
+        <li><a href="https://github.com/backnotprop/plannotator" target="_blank" rel="noopener noreferrer" class="text-muted-foreground hover:text-foreground transition-colors">GitHub</a></li>
+        <li><a href="https://x.com/backnotprop" target="_blank" rel="noopener noreferrer" class="text-muted-foreground hover:text-foreground transition-colors">@backnotprop</a></li>
+        <li><a href="https://x.com/plannotator" target="_blank" rel="noopener noreferrer" class="text-muted-foreground hover:text-foreground transition-colors">@plannotator</a></li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Brand stamp -->
+  <div class="flex flex-col items-center gap-3 pt-6 border-t border-border/20 mb-3">
+    <img src="/plannotator.webp" alt="" class="w-10 h-10 object-contain -scale-x-100 opacity-70" />
+    <span class="text-xs font-semibold tracking-[-0.03em] text-muted-foreground/70">Plannotator</span>
+  </div>
+
+  <p class="text-xs text-muted-foreground/40 text-center">
+    &copy; {year} backnotprop.
+  </p>
+  <p class="text-xs text-muted-foreground/40 text-center mt-1">
+    Licensed under <a href="https://github.com/backnotprop/plannotator/blob/main/LICENSE-MIT" target="_blank" rel="noopener noreferrer" class="hover:text-muted-foreground/50 transition-colors">MIT</a> or <a href="https://github.com/backnotprop/plannotator/blob/main/LICENSE-APACHE" target="_blank" rel="noopener noreferrer" class="hover:text-muted-foreground/50 transition-colors">Apache 2.0</a>, at your option.
+  </p>
+  <p class="text-xs text-muted-foreground/40 text-center mt-1">
+    <a href="/privacy/" class="hover:text-muted-foreground/50 transition-colors">Privacy Policy</a>
+  </p>
+</footer>
+
+{contributors.length > 0 && (
+  <div class="pt-6 pb-12 px-8 border-t border-border/20">
+    <p class="text-[0.6875rem] text-muted-foreground/40 text-center mb-4">Built by</p>
+    <div class="flex flex-wrap items-center justify-center gap-2">
+      {contributors.map((c) => (
+        <a
+          href={c.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={`@${c.login}`}
+          class="contributor-avatar"
+        >
+          <img
+            src={`${c.avatarUrl}&s=72`}
+            alt={c.login}
+            width="36"
+            height="36"
+            loading="lazy"
+            class="rounded-full"
+          />
+        </a>
+      ))}
+    </div>
+  </div>
+)}

@@ -1,0 +1,1275 @@
+@import "tailwindcss";
+
+/* Tell Tailwind where to scan for classes */
+@source "../components/**/*.astro";
+@source "../components/**/*.tsx";
+@source "../layouts/**/*.astro";
+@source "../pages/**/*.astro";
+
+@import "../../../../packages/ui/theme.css";
+
+/* Shiki dual theme — dark by default, light when .light class */
+.astro-code {
+  background: var(--muted) !important;
+  padding: 1rem;
+  border-radius: var(--radius);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+}
+
+.astro-code span {
+  color: var(--shiki-dark) !important;
+}
+
+.light .astro-code span {
+  color: var(--shiki-light) !important;
+}
+
+.light .astro-code {
+  background: var(--muted) !important;
+}
+
+/* Prose styles for docs and blog content */
+.prose {
+  max-width: 65ch;
+  font-size: 0.875rem;
+  line-height: 1.7;
+  color: var(--foreground);
+}
+
+@media (min-width: 768px) {
+  .prose {
+    font-size: 0.95rem;
+    line-height: 1.6;
+  }
+}
+
+.prose h1 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin-top: 2rem;
+  margin-bottom: 0.75rem;
+  letter-spacing: -0.025em;
+}
+
+.prose h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin-top: 1.75rem;
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.prose h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.prose h4 {
+  font-size: 0.875rem;
+  font-weight: 600;
+  margin-top: 1.25rem;
+  margin-bottom: 0.375rem;
+}
+
+.prose p {
+  margin-bottom: 0.75rem;
+}
+
+.prose a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.prose a:hover {
+  opacity: 0.8;
+}
+
+.prose ul,
+.prose ol {
+  padding-left: 1.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.prose li {
+  margin-bottom: 0.25rem;
+}
+
+.prose li::marker {
+  color: var(--muted-foreground);
+}
+
+.prose code {
+  font-family: var(--font-mono);
+  background: var(--muted);
+  padding: 0.125rem 0.375rem;
+  border-radius: 4px;
+  font-size: 0.8125em;
+}
+
+.prose pre {
+  margin-bottom: 1rem;
+  overflow-x: auto;
+  position: relative;
+}
+
+.prose pre .copy-btn {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  padding: 0.25rem;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--muted-foreground);
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .prose pre .copy-btn {
+    opacity: 0;
+  }
+  .prose pre:hover .copy-btn {
+    opacity: 1;
+  }
+}
+
+.prose pre .copy-btn:hover {
+  color: var(--foreground);
+  background: var(--muted);
+}
+
+.prose pre code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+  font-size: inherit;
+}
+
+.prose blockquote {
+  border-left: 3px solid var(--primary);
+  padding-left: 1rem;
+  color: var(--muted-foreground);
+  margin-bottom: 0.75rem;
+}
+
+.prose table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 1rem;
+  font-size: 0.8125rem;
+}
+
+.prose th,
+.prose td {
+  border: 1px solid var(--border);
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+}
+
+.prose th {
+  background: var(--muted);
+  font-weight: 600;
+}
+
+.prose img {
+  border-radius: var(--radius);
+  margin: 1rem 0;
+}
+
+.prose hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1.5rem 0;
+}
+
+.prose strong {
+  font-weight: 600;
+}
+
+/* ═══════════════════════════════════════════════════════
+   Landing page styles
+   ═══════════════════════════════════════════════════════ */
+
+/* Display font for landing headlines */
+.font-display {
+  font-family: 'Instrument Sans', system-ui, sans-serif;
+}
+
+/* ── Hero section ── */
+
+/* Dot grid background */
+.bg-dots {
+  background-image: radial-gradient(circle, oklch(from var(--border) l c h / 0.6) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* Noise/grain texture */
+.bg-noise {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.04;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  background-size: 256px 256px;
+}
+
+.light .bg-noise {
+  opacity: 0.03;
+}
+
+/* Hero horizon line */
+.hero-horizon {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(
+    to right,
+    transparent 0%,
+    oklch(from var(--border) l c h / 0.6) 20%,
+    oklch(from var(--border) l c h / 0.6) 80%,
+    transparent 100%
+  );
+  pointer-events: none;
+  z-index: 1;
+}
+
+.light .hero-horizon {
+  background: linear-gradient(
+    to right,
+    transparent 0%,
+    oklch(from var(--border) l c h / 0.5) 20%,
+    oklch(from var(--border) l c h / 0.5) 80%,
+    transparent 100%
+  );
+}
+
+/* Hero entrance animations */
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-up {
+  animation: fade-up 0.45s ease-out both;
+}
+
+.animate-delay-1 { animation-delay: 150ms; }
+.animate-delay-2 { animation-delay: 300ms; }
+.animate-delay-3 { animation-delay: 450ms; }
+
+/* Hero install command block (dark background) */
+.hero-install {
+  background: oklch(0.12 0.02 260);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-family: var(--font-mono);
+  position: relative;
+}
+
+.light .hero-install {
+  background: oklch(0.95 0.01 260);
+  border-color: var(--border);
+}
+
+.hero-install .copy-btn {
+  position: absolute;
+  top: 50%;
+  right: 0.75rem;
+  transform: translateY(-50%);
+  padding: 0.375rem;
+  border-radius: 4px;
+  border: 1px solid oklch(from var(--border) l c h / 0.5);
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+
+.hero-install .copy-btn:hover {
+  color: var(--foreground);
+  background: oklch(from var(--muted) l c h / 0.5);
+}
+
+.light .hero-install .copy-btn {
+  border-color: var(--border);
+}
+
+/* Detail step rows for multi-step installs */
+.hero-detail-step {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--muted-foreground);
+  background: oklch(from var(--muted) l c h / 0.3);
+  border: 1px solid oklch(from var(--border) l c h / 0.3);
+  border-radius: 4px;
+  padding: 0.25rem 0.5rem;
+}
+
+.hero-detail-step code {
+  flex: 1;
+  user-select: all;
+  cursor: text;
+}
+
+.hero-detail-step .step-copy-btn {
+  padding: 0.125rem;
+  border-radius: 3px;
+  border: none;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  transition: opacity 0.15s, color 0.15s;
+  flex-shrink: 0;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .hero-detail-step .step-copy-btn {
+    opacity: 0;
+  }
+  .hero-detail-step:hover .step-copy-btn {
+    opacity: 1;
+  }
+}
+
+.hero-detail-step .step-copy-btn:hover {
+  color: var(--foreground);
+}
+
+/* OpenCode icon — invert in light mode (dark icon by default) */
+.light .icon-opencode {
+  filter: invert(1);
+}
+
+/* Pi icon — white by default, invert in light mode */
+.light .icon-pi {
+  filter: invert(1);
+}
+
+/* Copilot icon — white by default, invert in light mode */
+.light .icon-copilot {
+  filter: invert(1);
+}
+
+/* Hero agent selector buttons — glassy, interactive */
+.agent-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.375rem 0.75rem;
+  border-radius: 0.375rem;
+  border: 1px solid var(--border);
+  background: oklch(from var(--card) l c h / 0.4);
+  backdrop-filter: blur(8px);
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.agent-btn:hover {
+  border-color: oklch(from var(--border) l c h / 0.8);
+  background: oklch(from var(--card) l c h / 0.6);
+  color: var(--foreground);
+}
+
+.agent-btn:active {
+  transform: scale(0.97);
+}
+
+.agent-btn.active {
+  border-color: oklch(from var(--primary) l c h / 0.5);
+  background: oklch(from var(--primary) l c h / 0.1);
+  color: var(--foreground);
+  box-shadow: 0 0 12px oklch(from var(--primary) l c h / 0.08);
+}
+
+.light .agent-btn {
+  background: oklch(from var(--card) l c h / 0.7);
+  backdrop-filter: blur(8px);
+}
+
+.light .agent-btn:hover {
+  background: oklch(from var(--card) l c h / 0.9);
+}
+
+.light .agent-btn.active {
+  background: oklch(from var(--primary) l c h / 0.08);
+  border-color: oklch(from var(--primary) l c h / 0.3);
+  box-shadow: 0 0 12px oklch(from var(--primary) l c h / 0.05);
+}
+
+/* ── Section scroll reveal ── */
+
+.landing-reveal {
+  opacity: 0;
+  transform: translateY(16px);
+  transition: opacity 0.5s cubic-bezier(0.23, 1, 0.32, 1),
+              transform 0.5s cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.landing-reveal.revealed {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-up { animation: none; opacity: 1; transform: none; }
+  .landing-reveal { opacity: 1; transform: none; transition: none; }
+}
+
+/* ── Annotation signature elements (used in showcase sections) ── */
+
+.anno-delete {
+  text-decoration: line-through;
+  text-decoration-color: var(--destructive);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+  color: oklch(from var(--destructive) l c h / 0.7);
+}
+
+.anno-insert {
+  border-bottom: 2px solid var(--success);
+  padding-bottom: 1px;
+}
+
+.anno-comment {
+  background: oklch(from var(--accent) l c h / 0.15);
+  border-bottom: 2px solid var(--accent);
+  padding: 0 3px;
+  border-radius: 2px;
+}
+
+/* ── Inline annotation replacement component ── */
+
+.anno-replace-wrap {
+  display: inline;
+  position: relative;
+  overflow: visible;
+}
+
+/* Ensure ancestor elements don't clip the glove/popover */
+.anno-replace-wrap,
+.anno-replace-wrap * {
+  overflow: visible;
+}
+
+.anno-replace-crossed {
+  cursor: pointer;
+  color: var(--muted-foreground);
+  text-decoration: none;
+  transition: color 0.4s ease;
+}
+
+.anno-replace-crossed.clicked {
+  text-decoration: line-through;
+  text-decoration-color: var(--destructive);
+  text-decoration-thickness: 2px;
+  color: oklch(from var(--destructive) l c h / 0.5);
+  cursor: default;
+}
+
+/* Plasma shimmer — smooth cycle through brand palette */
+.anno-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--muted-foreground) 0%,
+    var(--primary) 15%,
+    oklch(0.70 0.22 320) 30%,
+    var(--accent) 45%,
+    var(--primary) 60%,
+    oklch(0.70 0.22 320) 75%,
+    var(--muted-foreground) 100%
+  );
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: anno-shimmer 6s ease-in-out infinite;
+}
+
+@keyframes anno-shimmer {
+  0% { background-position: 100% center; }
+  100% { background-position: 0% center; }
+}
+
+/* White glove pointer — double-tap hint */
+.anno-glove {
+  position: absolute;
+  top: 0.2em;
+  left: -2.8em;
+  width: 2.5em;
+  height: auto;
+  pointer-events: none;
+  z-index: 10;
+  transform-origin: top right;
+  animation: anno-glove-tap 2.8s cubic-bezier(0.23, 1, 0.32, 1) infinite;
+}
+
+.anno-glove.hidden {
+  display: none;
+}
+
+@keyframes anno-glove-tap {
+  0%, 100% {
+    transform: translateX(0);
+    opacity: 0.8;
+  }
+  /* first jab right */
+  10% {
+    transform: translateX(6px);
+    opacity: 1;
+  }
+  /* pull back */
+  20% {
+    transform: translateX(0);
+    opacity: 0.85;
+  }
+  /* second jab right */
+  28% {
+    transform: translateX(6px);
+    opacity: 1;
+  }
+  /* settle back */
+  38% {
+    transform: translateX(0);
+    opacity: 0.8;
+  }
+  /* rest */
+  50% {
+    transform: translateX(0);
+    opacity: 0.7;
+  }
+}
+
+@media (max-width: 639px) {
+  .anno-glove {
+    animation-name: anno-glove-tap-mobile;
+  }
+}
+
+@keyframes anno-glove-tap-mobile {
+  0%, 100% {
+    transform: translateX(0);
+    opacity: 0.8;
+  }
+  10% {
+    transform: translateX(12px);
+    opacity: 1;
+  }
+  20% {
+    transform: translateX(0);
+    opacity: 0.85;
+  }
+  28% {
+    transform: translateX(12px);
+    opacity: 1;
+  }
+  38% {
+    transform: translateX(0);
+    opacity: 0.8;
+  }
+  50% {
+    transform: translateX(0);
+    opacity: 0.7;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .anno-glove {
+    animation: none;
+    opacity: 0.7;
+  }
+}
+
+.anno-replace-popover {
+  display: flex;
+  flex-direction: column;
+  background: var(--popover);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  box-shadow:
+    0 4px 6px -1px oklch(0 0 0 / 0.1),
+    0 10px 15px -3px oklch(0 0 0 / 0.15);
+  overflow: hidden;
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  width: max-content;
+  z-index: 10;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(-4px);
+  transition: opacity 0.15s ease-out, transform 0.15s ease-out;
+}
+
+.anno-replace-popover.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.anno-replace-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0.25rem 0.5rem;
+  border-bottom: 1px solid oklch(from var(--border) l c h / 0.5);
+}
+
+.anno-replace-popover-close {
+  background: none;
+  border: none;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  font-size: 0.75rem;
+  line-height: 1;
+  padding: 0 0.125rem;
+  border-radius: 2px;
+  pointer-events: auto;
+  transition: color 0.15s;
+}
+
+.anno-replace-popover-close:hover {
+  color: var(--foreground);
+}
+
+.anno-replace-popover-context {
+  font-size: 0.55em;
+  color: var(--muted-foreground);
+  font-weight: 400;
+  font-style: normal;
+  letter-spacing: 0;
+}
+
+.anno-replace-popover-body {
+  display: flex;
+  align-items: baseline;
+  padding: 0.4rem 0.625rem;
+  gap: 1px;
+}
+
+.anno-replace-popover-input {
+  font-size: 0.8em;
+  color: var(--foreground);
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.anno-replace-popover-cursor {
+  display: inline-block;
+  width: 1.5px;
+  height: 0.75em;
+  background: var(--primary);
+  animation: anno-cursor-blink 1s steps(2) infinite;
+  vertical-align: baseline;
+  position: relative;
+  top: 0.1em;
+}
+
+@keyframes anno-cursor-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+/* ── Install command block (for agent panels + CTA) ── */
+
+.install-block {
+  font-family: var(--font-mono);
+  background: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.75rem 1.25rem;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.install-block code {
+  user-select: all;
+  cursor: text;
+}
+
+.install-copy-btn {
+  padding: 0.25rem;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--muted-foreground);
+  cursor: pointer;
+  transition: opacity 0.15s;
+  flex-shrink: 0;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .install-copy-btn {
+    opacity: 0;
+  }
+  .install-block:hover .install-copy-btn {
+    opacity: 1;
+  }
+}
+
+.install-copy-btn:hover {
+  color: var(--foreground);
+  background: var(--muted);
+}
+
+/* ── Browser chrome frame ── */
+
+.browser-frame {
+  border-radius: var(--radius);
+  border: 1px solid oklch(from var(--border) l c h / 0.5);
+  overflow: hidden;
+  box-shadow:
+    0 4px 6px -1px oklch(0 0 0 / 0.1),
+    0 2px 4px -2px oklch(0 0 0 / 0.1),
+    0 20px 40px -8px oklch(0 0 0 / 0.15);
+}
+
+.browser-frame-bar {
+  height: 2.25rem;
+  background: var(--card);
+  border-bottom: 1px solid oklch(from var(--border) l c h / 0.3);
+  display: flex;
+  align-items: center;
+  padding: 0 0.875rem;
+  gap: 0.375rem;
+}
+
+.browser-frame-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+}
+
+/* ── Video demo button ── */
+
+.agent-video-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4375rem 0.875rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--foreground);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.agent-video-btn svg {
+  color: var(--primary);
+}
+
+.agent-video-btn:active {
+  transform: scale(0.97);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .agent-video-btn {
+    transition: background-color 0.15s cubic-bezier(0.23, 1, 0.32, 1),
+                border-color 0.15s cubic-bezier(0.23, 1, 0.32, 1),
+                transform 0.1s cubic-bezier(0.23, 1, 0.32, 1);
+  }
+
+  .agent-video-btn:hover {
+    background: var(--muted);
+    border-color: oklch(from var(--border) l c h / 0.8);
+  }
+}
+
+
+/* ── How it works toggle ── */
+
+.hiw-toggle {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.hiw-toggle-btn {
+  padding: 0.375rem 0.875rem;
+  font-size: 0.8125rem;
+  color: var(--muted-foreground);
+  background: transparent;
+  border: none;
+  border-right: 1px solid var(--border);
+  cursor: pointer;
+  transition: color 0.15s, background-color 0.15s;
+}
+
+.hiw-toggle-btn:last-child {
+  border-right: none;
+}
+
+.hiw-toggle-btn {
+  position: relative;
+}
+
+.hiw-toggle-btn.active {
+  color: var(--foreground);
+  background: var(--muted);
+  font-weight: 500;
+}
+
+.hiw-toggle-btn.active .hiw-notify-dot {
+  display: none;
+}
+
+.hiw-notify-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--primary);
+  margin-left: 0.25rem;
+  vertical-align: middle;
+  position: relative;
+  top: -1px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .hiw-toggle-btn:not(.active):hover {
+    color: var(--foreground);
+    background: oklch(from var(--muted) l c h / 0.5);
+  }
+}
+
+/* ── Capabilities grid ── */
+
+.capabilities-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 2rem;
+}
+
+@media (min-width: 768px) {
+  .capabilities-grid {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.5rem;
+  }
+}
+
+.cap-group-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted-foreground);
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid oklch(from var(--border) l c h / 0.3);
+}
+
+.cap-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid oklch(from var(--border) l c h / 0.15);
+}
+
+.cap-item:last-child {
+  border-bottom: none;
+}
+
+.cap-name {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--foreground);
+}
+
+.cap-cmd {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 500;
+  background: linear-gradient(
+    90deg,
+    var(--muted-foreground) 0%,
+    var(--primary) 15%,
+    oklch(0.70 0.22 320) 30%,
+    var(--accent) 45%,
+    var(--primary) 60%,
+    oklch(0.70 0.22 320) 75%,
+    var(--muted-foreground) 100%
+  );
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: anno-shimmer 6s ease-in-out infinite;
+}
+
+.cap-desc {
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+  line-height: 1.4;
+}
+
+/* ── Plan review terminal demo ── */
+
+.plan-demo {
+  border-radius: var(--radius);
+  border: 1px solid oklch(from var(--border) l c h / 0.5);
+  overflow: visible;
+  box-shadow:
+    0 4px 6px -1px oklch(0 0 0 / 0.1),
+    0 2px 4px -2px oklch(0 0 0 / 0.1),
+    0 20px 40px -8px oklch(0 0 0 / 0.15);
+  position: relative;
+}
+
+.plan-demo-terminal,
+.code-demo-terminal {
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.plan-demo-image {
+  border-radius: var(--radius);
+}
+
+.plan-demo-image img {
+  border-bottom-left-radius: var(--radius);
+  border-bottom-right-radius: var(--radius);
+}
+
+.plan-demo-terminal,
+.plan-demo-image {
+  transition: opacity 0.5s ease, transform 0.5s ease;
+}
+
+.plan-demo-hidden {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  transform: scale(0.98);
+}
+
+.plan-demo-hidden.plan-demo-visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: scale(1);
+}
+
+.plan-demo-terminal.plan-demo-faded {
+  opacity: 0;
+  pointer-events: none;
+  transform: scale(0.98);
+}
+
+.plan-demo-screen {
+  background: oklch(0.10 0.02 260);
+  height: 16rem;
+  font-family: var(--font-mono);
+  overflow-y: auto;
+  overflow-x: hidden;
+  position: relative;
+  scrollbar-width: none;
+}
+
+.plan-demo-screen::-webkit-scrollbar {
+  display: none;
+}
+
+.plan-demo-scroll {
+  display: flex;
+  flex-direction: column;
+  padding: 1.5rem 1.5rem;
+  min-height: 100%;
+  justify-content: flex-end;
+}
+
+.light .plan-demo-screen {
+  background: oklch(0.13 0.02 260);
+}
+
+.plan-demo-ascii {
+  margin: 0 0 1.5rem 0;
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: 0.5rem;
+  line-height: 1.15;
+  color: oklch(0.95 0.01 260 / 0.85);
+  background: none;
+  border: none;
+  overflow: hidden;
+  transition: opacity 0.4s ease;
+}
+
+@media (min-width: 768px) {
+  .plan-demo-ascii {
+    font-size: 0.6rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .plan-demo-ascii {
+    font-size: 0.7rem;
+  }
+}
+
+.plan-demo-input-area {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+}
+
+.plan-demo-prompt {
+  color: var(--primary);
+  font-weight: 600;
+  user-select: none;
+}
+
+.plan-demo-typed {
+  color: oklch(0.85 0.01 260);
+}
+
+.plan-demo-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1.1em;
+  background: var(--primary);
+  animation: anno-cursor-blink 1s steps(2) infinite;
+  vertical-align: text-bottom;
+}
+
+.plan-demo-caret.hidden {
+  display: none;
+}
+
+.plan-demo-output {
+  margin-top: 0.75rem;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: oklch(0.65 0.01 260);
+  white-space: pre-wrap;
+}
+
+.plan-demo-step {
+  color: oklch(0.55 0.01 260);
+  font-size: 0.8125rem;
+}
+
+.plan-demo-submit {
+  color: var(--primary);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  margin-top: 0.25rem;
+}
+
+.plan-demo-output .text-primary {
+  color: var(--primary);
+}
+
+.plan-demo-output .text-destructive {
+  color: var(--destructive);
+}
+
+.plan-demo-output .text-success {
+  color: var(--success);
+}
+
+/* Deny button on image */
+.plan-demo-deny-bar {
+  position: absolute;
+  bottom: 0.75rem;
+  right: 0.75rem;
+}
+
+.plan-demo-deny-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.5rem 1rem;
+  border-radius: var(--radius);
+  border: none;
+  background: var(--destructive);
+  color: #fff;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 2px 8px oklch(0 0 0 / 0.3);
+  transition: opacity 0.15s, transform 0.1s;
+}
+
+.plan-demo-deny-btn:hover {
+  opacity: 0.9;
+}
+
+.plan-demo-deny-btn:active {
+  transform: scale(0.97);
+}
+
+/* Glove pointer on demo buttons — flipped to point left toward button */
+.demo-glove {
+  position: absolute;
+  top: 0.1em;
+  left: calc(100% + 0.3em);
+  width: 2.5em;
+  height: auto;
+  pointer-events: none;
+  z-index: 10;
+  transform: scaleX(-1);
+  transform-origin: center;
+  animation: demo-glove-jab 2.8s cubic-bezier(0.23, 1, 0.32, 1) infinite;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.demo-glove.visible {
+  opacity: 1;
+}
+
+@keyframes demo-glove-jab {
+  0%, 100% {
+    transform: scaleX(-1) translateX(0);
+    opacity: 0.8;
+  }
+  10% {
+    transform: scaleX(-1) translateX(-6px);
+    opacity: 1;
+  }
+  20% {
+    transform: scaleX(-1) translateX(0);
+    opacity: 0.85;
+  }
+  28% {
+    transform: scaleX(-1) translateX(-6px);
+    opacity: 1;
+  }
+  38% {
+    transform: scaleX(-1) translateX(0);
+    opacity: 0.8;
+  }
+  50% {
+    transform: scaleX(-1) translateX(0);
+    opacity: 0.7;
+  }
+}
+
+/* Left-side variant — un-flipped, jabs right toward button */
+.demo-glove-left {
+  left: auto;
+  right: calc(100% + 0.3em);
+  transform: none;
+  animation-name: demo-glove-jab-left;
+}
+
+@keyframes demo-glove-jab-left {
+  0%, 100% {
+    transform: translateX(0);
+    opacity: 0.8;
+  }
+  10% {
+    transform: translateX(6px);
+    opacity: 1;
+  }
+  20% {
+    transform: translateX(0);
+    opacity: 0.85;
+  }
+  28% {
+    transform: translateX(6px);
+    opacity: 1;
+  }
+  38% {
+    transform: translateX(0);
+    opacity: 0.8;
+  }
+  50% {
+    transform: translateX(0);
+    opacity: 0.7;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .demo-glove {
+    animation: none;
+  }
+}
+
+/* Send button bar — bottom-left */
+.code-demo-send-bar {
+  position: absolute;
+  bottom: 0.75rem;
+  left: 0.75rem;
+}
+
+.code-demo-send-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.5rem 1rem;
+  border-radius: var(--radius);
+  border: none;
+  background: var(--destructive);
+  color: #fff;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 2px 8px oklch(0 0 0 / 0.3);
+  transition: opacity 0.15s, transform 0.1s;
+}
+
+.code-demo-send-btn:hover {
+  opacity: 0.9;
+}
+
+.code-demo-send-btn:active {
+  transform: scale(0.97);
+}
+
+/* ── Landing button active state ── */
+
+.landing-btn:active {
+  transform: scale(0.97);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .landing-btn {
+    transition: opacity 0.15s cubic-bezier(0.23, 1, 0.32, 1),
+                transform 0.1s cubic-bezier(0.23, 1, 0.32, 1);
+  }
+}
+
+/* ── Contributor avatars ── */
+
+.contributor-avatar {
+  display: block;
+  opacity: 0.85;
+  transition: opacity 0.15s, transform 0.15s;
+}
+
+.contributor-avatar:hover {
+  opacity: 1;
+  transform: scale(1.1);
+}
