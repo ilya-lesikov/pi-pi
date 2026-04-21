@@ -258,6 +258,8 @@ export default function (pi: ExtensionAPI) {
       description: state.description,
     };
 
+    setManagedSession(true);
+
     const modelConfig = config.mainModel[type === "debug" ? "debug" : type === "brainstorm" ? "brainstorm" : "implement"];
     const modelOk = await switchModel(ctx, modelConfig.model, modelConfig.thinking);
     if (!modelOk) {
@@ -307,6 +309,11 @@ export default function (pi: ExtensionAPI) {
 
 
 
+  function setManagedSession(managed: boolean): void {
+    pi.events.emit("tasks:set-managed", { managed });
+    pi.events.emit("subagents:set-managed", { managed });
+  }
+
   function abortAllSubagents(): void {
     for (const agentId of spawnedAgentIds) {
       pi.events.emit("subagents:rpc:stop", {
@@ -319,6 +326,7 @@ export default function (pi: ExtensionAPI) {
 
   async function cleanupActive(): Promise<void> {
     if (!active) return;
+    setManagedSession(false);
     if (active.release) {
       try {
         await active.release();
@@ -385,6 +393,7 @@ export default function (pi: ExtensionAPI) {
           reviewRound,
           description: found.state.description,
         };
+        setManagedSession(true);
         registerAgents();
         updateStatus(ctx);
         ctx.ui.notify(`Restored task: "${taskName(found.dir)}" (phase: ${found.state.phase})`, "info");
@@ -696,6 +705,8 @@ export default function (pi: ExtensionAPI) {
         reviewRound,
         description: task.state.description,
       };
+
+      setManagedSession(true);
 
       const modelConfig = config.mainModel[task.type === "debug" ? "debug" : task.type === "brainstorm" ? "brainstorm" : "implement"];
       const modelOk = await switchModel(ctx, modelConfig.model, modelConfig.thinking);

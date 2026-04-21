@@ -242,6 +242,12 @@ export default function (pi: ExtensionAPI) {
   // or tool_execution_start — whichever fires first).
   let storeUpgraded = false;
   let persistedTasksShown = false;
+
+  // When managed by an orchestrator extension, session_switch should not reset state.
+  let managedSession = false;
+  pi.events.on("tasks:set-managed", (data: any) => {
+    managedSession = data?.managed === true;
+  });
   function upgradeStoreIfNeeded(ctx: ExtensionContext) {
     if (storeUpgraded) return;
     if (taskScope === "session" && !piTasks) {
@@ -341,6 +347,10 @@ export default function (pi: ExtensionAPI) {
     widget.setUICtx(ctx.ui as UICtx);
 
     const isResume = event?.reason === "resume";
+
+    // In managed mode, an orchestrator extension controls session lifecycle.
+    // Skip state reset so tasks survive extension-triggered newSession() calls.
+    if (managedSession) return;
 
     // Reset session-scoped state for both /new and /resume
     storeUpgraded = false;

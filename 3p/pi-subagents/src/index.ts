@@ -430,7 +430,12 @@ export default function (pi: ExtensionAPI) {
     manager.clearCompleted();           // preserve existing behavior
   });
 
-  pi.on("session_switch", () => { manager.clearCompleted(); });
+  let managedSession = false;
+  pi.events.on("subagents:set-managed", (data: any) => {
+    managedSession = data?.managed === true;
+  });
+
+  pi.on("session_switch", () => { if (!managedSession) manager.clearCompleted(); });
 
   const { unsubPing: unsubPingRpc, unsubSpawn: unsubSpawnRpc, unsubStop: unsubStopRpc } = registerRpcHandlers({
     events: pi.events,
