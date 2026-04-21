@@ -1,0 +1,52 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+.astro
+*.local
+
+# npm pack output
+*.tgz
+
+# VS Code extension package
+*.vsix
+
+# OpenCode plugin build artifacts (generated from hook/review dist)
+apps/opencode-plugin/plannotator.html
+apps/opencode-plugin/review-editor.html
+
+# Pi extension build artifacts (generated from hook/review dist + shared packages)
+apps/pi-extension/plannotator.html
+apps/pi-extension/review-editor.html
+apps/pi-extension/storage.ts
+apps/pi-extension/draft.ts
+apps/pi-extension/project.ts
+apps/pi-extension/feedback-templates.ts
+apps/pi-extension/review-core.ts
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+
+# Claude Code session-local runtime state (lock files, scheduled-task state).
+# Machine-specific; never belongs in the repo.
+.claude/
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+opencode.json
+plannotator-local
+# Local research/reference docs (not for repo)
+/reference/

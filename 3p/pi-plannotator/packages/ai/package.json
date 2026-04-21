@@ -1,0 +1,20 @@
+{
+  "name": "@plannotator/ai",
+  "version": "0.0.1",
+  "private": true,
+  "description": "AI provider layer for Plannotator — pluggable agent runtime backbone",
+  "exports": {
+    ".": "./index.ts",
+    "./types": "./types.ts",
+    "./context": "./context.ts",
+    "./provider": "./provider.ts",
+    "./session-manager": "./session-manager.ts",
+    "./endpoints": "./endpoints.ts",
+    "./providers/claude-agent-sdk": "./providers/claude-agent-sdk.ts",
+    "./providers/codex-sdk": "./providers/codex-sdk.ts",
+    "./providers/pi-sdk": "./providers/pi-sdk.ts",
+    "./providers/opencode-sdk": "./providers/opencode-sdk.ts",
+    "./providers/pi-sdk-node": "./providers/pi-sdk-node.ts"
+  },
+  "dependencies": {}
+}

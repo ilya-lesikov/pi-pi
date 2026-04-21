@@ -1,0 +1,11 @@
+#!/bin/sh
+# Plannotator WebView Router
+# Invoked via PLANNOTATOR_BROWSER env var
+# Sends URL to the extension's local IPC server
+
+url="$1"
+[ -z "$url" ] && exit 0
+[ -z "$PLANNOTATOR_VSCODE_PORT" ] && exit 1
+
+curl -s -G "http://127.0.0.1:${PLANNOTATOR_VSCODE_PORT}/open" \
+  --data-urlencode "url=${url}" >/dev/null 2>&1

@@ -1,0 +1,467 @@
+---
+interface Props {
+  title: string;
+  description?: string;
+  ogImage?: string;
+  canonicalUrl?: string;
+}
+
+const {
+  title,
+  description = 'Interactive Plan Review: Mark up and refine your plans using a UI, easily share for team collaboration, automatically integrates with Claude Code plan mode.',
+  ogImage = 'https://plannotator.ai/og-image.webp',
+  canonicalUrl,
+} = Astro.props;
+
+const canonical = canonicalUrl || Astro.url.href;
+
+import '../styles/global.css';
+---
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{title}</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <meta name="description" content={description} />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:image" content={ogImage} />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={ogImage} />
+
+    <meta name="robots" content="index, follow" />
+    <link rel="canonical" href={canonical} />
+    <link rel="alternate" type="application/rss+xml" title="Plannotator Blog" href="/rss.xml" />
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+    <noscript><style>.landing-reveal{opacity:1!important;transform:none!important}</style></noscript>
+  </head>
+  <body class="min-h-screen antialiased">
+    <slot />
+    <script is:inline>
+      // Read theme cookies and set classes before paint to prevent FOUC
+      (function() {
+        var root = document.documentElement;
+        // Color theme (palette) — marketing uses whatever the user set in the app
+        var colorMatch = document.cookie.match(/(?:^|; )plannotator-color-theme=([^;]*)/);
+        var colorTheme = colorMatch ? decodeURIComponent(colorMatch[1]) : 'plannotator';
+        root.classList.add('theme-' + colorTheme);
+        // Mode (dark/light/system)
+        var modeMatch = document.cookie.match(/(?:^|; )plannotator-theme=([^;]*)/);
+        var mode = modeMatch ? decodeURIComponent(modeMatch[1]) : 'dark';
+        if (mode === 'light') {
+          root.classList.add('light');
+        } else if (mode === 'system') {
+          if (window.matchMedia('(prefers-color-scheme: light)').matches) {
+            root.classList.add('light');
+          }
+        }
+      })();
+    </script>
+    <script is:inline>
+      // Add copy buttons to code blocks
+      document.querySelectorAll('.prose pre').forEach(function(pre) {
+        var btn = document.createElement('button');
+        btn.className = 'copy-btn';
+        btn.setAttribute('aria-label', 'Copy code');
+        btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>';
+        btn.addEventListener('click', function() {
+          var code = pre.querySelector('code');
+          var text = code ? code.textContent : pre.textContent;
+          navigator.clipboard.writeText(text).then(function() {
+            btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>';
+            setTimeout(function() {
+              btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>';
+            }, 1500);
+          });
+        });
+        pre.appendChild(btn);
+      });
+    </script>
+    <script is:inline>
+      // Install block copy buttons (landing page)
+      document.querySelectorAll('.install-copy-btn').forEach(function(btn) {
+        btn.addEventListener('click', function(e) {
+          e.preventDefault();
+          var block = btn.closest('.install-block');
+          var code = block.querySelector('code');
+          var text = code ? code.textContent : '';
+          navigator.clipboard.writeText(text.trim()).then(function() {
+            btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>';
+            setTimeout(function() {
+              btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>';
+            }, 1500);
+          });
+        });
+      });
+    </script>
+    <script is:inline>
+      // How it works toggle (plan review / code review)
+      (function() {
+        var planSteps = [
+          'Work with your coding agent exactly as you do today. When it proposes a plan, Plannotator intercepts the approval step automatically.',
+          'Instead of squinting at terminal text, you get a proper review workspace. Annotate inline, mark what needs to change, then approve or deny with structured feedback. You own the specification.',
+          'Your annotations are sent directly to the agent as structured feedback. No copy-pasting, no retyping. The agent revises based on exactly what you said.'
+        ];
+        var codeSteps = [
+          'Your agent writes code. Run the review command and Plannotator opens a full diff viewer in your browser with every uncommitted change.',
+          'Browse the file tree, expand context, and leave line-level comments or code suggestions. Stage the files you want, send back the ones that need work.',
+          'Your feedback goes straight to the agent. It sees exactly which lines you commented on and what you want changed. No ambiguity.'
+        ];
+
+        document.querySelectorAll('.hiw-toggle-btn').forEach(function(btn) {
+          btn.addEventListener('click', function() {
+            var mode = btn.dataset.hiw;
+            document.querySelectorAll('.hiw-toggle-btn').forEach(function(b) {
+              b.classList.toggle('active', b.dataset.hiw === mode);
+              b.setAttribute('aria-selected', b.dataset.hiw === mode ? 'true' : 'false');
+            });
+
+            var planImg = document.getElementById('hiw-img-plan');
+            var codeImg = document.getElementById('hiw-img-code');
+            var barTitle = document.querySelector('.hiw-bar-title');
+            if (planImg && codeImg) {
+              planImg.classList.toggle('hidden', mode === 'code');
+              codeImg.classList.toggle('hidden', mode === 'plan');
+            }
+            if (barTitle) {
+              barTitle.innerHTML = mode === 'plan'
+                ? 'Plannotator · Plan Review'
+                : 'Plannotator · Code Review';
+            }
+
+            var steps = mode === 'plan' ? planSteps : codeSteps;
+            for (var i = 0; i < 3; i++) {
+              var el = document.getElementById('hiw-step-' + (i + 1));
+              if (el) el.textContent = steps[i];
+            }
+          });
+        });
+      })();
+    </script>
+    <script is:inline>
+      // Plan review terminal demo — starts on viewport entry
+      (function() {
+        var demo = document.getElementById('plan-demo');
+        var terminal = document.getElementById('plan-demo-terminal');
+        var screen = document.getElementById('plan-demo-screen');
+        var image = document.getElementById('plan-demo-image');
+        var typed = document.getElementById('plan-demo-typed');
+        var caret = document.getElementById('plan-demo-caret');
+        var output = document.getElementById('plan-demo-output');
+        var ascii = document.getElementById('plan-demo-ascii');
+        var denyBtn = document.getElementById('plan-demo-deny');
+        var glove = document.getElementById('plan-demo-glove');
+        if (!demo || !terminal || !screen || !image || !typed || !caret || !output || !denyBtn) return;
+
+        function scrollToBottom() {
+          screen.scrollTop = screen.scrollHeight;
+        }
+
+        var active = false;
+        var timers = [];
+
+        function delay(fn, ms) {
+          var t = setTimeout(fn, ms);
+          timers.push(t);
+          return t;
+        }
+
+        function clearTimers() {
+          timers.forEach(clearTimeout);
+          timers = [];
+        }
+
+        function typeText(el, text, speed, cb) {
+          var i = 0;
+          function tick() {
+            if (!active) return;
+            if (i < text.length) {
+              el.textContent += text[i];
+              i++;
+              delay(tick, speed);
+            } else if (cb) { cb(); }
+          }
+          tick();
+        }
+
+        function resetDemo() {
+          clearTimers();
+          typed.textContent = '';
+          output.innerHTML = '';
+          caret.classList.remove('hidden');
+          if (ascii) ascii.style.opacity = '1';
+          if (glove) glove.classList.remove('visible');
+          image.classList.remove('plan-demo-visible');
+          terminal.classList.remove('plan-demo-faded');
+        }
+
+        function showImage() {
+          terminal.classList.add('plan-demo-faded');
+          image.classList.add('plan-demo-visible');
+          if (glove) delay(function() { glove.classList.add('visible'); }, 600);
+        }
+
+        function showTerminal() {
+          image.classList.remove('plan-demo-visible');
+          terminal.classList.remove('plan-demo-faded');
+        }
+
+        function showOutput(text, cls) {
+          var line = document.createElement('div');
+          if (cls) line.className = cls;
+          line.textContent = text;
+          output.appendChild(line);
+          screen.scrollTop = screen.scrollHeight;
+        }
+
+        function runPhase1() {
+          if (!active) return;
+          resetDemo();
+          active = true;
+          delay(function() {
+            if (!active) return;
+            if (ascii) ascii.style.opacity = '0.4';
+            delay(function() {
+              if (!active) return;
+              typeText(typed, '/plan', 100, function() {
+                delay(function() {
+                  if (!active) return;
+                  caret.classList.add('hidden');
+                  delay(function() {
+                    if (!active) return;
+                    showOutput('... exploring codebase', 'plan-demo-step');
+                    delay(function() {
+                      if (!active) return;
+                      showOutput('... asking questions', 'plan-demo-step');
+                      delay(function() {
+                        if (!active) return;
+                        showOutput('... gathering context', 'plan-demo-step');
+                        delay(function() {
+                          if (!active) return;
+                          showOutput('... writing plan', 'plan-demo-step');
+                          delay(function() {
+                            if (!active) return;
+                            showOutput('submit_plan()', 'plan-demo-submit');
+                            delay(function() { if (active) showImage(); }, 900);
+                          }, 1000);
+                        }, 900);
+                      }, 800);
+                    }, 800);
+                  }, 600);
+                }, 700);
+              });
+            }, 400);
+          }, 1200);
+        }
+
+        function runPhase2() {
+          if (!active) return;
+          if (glove) glove.classList.remove('visible');
+          showTerminal();
+          typed.textContent = '';
+          output.innerHTML = '';
+          caret.classList.add('hidden');
+          if (ascii) ascii.style.opacity = '0.4';
+          typed.textContent = '...';
+          screen.scrollTop = screen.scrollHeight;
+          delay(function() {
+            if (!active) return;
+            showOutput('✗ Plan denied with feedback', 'text-destructive');
+            delay(function() {
+              if (!active) return;
+              showOutput('"Keep Postgres — Redis adds infra', 'text-primary');
+              delay(function() {
+                if (!active) return;
+                showOutput('we don\'t need yet."', 'text-primary');
+                delay(function() {
+                  if (!active) return;
+                  showOutput('Updating the plan...', 'text-success');
+                  delay(runPhase1, 3000);
+                }, 800);
+              }, 500);
+            }, 700);
+          }, 800);
+        }
+
+        denyBtn.addEventListener('click', runPhase2);
+
+        // Continuous observation — start/stop based on visibility
+        var observer = new IntersectionObserver(function(entries) {
+          entries.forEach(function(entry) {
+            if (entry.isIntersecting && !active) {
+              active = true;
+              delay(runPhase1, 600);
+            } else if (!entry.isIntersecting && active) {
+              active = false;
+              clearTimers();
+              resetDemo();
+            }
+          });
+        }, { threshold: 0.6 });
+        observer.observe(demo);
+      })();
+    </script>
+    <script is:inline>
+      // Code review terminal demo — starts on viewport entry
+      (function() {
+        var demo = document.getElementById('code-demo');
+        var terminal = document.getElementById('code-demo-terminal');
+        var screen = document.getElementById('code-demo-screen');
+        var image = document.getElementById('code-demo-image');
+        var typed = document.getElementById('code-demo-typed');
+        var caret = document.getElementById('code-demo-caret');
+        var output = document.getElementById('code-demo-output');
+        var ascii = document.getElementById('code-demo-ascii');
+        var sendBtn = document.getElementById('code-demo-send');
+        var glove = document.getElementById('code-demo-glove');
+        if (!demo || !terminal || !screen || !image || !typed || !caret || !output || !sendBtn) return;
+
+        var active = false;
+        var timers = [];
+
+        function delay(fn, ms) {
+          var t = setTimeout(fn, ms);
+          timers.push(t);
+          return t;
+        }
+
+        function clearTimers() {
+          timers.forEach(clearTimeout);
+          timers = [];
+        }
+
+        function typeText(el, text, speed, cb) {
+          var i = 0;
+          function tick() {
+            if (!active) return;
+            if (i < text.length) {
+              el.textContent += text[i];
+              i++;
+              delay(tick, speed);
+            } else if (cb) { cb(); }
+          }
+          tick();
+        }
+
+        function resetDemo() {
+          clearTimers();
+          typed.textContent = '';
+          output.innerHTML = '';
+          caret.classList.remove('hidden');
+          if (ascii) ascii.style.opacity = '1';
+          if (glove) glove.classList.remove('visible');
+          image.classList.remove('plan-demo-visible');
+          terminal.classList.remove('plan-demo-faded');
+        }
+
+        function showImage() {
+          terminal.classList.add('plan-demo-faded');
+          image.classList.add('plan-demo-visible');
+          if (glove) delay(function() { glove.classList.add('visible'); }, 600);
+        }
+
+        function showTerminal() {
+          image.classList.remove('plan-demo-visible');
+          terminal.classList.remove('plan-demo-faded');
+        }
+
+        function addLine(text, cls) {
+          var line = document.createElement('div');
+          if (cls) line.className = cls;
+          line.textContent = text;
+          output.appendChild(line);
+          screen.scrollTop = screen.scrollHeight;
+        }
+
+        function runPhase1() {
+          if (!active) return;
+          resetDemo();
+          active = true;
+          delay(function() {
+            if (!active) return;
+            if (ascii) ascii.style.opacity = '0.4';
+            delay(function() {
+              if (!active) return;
+              typeText(typed, '/plannotator-review', 60, function() {
+                delay(function() {
+                  if (!active) return;
+                  caret.classList.add('hidden');
+                  addLine('Loading diff...', 'plan-demo-step');
+                  delay(function() { if (active) showImage(); }, 800);
+                }, 600);
+              });
+            }, 400);
+          }, 1200);
+        }
+
+        function runPhase2() {
+          if (!active) return;
+          if (glove) glove.classList.remove('visible');
+          showTerminal();
+          typed.textContent = '';
+          output.innerHTML = '';
+          caret.classList.add('hidden');
+          if (ascii) ascii.style.opacity = '0.4';
+          typed.textContent = '...';
+          screen.scrollTop = screen.scrollHeight;
+          delay(function() {
+            if (!active) return;
+            addLine('Feedback sent to agent', 'text-primary');
+            delay(function() {
+              if (!active) return;
+              addLine('2 comments, 1 suggestion', 'plan-demo-step');
+              delay(function() {
+                if (!active) return;
+                addLine('Addressing feedback...', 'text-success');
+                delay(runPhase1, 3000);
+              }, 800);
+            }, 600);
+          }, 800);
+        }
+
+        sendBtn.addEventListener('click', runPhase2);
+
+        var observer = new IntersectionObserver(function(entries) {
+          entries.forEach(function(entry) {
+            if (entry.isIntersecting && !active) {
+              active = true;
+              delay(runPhase1, 600);
+            } else if (!entry.isIntersecting && active) {
+              active = false;
+              clearTimers();
+              resetDemo();
+            }
+          });
+        }, { threshold: 0.6 });
+        observer.observe(demo);
+      })();
+    </script>
+    <script is:inline>
+      // Scroll reveal for landing sections
+      if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        var observer = new IntersectionObserver(function(entries) {
+          entries.forEach(function(entry) {
+            if (entry.isIntersecting) {
+              entry.target.classList.add('revealed');
+              observer.unobserve(entry.target);
+            }
+          });
+        }, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
+        document.querySelectorAll('.landing-reveal').forEach(function(el) {
+          observer.observe(el);
+        });
+      }
+    </script>
+  </body>
+</html>

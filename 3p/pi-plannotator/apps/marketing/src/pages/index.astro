@@ -1,0 +1,446 @@
+---
+import Base from '../layouts/Base.astro';
+import Nav from '../components/Nav.astro';
+import Footer from '../components/Footer.astro';
+import HeroSection from '../components/landing/HeroSection.astro';
+import SocialProofBar from '../components/landing/SocialProofBar.astro';
+import AnnoReplace from '../components/landing/AnnoReplace.astro';
+---
+<Base
+  title="Plannotator - Plan & Code Review for AI Coding Agents"
+  description="Free, open-source plugin for Claude Code, OpenCode, Codex, and Pi. Review agent plans before they execute, annotate agent-written code, send structured feedback back — all locally."
+>
+  <div class="min-h-screen bg-background text-foreground">
+    <Nav />
+
+    <!-- Contained column — editorial feel -->
+    <div class="max-w-4xl mx-auto border-x border-border/30">
+
+      <!-- Hero -->
+      <HeroSection />
+
+      <!-- Social Proof -->
+      <SocialProofBar />
+
+      <!-- Plan Review -->
+      <section class="py-16 px-8 border-t border-border/30 landing-reveal">
+        <div class="grid md:grid-cols-2 gap-10 items-center">
+          <div class="order-2 md:order-1">
+            <p class="text-xs font-medium uppercase tracking-wider text-primary mb-3">
+              Plan Review
+            </p>
+            <h2 class="font-display text-xl font-semibold tracking-tight mb-3">
+              Annotate the plan before it executes
+            </h2>
+            <p class="text-sm text-muted-foreground mb-4 leading-relaxed">
+              Select text. Mark it for deletion, add a comment, or write a
+              replacement. Your annotations export as structured feedback
+              that the agent understands.
+            </p>
+            <ul class="space-y-2 text-sm text-foreground/80">
+              <li class="flex items-start gap-2">
+                <span class="text-accent mt-0.5 shrink-0">&bull;</span>
+                <span><span class="anno-comment">Inline comments</span> on any section</span>
+              </li>
+              <li class="flex items-start gap-2">
+                <span class="text-destructive mt-0.5 shrink-0">&bull;</span>
+                <span><span class="anno-delete">Mark deletions</span> to remove scope</span>
+              </li>
+              <li class="flex items-start gap-2">
+                <span class="text-primary mt-0.5 shrink-0">&bull;</span>
+                <span>Version history tracks every revision (plan diffs)</span>
+              </li>
+              <li class="flex items-start gap-2">
+                <span class="text-success mt-0.5 shrink-0">&bull;</span>
+                <span>Diff view shows what changed between iterations</span>
+              </li>
+            </ul>
+          </div>
+          <div class="plan-demo order-1 md:order-2" id="plan-demo">
+            <!-- Terminal state -->
+            <div class="plan-demo-terminal" id="plan-demo-terminal">
+              <div class="browser-frame-bar">
+                <div class="browser-frame-dot bg-destructive/50"></div>
+                <div class="browser-frame-dot bg-accent/50"></div>
+                <div class="browser-frame-dot bg-success/50"></div>
+                <span class="ml-2 text-[0.6875rem] text-muted-foreground">Terminal</span>
+              </div>
+              <div class="plan-demo-screen" id="plan-demo-screen">
+                <div class="plan-demo-scroll">
+                  <pre class="plan-demo-ascii" id="plan-demo-ascii"
+>  ██████  ██████  ██████  ███████
+ ██      ██    ██ ██   ██ ██
+ ██      ██    ██ ██   ██ █████
+ ██      ██    ██ ██   ██ ██
+  ██████  ██████  ██████  ███████
+
+  █████   ██████  ███████ ███   ██ ████████
+ ██   ██ ██       ██      ████  ██    ██
+ ███████ ██   ███ █████   ██ ██ ██    ██
+ ██   ██ ██    ██ ██      ██  ████    ██
+ ██   ██  ██████  ███████ ██   ███    ██</pre>
+                  <div class="plan-demo-input-area">
+                    <span class="plan-demo-prompt">$</span>
+                    <span class="plan-demo-typed" id="plan-demo-typed"></span>
+                    <span class="plan-demo-caret" id="plan-demo-caret"></span>
+                  </div>
+                  <div class="plan-demo-output" id="plan-demo-output"></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Image state -->
+            <div class="plan-demo-image plan-demo-hidden" id="plan-demo-image">
+              <div class="browser-frame-bar">
+                <div class="browser-frame-dot bg-destructive/50"></div>
+                <div class="browser-frame-dot bg-accent/50"></div>
+                <div class="browser-frame-dot bg-success/50"></div>
+                <span class="ml-2 text-[0.6875rem] text-muted-foreground">Plannotator</span>
+              </div>
+              <div class="relative">
+                <img
+                  src="/assets/plan-review.webp"
+                  alt="Plannotator plan review with inline annotations"
+                  class="w-full block"
+                  loading="lazy"
+                />
+                <div class="plan-demo-deny-bar">
+                  <button class="plan-demo-deny-btn" id="plan-demo-deny">
+                    <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                    Deny with feedback
+                  </button>
+                  <img
+                    src="/assets/whiteglove.png"
+                    alt=""
+                    class="demo-glove"
+                    id="plan-demo-glove"
+                    aria-hidden="true"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Code Review -->
+      <section class="py-16 px-8 border-t border-border/30 landing-reveal">
+        <div class="grid md:grid-cols-2 gap-10 items-center">
+          <div class="order-2 md:order-last">
+            <p class="text-xs font-medium uppercase tracking-wider text-secondary mb-3">
+              Code Review
+            </p>
+            <h2 class="font-display text-xl font-semibold tracking-tight mb-3">
+              Review the diff before you commit
+            </h2>
+            <p class="text-sm text-muted-foreground mb-4 leading-relaxed">
+              Run <code class="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">{"/"}plannotator-review</code>
+              and get a PR-style diff viewer for your agent's uncommitted changes.
+              The same workflow you use for human PRs, applied to agent output.
+            </p>
+            <ul class="space-y-2 text-sm text-foreground/80">
+              <li class="flex items-start gap-2">
+                <span class="text-secondary mt-0.5 shrink-0">&bull;</span>
+                <span>Side-by-side or unified diff view</span>
+              </li>
+              <li class="flex items-start gap-2">
+                <span class="text-secondary mt-0.5 shrink-0">&bull;</span>
+                <span>File tree navigation</span>
+              </li>
+              <li class="flex items-start gap-2">
+                <span class="text-secondary mt-0.5 shrink-0">&bull;</span>
+                <span>Line-level annotations with code suggestions</span>
+              </li>
+              <li class="flex items-start gap-2">
+                <span class="text-secondary mt-0.5 shrink-0">&bull;</span>
+                <span>Stage or unstage files before committing</span>
+              </li>
+            </ul>
+          </div>
+          <!-- Code review demo -->
+          <div class="plan-demo order-1 md:order-first" id="code-demo">
+            <!-- Terminal state -->
+            <div class="code-demo-terminal" id="code-demo-terminal">
+              <div class="browser-frame-bar">
+                <div class="browser-frame-dot bg-destructive/50"></div>
+                <div class="browser-frame-dot bg-accent/50"></div>
+                <div class="browser-frame-dot bg-success/50"></div>
+                <span class="ml-2 text-[0.6875rem] text-muted-foreground">Terminal</span>
+              </div>
+              <div class="plan-demo-screen" id="code-demo-screen">
+                <div class="plan-demo-scroll">
+                  <pre class="plan-demo-ascii" id="code-demo-ascii"
+>  ██████  ██████  ██████  ███████
+ ██      ██    ██ ██   ██ ██
+ ██      ██    ██ ██   ██ █████
+ ██      ██    ██ ██   ██ ██
+  ██████  ██████  ██████  ███████
+
+  █████   ██████  ███████ ███   ██ ████████
+ ██   ██ ██       ██      ████  ██    ██
+ ███████ ██   ███ █████   ██ ██ ██    ██
+ ██   ██ ██    ██ ██      ██  ████    ██
+ ██   ██  ██████  ███████ ██   ███    ██</pre>
+                  <div class="plan-demo-input-area">
+                    <span class="plan-demo-prompt">$</span>
+                    <span class="plan-demo-typed" id="code-demo-typed"></span>
+                    <span class="plan-demo-caret" id="code-demo-caret"></span>
+                  </div>
+                  <div class="plan-demo-output" id="code-demo-output"></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Image state -->
+            <div class="plan-demo-image plan-demo-hidden" id="code-demo-image">
+              <div class="browser-frame-bar">
+                <div class="browser-frame-dot bg-destructive/50"></div>
+                <div class="browser-frame-dot bg-accent/50"></div>
+                <div class="browser-frame-dot bg-success/50"></div>
+                <span class="ml-2 text-[0.6875rem] text-muted-foreground">Plannotator · Code Review</span>
+              </div>
+              <div class="relative">
+                <img
+                  src="/assets/code-review.webp"
+                  alt="Plannotator code review with diff annotations"
+                  class="w-full block"
+                  loading="lazy"
+                />
+                <div class="code-demo-send-bar">
+                  <img
+                    src="/assets/whiteglove.png"
+                    alt=""
+                    class="demo-glove demo-glove-left"
+                    id="code-demo-glove"
+                    aria-hidden="true"
+                  />
+                  <button class="code-demo-send-btn" id="code-demo-send">
+                    <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
+                    </svg>
+                    Send feedback
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- How it works -->
+      <section class="pt-10 pb-16 px-8 border-t border-border/30 bg-card/30 landing-reveal" id="how-it-works">
+        <h2 class="font-display text-xl font-semibold tracking-tight mb-2 text-center">
+          How it works<span class="text-muted-foreground/50">...</span> simple.
+        </h2>
+        <div class="flex justify-center mb-8">
+          <div class="hiw-toggle" role="tablist" aria-label="Choose workflow">
+            <button class="hiw-toggle-btn active" data-hiw="plan" role="tab" aria-selected="true">Plan Review</button>
+            <button class="hiw-toggle-btn" data-hiw="code" role="tab" aria-selected="false">
+              Code Review
+              <span class="hiw-notify-dot"></span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Image -->
+        <div class="browser-frame mb-8">
+          <div class="browser-frame-bar">
+            <div class="browser-frame-dot bg-destructive/50"></div>
+            <div class="browser-frame-dot bg-accent/50"></div>
+            <div class="browser-frame-dot bg-success/50"></div>
+            <span class="ml-2 text-[0.6875rem] text-muted-foreground hiw-bar-title">Plannotator · Plan Review</span>
+          </div>
+          <div class="bg-background">
+            <img
+              id="hiw-img-plan"
+              src="/assets/hiw-plan.webp"
+              alt="Plannotator plan review showing annotations on an agent's proposed plan"
+              class="w-full block"
+              loading="lazy"
+            />
+            <img
+              id="hiw-img-code"
+              src="/assets/hiw-code.webp"
+              alt="Plannotator code review showing diff annotations on agent-written code"
+              class="w-full block hidden"
+              loading="lazy"
+            />
+          </div>
+        </div>
+
+        <!-- Steps -->
+        <div class="grid sm:grid-cols-3 gap-6">
+          <div>
+            <div class="flex items-center gap-2 mb-2">
+              <span class="w-5 h-5 rounded-full bg-primary text-primary-foreground text-[0.6875rem] font-semibold flex items-center justify-center">1</span>
+              <h4 class="text-sm font-medium">Use your agent normally</h4>
+            </div>
+            <p class="text-sm text-muted-foreground leading-relaxed" id="hiw-step-1">
+              Work with your coding agent exactly as you do today. When it proposes a plan, Plannotator intercepts the approval step automatically.
+            </p>
+          </div>
+          <div>
+            <div class="flex items-center gap-2 mb-2">
+              <span class="w-5 h-5 rounded-full bg-primary text-primary-foreground text-[0.6875rem] font-semibold flex items-center justify-center">2</span>
+              <h4 class="text-sm font-medium">Review on a real surface</h4>
+            </div>
+            <p class="text-sm text-muted-foreground leading-relaxed" id="hiw-step-2">
+              Instead of squinting at terminal text, you get a proper review workspace. Annotate inline, mark what needs to change, then approve or deny with structured feedback. You own the specification.
+            </p>
+          </div>
+          <div>
+            <div class="flex items-center gap-2 mb-2">
+              <span class="w-5 h-5 rounded-full bg-primary text-primary-foreground text-[0.6875rem] font-semibold flex items-center justify-center">3</span>
+              <h4 class="text-sm font-medium">Feedback flows back</h4>
+            </div>
+            <p class="text-sm text-muted-foreground leading-relaxed" id="hiw-step-3">
+              Your annotations are sent directly to the agent as structured feedback. No copy-pasting, no retyping. The agent revises based on exactly what you said.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Capabilities -->
+      <section class="py-16 px-8 border-t border-border/30 landing-reveal">
+        <h2 class="font-display text-xl font-semibold tracking-tight mb-8 text-center">
+          Everything the plugin does
+        </h2>
+        <div class="capabilities-grid">
+          <div class="cap-group">
+            <h3 class="cap-group-label">Commands</h3>
+            <div class="cap-item">
+              <code class="cap-cmd">Plan review</code>
+              <span class="cap-desc">Automatic: hooks into your agent's plan step</span>
+            </div>
+            <div class="cap-item">
+              <code class="cap-cmd">/plannotator-annotate &lt;file|dir|url&gt;</code>
+              <span class="cap-desc">Annotate any markdown, spec/plan, folder, or URL and send feedback</span>
+            </div>
+            <div class="cap-item">
+              <code class="cap-cmd">/plannotator-last</code>
+              <span class="cap-desc">Annotate the agent's last message</span>
+            </div>
+            <div class="cap-item">
+              <code class="cap-cmd">/plannotator-review &lt;null|pr-url&gt;</code>
+              <span class="cap-desc">Code review for local changes or GitHub and GitLab PRs</span>
+            </div>
+          </div>
+          <div class="cap-group">
+            <h3 class="cap-group-label">Features</h3>
+            <div class="cap-item">
+              <span class="cap-name">Runs locally</span>
+              <span class="cap-desc">Plans never leave your machine</span>
+            </div>
+            <div class="cap-item">
+              <span class="cap-name">Encrypted sharing</span>
+              <span class="cap-desc">Share plans via URL — data lives in the link itself</span>
+            </div>
+            <div class="cap-item">
+              <span class="cap-name">Version history</span>
+              <span class="cap-desc">Every plan revision saved, with diffs between versions</span>
+            </div>
+            <div class="cap-item">
+              <span class="cap-name">Draft auto-save</span>
+              <span class="cap-desc">Annotations survive server crashes and restarts</span>
+            </div>
+          </div>
+          <div class="cap-group">
+            <h3 class="cap-group-label">Integrations</h3>
+            <div class="cap-item">
+              <span class="cap-name">VS Code</span>
+              <span class="cap-desc">Open plans in editor tabs, diff view, editor annotations</span>
+            </div>
+            <div class="cap-item">
+              <span class="cap-name">Obsidian</span>
+              <span class="cap-desc">Auto-save plans to your vault with frontmatter and tags</span>
+            </div>
+            <div class="cap-item">
+              <span class="cap-name">Bear</span>
+              <span class="cap-desc">Save plans with nested tags and project metadata</span>
+            </div>
+            <div class="cap-item">
+              <span class="cap-name">GitHub PRs</span>
+              <span class="cap-desc">Review pull requests by URL with full diff annotations</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Compatibility & social proof -->
+      <section class="py-12 px-8 border-t border-border/30 text-center">
+        <p class="text-sm text-muted-foreground mb-4">
+          Integrations for Claude Code, OpenCode, Pi, Codex, and VS Code. Works with any agent that supports plan mode.
+        </p>
+        <div class="flex items-center justify-center gap-5">
+          <a
+            href="https://github.com/backnotprop/plannotator"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="inline-flex items-center gap-1.5"
+          >
+            <img
+              src="https://img.shields.io/github/stars/backnotprop/plannotator?style=flat&logo=github&label=stars&color=gray"
+              alt="GitHub stars"
+              class="h-5"
+              loading="lazy"
+            />
+          </a>
+          <a
+            href="https://github.com/backnotprop/plannotator"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="text-sm text-muted-foreground hover:text-foreground transition-colors"
+          >
+            View on GitHub &rarr;
+          </a>
+          <a
+            href="/docs/getting-started/installation/"
+            class="text-sm text-muted-foreground hover:text-foreground transition-colors"
+          >
+            Read the docs &rarr;
+          </a>
+        </div>
+      </section>
+
+      <!-- Final CTA -->
+      <section class="py-16 px-8 border-t border-border/30 bg-card/30">
+        <div class="text-center">
+          <h2 class="font-display text-2xl font-semibold tracking-tight mb-6">
+            Your next plan deserves more than a rubber stamp.
+          </h2>
+          <p class="text-base text-muted-foreground mb-6">
+            Shape what gets built. Own what ships.
+          </p>
+          <div class="install-block max-w-lg mx-auto mb-4 hidden sm:flex">
+            <code>curl -fsSL https://plannotator.ai/install.sh | bash</code>
+            <button class="install-copy-btn" aria-label="Copy install command">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+            </button>
+          </div>
+          <div class="flex items-center justify-center gap-3 mt-5">
+            <a
+              id="cta-video-link"
+              href="https://www.youtube.com/watch?v=a_AT7cEN_9I"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="agent-video-btn"
+            >
+              <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.14v14l11-7-11-7z" /></svg>
+              Watch the demo
+            </a>
+            <a
+              href="/docs/getting-started/installation/"
+              class="text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              All agent guides &rarr;
+            </a>
+          </div>
+        </div>
+      </section>
+
+      <Footer />
+    </div>
+  </div>
+</Base>

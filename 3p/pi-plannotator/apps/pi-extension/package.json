@@ -1,0 +1,54 @@
+{
+  "name": "@plannotator/pi-extension",
+  "version": "0.18.0",
+  "type": "module",
+  "description": "Plannotator extension for Pi coding agent - interactive plan review with visual annotation",
+  "author": "backnotprop",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/backnotprop/plannotator.git",
+    "directory": "apps/pi-extension"
+  },
+  "homepage": "https://github.com/backnotprop/plannotator",
+  "bugs": {
+    "url": "https://github.com/backnotprop/plannotator/issues"
+  },
+  "keywords": ["pi-package", "plannotator", "plan-review", "ai-agent", "coding-agent"],
+  "pi": {
+    "extensions": ["./"],
+    "skills": ["./skills"]
+  },
+  "files": [
+    "index.ts",
+    "plannotator-browser.ts",
+    "plannotator-events.ts",
+    "server.ts",
+    "tool-scope.ts",
+    "config.ts",
+    "plannotator.json",
+    "server/",
+    "generated/",
+    "README.md",
+    "plannotator.html",
+    "review-editor.html",
+    "skills/"
+  ],
+  "scripts": {
+    "build": "cp ../hook/dist/index.html plannotator.html && cp ../hook/dist/review.html review-editor.html && rm -rf skills && cp -r ../skills skills && bash vendor.sh",
+    "prepublishOnly": "cd ../.. && bun run build:pi"
+  },
+  "dependencies": {
+    "turndown": "^7.2.4",
+    "@joplin/turndown-plugin-gfm": "^1.0.64"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": ">=0.53.0"
+  },
+  "devDependencies": {
+    "@mariozechner/pi-coding-agent": ">=0.53.0",
+    "@mariozechner/pi-agent-core": ">=0.53.0",
+    "@mariozechner/pi-ai": ">=0.53.0",
+    "@mariozechner/pi-tui": ">=0.53.0"
+  }
+}
