@@ -7,12 +7,19 @@
   ],
   "license": "Apache-2.0",
   "scripts": {
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "test": "vitest run --exclude '3p/**'",
+    "test:watch": "vitest --exclude '3p/**'"
   },
   "pi": {
     "extensions": [
-      "./extensions/orchestrator"
+      "./extensions/orchestrator",
+      "./3p/pi-subagents/src/index.ts",
+      "./3p/pi-tasks/src/index.ts",
+      "./3p/pi-lsp/extensions/lsp",
+      "./3p/pi-ask-user",
+      "./3p/pi-mcp-adapter",
+      "./3p/pi-plannotator/apps/pi-extension",
+      "./3p/pi-hashline-readmap"
     ]
   },
   "dependencies": {
