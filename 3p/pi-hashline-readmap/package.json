@@ -7,7 +7,6 @@
     ".": "./index.ts"
   },
   "keywords": [
-    "pi-package",
     "pi-extension",
     "hashline",
     "code-map",

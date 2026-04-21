@@ -14,10 +14,19 @@
   "bugs": {
     "url": "https://github.com/backnotprop/plannotator/issues"
   },
-  "keywords": ["pi-package", "plannotator", "plan-review", "ai-agent", "coding-agent"],
+  "keywords": [
+    "plannotator",
+    "plan-review",
+    "ai-agent",
+    "coding-agent"
+  ],
   "pi": {
-    "extensions": ["./"],
-    "skills": ["./skills"]
+    "extensions": [
+      "./"
+    ],
+    "skills": [
+      "./skills"
+    ]
   },
   "files": [
     "index.ts",

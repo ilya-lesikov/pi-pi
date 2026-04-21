@@ -18,7 +18,6 @@
     "url": "git+https://github.com/nicobailon/pi-mcp-adapter.git"
   },
   "keywords": [
-    "pi-package",
     "pi",
     "mcp",
     "model-context-protocol",

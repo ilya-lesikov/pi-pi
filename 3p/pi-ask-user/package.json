@@ -4,7 +4,6 @@
   "description": "Interactive ask_user tool for pi-coding-agent with searchable split-pane selection UI, multi-select, and freeform input",
   "type": "module",
   "keywords": [
-    "pi-package",
     "pi",
     "pi-coding-agent",
     "extension",

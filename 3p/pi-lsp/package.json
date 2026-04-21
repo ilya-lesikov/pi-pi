@@ -2,9 +2,7 @@
   "name": "@dreki-gg/pi-lsp",
   "version": "0.1.1",
   "description": "Language-agnostic LSP code intelligence for pi — diagnostics, hover, definitions, references, symbols, and call hierarchy",
-  "keywords": [
-    "pi-package"
-  ],
+  "keywords": [],
   "author": "Juan Albarran <jalbarrandev@gmail.com>",
   "license": "MIT",
   "repository": {
