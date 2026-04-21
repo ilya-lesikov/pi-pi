@@ -1,0 +1,42 @@
+{
+  "name": "@dreki-gg/pi-lsp",
+  "version": "0.1.1",
+  "description": "Language-agnostic LSP code intelligence for pi — diagnostics, hover, definitions, references, symbols, and call hierarchy",
+  "keywords": [
+    "pi-package"
+  ],
+  "author": "Juan Albarran <jalbarrandev@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dreki-gg/pi-extensions",
+    "directory": "packages/lsp"
+  },
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "lint": "oxlint extensions test",
+    "format": "oxfmt --write extensions test",
+    "format:check": "oxfmt --check extensions test"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/lsp"
+    ]
+  },
+  "devDependencies": {
+    "@mariozechner/pi-ai": "^0.64.0",
+    "@types/node": "24",
+    "bun-types": "latest",
+    "oxfmt": "^0.43.0",
+    "oxlint": "^1.58.0",
+    "typescript": "^6.0.0",
+    "typescript-language-server": "^5.1.3"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-coding-agent": "*",
+    "@sinclair/typebox": "*"
+  }
+}
