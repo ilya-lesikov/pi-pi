@@ -11,14 +11,13 @@ interface AgentFrontmatter {
 
 export function registerAgentDefinitions(
   pi: ExtensionAPI,
-  taskId: string,
   agents: Array<{ type: string; variant: string | null; frontmatter: AgentFrontmatter; prompt: string }>,
 ): void {
   const agentMap = new Map<string, any>();
 
   for (const agent of agents) {
     const suffix = agent.variant ? `_${agent.variant}` : "";
-    const name = `pp_${taskId}_${agent.type}${suffix}`;
+    const name = `${agent.type}${suffix}`;
     const toolNames = agent.frontmatter.tools === "none" ? [] : agent.frontmatter.tools.split(",").map((t: string) => t.trim()).filter(Boolean);
 
     agentMap.set(name, {
@@ -43,8 +42,8 @@ export function registerAgentDefinitions(
   pi.events.emit("subagents:register-agents", { agents: agentMap });
 }
 
-export function unregisterAgentDefinitions(pi: ExtensionAPI, taskId: string): void {
-  pi.events.emit("subagents:unregister-agents", { prefix: `pp_${taskId}_` });
+export function unregisterAgentDefinitions(pi: ExtensionAPI): void {
+  pi.events.emit("subagents:unregister-agents", { all: true });
 }
 
 export function setExtensionOnlyMode(pi: ExtensionAPI): void {

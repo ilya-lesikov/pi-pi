@@ -59,12 +59,12 @@ export async function spawnCodeReviewers(
     const outputPath = join(reviewsDir, `${timestamp}_${variant}_round-${round}.md`);
     const agent = createCodeReviewerAgent(variant, config, { userRequest, research, synthesizedPlan }, outputPath);
 
-    registerAgentDefinitions(pi, taskId, [{ type: "code_reviewer", variant, ...agent }]);
+    registerAgentDefinitions(pi, [{ type: "code_reviewer", variant, ...agent }]);
 
     results.push(
       (async () => {
         try {
-          const { id } = await spawnViaRpc(pi, `pp_${taskId}_code_reviewer_${variant}`, agent.prompt, {
+          const { id } = await spawnViaRpc(pi, `code_reviewer_${variant}`, agent.prompt, {
             description: `Code reviewer (${variant})`,
             model: agent.frontmatter.model,
             thinkingLevel: agent.frontmatter.thinking,

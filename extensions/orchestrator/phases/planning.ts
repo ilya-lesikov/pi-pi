@@ -60,12 +60,12 @@ export async function spawnPlanners(
     const outputPath = join(plansDir, `${timestamp}_${variant}.md`);
     const agent = createPlannerAgent(variant, config, { userRequest, research }, outputPath);
 
-    registerAgentDefinitions(pi, taskId, [{ type: "planner", variant, ...agent }]);
+    registerAgentDefinitions(pi, [{ type: "planner", variant, ...agent }]);
 
     results.push(
       (async () => {
         try {
-          const { id } = await spawnViaRpc(pi, `pp_${taskId}_planner_${variant}`, agent.prompt, {
+          const { id } = await spawnViaRpc(pi, `planner_${variant}`, agent.prompt, {
             description: `Planner (${variant})`,
             model: agent.frontmatter.model,
             thinkingLevel: agent.frontmatter.thinking,
@@ -144,12 +144,12 @@ export async function spawnPlanReviewers(
 
     const agent = createPlanReviewerAgent(variant, config, { userRequest, research, synthesizedPlan }, outputPath);
 
-    registerAgentDefinitions(pi, taskId, [{ type: "plan_reviewer", variant, ...agent }]);
+    registerAgentDefinitions(pi, [{ type: "plan_reviewer", variant, ...agent }]);
 
     results.push(
       (async () => {
         try {
-          const { id } = await spawnViaRpc(pi, `pp_${taskId}_plan_reviewer_${variant}`, agent.prompt, {
+          const { id } = await spawnViaRpc(pi, `plan_reviewer_${variant}`, agent.prompt, {
             description: `Plan reviewer (${variant})`,
             model: agent.frontmatter.model,
             thinkingLevel: agent.frontmatter.thinking,

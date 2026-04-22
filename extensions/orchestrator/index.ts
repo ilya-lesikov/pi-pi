@@ -210,7 +210,7 @@ export default function (pi: ExtensionAPI) {
       abortAllSubagents();
       active.state.phase = "done";
       saveTask(active.dir, active.state);
-      unregisterAgentDefinitions(pi, active.taskId);
+      unregisterAgentDefinitions(pi);
       await cleanupActive();
     }
 
@@ -332,7 +332,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_before_switch" as any, async () => {
     if (!active) return;
     abortAllSubagents();
-    unregisterAgentDefinitions(pi, active.taskId);
+    unregisterAgentDefinitions(pi);
     await cleanupActive();
   });
 
@@ -357,6 +357,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     setExtensionOnlyMode(pi);
+    registerAgents();
 
     const found = getActiveTask(cwd, config.timeouts.lockStale);
     if (found) {
@@ -387,11 +388,10 @@ export default function (pi: ExtensionAPI) {
   });
 
   function registerAgents(): void {
-    if (!active) return;
     const explore = createExploreAgent(config);
     const librarian = createLibrarianAgent(config);
     const taskAgent = createTaskAgent(config, "{{subtask}}", { userRequest: "", synthesizedPlan: "" });
-    registerAgentDefinitions(pi, active.taskId, [
+    registerAgentDefinitions(pi, [
       { type: "explore", variant: null, ...explore },
       { type: "librarian", variant: null, ...librarian },
       { type: "task", variant: null, ...taskAgent },
@@ -449,15 +449,15 @@ export default function (pi: ExtensionAPI) {
       const isLibrarian = requestedType === "librarian";
 
       if (isExplore) {
-        input.subagent_type = `pp_${active.taskId}_explore`;
+        input.subagent_type = "explore";
         input.model = config.agents.explore.model;
         input.thinking = config.agents.explore.thinking;
       } else if (isLibrarian) {
-        input.subagent_type = `pp_${active.taskId}_librarian`;
+        input.subagent_type = "librarian";
         input.model = config.agents.librarian.model;
         input.thinking = config.agents.librarian.thinking;
       } else {
-        input.subagent_type = `pp_${active.taskId}_task`;
+        input.subagent_type = "task";
         input.model = config.agents.task.model;
         input.thinking = config.agents.task.thinking;
       }
@@ -648,7 +648,7 @@ export default function (pi: ExtensionAPI) {
 
       active.state.phase = "done";
       saveTask(active.dir, active.state);
-      unregisterAgentDefinitions(pi, active.taskId);
+      unregisterAgentDefinitions(pi);
       await cleanupActive();
 
       updateStatus(ctx);
@@ -815,7 +815,7 @@ export default function (pi: ExtensionAPI) {
 
       if (next === "done") {
         abortAllSubagents();
-        unregisterAgentDefinitions(pi, active.taskId);
+        unregisterAgentDefinitions(pi);
         await cleanupActive();
         updateStatus(ctx);
         ctx.ui.notify("Task completed!", "info");

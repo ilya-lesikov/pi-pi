@@ -104,6 +104,13 @@ export function unregisterExtensionAgentsByPrefix(prefix: string): void {
   }
 }
 
+/**
+ * Remove all extension-registered agents.
+ */
+export function clearExtensionAgents(): void {
+  extensionAgents.clear();
+}
+
 /** Case-insensitive key resolution. */
 function resolveKey(name: string): string | undefined {
   if (agents.has(name)) return name;
