@@ -18,23 +18,30 @@ async function callExa(toolName: string, args: Record<string, unknown>): Promise
       Accept: "application/json, text/event-stream",
     },
     body,
+    signal: AbortSignal.timeout(30000),
   });
 
   const raw = await res.text();
 
-  // SSE format: find the "data:" line with the JSON payload
   for (const line of raw.split("\n")) {
     if (!line.startsWith("data:")) continue;
-    const json = JSON.parse(line.slice(5).trim());
-    if (json.error) throw new Error(json.error.message);
-    const text = json.result?.content?.[0]?.text;
-    if (text) return text;
+    try {
+      const json = JSON.parse(line.slice(5).trim());
+      if (json.error) throw new Error(json.error.message);
+      const text = json.result?.content?.[0]?.text;
+      if (text) return text;
+    } catch (e: any) {
+      if (e.message?.includes("error")) throw e;
+    }
   }
 
-  // Fallback: try parsing as plain JSON
-  const json = JSON.parse(raw);
-  if (json.error) throw new Error(json.error.message);
-  return json.result?.content?.[0]?.text ?? raw;
+  try {
+    const json = JSON.parse(raw);
+    if (json.error) throw new Error(json.error.message);
+    return json.result?.content?.[0]?.text ?? raw;
+  } catch {
+    return raw;
+  }
 }
 
 function ok(text: string) {

@@ -1,4 +1,4 @@
-import { execFileSync } from "child_process";
+import { execFile } from "child_process";
 import { existsSync } from "fs";
 import { join } from "path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
@@ -6,36 +6,52 @@ import { Type } from "@sinclair/typebox";
 
 const CBM_BIN = join(process.env.HOME ?? "", ".local", "bin", "codebase-memory-mcp");
 
+const indexedProjects = new Set<string>();
+
 function isCbmAvailable(): boolean {
   return existsSync(CBM_BIN);
 }
 
-function callCbm(tool: string, params: Record<string, unknown>, timeoutMs = 60000): unknown {
-  const raw = execFileSync(CBM_BIN, ["cli", tool, JSON.stringify(params)], {
-    timeout: timeoutMs,
-    stdio: ["ignore", "pipe", "pipe"],
-    encoding: "utf-8",
+function callCbm(tool: string, params: Record<string, unknown>, timeoutMs = 60000): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      CBM_BIN,
+      ["cli", tool, JSON.stringify(params)],
+      { timeout: timeoutMs, encoding: "utf-8" },
+      (err, stdout, _stderr) => {
+        if (err) return reject(err);
+        try {
+          const envelope = JSON.parse(stdout);
+          if (envelope.isError) {
+            return reject(new Error(envelope.content?.[0]?.text ?? "unknown error"));
+          }
+          resolve(JSON.parse(envelope.content[0].text));
+        } catch (parseErr: any) {
+          reject(new Error(`Failed to parse CBM output: ${parseErr.message}`));
+        }
+      },
+    );
   });
-  const envelope = JSON.parse(raw);
-  if (envelope.isError) {
-    const text = envelope.content?.[0]?.text ?? "unknown error";
-    throw new Error(text);
-  }
-  return JSON.parse(envelope.content[0].text);
 }
 
 function projectName(cwd: string): string {
   return cwd.replace(/^\//, "").replace(/\//g, "-");
 }
 
-function ensureIndexed(cwd: string): string {
+async function ensureIndexed(cwd: string): Promise<string> {
   const name = projectName(cwd);
+  if (indexedProjects.has(name)) return name;
+
   try {
-    const projects = callCbm("list_projects", {}) as { projects: Array<{ name: string }> };
-    if (projects.projects.some((p) => p.name === name)) return name;
+    const projects = (await callCbm("list_projects", {})) as { projects: Array<{ name: string }> };
+    if (projects.projects.some((p) => p.name === name)) {
+      indexedProjects.add(name);
+      return name;
+    }
   } catch { /* fall through to index */ }
 
-  callCbm("index_repository", { repo_path: cwd }, 300000);
+  await callCbm("index_repository", { repo_path: cwd }, 300000);
+  indexedProjects.add(name);
   return name;
 }
 
@@ -66,13 +82,13 @@ export function registerCbmTools(pi: ExtensionAPI, cwd: string): boolean {
     }),
     async execute(_toolCallId, params: any) {
       try {
-        const project = ensureIndexed(cwd);
+        const project = await ensureIndexed(cwd);
         const p: Record<string, unknown> = { project, limit: params.limit ?? 20 };
         if (params.query) p.query = params.query;
         if (params.name_pattern) p.name_pattern = params.name_pattern;
         if (params.semantic_query) p.semantic_query = params.semantic_query;
         if (params.label) p.label = params.label;
-        return ok(JSON.stringify(callCbm("search_graph", p), null, 2));
+        return ok(JSON.stringify(await callCbm("search_graph", p), null, 2));
       } catch (e: any) {
         return fail(`cbm_search error: ${e.message}`);
       }
@@ -94,11 +110,11 @@ export function registerCbmTools(pi: ExtensionAPI, cwd: string): boolean {
     }),
     async execute(_toolCallId, params: any) {
       try {
-        const project = ensureIndexed(cwd);
+        const project = await ensureIndexed(cwd);
         const p: Record<string, unknown> = { project, pattern: params.pattern, limit: params.limit ?? 20 };
         if (params.file_pattern) p.file_pattern = params.file_pattern;
         if (params.path_filter) p.path_filter = params.path_filter;
-        return ok(JSON.stringify(callCbm("search_code", p), null, 2));
+        return ok(JSON.stringify(await callCbm("search_code", p), null, 2));
       } catch (e: any) {
         return fail(`cbm_search_code error: ${e.message}`);
       }
@@ -118,14 +134,14 @@ export function registerCbmTools(pi: ExtensionAPI, cwd: string): boolean {
     }),
     async execute(_toolCallId, params: any) {
       try {
-        const project = ensureIndexed(cwd);
+        const project = await ensureIndexed(cwd);
         const p: Record<string, unknown> = {
           project,
           function_name: params.function_name,
           direction: params.direction ?? "both",
           depth: params.depth ?? 3,
         };
-        return ok(JSON.stringify(callCbm("trace_path", p), null, 2));
+        return ok(JSON.stringify(await callCbm("trace_path", p), null, 2));
       } catch (e: any) {
         return fail(`cbm_trace error: ${e.message}`);
       }
@@ -144,11 +160,11 @@ export function registerCbmTools(pi: ExtensionAPI, cwd: string): boolean {
     }),
     async execute(_toolCallId, params: any) {
       try {
-        const project = ensureIndexed(cwd);
+        const project = await ensureIndexed(cwd);
         const p: Record<string, unknown> = { project };
         if (params.base_branch) p.base_branch = params.base_branch;
         if (params.since) p.since = params.since;
-        return ok(JSON.stringify(callCbm("detect_changes", p), null, 2));
+        return ok(JSON.stringify(await callCbm("detect_changes", p), null, 2));
       } catch (e: any) {
         return fail(`cbm_changes error: ${e.message}`);
       }
@@ -166,8 +182,8 @@ export function registerCbmTools(pi: ExtensionAPI, cwd: string): boolean {
     }),
     async execute(_toolCallId, params: any) {
       try {
-        const project = ensureIndexed(cwd);
-        return ok(JSON.stringify(callCbm("query_graph", { project, query: params.query }), null, 2));
+        const project = await ensureIndexed(cwd);
+        return ok(JSON.stringify(await callCbm("query_graph", { project, query: params.query }), null, 2));
       } catch (e: any) {
         return fail(`cbm_query error: ${e.message}`);
       }
@@ -181,8 +197,8 @@ export function registerCbmTools(pi: ExtensionAPI, cwd: string): boolean {
     parameters: Type.Object({}),
     async execute() {
       try {
-        const project = ensureIndexed(cwd);
-        return ok(JSON.stringify(callCbm("get_architecture", { project }), null, 2));
+        const project = await ensureIndexed(cwd);
+        return ok(JSON.stringify(await callCbm("get_architecture", { project }), null, 2));
       } catch (e: any) {
         return fail(`cbm_architecture error: ${e.message}`);
       }
