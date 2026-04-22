@@ -3,7 +3,6 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { ensureHashInit } from "../src/hashline.js";
-import { isNuAvailable } from "../src/nu.js";
 import { PTC_ERROR_CODES } from "../src/ptc-error-codes.js";
 
 async function callTool(
@@ -14,8 +13,7 @@ async function callTool(
     | "registerSgTool"
     | "registerFindTool"
     | "registerLsTool"
-    | "registerWriteTool"
-    | "registerNuTool",
+    | "registerWriteTool",
   modulePath: string,
   params: Record<string, unknown>,
   options?: any,
@@ -106,9 +104,4 @@ describe("ptc-error contract — every tool emits ptcValue.error on representati
     expect(r!.isError).toBe(true);
   });
 
-  (isNuAvailable() ? it : it.skip)("nu → nu-non-zero-exit (AC 15)", async () => {
-    const r = await callTool("registerNuTool", "../src/nu.js", { command: "exit 1" });
-    assertContract(r, "nu", "nu-non-zero-exit");
-    expect(r!.isError).toBeFalsy();
-  });
 });

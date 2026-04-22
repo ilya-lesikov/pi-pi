@@ -14,7 +14,7 @@ export function createPlanReviewerAgent(
   return {
     frontmatter: {
       description: `Plan reviewer (${variant} variant, pi-pi)`,
-      tools: "read, grep, find, bash, write",
+      tools: "read, grep, find, bash, write, lsp, cbm_search, cbm_changes",
       model: variantConfig.model,
       thinking: variantConfig.thinking,
       max_turns: 20,
@@ -30,6 +30,13 @@ export function createPlanReviewerAgent(
       `  ${outputPath}`,
       "",
       "You MUST NOT write to any other file. Only write .md files inside .pp/state/.",
+      "",
+      "# Tool routing — validate the plan against codebase reality",
+      "",
+      "- cbm_search: check that symbols/functions mentioned in the plan actually exist",
+      "- cbm_changes: check for uncommitted changes that might conflict with the plan",
+      "- lsp findReferences: verify usage counts for symbols the plan proposes to change",
+      "- grep: quick text search to verify assumptions",
       "",
       "Review criteria:",
       "- Are all plan items actionable and verifiable?",

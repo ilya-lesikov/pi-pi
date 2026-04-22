@@ -18,6 +18,7 @@ import { registerAgentDefinitions, unregisterAgentDefinitions, setExtensionOnlyM
 import { createExploreAgent } from "./agents/explore.js";
 import { createLibrarianAgent } from "./agents/librarian.js";
 import { createTaskAgent } from "./agents/task.js";
+import { registerCbmTools } from "./cbm.js";
 
 interface ActiveTask {
   dir: string;
@@ -356,6 +357,7 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
+    registerCbmTools(pi, cwd);
     setExtensionOnlyMode(pi);
     registerAgents();
 

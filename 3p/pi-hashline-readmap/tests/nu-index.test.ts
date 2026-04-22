@@ -5,15 +5,14 @@ import { fileURLToPath } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-describe("index.ts nu integration", () => {
+describe("index.ts nu integration removed", () => {
   const content = readFileSync(resolve(__dirname, "../index.ts"), "utf-8");
 
-  it("imports registerNuTool", () => {
-    expect(content).toContain("registerNuTool");
-    expect(content).toContain("./src/nu.js");
+  it("does not import registerNuTool", () => {
+    expect(content).not.toContain("registerNuTool");
   });
 
-  it("calls registerNuTool(pi)", () => {
-    expect(content).toContain("registerNuTool(pi)");
+  it("does not reference nu tool", () => {
+    expect(content).not.toContain("nuTool");
   });
 });

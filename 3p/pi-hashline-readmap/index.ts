@@ -3,7 +3,7 @@ import { registerReadTool } from "./src/read.js";
 import { registerEditTool } from "./src/edit.js";
 import { registerGrepTool } from "./src/grep.js";
 import { registerSgTool, isSgAvailable } from "./src/sg.js";
-import { registerNuTool } from "./src/nu.js";
+
 import { registerWriteTool } from "./src/write.js";
 import { registerLsTool } from "./src/ls.js";
 import { registerFindTool } from "./src/find.js";
@@ -84,7 +84,6 @@ export default function piHashlineReadmapExtension(pi: ExtensionAPI): void {
 
   const grepTool = registerGrepTool(pi, { astSearchGuideline, onFileAnchored: noteRead });
   const sgTool = registerSgTool(pi, { onFileAnchored: noteRead });
-  const nuTool = registerNuTool(pi);
   const writeTool = registerWriteTool(pi, { onFileAnchored: noteRead });
   const lsTool = registerLsTool(pi);
   const findTool = registerFindTool(pi);
@@ -96,7 +95,6 @@ export default function piHashlineReadmapExtension(pi: ExtensionAPI): void {
     write: writeTool,
     ls: lsTool,
     find: findTool,
-    ...(nuTool ? { nu: nuTool } : {}),
   };
 
   (globalThis as any).__hashlineToolExecutors = toolExecutors;

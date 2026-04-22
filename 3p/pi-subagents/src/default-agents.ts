@@ -6,7 +6,7 @@
 
 import type { AgentConfig } from "./types.js";
 
-const READ_ONLY_TOOLS = ["read", "bash", "grep", "find", "ls"];
+const READ_ONLY_TOOLS = ["read", "bash", "grep", "find", "ls", "ast_search"];
 
 export const DEFAULT_AGENTS: Map<string, AgentConfig> = new Map([
   [
@@ -49,19 +49,26 @@ You are STRICTLY PROHIBITED from:
 - Using redirect operators (>, >>, |) or heredocs to write to files
 - Running ANY commands that change system state
 
-Use Bash ONLY for read-only operations: ls, git status, git log, git diff, find, cat, head, tail.
+# Tool routing — pick the right tool for the question
 
-# Tool Usage
-- Use the find tool for file pattern matching (NOT the bash find command)
-- Use the grep tool for content search (NOT bash grep/rg command)
-- Use the read tool for reading files (NOT bash cat/head/tail)
-- Use Bash ONLY for read-only operations
-- Make independent tool calls in parallel for efficiency
-- Adapt search approach based on thoroughness level specified
+Discovery (don't know where to look):
+- cbm_search: natural-language search across all symbols (best first step)
+- cbm_search_code: graph-augmented grep — finds text, deduplicates into containing functions
+- grep: fast text/regex search for known strings
+
+Structural patterns (find code shapes, not names):
+- ast_search: AST-aware pattern matching (e.g. 'if err != nil { $$$ }', 'type $N interface { $$$ }')
+
+File navigation:
+- find: locate files by name/glob pattern
+- read: read file contents
+- ls: list directory contents
+
+Use Bash ONLY for read-only operations: git status, git log, git diff.
+Make independent tool calls in parallel for efficiency.
 
 # Output
 - Use absolute file paths in all references
-- Report findings as regular messages
 - Do not use emojis
 - Be thorough and precise`,
       promptMode: "replace",
@@ -94,9 +101,22 @@ You are STRICTLY PROHIBITED from:
 - Using redirect operators (>, >>, |) or heredocs to write to files
 - Running ANY commands that change system state
 
+# Tool routing — understand the codebase before planning
+
+Architecture overview:
+- cbm_search: natural-language search for relevant symbols
+- cbm_search_code: graph-augmented grep — deduplicates into containing functions
+
+Detailed understanding:
+- grep: fast text/regex search for known strings
+- read: read file contents
+- find: locate files by name/glob pattern
+
+Use Bash ONLY for read-only operations: git status, git log, git diff.
+
 # Planning Process
 1. Understand requirements
-2. Explore thoroughly (read files, find patterns, understand architecture)
+2. Explore thoroughly (search for patterns, understand architecture)
 3. Design solution based on your assigned perspective
 4. Detail the plan with step-by-step implementation strategy
 
@@ -105,12 +125,6 @@ You are STRICTLY PROHIBITED from:
 - Identify dependencies and sequencing
 - Anticipate potential challenges
 - Follow existing patterns where appropriate
-
-# Tool Usage
-- Use the find tool for file pattern matching (NOT the bash find command)
-- Use the grep tool for content search (NOT bash grep/rg command)
-- Use the read tool for reading files (NOT bash cat/head/tail)
-- Use Bash ONLY for read-only operations
 
 # Output Format
 - Use absolute file paths

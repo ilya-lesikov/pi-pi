@@ -4,8 +4,7 @@ export type HashlineToolName =
   | "ast_search"
   | "edit"
   | "ls"
-  | "find"
-  | "nu";
+  | "find";
 
 export type HashlineToolMutability = "read-only" | "mutating";
 
@@ -71,13 +70,6 @@ export const HASHLINE_TOOL_PTC_POLICY: HashlineToolPtcPolicy = {
       overridesBuiltin: true,
       mutability: "read-only",
       defaultExposure: "safe-by-default",
-    },
-    nu: {
-      toolName: "nu",
-      helperName: "nu",
-      overridesBuiltin: false,
-      mutability: "read-only",
-      defaultExposure: "opt-in",
     },
   },
 };

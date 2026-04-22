@@ -17,7 +17,6 @@ describe("public API ptc policy export", () => {
     expect(mod.HASHLINE_TOOL_PTC_POLICY.tools.ls.defaultExposure).toBe("safe-by-default");
     expect(mod.HASHLINE_TOOL_PTC_POLICY.tools.find.defaultExposure).toBe("safe-by-default");
     expect(mod.HASHLINE_TOOL_PTC_POLICY.tools.ast_search.defaultExposure).toBe("opt-in");
-    expect(mod.HASHLINE_TOOL_PTC_POLICY.tools.nu.defaultExposure).toBe("opt-in");
     expect(mod.HASHLINE_TOOL_PTC_POLICY.tools.edit.defaultExposure).toBe("not-safe-by-default");
   });
 });

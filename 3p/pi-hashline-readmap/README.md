@@ -7,7 +7,7 @@
 
 Upgrade pi's local coding workflow with hash-anchored reads and edits, structural file maps, symbol-aware navigation, structural search, agent-friendly file exploration, and compressed `bash` output.
 
-`pi-hashline-readmap` is a drop-in pi extension. It replaces the stock `read`, `edit`, `grep`, `ls`, and `find` tools, provides an enhanced `ast_search` tool, registers `write`, adds an optional `nu` tool for structured exploration via Nushell, and post-processes `bash` output so more context budget goes to signal instead of noise.
+`pi-hashline-readmap` is a drop-in pi extension. It replaces the stock `read`, `edit`, `grep`, `ls`, and `find` tools, provides an enhanced `ast_search` tool, registers `write`, and post-processes `bash` output so more context budget goes to signal instead of noise.
 
 ## Why this exists
 
@@ -29,7 +29,6 @@ This package consolidates those improvements into one extension instead of stack
 - Structural maps and direct symbol reads for large or complex files
 - Symbol-scoped grep and local same-file support bundles for symbol reads
 - Agent-optimized `ls` and `find` tools for file exploration
-- Optional `nu` tool for structured exploration with Nushell
 - Route-aware `bash` compression for tests, builds, Git, Docker, linters, package managers, and more
 
 ## Quick Start
@@ -92,7 +91,6 @@ Use this when developing locally or testing unreleased changes.
 These tools are not required for the package to load, but they unlock more capability or better output quality:
 
 ```bash
-brew install nushell           # required for nu tool
 brew install ast-grep          # required for ast_search
 brew install fd                # optional, speeds up find
 brew install difftastic        # optional, improves semantic edit summaries
@@ -190,14 +188,6 @@ ls({ path: "src" })
 find({ pattern: "*.ts", path: "src", maxDepth: 2 })
 ```
 
-### Use Nushell for structured exploration
-
-```text
-nu({ command: "open package.json | get scripts" })
-```
-
-When [Nushell](https://www.nushell.sh/) is installed, the extension registers `nu` for structured exploration and data inspection.
-
 ### Bypass `bash` compression when you need raw output
 
 ```bash
@@ -248,13 +238,6 @@ Use the bypass when the filtered output hides information you need.
 - `ls` shows a single directory, dirs first, with dotfiles included
 - `find` performs recursive discovery, respects `.gitignore`, includes hidden files, and supports depth, regex, sort, mtime, and size filters
 
-### `nu`
-
-- registers only when Nushell is installed
-- useful for structured inspection of JSON, CSV, TOML, YAML, filesystem state, and other machine-readable data
-- supports pi-specific config lookup via `PI_NUSHELL_CONFIG`
-- points agents at optional plugins such as `gstat`, `query`, `formats`, `semver`, and `file`
-
 ### `bash` output compression
 
 The extension post-processes `bash` tool results to reduce noise while preserving the useful parts. Specialized compressors currently cover:
@@ -280,7 +263,7 @@ This package is configured with environment variables rather than a project-loca
 | `PI_HASHLINE_MAP_CACHE_DIR` | Override the persistent structural-map cache directory | Uses the provided path verbatim |
 | `XDG_CACHE_HOME` | Base directory for the persistent map cache when no explicit cache dir is set | Cache lives under `$XDG_CACHE_HOME/pi-hashline-readmap/maps` |
 | `PI_HASHLINE_NO_PERSIST_MAPS=1` | Disable the on-disk structural-map cache | Keeps caching in-memory only |
-| `PI_NUSHELL_CONFIG` | Override the Nushell config path used by `nu` | Otherwise prefers `~/.config/pi/nushell/config.nu`, then `--no-config-file` |
+
 | `PI_RTK_BYPASS=1` | Disable route-specific `bash` compression for one command invocation | ANSI is still stripped; anti-pattern hints still apply |
 
 ## Structured output (`details.ptcValue`)
@@ -341,7 +324,7 @@ import { HASHLINE_TOOL_PTC_POLICY } from "pi-hashline-readmap";
 
 Policy summary:
 - `read`, `grep`, `ls`, and `find` are safe-by-default and read-only
-- `ast_search` and `nu` are opt-in and read-only
+- `ast_search` is opt-in and read-only
 - `edit` is not safe-by-default and is mutating
 - `pi-prompt-assembler` may optionally consume this contract
 
@@ -349,7 +332,7 @@ Policy summary:
 
 On load, the extension emits tool executor references for downstream consumers.
 
-The emitted/stashed executor surface always includes `read`, `edit`, `grep`, `ast_search`, `write`, `ls`, and `find`, plus `nu` when Nushell is available at runtime.
+The emitted/stashed executor surface always includes `read`, `edit`, `grep`, `ast_search`, `write`, `ls`, and `find`.
 
 ```ts
 pi.events.emit("hashline:tool-executors", {
@@ -360,7 +343,6 @@ pi.events.emit("hashline:tool-executors", {
   write,
   ls,
   find,
-  ...(nu ? { nu } : {}),
 });
 ```
 
@@ -378,7 +360,6 @@ src/
   write.ts                # write tool implementation
   ls.ts                   # single-directory listing
   find.ts                 # recursive discovery
-  nu.ts                   # Nushell integration
   readmap/                # structural mapping and symbol lookup engine
   rtk/                    # bash output compression pipeline
 prompts/                  # tool prompt/schema docs
