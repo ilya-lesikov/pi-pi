@@ -1,11 +1,11 @@
 import type { PiPiConfig } from "../config.js";
-import { TOOL_ROUTING, ALL_CBM_TOOLS } from "./tool-routing.js";
+import { TOOL_ROUTING, ALL_CBM_TOOLS, EXA_TOOLS, WORKING_PRINCIPLES_READONLY, COMMUNICATION } from "./tool-routing.js";
 
 export function createExploreAgent(config: PiPiConfig) {
   return {
     frontmatter: {
       description: "Codebase explorer (pi-pi)",
-      tools: `read, bash, grep, find, ls, lsp, ast_search, ${ALL_CBM_TOOLS}`,
+      tools: `read, bash, grep, find, ls, lsp, ast_search, ${ALL_CBM_TOOLS}, ${EXA_TOOLS}`,
       model: config.agents.explore.model,
       thinking: config.agents.explore.thinking,
       max_turns: 20,
@@ -16,6 +16,10 @@ export function createExploreAgent(config: PiPiConfig) {
       "",
       "Your job is to find specific information in the codebase and report back with file paths and findings.",
       "You are read-only — do NOT modify any files.",
+      "",
+      WORKING_PRINCIPLES_READONLY,
+      "",
+      COMMUNICATION,
       "",
       TOOL_ROUTING,
       "",

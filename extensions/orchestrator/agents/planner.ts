@@ -1,5 +1,5 @@
 import type { PiPiConfig } from "../config.js";
-import { TOOL_ROUTING, ALL_CBM_TOOLS } from "./tool-routing.js";
+import { TOOL_ROUTING, ALL_CBM_TOOLS, EXA_TOOLS, WORKING_PRINCIPLES_READONLY, COMMUNICATION } from "./tool-routing.js";
 
 export function createPlannerAgent(
   variant: string,
@@ -15,19 +15,19 @@ export function createPlannerAgent(
   return {
     frontmatter: {
       description: `Planner (${variant} variant, pi-pi)`,
-      tools: `read, grep, find, bash, write, lsp, ast_search, ${ALL_CBM_TOOLS}`,
+      tools: `read, grep, find, bash, write, lsp, ast_search, ${ALL_CBM_TOOLS}, ${EXA_TOOLS}`,
       model: variantConfig.model,
       thinking: variantConfig.thinking,
       max_turns: 30,
       prompt_mode: "replace",
     },
     prompt: [
+      // --- static prefix (cacheable) ---
       "You are a planning agent. Your job is to create a detailed implementation plan.",
       "",
-      "You MUST write your plan to this exact file:",
-      `  ${outputPath}`,
+      WORKING_PRINCIPLES_READONLY,
       "",
-      "You MUST NOT write to any other file. Only write .md files inside .pp/state/.",
+      COMMUNICATION,
       "",
       TOOL_ROUTING,
       "",
@@ -39,6 +39,12 @@ export function createPlannerAgent(
       "- Group related items under headings",
       "",
       'You can spawn subagents: Agent(subagent_type="Explore", ...) for codebase, Agent(subagent_type="Librarian", ...) for external docs.',
+      "",
+      // --- dynamic suffix ---
+      "You MUST write your plan to this exact file:",
+      `  ${outputPath}`,
+      "",
+      "You MUST NOT write to any other file. Only write .md files inside .pp/state/.",
       "",
       "=== USER REQUEST ===",
       taskArtifacts.userRequest,

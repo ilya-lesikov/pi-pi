@@ -1,5 +1,5 @@
 import type { PiPiConfig } from "../config.js";
-import { TOOL_ROUTING, ALL_CBM_TOOLS } from "./tool-routing.js";
+import { TOOL_ROUTING, ALL_CBM_TOOLS, EXA_TOOLS, WORKING_PRINCIPLES, FAILURE_RECOVERY, COMMUNICATION } from "./tool-routing.js";
 
 export function createTaskAgent(
   config: PiPiConfig,
@@ -9,19 +9,23 @@ export function createTaskAgent(
   return {
     frontmatter: {
       description: "Implementation subtask (pi-pi)",
-      tools: `read, write, edit, bash, grep, find, ls, lsp, ast_search, ${ALL_CBM_TOOLS}`,
+      tools: `read, write, edit, bash, grep, find, ls, lsp, ast_search, ${ALL_CBM_TOOLS}, ${EXA_TOOLS}`,
       model: config.agents.task.model,
       thinking: config.agents.task.thinking,
       max_turns: 50,
       prompt_mode: "replace",
     },
     prompt: [
+      // --- static prefix (cacheable) ---
       "You are a focused implementation agent working on a specific subtask.",
       "",
-      "Your subtask:",
-      subtaskDescription,
+      WORKING_PRINCIPLES,
+      "",
+      COMMUNICATION,
       "",
       TOOL_ROUTING,
+      "",
+      FAILURE_RECOVERY,
       "",
       "# Constraints",
       "- Do NOT spawn task subagents (no recursion)",
@@ -29,6 +33,10 @@ export function createTaskAgent(
       "- Focus only on your subtask — do not modify unrelated code",
       "- Before modifying a function, use lsp findReferences to understand all callers",
       "- After editing files, run lsp diagnostics and fix errors before moving on",
+      "",
+      // --- dynamic suffix ---
+      "=== YOUR SUBTASK ===",
+      subtaskDescription,
       "",
       "=== USER REQUEST (for context) ===",
       taskArtifacts.userRequest,

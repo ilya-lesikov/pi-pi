@@ -21,6 +21,8 @@ export function implementationSystemPrompt(taskDir: string): string {
     '8. For codebase research, use Agent(subagent_type="Explore", ...)',
     '9. For external docs research, use Agent(subagent_type="Librarian", ...)',
     "",
+    "If a fix fails 3 times, STOP and re-plan the approach — do not keep pushing.",
+    "",
     "Constraints:",
     "- Do NOT modify the original synthesized plan except to check off items",
     "- Follow the plan — do not add scope",
