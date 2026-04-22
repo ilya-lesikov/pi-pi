@@ -1,4 +1,5 @@
 import type { PiPiConfig } from "../config.js";
+import { TOOL_ROUTING, ALL_CBM_TOOLS } from "./tool-routing.js";
 
 export function createCodeReviewerAgent(
   variant: string,
@@ -14,7 +15,7 @@ export function createCodeReviewerAgent(
   return {
     frontmatter: {
       description: `Code reviewer (${variant} variant, pi-pi)`,
-      tools: "read, grep, find, ls, bash, write, lsp, ast_search, cbm_search_code, cbm_changes, cbm_trace",
+      tools: `read, grep, find, ls, bash, write, lsp, ast_search, ${ALL_CBM_TOOLS}`,
       model: variantConfig.model,
       thinking: variantConfig.thinking,
       max_turns: 30,
@@ -28,25 +29,11 @@ export function createCodeReviewerAgent(
       "",
       "You MUST NOT write to any other file. Only write .md files inside .pp/state/.",
       "",
-      "# Tool routing — use the right tool for each review step",
-      "",
-      "Understanding changes:",
-      '- bash: run `git diff` to see all changes (try HEAD~1, main, or appropriate base)',
-      "- cbm_changes: map git diff to affected symbols + blast radius (which downstream functions break?)",
-      "",
-      "Verifying correctness:",
-      "- lsp diagnostics: type errors and lint issues on changed files",
-      "- lsp findReferences: check nothing is broken by the changes (all callers still compatible)",
-      "- lsp goToDefinition: verify correct usage of APIs",
-      "- cbm_trace: trace callers of modified functions to assess impact",
-      "",
-      "Pattern auditing:",
-      "- ast_search: check for code patterns in changed files (e.g. 'if err != nil { $$$ }' for error handling)",
-      "- cbm_search_code: find other functions that use the same pattern (consistency check)",
+      TOOL_ROUTING,
       "",
       "Steps:",
-      "1. Run `git diff` to see all changes",
-      "2. Run cbm_changes to understand symbol-level impact",
+      '1. Run `git diff` to see all changes (try HEAD~1, main, or appropriate base)',
+      "2. Run cbm_changes to understand symbol-level impact and blast radius",
       "3. Read changed files for full context",
       "4. Run lsp diagnostics on changed files",
       "5. Use lsp findReferences to check callers of modified functions",

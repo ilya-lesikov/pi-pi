@@ -1,4 +1,5 @@
 import type { PiPiConfig } from "../config.js";
+import { TOOL_ROUTING, ALL_CBM_TOOLS } from "./tool-routing.js";
 
 export function createPlannerAgent(
   variant: string,
@@ -14,7 +15,7 @@ export function createPlannerAgent(
   return {
     frontmatter: {
       description: `Planner (${variant} variant, pi-pi)`,
-      tools: "read, grep, find, bash, write, lsp, cbm_search, cbm_search_code, cbm_trace, cbm_architecture",
+      tools: `read, grep, find, bash, write, lsp, ast_search, ${ALL_CBM_TOOLS}`,
       model: variantConfig.model,
       thinking: variantConfig.thinking,
       max_turns: 30,
@@ -28,21 +29,7 @@ export function createPlannerAgent(
       "",
       "You MUST NOT write to any other file. Only write .md files inside .pp/state/.",
       "",
-      "# Tool routing — understand the codebase before planning",
-      "",
-      "Architecture overview:",
-      "- cbm_architecture: get codebase structure overview (node/edge counts, schema)",
-      "- cbm_search: natural-language search for relevant symbols",
-      "- cbm_trace: understand call chains and dependencies between functions",
-      "",
-      "Detailed understanding:",
-      "- lsp documentSymbol: list all symbols in a file",
-      "- lsp goToDefinition/hover: understand types and APIs",
-      "- lsp findReferences: check how widely a symbol is used before planning changes",
-      "",
-      "Pattern discovery:",
-      "- grep: fast text search for known patterns",
-      "- cbm_search_code: graph-augmented grep (better for understanding function context)",
+      TOOL_ROUTING,
       "",
       "Plan format rules:",
       "- Use checkboxes (- [ ]) for every actionable item",

@@ -1,4 +1,5 @@
 import type { PiPiConfig } from "../config.js";
+import { TOOL_ROUTING, ALL_CBM_TOOLS } from "./tool-routing.js";
 
 export function createPlanReviewerAgent(
   variant: string,
@@ -14,7 +15,7 @@ export function createPlanReviewerAgent(
   return {
     frontmatter: {
       description: `Plan reviewer (${variant} variant, pi-pi)`,
-      tools: "read, grep, find, bash, write, lsp, cbm_search, cbm_changes",
+      tools: `read, grep, find, bash, write, lsp, ast_search, ${ALL_CBM_TOOLS}`,
       model: variantConfig.model,
       thinking: variantConfig.thinking,
       max_turns: 20,
@@ -31,12 +32,7 @@ export function createPlanReviewerAgent(
       "",
       "You MUST NOT write to any other file. Only write .md files inside .pp/state/.",
       "",
-      "# Tool routing — validate the plan against codebase reality",
-      "",
-      "- cbm_search: check that symbols/functions mentioned in the plan actually exist",
-      "- cbm_changes: check for uncommitted changes that might conflict with the plan",
-      "- lsp findReferences: verify usage counts for symbols the plan proposes to change",
-      "- grep: quick text search to verify assumptions",
+      TOOL_ROUTING,
       "",
       "Review criteria:",
       "- Are all plan items actionable and verifiable?",

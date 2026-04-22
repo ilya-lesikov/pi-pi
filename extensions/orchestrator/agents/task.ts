@@ -1,4 +1,5 @@
 import type { PiPiConfig } from "../config.js";
+import { TOOL_ROUTING, ALL_CBM_TOOLS } from "./tool-routing.js";
 
 export function createTaskAgent(
   config: PiPiConfig,
@@ -8,7 +9,7 @@ export function createTaskAgent(
   return {
     frontmatter: {
       description: "Implementation subtask (pi-pi)",
-      tools: "read, write, edit, bash, grep, find, ls, lsp, ast_search, cbm_search, cbm_search_code, cbm_changes",
+      tools: `read, write, edit, bash, grep, find, ls, lsp, ast_search, ${ALL_CBM_TOOLS}`,
       model: config.agents.task.model,
       thinking: config.agents.task.thinking,
       max_turns: 50,
@@ -20,26 +21,7 @@ export function createTaskAgent(
       "Your subtask:",
       subtaskDescription,
       "",
-      "# Tool routing — pick the right tool for the question",
-      "",
-      "Discovery (don't know where to look):",
-      "- cbm_search: natural-language search across all symbols",
-      "- cbm_search_code: graph-augmented grep — finds text, deduplicates into containing functions",
-      "",
-      "Precision (know a file or symbol):",
-      "- lsp goToDefinition: resolve where a symbol is defined",
-      "- lsp findReferences: find all usages before modifying",
-      "- lsp hover: get type info and docs",
-      "- lsp incomingCalls/outgoingCalls: understand call chains",
-      "",
-      "Structural patterns:",
-      "- ast_search: find code shapes (e.g. 'if err != nil { $$$ }', 'type $N interface { $$$ }')",
-      "",
-      "Text search:",
-      "- grep: fast text/regex search",
-      "",
-      "Impact assessment:",
-      "- cbm_changes: see which symbols are affected by your changes",
+      TOOL_ROUTING,
       "",
       "# Constraints",
       "- Do NOT spawn task subagents (no recursion)",
