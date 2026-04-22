@@ -262,8 +262,6 @@ export default function (pi: ExtensionAPI) {
       description: state.description,
     };
 
-    setManagedSession(true);
-
     const modelConfig = config.mainModel[type === "debug" ? "debug" : type === "brainstorm" ? "brainstorm" : "implement"];
     const modelOk = await switchModel(ctx, modelConfig.model, modelConfig.thinking);
     if (!modelOk) {
@@ -272,39 +270,11 @@ export default function (pi: ExtensionAPI) {
 
     registerAgents();
     pi.setSessionName(active.description.slice(0, 50));
-
-    const phasePrompt = getPhasePrompt(ctx);
-    ownSessionSwitch = true;
-    const result = await ctx.newSession({
-      setup: async (sm) => {
-        const contextFiles = loadContextFiles(cwd, "main", "context");
-        for (const cf of contextFiles) {
-          sm.appendMessage({
-            role: "user" as const,
-            content: [{ type: "text" as const, text: cf.content }],
-            timestamp: Date.now(),
-          });
-        }
-        const artifacts = getPhaseArtifacts(active!.dir, active!.state.phase);
-        for (const artifact of artifacts) {
-          sm.appendMessage({
-            role: "user" as const,
-            content: [{ type: "text" as const, text: `=== ${artifact.name} ===\n${artifact.content}` }],
-            timestamp: Date.now(),
-          });
-        }
-      },
-    });
-    ownSessionSwitch = false;
-
-    if (result.cancelled) {
-      await cleanupActive();
-      return;
-    }
-
     updateStatus(ctx);
+
+    injectContextAndArtifacts(active.dir, active.state.phase);
     createPhaseTasks();
-    pi.sendUserMessage(phasePrompt);
+    pi.sendUserMessage(getPhasePrompt(ctx));
 
     if (active.state.phase === "planning") {
       spawnPlanners(pi, cwd, active.dir, active.taskId, config).catch((err) => {
@@ -315,13 +285,8 @@ export default function (pi: ExtensionAPI) {
 
 
 
-  let ownSessionSwitch = false;
-
-  function setManagedSession(managed: boolean): void {
-    console.error(`[pi-pi] setManagedSession(${managed}) at ${new Date().toISOString()}`);
-    pi.events.emit("tasks:set-managed", { managed });
-    pi.events.emit("subagents:set-managed", { managed });
-  }
+  let phaseCompactionPending = false;
+  let phaseCompactionResolve: (() => void) | null = null;
 
   function abortAllSubagents(): void {
     for (const agentId of spawnedAgentIds) {
@@ -335,7 +300,6 @@ export default function (pi: ExtensionAPI) {
 
   async function cleanupActive(): Promise<void> {
     if (!active) return;
-    setManagedSession(false);
     if (active.release) {
       try {
         await active.release();
@@ -366,7 +330,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   pi.on("session_before_switch" as any, async () => {
-    if (!active || ownSessionSwitch) return;
+    if (!active) return;
     abortAllSubagents();
     unregisterAgentDefinitions(pi, active.taskId);
     await cleanupActive();
@@ -432,6 +396,49 @@ export default function (pi: ExtensionAPI) {
       { type: "librarian", variant: null, ...librarian },
       { type: "task", variant: null, ...taskAgent },
     ]);
+  }
+
+  function injectContextAndArtifacts(taskDir: string, phase: Phase): void {
+    const contextFiles = loadContextFiles(cwd, "main", "context");
+    for (const cf of contextFiles) {
+      pi.sendMessage(
+        { customType: "pp-context", content: cf.content, display: false },
+        { deliverAs: "steer" },
+      );
+    }
+    const artifacts = getPhaseArtifacts(taskDir, phase);
+    for (const artifact of artifacts) {
+      pi.sendMessage(
+        { customType: "pp-artifact", content: `=== ${artifact.name} ===\n${artifact.content}`, display: false },
+        { deliverAs: "steer" },
+      );
+    }
+  }
+
+  function compactAndTransition(ctx: ExtensionContext, taskDir: string, phase: Phase): void {
+    phaseCompactionPending = true;
+    ctx.compact({
+      customInstructions: "Phase transition — discard all prior conversation. Produce a one-line summary: 'Previous phase completed.'",
+      onComplete: () => {
+        phaseCompactionPending = false;
+        if (phaseCompactionResolve) {
+          phaseCompactionResolve();
+          phaseCompactionResolve = null;
+        }
+        injectContextAndArtifacts(taskDir, phase);
+        pi.sendUserMessage(getPhasePrompt(ctx));
+      },
+      onError: (err) => {
+        console.error(`[pi-pi] Phase compaction failed: ${err.message}`);
+        phaseCompactionPending = false;
+        if (phaseCompactionResolve) {
+          phaseCompactionResolve();
+          phaseCompactionResolve = null;
+        }
+        injectContextAndArtifacts(taskDir, phase);
+        pi.sendUserMessage(getPhasePrompt(ctx));
+      },
+    });
   }
 
   pi.on("tool_call", async (event, _ctx) => {
@@ -521,8 +528,18 @@ export default function (pi: ExtensionAPI) {
     return;
   });
 
-  pi.on("session_before_compact", async (_event, ctx) => {
+  pi.on("session_before_compact", async (event, ctx) => {
     if (!active || active.state.phase === "done") return;
+
+    if (phaseCompactionPending) {
+      return {
+        compaction: {
+          summary: `Previous phase (${active.state.phase}) completed. Transitioning to next phase.`,
+          firstKeptEntryId: event.preparation.firstKeptEntryId,
+          tokensBefore: event.preparation.tokensBefore,
+        },
+      };
+    }
 
     const artifacts = getPhaseArtifacts(active.dir, active.state.phase);
     if (artifacts.length === 0) return;
@@ -707,8 +724,6 @@ export default function (pi: ExtensionAPI) {
         description: task.state.description,
       };
 
-      setManagedSession(true);
-
       const modelConfig = config.mainModel[task.type === "debug" ? "debug" : task.type === "brainstorm" ? "brainstorm" : "implement"];
       const modelOk = await switchModel(ctx, modelConfig.model, modelConfig.thinking);
       if (!modelOk) {
@@ -717,38 +732,10 @@ export default function (pi: ExtensionAPI) {
 
       registerAgents();
       pi.setSessionName(active.description.slice(0, 50));
-
-      const resumePrompt = getPhasePrompt(ctx);
-      ownSessionSwitch = true;
-      const resumeResult = await ctx.newSession({
-        setup: async (sm) => {
-          const contextFiles = loadContextFiles(cwd, "main", "context");
-          for (const cf of contextFiles) {
-            sm.appendMessage({
-              role: "user" as const,
-              content: [{ type: "text" as const, text: cf.content }],
-              timestamp: Date.now(),
-            });
-          }
-          const artifacts = getPhaseArtifacts(active!.dir, active!.state.phase);
-          for (const artifact of artifacts) {
-            sm.appendMessage({
-              role: "user" as const,
-              content: [{ type: "text" as const, text: `=== ${artifact.name} ===\n${artifact.content}` }],
-              timestamp: Date.now(),
-            });
-          }
-        },
-      });
-      ownSessionSwitch = false;
-
-      if (resumeResult.cancelled) {
-        await cleanupActive();
-        return;
-      }
-
       updateStatus(ctx);
-      pi.sendUserMessage(resumePrompt);
+
+      injectContextAndArtifacts(active.dir, active.state.phase);
+      pi.sendUserMessage(getPhasePrompt(ctx));
     },
   });
 
@@ -835,35 +822,9 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      const nextPhasePrompt = getPhasePrompt(ctx);
-      ownSessionSwitch = true;
-      const nsResult = await ctx.newSession({
-        setup: async (sm) => {
-          const contextFiles = loadContextFiles(cwd, "main", "context");
-          for (const cf of contextFiles) {
-            sm.appendMessage({
-              role: "user" as const,
-              content: [{ type: "text" as const, text: cf.content }],
-              timestamp: Date.now(),
-            });
-          }
-          const artifacts = getPhaseArtifacts(active!.dir, active!.state.phase);
-          for (const artifact of artifacts) {
-            sm.appendMessage({
-              role: "user" as const,
-              content: [{ type: "text" as const, text: `=== ${artifact.name} ===\n${artifact.content}` }],
-              timestamp: Date.now(),
-            });
-          }
-        },
-      });
-      ownSessionSwitch = false;
-
-      if (nsResult.cancelled) return;
-
       updateStatus(ctx);
       updatePhaseTasks();
-      pi.sendUserMessage(nextPhasePrompt);
+      compactAndTransition(ctx, active.dir, active.state.phase);
 
       if (next === "planning") {
         spawnPlanners(pi, cwd, active.dir, active.taskId, config).catch((err) => {
