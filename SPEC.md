@@ -48,6 +48,8 @@ Shows current task info (type, phase, age, directory).
 
 The main agent interviews the user, spawns explore/librarian subagents for codebase and external research, and iteratively builds the two documents. Once both are non-empty, calls `/pp:next`.
 
+RESEARCH.md follows a structured template: Affected Code, Architecture Context, Constraints & Edge Cases, Open Questions, Recommended Approach.
+
 ### Phase 2: Planning
 
 **Goal:** Produce a synthesized plan in `plans/<timestamp>_synthesized.md`.
@@ -60,7 +62,7 @@ Plans use checkboxes for progress tracking. They describe *what* to do, not *how
 
 **Goal:** Execute the plan.
 
-The main agent implements the plan, checking off items as it completes them. Subtasks can be delegated to task subagents. LSP diagnostics run on each edit. `afterEdit` commands (formatters, type checkers) run after each file change — advisory, not blocking. Auto-commit creates human-readable commits after each checkpoint.
+The main agent implements the plan, checking off items as it completes them. Subtasks can be delegated to task subagents. LSP diagnostics run on each edit. `afterEdit` commands (formatters, type checkers) run after each file change — advisory, not blocking. Auto-commit creates human-readable commits after each checkpoint. If a fix fails 3 times, the agent stops and re-plans the approach.
 
 After all items are checked, `afterImplement` commands run (full test suite, linters). These ARE gates — failures block the transition.
 
@@ -68,7 +70,7 @@ After all items are checked, `afterImplement` commands run (full test suite, lin
 
 **Goal:** Validate the implementation.
 
-The user chooses: manual review only, normal auto-review, or deep auto-review (higher thinking levels). Code-reviewer subagents run in parallel, each writing a review. The main agent synthesizes reviews and presents to the user.
+The user chooses: manual review only, normal auto-review, or deep auto-review (higher thinking levels). Code-reviewer subagents run in parallel, each writing a review with structured output (CRITICAL/MAJOR/MINOR/OPEN QUESTIONS/VERDICT), evidence requirements (file:line for every CRITICAL/MAJOR), and confidence tagging (HIGH/MEDIUM/LOW). The main agent synthesizes reviews and presents to the user.
 
 If changes are needed, the agent creates a separate fix plan (the original plan is never modified), implements fixes, and a new review round begins. Auto-review rounds are capped by `maxAutoReviewRounds` (default 2).
 
@@ -100,16 +102,68 @@ Open-ended conversation. No phases. Spawns explore/librarian on demand. If concl
 
 | Agent | Purpose | Who spawns it | Tools |
 |-------|---------|---------------|-------|
-| explore | Internal codebase search | LLM via Agent() | read, grep, find, ls, bash |
-| librarian | External docs research | LLM via Agent() | read, grep, find, bash |
-| task | Delegated implementation subtask | LLM via Agent() | all |
-| planner | Creates plans from requirements | Extension on planning phase entry | read, grep, find, bash, write (restricted) |
-| plan-reviewer | Validates plan executability | Extension on demand | read, grep, find, bash, write (restricted) |
-| code-reviewer | Reviews implementation diffs | Extension on review phase entry | read, grep, find, ls, bash, write (restricted) |
+| explore | Internal codebase search | LLM via Agent() | read, grep, find, ls, bash, lsp, ast_search, cbm_*, exa_* |
+| librarian | External docs research | LLM via Agent() | read, grep, find, bash, exa_search, exa_fetch |
+| task | Delegated implementation subtask | LLM via Agent() | all (read, write, edit, bash, grep, find, ls, lsp, ast_search, cbm_*, exa_*) |
+| planner | Creates plans from requirements | Extension on planning phase entry | read, grep, find, bash, write (restricted), lsp, ast_search, cbm_*, exa_* |
+| plan-reviewer | Validates plan executability | Extension on demand | read, grep, find, bash, write (restricted), lsp, ast_search, cbm_*, exa_* |
+| code-reviewer | Reviews implementation diffs | Extension on review phase entry | read, grep, find, ls, bash, write (restricted), lsp, ast_search, cbm_*, exa_* |
 
 Planner, plan-reviewer, and code-reviewer have per-model variants (opus, gpt, gemini, grok), each independently configurable/disablable.
 
 All subagents can spawn explore/librarian for additional context. Task subagents cannot spawn other task subagents (no recursion).
+
+### Code Intelligence Tools
+
+The extension hardcodes three code intelligence tool suites, always available without configuration:
+
+**CBM (codebase-memory-mcp)** — Graph-based code knowledge engine. Binary at `~/.local/bin/codebase-memory-mcp`. Auto-indexes the workspace on first use.
+
+| Tool | Purpose |
+|------|---------|
+| cbm_search | Natural-language BM25, regex, or semantic vector search across indexed symbols |
+| cbm_search_code | Graph-augmented grep — deduplicates matches into containing functions |
+| cbm_trace | Call chain traversal (inbound/outbound) by function name |
+| cbm_changes | Git diff → affected symbols + blast radius |
+| cbm_query | Cypher-like graph queries for multi-hop patterns |
+| cbm_architecture | High-level codebase structure overview |
+
+**LSP (via pi-lsp)** — Compiler-grade semantic analysis. Zero false positives. Supports goToDefinition, findReferences, hover, goToImplementation, documentSymbol, workspaceSymbol, incomingCalls, outgoingCalls, diagnostics, codeActions.
+
+**ast-grep (via pi-hashline-readmap)** — AST-aware structural pattern matching via the `ast_search` tool. Finds code shapes (e.g. `if err != nil { $$$ }`, `go $FUNC($$$)`) rather than text.
+
+**Exa (web search)** — Always-available web search via Exa AI. No API key required.
+
+| Tool | Purpose |
+|------|---------|
+| exa_search | Search the web for docs, guides, examples. Natural-language queries. |
+| exa_fetch | Read a URL's full content as clean markdown. |
+
+### Tool Routing
+
+Agent prompts include an intent-based tool routing guide:
+
+| Intent | Primary tool | Fallback |
+|--------|-------------|----------|
+| Find code by concept | cbm_search | lsp workspaceSymbol → grep |
+| Navigate to definition | lsp goToDefinition | — |
+| Find all usages | lsp findReferences | — |
+| Trace call chains | lsp incomingCalls/outgoingCalls | cbm_trace |
+| Find structural patterns | ast_search | — |
+| Search literal text | grep | — |
+| Assess change impact | cbm_changes | — |
+| Web search | exa_search → exa_fetch | — |
+
+### Behavioral Blocks
+
+All agent prompts include shared behavioral blocks from `tool-routing.ts`:
+
+- **WORKING_PRINCIPLES** — verify before assuming, understand before modifying, smallest viable change, no temp artifacts, evidence over claims, match existing patterns. Read-only agents get a trimmed version.
+- **FAILURE_RECOVERY** — 3-strike rule: after 3 failed attempts, stop editing, revert, document, report blocker.
+- **COMMUNICATION** — be direct/brief, think critically, push back when wrong, dense over polished.
+- **TOOL_ROUTING** — intent-first routing guide (see table above).
+
+Prompts are structured for prompt caching: static blocks first, dynamic content (subtask description, user request, plan) last.
 
 ### Agent Registration
 
@@ -255,4 +309,5 @@ pi-pi bundles modified forks of third-party extensions in `3p/`. These are loade
 Bundled:
 - `pi-subagents` — modified to support in-memory agent registration and extension-only mode
 - `pi-tasks` — modified to handle store upgrade in command handlers
-- `pi-lsp`, `pi-ask-user`, `pi-mcp-adapter`, `pi-plannotator`, `pi-hashline-readmap` — unmodified forks
+- `pi-hashline-readmap` — modified: nu tool disabled and removed
+- `pi-lsp`, `pi-ask-user`, `pi-mcp-adapter`, `pi-plannotator` — unmodified forks
