@@ -23,7 +23,10 @@ class CbmDaemon {
   start(): void {
     if (this.proc) return;
 
-    this.proc = spawn(CBM_BIN, [], { stdio: ["pipe", "pipe", "pipe"] });
+    this.proc = spawn(CBM_BIN, [], { stdio: ["pipe", "pipe", "ignore"] });
+    this.proc.unref();
+    (this.proc.stdout as any)?.unref?.();
+    (this.proc.stdin as any)?.unref?.();
 
     this.rl = createInterface({ input: this.proc.stdout! });
     this.rl.on("line", (line) => this.handleLine(line));
