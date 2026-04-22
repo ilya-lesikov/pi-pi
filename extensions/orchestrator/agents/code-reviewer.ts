@@ -14,7 +14,7 @@ export function createCodeReviewerAgent(
   return {
     frontmatter: {
       description: `Code reviewer (${variant} variant, pi-pi)`,
-      tools: "read, grep, find, ls, bash, write",
+      tools: "read, grep, find, ls, bash, write, lsp",
       model: variantConfig.model,
       thinking: variantConfig.thinking,
       max_turns: 30,
@@ -31,8 +31,10 @@ export function createCodeReviewerAgent(
       "Steps:",
       '1. Run `git diff` to see all changes (try HEAD~1, main, or appropriate base)',
       "2. Read changed files for full context",
-      "3. Run LSP diagnostics on changed files",
-      "4. Check the implementation against the plan",
+      "3. Run lsp diagnostics on changed files to find type errors and lint issues",
+      "4. Use lsp findReferences to check nothing is broken by the changes",
+      "5. Use lsp goToDefinition to verify correct usage of APIs",
+      "6. Check the implementation against the plan",
       "",
       "Review criteria:",
       "- Bugs: logic errors, off-by-ones, null handling, race conditions",

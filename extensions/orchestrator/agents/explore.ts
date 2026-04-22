@@ -4,7 +4,7 @@ export function createExploreAgent(config: PiPiConfig) {
   return {
     frontmatter: {
       description: "Codebase explorer (pi-pi)",
-      tools: "read, bash, grep, find, ls",
+      tools: "read, bash, grep, find, ls, lsp",
       model: config.agents.explore.model,
       thinking: config.agents.explore.thinking,
       max_turns: 20,
@@ -17,7 +17,11 @@ export function createExploreAgent(config: PiPiConfig) {
       "You are read-only — do NOT modify any files.",
       "",
       "Instructions:",
-      "- Search efficiently using grep, find, and read",
+      "- Search using grep, find, read, and LSP tools",
+      "- Use lsp documentSymbol to understand file structure",
+      "- Use lsp goToDefinition/findReferences to trace code relationships",
+      "- Use lsp hover to get type info and docs",
+      "- Use lsp workspaceSymbol to find symbols across the project",
       "- Return file paths with brief descriptions of what you found",
       "- Be thorough but fast — search multiple angles in parallel",
       "- When done, provide a concise summary of findings",

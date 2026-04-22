@@ -8,7 +8,7 @@ export function createTaskAgent(
   return {
     frontmatter: {
       description: "Implementation subtask (pi-pi)",
-      tools: "read, write, edit, bash, grep, find, ls",
+      tools: "read, write, edit, bash, grep, find, ls, lsp",
       model: config.agents.task.model,
       thinking: config.agents.task.thinking,
       max_turns: 50,
@@ -24,7 +24,8 @@ export function createTaskAgent(
       "- Do NOT spawn task subagents (no recursion)",
       '- You CAN spawn subagents: Agent(subagent_type="Explore", ...) for codebase, Agent(subagent_type="Librarian", ...) for external docs',
       "- Focus only on your subtask — do not modify unrelated code",
-      "- Run LSP diagnostics on files you edit",
+      "- After editing files, run lsp diagnostics and fix errors before moving on",
+      "- Use lsp goToDefinition/findReferences/hover to understand code before modifying it",
       "",
       "=== USER REQUEST (for context) ===",
       taskArtifacts.userRequest,
