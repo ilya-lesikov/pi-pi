@@ -66,8 +66,6 @@ export async function spawnCodeReviewers(
         try {
           const { id } = await spawnViaRpc(pi, `code_reviewer_${variant}`, agent.prompt, {
             description: `Code reviewer (${variant})`,
-            model: agent.frontmatter.model,
-            thinkingLevel: agent.frontmatter.thinking,
           });
           await waitForCompletion(pi, id);
         } catch (err: any) {

@@ -54,7 +54,7 @@ export function spawnViaRpc(
   pi: ExtensionAPI,
   agentType: string,
   prompt: string,
-  options: { description: string; model?: string; maxTurns?: number; thinkingLevel?: string; spawnTimeout?: number },
+  options: { description: string; maxTurns?: number; spawnTimeout?: number },
 ): Promise<{ id: string }> {
   const timeout = options.spawnTimeout ?? 30000;
   return new Promise((resolve, reject) => {
@@ -77,9 +77,7 @@ export function spawnViaRpc(
       options: {
         description: options.description,
         run_in_background: true,
-        model: options.model,
         maxTurns: options.maxTurns,
-        thinkingLevel: options.thinkingLevel,
       },
     });
 
