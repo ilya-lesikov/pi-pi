@@ -50,6 +50,7 @@ export class Orchestrator {
   nudgeTimestamps: number[] = [];
   cooldownHits: number[] = [];
   nudgeHalted = false;
+  manualReview = false;
 
   constructor(readonly pi: ExtensionAPI) {}
 
@@ -104,10 +105,12 @@ export class Orchestrator {
   createPhaseTasks(): void {
     if (!this.active || this.active.type !== "implement") return;
 
+    const currentPhase = this.active.state.phase;
     const phases = phasePipeline(this.active.type).filter((p) => p !== "done");
+    const currentIdx = phases.indexOf(currentPhase as typeof phases[number]);
     const lines = phases.map((p, i) => {
-      const status = p === this.active!.state.phase ? "in_progress" : "pending";
-      const blockedBy = i > 0 ? ` (blocked by #${i})` : "";
+      const status = i < currentIdx ? "completed" : p === currentPhase ? "in_progress" : "pending";
+      const blockedBy = i > currentIdx ? ` (blocked by #${i})` : "";
       return `${i + 1}. "${p}" (status: ${status})${blockedBy}`;
     });
 
@@ -147,7 +150,7 @@ export class Orchestrator {
       case "implementation":
         return implementationSystemPrompt(this.active.dir);
       case "review":
-        return reviewSystemPrompt(this.active.dir, this.active.reviewRound);
+        return reviewSystemPrompt(this.active.dir, this.active.reviewRound, this.manualReview);
       default:
         return "";
     }

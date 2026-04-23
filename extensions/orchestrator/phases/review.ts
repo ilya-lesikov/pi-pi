@@ -6,9 +6,31 @@ import { registerAgentDefinitions, spawnViaRpc, waitForCompletion } from "../age
 import { createCodeReviewerAgent } from "../agents/code-reviewer.js";
 import { getLatestSynthesizedPlan } from "../context.js";
 
-export function reviewSystemPrompt(taskDir: string, round: number): string {
+export function reviewSystemPrompt(taskDir: string, round: number, manualReview = false): string {
   const reviewsDir = join(taskDir, "reviews");
   const plansDir = join(taskDir, "plans");
+
+  if (manualReview) {
+    return [
+      `[PI-PI — REVIEW PHASE (round ${round}, manual)]`,
+      "",
+      "Manual review mode — no auto-reviewers are running.",
+      "Review the implementation yourself using the available tools.",
+      "",
+      `Write your review to ${reviewsDir}/<timestamp>_final_round-${round}.md`,
+      "",
+      "If changes are needed:",
+      `1. Create a fix plan at ${plansDir}/<timestamp>_<description>.md`,
+      "2. Implement the fixes",
+      "3. Run afterImplement commands",
+      "",
+      "When done:",
+      "1. Present a brief summary to the user",
+      "2. Tell the user they can visually review code with /pp:review-code",
+      "3. Do NOT run /pp:next yourself — wait for the user to decide",
+    ].join("\n");
+  }
+
   return [
     `[PI-PI — REVIEW PHASE (round ${round})]`,
     "",

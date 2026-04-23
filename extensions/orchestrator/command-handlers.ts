@@ -311,13 +311,6 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
 
       orchestrator.updateStatus(ctx);
       orchestrator.updatePhaseTasks();
-      orchestrator.compactAndTransition(ctx, orchestrator.active.dir, orchestrator.active.state.phase);
-
-      if (next === "planning") {
-        spawnPlanners(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, orchestrator.config).catch((err) => {
-          console.error(`[pi-pi] spawnPlanners failed: ${err.message}`);
-        });
-      }
 
       if (next === "review") {
         const reviewChoice = await ctx.ui.select("Review mode", [
@@ -326,7 +319,9 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
           "Manual review only",
         ]);
 
-        if (reviewChoice !== "Manual review only") {
+        orchestrator.manualReview = reviewChoice === "Manual review only";
+
+        if (!orchestrator.manualReview) {
           if (orchestrator.active.reviewRound > orchestrator.config.maxAutoReviewRounds) {
             ctx.ui.notify(
               `Auto-review round limit reached (${orchestrator.config.maxAutoReviewRounds}). Switching to manual review.`,
@@ -338,10 +333,16 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
             spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, reviewConfig, orchestrator.active.reviewRound).catch((err) => {
               console.error(`[pi-pi] spawnCodeReviewers failed: ${err.message}`);
             });
-            orchestrator.active.reviewRound++;
-            orchestrator.persistReviewRound();
           }
         }
+      }
+
+      orchestrator.compactAndTransition(ctx, orchestrator.active.dir, orchestrator.active.state.phase);
+
+      if (next === "planning") {
+        spawnPlanners(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, orchestrator.config).catch((err) => {
+          console.error(`[pi-pi] spawnPlanners failed: ${err.message}`);
+        });
       }
     },
   });
