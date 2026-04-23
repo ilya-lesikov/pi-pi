@@ -139,12 +139,16 @@ export class Orchestrator {
       case "active":
       case "diagnosing":
         return brainstormSystemPrompt(this.active.type, this.active.description, this.active.dir);
-      case "planning":
-        return planningSystemPrompt(this.active.dir, this.config.usePlannotator);
+      case "planning": {
+        const plannotatorAvailable = this.config.usePlannotator && this.pi.getAllTools().some((t) => t.name === "plannotator_submit_plan");
+        return planningSystemPrompt(this.active.dir, plannotatorAvailable);
+      }
       case "implementation":
         return implementationSystemPrompt(this.active.dir);
-      case "review":
-        return reviewSystemPrompt(this.active.dir, this.active.reviewRound, this.config.usePlannotator);
+      case "review": {
+        const plannotatorAvailable = this.config.usePlannotator && this.pi.getAllTools().some((t) => t.name === "plannotator_submit_plan");
+        return reviewSystemPrompt(this.active.dir, this.active.reviewRound, plannotatorAvailable);
+      }
       default:
         return "";
     }
