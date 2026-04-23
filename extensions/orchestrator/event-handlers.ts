@@ -73,7 +73,7 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
       const ok = (text: string) => ({ content: [{ type: "text" as const, text }], details: {} });
 
       const options: string[] = [];
-      if (phase === "brainstorm" || phase === "diagnosing") {
+      if (phase === "brainstorm" || phase === "diagnosing" || phase === "active") {
         options.push("Approve & continue", "Let me review first");
       } else if (phase === "planning") {
         options.push("Approve plan & continue", "Review in Plannotator", "Let me review first");
