@@ -94,7 +94,7 @@ const DEFAULT_CONFIG: PiPiConfig = {
   },
   autoCommit: true,
   injectAgentsMd: true,
-  usePlannotator: false,
+  usePlannotator: true,
   maxAutoReviewRounds: 2,
 };
 
