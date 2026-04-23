@@ -180,6 +180,28 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
 
       orchestrator.injectContextAndArtifacts(orchestrator.active.dir, orchestrator.active.state.phase);
       pi.sendUserMessage(orchestrator.getPhasePrompt(ctx));
+
+      if (orchestrator.active.state.phase === "planning") {
+        spawnPlanners(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, orchestrator.config).catch((err: any) => {
+          console.error(`[pi-pi] spawnPlanners failed: ${err.message}`);
+        });
+      }
+
+      if (orchestrator.active.state.phase === "review") {
+        const reviewChoice = await ctx.ui.select("Review mode", [
+          "Normal auto-review",
+          "Deep auto-review (higher reasoning)",
+          "Manual review only",
+        ]);
+
+        if (reviewChoice !== "Manual review only") {
+          const deep = reviewChoice === "Deep auto-review (higher reasoning)";
+          const reviewConfig = deep ? deepReviewConfig(orchestrator.config) : orchestrator.config;
+          spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, reviewConfig, orchestrator.active.reviewRound).catch((err: any) => {
+            console.error(`[pi-pi] spawnCodeReviewers failed: ${err.message}`);
+          });
+        }
+      }
     },
   });
 
