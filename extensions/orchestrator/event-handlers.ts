@@ -256,17 +256,22 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     const hasToolResults = event.toolResults && event.toolResults.length > 0;
     const turnWasEmpty = !msgContent.trim() && !hasToolResults;
 
-    if (!turnWasEmpty) {
-      orchestrator.nudgeTimestamps = [];
-      return;
-    }
+    if (!turnWasEmpty) return;
 
     const now = Date.now();
-    const windowMs = 60000;
+    const RESET_AFTER_MS = 5 * 60 * 1000;
+    const MAX_BACKOFF_MS = 60 * 1000;
+    const HALT_WINDOW_MS = 30 * 60 * 1000;
+    const MAX_BACKOFF_HITS_BEFORE_HALT = 3;
+
+    const lastNudge = orchestrator.nudgeTimestamps[orchestrator.nudgeTimestamps.length - 1];
+    if (lastNudge && now - lastNudge > RESET_AFTER_MS) {
+      orchestrator.nudgeTimestamps = [];
+      orchestrator.currentBackoffMs = 0;
+    }
 
     orchestrator.nudgeTimestamps.push(now);
-    const recentNudges = orchestrator.nudgeTimestamps.filter((t) => now - t < windowMs);
-    orchestrator.nudgeTimestamps = recentNudges;
+    const recentNudges = orchestrator.nudgeTimestamps.filter((t) => now - t < 60000);
 
     const sendNudge = () => {
       pi.sendMessage(
@@ -280,13 +285,36 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     };
 
     if (recentNudges.length <= 3) {
+      orchestrator.currentBackoffMs = 0;
       sendNudge();
       return;
     }
 
-    const backoffExponent = recentNudges.length - 3;
-    const delayMs = Math.min(1000 * Math.pow(2, backoffExponent), 60000);
-    setTimeout(sendNudge, delayMs);
+    orchestrator.currentBackoffMs = orchestrator.currentBackoffMs === 0
+      ? 1000
+      : Math.min(orchestrator.currentBackoffMs * 3, MAX_BACKOFF_MS);
+
+    if (orchestrator.currentBackoffMs >= MAX_BACKOFF_MS) {
+      orchestrator.maxBackoffHits.push(now);
+      orchestrator.maxBackoffHits = orchestrator.maxBackoffHits.filter((t) => now - t < HALT_WINDOW_MS);
+
+      if (orchestrator.maxBackoffHits.length >= MAX_BACKOFF_HITS_BEFORE_HALT) {
+        pi.sendMessage(
+          {
+            customType: "pp-continuation-halted",
+            content: "Agent has been repeatedly interrupted and unable to make progress. This is likely a provider issue (content filter, rate limiting, or outage). Please check your provider status and retry manually.",
+            display: true,
+          },
+          { deliverAs: "steer" },
+        );
+        orchestrator.nudgeTimestamps = [];
+        orchestrator.currentBackoffMs = 0;
+        orchestrator.maxBackoffHits = [];
+        return;
+      }
+    }
+
+    setTimeout(sendNudge, orchestrator.currentBackoffMs);
   });
 
   pi.events.on("plannotator:review-result", (data: any) => {
