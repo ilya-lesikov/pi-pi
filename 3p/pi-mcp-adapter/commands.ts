@@ -164,7 +164,7 @@ export async function authenticateServer(
       ctx.ui.notify(
         `OAuth authentication successful for "${serverName}"!\n` +
         `Run /mcp reconnect ${serverName} to connect with the new token.`,
-        "success"
+        "info"
       );
     } else {
       ctx.ui.notify(
@@ -223,14 +223,16 @@ export async function openMcpPanel(
   return new Promise<void>((resolve) => {
     ctx.ui.custom(
       (tui, _theme, _keybindings, done) => {
-        return createMcpPanel(config, cache, provenanceMap, callbacks, tui, (result: McpPanelResult) => {
+        const panel = createMcpPanel(config, cache, provenanceMap, callbacks, tui, (result: McpPanelResult) => {
           if (!result.cancelled && result.changes.size > 0) {
             writeDirectToolsConfig(result.changes, provenanceMap, config);
             ctx.ui.notify("Direct tools updated. Restart pi to apply.", "info");
           }
-          done();
+          panel.dispose();
+          done(undefined);
           resolve();
         });
+        return panel;
       },
       { overlay: true, overlayOptions: { anchor: "center", width: 82 } },
     );

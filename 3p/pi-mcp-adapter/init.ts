@@ -51,7 +51,7 @@ export async function initializeMcp(
     completedUiSessions: [],
     openBrowser: (url: string) => openUrl(pi, url, process.env.BROWSER),
     ui,
-    sendMessage: (message, options) => pi.sendMessage(message, options),
+    sendMessage: (message, options) => pi.sendMessage({ ...message, display: message.display ?? false }, options),
   };
 
   const serverEntries = Object.entries(config.mcpServers);

@@ -172,6 +172,7 @@ describe("McpOAuthProvider", () => {
         client_secret: "new-secret",
         client_id_issued_at: Math.floor(Date.now() / 1000),
         client_secret_expires_at: futureTime,
+        redirect_uris: [],
       }
 
       await provider.saveClientInformation(info)

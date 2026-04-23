@@ -31,7 +31,11 @@ async function attemptDirectAutoAuth(
     return { status: "skipped" };
   }
 
-  const grantType = definition.oauth?.grantType ?? "authorization_code";
+  if (!definition.oauth) {
+    return { status: "skipped" };
+  }
+
+  const grantType = definition.oauth.grantType ?? "authorization_code";
   if (!state.ui && grantType !== "client_credentials") {
     return {
       status: "failed",
@@ -334,7 +338,7 @@ export function createDirectToolExecutor(
         ? await maybeStartUiSession(state, {
             serverName: spec.serverName,
             toolName: spec.originalName,
-            toolArgs: params ?? {},
+            toolArgs: (params ?? {}) as Record<string, unknown>,
             uiResourceUri: spec.uiResourceUri!,
             streamMode: spec.uiStreamMode,
           })
@@ -342,7 +346,7 @@ export function createDirectToolExecutor(
 
       const resultPromise = connection.client.callTool({
         name: spec.originalName,
-        arguments: params ?? {},
+        arguments: (params ?? {}) as Record<string, unknown>,
         _meta: uiSession?.requestMeta,
       });
 

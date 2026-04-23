@@ -33,7 +33,11 @@ async function attemptAutoAuth(
     return { status: "skipped" };
   }
 
-  const grantType = definition.oauth?.grantType ?? "authorization_code";
+  if (!definition.oauth) {
+    return { status: "skipped" };
+  }
+
+  const grantType = definition.oauth.grantType ?? "authorization_code";
   if (!state.ui && grantType !== "client_credentials") {
     return {
       status: "failed",

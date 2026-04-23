@@ -18,8 +18,8 @@ export interface CompletedUiSession {
 export type SendMessageFn = (
   message: {
     customType: string;
-    content: Array<{ type: string; text: string }>;
-    display?: string;
+    content: Array<{ type: "text"; text: string }>;
+    display?: boolean;
     details?: unknown;
   },
   options?: { triggerTurn?: boolean }
