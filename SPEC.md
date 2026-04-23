@@ -64,7 +64,7 @@ When complete, the agent calls `pp_phase_complete` which shows a dialog to the u
 
 **Goal:** Produce a synthesized plan in `plans/<timestamp>_synthesized.md`.
 
-Multiple planner subagents run in parallel (opus, gpt, gemini, grok — each configurable/disablable). Each reads USER_REQUEST.md and RESEARCH.md and writes its own plan. The main agent waits for the "N planner(s) completed" notification, then synthesizes all plans into a final plan.
+Multiple planner subagents run in parallel (opus, gpt, gemini — each configurable/disablable). Each reads USER_REQUEST.md and RESEARCH.md and writes its own plan. The main agent waits for the "N planner(s) completed" notification, then synthesizes all plans into a final plan.
 
 The main agent is a SYNTHESIZER — it must NOT write its own plan from scratch or proceed before all planners complete.
 
@@ -136,7 +136,7 @@ Open-ended conversation. No phases. Spawns explore/librarian on demand. If concl
 | plan-reviewer | Validates plan executability | Extension on demand | read, grep, find, bash, write (restricted), lsp, ast_search, cbm_*, exa_* |
 | code-reviewer | Reviews implementation diffs | Extension on review phase entry | read, grep, find, ls, bash, write (restricted), lsp, ast_search, cbm_*, exa_* |
 
-Planner, plan-reviewer, and code-reviewer have per-model variants (opus, gpt, gemini, grok), each independently configurable/disablable.
+Planner, plan-reviewer, and code-reviewer have per-model variants (opus, gpt, gemini), each independently configurable/disablable.
 
 All subagents can spawn explore/librarian for additional context. Task subagents cannot spawn other task subagents (no recursion).
 

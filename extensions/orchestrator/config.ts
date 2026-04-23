@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
+import { getAgentDir } from "@mariozechner/pi-coding-agent";
 
 export interface ModelConfig {
   model: string;
@@ -61,7 +62,6 @@ const DEFAULT_CONFIG: PiPiConfig = {
     opus: { enabled: true, model: "anthropic/claude-opus-4-6", thinking: "high" },
     gpt: { enabled: true, model: "openai/gpt-5.4", thinking: "high" },
     gemini: { enabled: true, model: "google/gemini-3.1-pro", thinking: "high" },
-    grok: { enabled: true, model: "xai/grok-4", thinking: "high" },
   },
   planReviewers: {
     opus: { enabled: true, model: "anthropic/claude-opus-4-6", thinking: "high" },
@@ -71,7 +71,6 @@ const DEFAULT_CONFIG: PiPiConfig = {
     opus: { enabled: true, model: "anthropic/claude-opus-4-6", thinking: "high" },
     gpt: { enabled: true, model: "openai/gpt-5.4", thinking: "high" },
     gemini: { enabled: false, model: "google/gemini-3.1-pro", thinking: "high" },
-    grok: { enabled: false, model: "xai/grok-4", thinking: "high" },
   },
   agents: {
     explore: { model: "google/gemini-3.1-flash", thinking: "low" },
@@ -182,27 +181,42 @@ export function validateConfig(config: Record<string, any>): void {
   }
 }
 
+function loadJsonFile(path: string): Record<string, any> | null {
+  if (!existsSync(path)) return null;
+  const raw = readFileSync(path, "utf-8");
+  try {
+    return JSON.parse(raw);
+  } catch (err: any) {
+    throw new Error(`Failed to parse ${path}: ${err.message}`);
+  }
+}
+
+export const GLOBAL_CONFIG_PATH = join(getAgentDir(), "extensions", "pp", "config.json");
+
 export function loadConfig(cwd: string): PiPiConfig {
   const ppDir = join(cwd, ".pp");
-  const configPath = join(ppDir, "config.json");
+  const projectConfigPath = join(ppDir, "config.json");
 
   if (!existsSync(ppDir)) {
     mkdirSync(ppDir, { recursive: true });
   }
 
-  let userConfig: Record<string, any> = {};
-  if (existsSync(configPath)) {
-    const raw = readFileSync(configPath, "utf-8");
-    try {
-      userConfig = JSON.parse(raw);
-    } catch (err: any) {
-      throw new Error(`Failed to parse ${configPath}: ${err.message}`);
-    }
-  } else {
-    writeFileSync(configPath, JSON.stringify(DEFAULT_CONFIG, null, 2) + "\n", "utf-8");
+  const globalConfig = loadJsonFile(GLOBAL_CONFIG_PATH);
+  const projectConfig = loadJsonFile(projectConfigPath);
+
+  if (!projectConfig && !globalConfig) {
+    writeFileSync(projectConfigPath, JSON.stringify(DEFAULT_CONFIG, null, 2) + "\n", "utf-8");
   }
 
-  validateConfig(userConfig);
+  let merged = { ...DEFAULT_CONFIG } as Record<string, any>;
+  if (globalConfig) {
+    validateConfig(globalConfig);
+    merged = deepMerge(merged, globalConfig);
+  }
+  if (projectConfig) {
+    validateConfig(projectConfig);
+    merged = deepMerge(merged, projectConfig);
+  }
 
-  return deepMerge(DEFAULT_CONFIG, userConfig) as unknown as PiPiConfig;
+  return merged as unknown as PiPiConfig;
 }
