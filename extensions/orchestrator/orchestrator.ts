@@ -48,8 +48,8 @@ export class Orchestrator {
   phaseCompactionPending = false;
   phaseCompactionResolve: (() => void) | null = null;
   nudgeTimestamps: number[] = [];
-  currentBackoffMs = 0;
-  maxBackoffHits: number[] = [];
+  cooldownHits: number[] = [];
+  nudgeHalted = false;
 
   constructor(readonly pi: ExtensionAPI) {}
 

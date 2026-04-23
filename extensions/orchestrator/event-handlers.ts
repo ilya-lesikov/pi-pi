@@ -102,6 +102,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   pi.on("before_agent_start", async (event, ctx) => {
     if (!orchestrator.active || orchestrator.active.state.phase === "done") return;
 
+    orchestrator.nudgeHalted = false;
     orchestrator.updateStatus(ctx);
 
     const phasePrompt = orchestrator.getPhasePrompt(ctx);
@@ -257,21 +258,12 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     const turnWasEmpty = !msgContent.trim() && !hasToolResults;
 
     if (!turnWasEmpty) return;
+    if (orchestrator.nudgeHalted) return;
 
     const now = Date.now();
-    const RESET_AFTER_MS = 5 * 60 * 1000;
-    const MAX_BACKOFF_MS = 60 * 1000;
-    const HALT_WINDOW_MS = 30 * 60 * 1000;
-    const MAX_BACKOFF_HITS_BEFORE_HALT = 3;
-
-    const lastNudge = orchestrator.nudgeTimestamps[orchestrator.nudgeTimestamps.length - 1];
-    if (lastNudge && now - lastNudge > RESET_AFTER_MS) {
-      orchestrator.nudgeTimestamps = [];
-      orchestrator.currentBackoffMs = 0;
-    }
 
     orchestrator.nudgeTimestamps.push(now);
-    const recentNudges = orchestrator.nudgeTimestamps.filter((t) => now - t < 60000);
+    orchestrator.nudgeTimestamps = orchestrator.nudgeTimestamps.filter((t) => now - t < 60000);
 
     const sendNudge = () => {
       pi.sendMessage(
@@ -284,37 +276,44 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       );
     };
 
-    if (recentNudges.length <= 3) {
-      orchestrator.currentBackoffMs = 0;
+    if (orchestrator.nudgeTimestamps.length <= 3) {
       sendNudge();
       return;
     }
 
-    orchestrator.currentBackoffMs = orchestrator.currentBackoffMs === 0
-      ? 1000
-      : Math.min(orchestrator.currentBackoffMs * 3, MAX_BACKOFF_MS);
+    if (orchestrator.nudgeTimestamps.length >= 5) {
+      orchestrator.cooldownHits.push(now);
+      orchestrator.cooldownHits = orchestrator.cooldownHits.filter((t) => now - t < 20 * 60 * 1000);
 
-    if (orchestrator.currentBackoffMs >= MAX_BACKOFF_MS) {
-      orchestrator.maxBackoffHits.push(now);
-      orchestrator.maxBackoffHits = orchestrator.maxBackoffHits.filter((t) => now - t < HALT_WINDOW_MS);
-
-      if (orchestrator.maxBackoffHits.length >= MAX_BACKOFF_HITS_BEFORE_HALT) {
+      if (orchestrator.cooldownHits.length >= 5) {
+        orchestrator.nudgeHalted = true;
+        orchestrator.nudgeTimestamps = [];
+        orchestrator.cooldownHits = [];
         pi.sendMessage(
           {
             customType: "pp-continuation-halted",
-            content: "Agent has been repeatedly interrupted and unable to make progress. This is likely a provider issue (content filter, rate limiting, or outage). Please check your provider status and retry manually.",
+            content: "Agent has been repeatedly interrupted. Auto-continuation paused. Send any message to resume nudging.",
             display: true,
           },
           { deliverAs: "steer" },
         );
-        orchestrator.nudgeTimestamps = [];
-        orchestrator.currentBackoffMs = 0;
-        orchestrator.maxBackoffHits = [];
         return;
       }
+
+      pi.sendMessage(
+        {
+          customType: "pp-continuation-cooldown",
+          content: "Agent interrupted repeatedly. Waiting 60 seconds before retrying.",
+          display: true,
+        },
+        { deliverAs: "steer" },
+      );
+      orchestrator.nudgeTimestamps = [];
+      setTimeout(sendNudge, 60000);
+      return;
     }
 
-    setTimeout(sendNudge, orchestrator.currentBackoffMs);
+    sendNudge();
   });
 
   pi.events.on("plannotator:review-result", (data: any) => {
