@@ -222,6 +222,85 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
     },
   });
 
+  async function transitionToNextPhase(ctx: any): Promise<{ ok: boolean; error?: string }> {
+    if (!orchestrator.active) return { ok: false, error: "No active task." };
+
+    const currentPhase = orchestrator.active.state.phase;
+    if (currentPhase === "done") return { ok: false, error: "Task is already done." };
+
+    const exitCheck = validateExitCriteria(orchestrator.active.dir, orchestrator.active.type, currentPhase);
+    if (!exitCheck.ok) {
+      pi.sendUserMessage(`Phase transition blocked: ${exitCheck.reason}. Please address this before advancing.`);
+      return { ok: false, error: exitCheck.reason };
+    }
+
+    const next = nextPhase(orchestrator.active.type, currentPhase);
+    if (!next) return { ok: false, error: "No next phase available." };
+
+    if (currentPhase === "implementation") {
+      const afterResults = runAfterImplement(orchestrator.config, orchestrator.cwd);
+      const failures = afterResults.filter((r) => !r.ok);
+      if (failures.length > 0) {
+        const failureText = failures.map((f) => `${f.command}: ${f.output}`).join("\n");
+        ctx.ui.notify(`afterImplement commands failed:\n${failureText}`, "error");
+        pi.sendUserMessage(`afterImplement failed:\n${failureText}\n\nFix these issues before advancing.`);
+        return { ok: false, error: "afterImplement commands failed" };
+      }
+    }
+
+    orchestrator.active.state.phase = next;
+    saveTask(orchestrator.active.dir, orchestrator.active.state);
+
+    if (next === "done") {
+      orchestrator.abortAllSubagents();
+      unregisterAgentDefinitions(pi);
+      await orchestrator.cleanupActive();
+      orchestrator.updateStatus(ctx);
+      ctx.ui.notify("Task completed!", "info");
+      return { ok: true };
+    }
+
+    orchestrator.updateStatus(ctx);
+    orchestrator.updatePhaseTasks();
+
+    if (next === "review") {
+      const reviewChoice = await ctx.ui.select("Review mode", [
+        "Normal auto-review",
+        "Deep auto-review (higher reasoning)",
+        "Manual review only",
+      ]);
+
+      orchestrator.manualReview = reviewChoice === "Manual review only";
+
+      if (!orchestrator.manualReview) {
+        if (orchestrator.active.reviewRound > orchestrator.config.maxAutoReviewRounds) {
+          ctx.ui.notify(
+            `Auto-review round limit reached (${orchestrator.config.maxAutoReviewRounds}). Switching to manual review.`,
+            "warning",
+          );
+        } else {
+          const deep = reviewChoice === "Deep auto-review (higher reasoning)";
+          const reviewConfig = deep ? deepReviewConfig(orchestrator.config) : orchestrator.config;
+          spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, reviewConfig, orchestrator.active.reviewRound).catch((err) => {
+            console.error(`[pi-pi] spawnCodeReviewers failed: ${err.message}`);
+          });
+        }
+      }
+    }
+
+    orchestrator.compactAndTransition(ctx, orchestrator.active.dir, orchestrator.active.state.phase);
+
+    if (next === "planning") {
+      spawnPlanners(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, orchestrator.config).catch((err) => {
+        console.error(`[pi-pi] spawnPlanners failed: ${err.message}`);
+      });
+    }
+
+    return { ok: true };
+  }
+
+  orchestrator.transitionToNextPhase = transitionToNextPhase;
+
   pi.registerCommand("pp:next", {
     description: "Validate exit criteria and transition to next phase",
     handler: async (_args, ctx) => {
@@ -231,23 +310,6 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
       }
 
       const currentPhase = orchestrator.active.state.phase;
-      if (currentPhase === "done") {
-        ctx.ui.notify("Task is already done.", "info");
-        return;
-      }
-
-      const exitCheck = validateExitCriteria(orchestrator.active.dir, orchestrator.active.type, currentPhase);
-      if (!exitCheck.ok) {
-        ctx.ui.notify(`Cannot advance: ${exitCheck.reason}`, "warning");
-        pi.sendUserMessage(`/pp:next failed: ${exitCheck.reason}. Please address this before advancing.`);
-        return;
-      }
-
-      const next = nextPhase(orchestrator.active.type, currentPhase);
-      if (!next) {
-        ctx.ui.notify("No next phase available.", "error");
-        return;
-      }
 
       if (currentPhase === "planning") {
         const approved = await ctx.ui.confirm("Approve plan?", "The synthesized plan will be used for implementation.");
@@ -286,63 +348,9 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
         }
       }
 
-      if (currentPhase === "implementation") {
-        const afterResults = runAfterImplement(orchestrator.config, orchestrator.cwd);
-        const failures = afterResults.filter((r) => !r.ok);
-        if (failures.length > 0) {
-          const failureText = failures.map((f) => `${f.command}: ${f.output}`).join("\n");
-          ctx.ui.notify(`afterImplement commands failed:\n${failureText}`, "error");
-          pi.sendUserMessage(`afterImplement failed:\n${failureText}\n\nFix these issues before advancing.`);
-          return;
-        }
-      }
-
-      orchestrator.active.state.phase = next;
-      saveTask(orchestrator.active.dir, orchestrator.active.state);
-
-      if (next === "done") {
-        orchestrator.abortAllSubagents();
-        unregisterAgentDefinitions(pi);
-        await orchestrator.cleanupActive();
-        orchestrator.updateStatus(ctx);
-        ctx.ui.notify("Task completed!", "info");
-        return;
-      }
-
-      orchestrator.updateStatus(ctx);
-      orchestrator.updatePhaseTasks();
-
-      if (next === "review") {
-        const reviewChoice = await ctx.ui.select("Review mode", [
-          "Normal auto-review",
-          "Deep auto-review (higher reasoning)",
-          "Manual review only",
-        ]);
-
-        orchestrator.manualReview = reviewChoice === "Manual review only";
-
-        if (!orchestrator.manualReview) {
-          if (orchestrator.active.reviewRound > orchestrator.config.maxAutoReviewRounds) {
-            ctx.ui.notify(
-              `Auto-review round limit reached (${orchestrator.config.maxAutoReviewRounds}). Switching to manual review.`,
-              "warning",
-            );
-          } else {
-            const deep = reviewChoice === "Deep auto-review (higher reasoning)";
-            const reviewConfig = deep ? deepReviewConfig(orchestrator.config) : orchestrator.config;
-            spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, reviewConfig, orchestrator.active.reviewRound).catch((err) => {
-              console.error(`[pi-pi] spawnCodeReviewers failed: ${err.message}`);
-            });
-          }
-        }
-      }
-
-      orchestrator.compactAndTransition(ctx, orchestrator.active.dir, orchestrator.active.state.phase);
-
-      if (next === "planning") {
-        spawnPlanners(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, orchestrator.config).catch((err) => {
-          console.error(`[pi-pi] spawnPlanners failed: ${err.message}`);
-        });
+      const result = await transitionToNextPhase(ctx);
+      if (!result.ok) {
+        ctx.ui.notify(result.error ?? "Transition failed.", "error");
       }
     },
   });

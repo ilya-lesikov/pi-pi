@@ -47,8 +47,11 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
       const choice = await ctx.ui.select(`${params.summary}`, options);
 
       if (choice?.startsWith("Approve")) {
-        ctx.ui.notify("Run /pp:next to continue.", "info");
-        return ok(`User approved: "${choice}". Waiting for /pp:next.`);
+        const result = await orchestrator.transitionToNextPhase(ctx);
+        if (!result.ok) {
+          return ok(`Transition blocked: ${result.error}. Address the issue and try again.`);
+        }
+        return ok("User approved. Transitioned to next phase.");
       }
       if (choice === "Review in Plannotator") {
         return ok("User wants visual review in Plannotator. Wait for their input.");

@@ -51,6 +51,7 @@ export class Orchestrator {
   cooldownHits: number[] = [];
   nudgeHalted = false;
   manualReview = false;
+  transitionToNextPhase: (ctx: any) => Promise<{ ok: boolean; error?: string }> = async () => ({ ok: false, error: "not initialized" });
 
   constructor(readonly pi: ExtensionAPI) {}
 
