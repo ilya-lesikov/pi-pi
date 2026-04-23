@@ -23,14 +23,9 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
   pi.registerCommand("pp:implement", {
     description: "Start implementation workflow: brainstorm → planning → implementation → review",
     handler: async (args, ctx) => {
-      if (!args || args.trim().length === 0) {
-        ctx.ui.notify("Usage: /pp:implement <task description> [--from <task-path>]", "warning");
-        return;
-      }
-
       let fromTaskDir: string | undefined;
       let skipBrainstorm = false;
-      let description = args.trim();
+      let description = (args ?? "").trim();
 
       const fromMatch = description.match(/--from\s+(\S+)/);
       if (fromMatch) {
@@ -49,6 +44,8 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
         }
       }
 
+      if (!description) description = "implement";
+
       await orchestrator.startTask(ctx, "implement", description, fromTaskDir, skipBrainstorm);
     },
   });
@@ -56,22 +53,16 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
   pi.registerCommand("pp:debug", {
     description: "Start read-only diagnosis: analyze a problem and produce fix recommendations",
     handler: async (args, ctx) => {
-      if (!args || args.trim().length === 0) {
-        ctx.ui.notify("Usage: /pp:debug <problem description>", "warning");
-        return;
-      }
-      await orchestrator.startTask(ctx, "debug", args.trim());
+      const description = (args ?? "").trim() || "debug";
+      await orchestrator.startTask(ctx, "debug", description);
     },
   });
 
   pi.registerCommand("pp:brainstorm", {
     description: "Start open-ended brainstorming conversation",
     handler: async (args, ctx) => {
-      if (!args || args.trim().length === 0) {
-        ctx.ui.notify("Usage: /pp:brainstorm <topic>", "warning");
-        return;
-      }
-      await orchestrator.startTask(ctx, "brainstorm", args.trim());
+      const description = (args ?? "").trim() || "brainstorm";
+      await orchestrator.startTask(ctx, "brainstorm", description);
     },
   });
 
