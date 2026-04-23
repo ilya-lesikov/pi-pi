@@ -118,8 +118,6 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   });
 
   pi.on("tool_call", async (event, _ctx) => {
-    orchestrator.hadToolCallSinceLastNudge = true;
-
     if (event.toolName === "Agent" && orchestrator.active) {
       const input = event.input as Record<string, unknown>;
       const requestedType = ((input.subagent_type as string) || "").toLowerCase();
@@ -258,40 +256,37 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     const hasToolResults = event.toolResults && event.toolResults.length > 0;
     const turnWasEmpty = !msgContent.trim() && !hasToolResults;
 
-    if (!turnWasEmpty) return;
-
-    const now = Date.now();
-    const windowMs = 60000;
-
-    if (orchestrator.hadToolCallSinceLastNudge) {
-      orchestrator.nudgeTimestamps = [];
-      orchestrator.hadToolCallSinceLastNudge = false;
-    }
-
-    orchestrator.nudgeTimestamps.push(now);
-    orchestrator.nudgeTimestamps = orchestrator.nudgeTimestamps.filter((t) => now - t < windowMs);
-
-    if (orchestrator.nudgeTimestamps.length >= 3) {
-      pi.sendMessage(
-        {
-          customType: "pp-continuation-stuck",
-          content: "The agent has been interrupted multiple times without making progress. Please check for provider errors and retry manually.",
-          display: true,
-        },
-        { deliverAs: "steer" },
-      );
+    if (!turnWasEmpty) {
       orchestrator.nudgeTimestamps = [];
       return;
     }
 
-    pi.sendMessage(
-      {
-        customType: "pp-continuation",
-        content: `Your previous response was interrupted. Continue working on the current phase (${phase}). Pick up where you left off.`,
-        display: false,
-      },
-      { deliverAs: "steer" },
-    );
+    const now = Date.now();
+    const windowMs = 60000;
+
+    orchestrator.nudgeTimestamps.push(now);
+    const recentNudges = orchestrator.nudgeTimestamps.filter((t) => now - t < windowMs);
+    orchestrator.nudgeTimestamps = recentNudges;
+
+    const sendNudge = () => {
+      pi.sendMessage(
+        {
+          customType: "pp-continuation",
+          content: `Your previous response was interrupted. Continue working on the current phase (${phase}). Pick up where you left off.`,
+          display: false,
+        },
+        { deliverAs: "steer" },
+      );
+    };
+
+    if (recentNudges.length <= 3) {
+      sendNudge();
+      return;
+    }
+
+    const backoffExponent = recentNudges.length - 3;
+    const delayMs = Math.min(1000 * Math.pow(2, backoffExponent), 60000);
+    setTimeout(sendNudge, delayMs);
   });
 
   pi.events.on("plannotator:review-result", (data: any) => {
