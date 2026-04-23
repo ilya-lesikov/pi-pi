@@ -7,7 +7,7 @@ import { createPlannerAgent } from "../agents/planner.js";
 import { createPlanReviewerAgent } from "../agents/plan-reviewer.js";
 import { getLatestSynthesizedPlan } from "../context.js";
 
-export function planningSystemPrompt(taskDir: string, usePlannotator: boolean): string {
+export function planningSystemPrompt(taskDir: string): string {
   const plansDir = join(taskDir, "plans");
   return [
     "[PI-PI — PLANNING PHASE]",
@@ -28,7 +28,6 @@ export function planningSystemPrompt(taskDir: string, usePlannotator: boolean): 
     `4. Synthesize all plans into a single plan at ${plansDir}/<timestamp>_synthesized.md`,
     "5. Ask the user for clarifications if unsure about anything",
     "6. If the user wants changes, update the synthesized plan",
-    ...(usePlannotator ? ["7. Submit the plan via plannotator_submit_plan for user review"] : []),
     "",
     "Plan format:",
     "- Use checkboxes (- [ ]) for every actionable item",

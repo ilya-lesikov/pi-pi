@@ -49,7 +49,6 @@ export interface PiPiConfig {
   timeouts: TimeoutConfig;
   autoCommit: boolean;
   injectAgentsMd: boolean;
-  usePlannotator: boolean;
   maxAutoReviewRounds: number;
 }
 
@@ -94,7 +93,6 @@ const DEFAULT_CONFIG: PiPiConfig = {
   },
   autoCommit: true,
   injectAgentsMd: true,
-  usePlannotator: true,
   maxAutoReviewRounds: 2,
 };
 

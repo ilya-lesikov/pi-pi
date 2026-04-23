@@ -6,7 +6,7 @@ import { registerAgentDefinitions, spawnViaRpc, waitForCompletion } from "../age
 import { createCodeReviewerAgent } from "../agents/code-reviewer.js";
 import { getLatestSynthesizedPlan } from "../context.js";
 
-export function reviewSystemPrompt(taskDir: string, round: number, usePlannotator: boolean): string {
+export function reviewSystemPrompt(taskDir: string, round: number): string {
   const reviewsDir = join(taskDir, "reviews");
   const plansDir = join(taskDir, "plans");
   return [
@@ -26,7 +26,6 @@ export function reviewSystemPrompt(taskDir: string, round: number, usePlannotato
     `2. Read ALL reviewer outputs from ${reviewsDir}/`,
     `3. Synthesize into ${reviewsDir}/<timestamp>_final_round-${round}.md`,
     "4. Present the synthesis to the user",
-    ...(usePlannotator ? ["5. Submit the review via plannotator_submit_plan for user review"] : []),
     "",
     "If changes are needed:",
     `1. Create a fix plan at ${plansDir}/<timestamp>_<description>.md (do NOT modify the original synthesized plan)`,

@@ -120,7 +120,6 @@ describe("deepReviewConfig", () => {
       },
       autoCommit: true,
       injectAgentsMd: true,
-      usePlannotator: true,
       maxAutoReviewRounds: 2,
     };
 

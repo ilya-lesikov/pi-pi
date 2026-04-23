@@ -1,4 +1,4 @@
-import { existsSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { join, relative } from "path";
 import { loadConfig } from "./config.js";
 import { runAfterImplement } from "./commands.js";
@@ -6,6 +6,7 @@ import { unregisterAgentDefinitions } from "./agents/registry.js";
 import { spawnPlanners } from "./phases/planning.js";
 import { spawnCodeReviewers } from "./phases/review.js";
 import { validateExitCriteria, nextPhase } from "./phases/machine.js";
+import { getLatestSynthesizedPlan } from "./context.js";
 import {
   saveTask,
   listTasks,
@@ -299,6 +300,90 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
           }
         }
       }
+    },
+  });
+
+  pi.registerCommand("pp:review-plan", {
+    description: "Open the synthesized plan in Plannotator browser UI for visual review",
+    handler: async (_args, ctx) => {
+      if (!orchestrator.active) {
+        ctx.ui.notify("No active task", "warning");
+        return;
+      }
+
+      const planContent = getLatestSynthesizedPlan(orchestrator.active.dir);
+      if (!planContent) {
+        ctx.ui.notify("No synthesized plan found", "warning");
+        return;
+      }
+
+      const requestId = crypto.randomUUID();
+      const responded = new Promise<void>((resolve) => {
+        pi.events.emit("plannotator:request", {
+          requestId,
+          action: "plan-review",
+          payload: {
+            planContent,
+            planFilePath: join(orchestrator.active!.dir, "plans"),
+          },
+          respond: (response: any) => {
+            if (response.status === "handled") {
+              ctx.ui.notify("Plan review opened in browser", "info");
+            } else {
+              ctx.ui.notify(`Plannotator unavailable: ${response.error ?? "plannotator extension not loaded"}`, "error");
+            }
+            resolve();
+          },
+        });
+      });
+
+      const timeout = new Promise<void>((resolve) => {
+        setTimeout(() => {
+          ctx.ui.notify("Plannotator not responding — is the extension loaded? (-e 3p/pi-plannotator/apps/pi-extension)", "error");
+          resolve();
+        }, 5000);
+      });
+
+      await Promise.race([responded, timeout]);
+    },
+  });
+
+  pi.registerCommand("pp:review-code", {
+    description: "Open code changes in Plannotator code review browser UI",
+    handler: async (_args, ctx) => {
+      const requestId = crypto.randomUUID();
+      const responded = new Promise<void>((resolve) => {
+        pi.events.emit("plannotator:request", {
+          requestId,
+          action: "code-review",
+          payload: {
+            cwd: orchestrator.cwd,
+            diffType: "branch",
+          },
+          respond: (response: any) => {
+            if (response.status === "handled") {
+              if (response.result?.feedback) {
+                pi.sendMessage(
+                  { customType: "pp-code-review-feedback", content: response.result.feedback, display: true },
+                  { deliverAs: "steer" },
+                );
+              }
+            } else {
+              ctx.ui.notify(`Plannotator unavailable: ${response.error ?? "plannotator extension not loaded"}`, "error");
+            }
+            resolve();
+          },
+        });
+      });
+
+      const timeout = new Promise<void>((resolve) => {
+        setTimeout(() => {
+          ctx.ui.notify("Plannotator not responding — is the extension loaded? (-e 3p/pi-plannotator/apps/pi-extension)", "error");
+          resolve();
+        }, 5000);
+      });
+
+      await Promise.race([responded, timeout]);
     },
   });
 }
