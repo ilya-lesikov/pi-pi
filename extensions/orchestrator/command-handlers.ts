@@ -339,7 +339,7 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
 
       const timeout = new Promise<void>((resolve) => {
         setTimeout(() => {
-          ctx.ui.notify("Plannotator not responding — is the extension loaded? (-e 3p/pi-plannotator/apps/pi-extension)", "error");
+          ctx.ui.notify("Plannotator not responding — is the extension installed?", "error");
           resolve();
         }, 5000);
       });
@@ -378,7 +378,7 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
 
       const timeout = new Promise<void>((resolve) => {
         setTimeout(() => {
-          ctx.ui.notify("Plannotator not responding — is the extension loaded? (-e 3p/pi-plannotator/apps/pi-extension)", "error");
+          ctx.ui.notify("Plannotator not responding — is the extension installed?", "error");
           resolve();
         }, 5000);
       });
