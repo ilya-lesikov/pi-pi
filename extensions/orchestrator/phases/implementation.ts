@@ -29,7 +29,7 @@ export function implementationSystemPrompt(taskDir: string): string {
     "Constraints:",
     "- Fix issues found by lsp diagnostics before moving on",
     "",
-    "When all plan items are checked off, call /pp:next.",
+    "When all plan items are checked off, run /pp:next (slash command, not a tool call).",
     "The extension will run afterImplement commands and transition to review.",
   ].join("\n");
 }

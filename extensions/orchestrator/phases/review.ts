@@ -19,6 +19,7 @@ export function reviewSystemPrompt(taskDir: string, round: number): string {
     "- Do NOT write your own code review from scratch. You are a SYNTHESIZER, not a reviewer.",
     "- Do NOT create the reviews/ directory yourself — the extension manages it.",
     "- Do NOT proceed until at least one reviewer output file exists.",
+    "- Do NOT call plannotator_submit_plan — code review is handled by the user via /pp:review-code.",
     "- If no reviewer outputs appear after a few minutes, tell the user reviewers may have failed.",
     "",
     "# Your job (in this order):",
@@ -33,7 +34,7 @@ export function reviewSystemPrompt(taskDir: string, round: number): string {
     "3. Run afterImplement commands",
     "4. A new review round will begin",
     "",
-    "If the user approves, call /pp:next to finish.",
+    "If the user approves, run /pp:next (slash command, not a tool call).",
   ].join("\n");
 }
 

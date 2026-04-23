@@ -19,6 +19,8 @@ export function planningSystemPrompt(taskDir: string): string {
     "- Do NOT write your own plan from scratch. You are a SYNTHESIZER, not a planner.",
     "- Do NOT create the plans/ directory yourself — the extension manages it.",
     "- Do NOT proceed until at least one planner output file exists.",
+    "- Do NOT read project source code directly — the planner outputs already contain the analysis.",
+    "- Do NOT call plannotator_submit_plan — plan review is handled by the user via /pp:review-plan.",
     "- If no planner outputs appear after a few minutes, tell the user planners may have failed.",
     "",
     "# Your job (in this order):",
@@ -35,7 +37,7 @@ export function planningSystemPrompt(taskDir: string): string {
     "- No code snippets",
     "- Group items under headings",
     "",
-    "When the synthesized plan is ready, call /pp:next.",
+    "When the synthesized plan is ready, run /pp:next (slash command, not a tool call).",
     "The extension will ask the user for approval before transitioning.",
   ].join("\n");
 }
