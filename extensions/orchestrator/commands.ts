@@ -59,23 +59,14 @@ export function runAfterImplement(config: PiPiConfig, cwd: string): CommandResul
   return results;
 }
 
-export function autoCommit(files: string[], checkpointText: string, cwd: string): { ok: boolean; commitHash?: string; error?: string } {
+export function autoCommit(files: string[], message: string, cwd: string): { ok: boolean; commitHash?: string; error?: string } {
   if (files.length === 0) return { ok: true };
 
-  const message = checkpointText
-    .replace(/^#+\s*/, "")
-    .replace(/\*\*/g, "")
-    .replace(/`/g, "")
-    .replace(/^\s*-\s*\[.\]\s*/, "")
-    .replace(/\n/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 72)
-    .replace(/^./, (c) => c.toLowerCase()) || "checkpoint";
+  const cleanMessage = message.trim().slice(0, 72) || "checkpoint";
 
   try {
     execFileSync("git", ["add", "--", ...files], { cwd, encoding: "utf-8", stdio: "pipe" });
-    const output = execFileSync("git", ["commit", "-m", message], { cwd, encoding: "utf-8", stdio: "pipe" });
+    const output =     execFileSync("git", ["commit", "-m", cleanMessage], { cwd, encoding: "utf-8", stdio: "pipe" });
     const hashMatch = output.match(/\[[\w-]+ (?:\([^)]+\) )?([a-f0-9]+)\]/);
     return { ok: true, commitHash: hashMatch?.[1] };
   } catch (err: any) {

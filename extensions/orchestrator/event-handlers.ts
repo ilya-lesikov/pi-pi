@@ -11,6 +11,46 @@ import { spawnPlanners } from "./phases/planning.js";
 import { spawnCodeReviewers } from "./phases/review.js";
 import { Orchestrator, deepReviewConfig } from "./orchestrator.js";
 
+function registerOrchestratorTools(orchestrator: Orchestrator): void {
+  registerPhaseCompleteTool(orchestrator);
+  registerCommitTool(orchestrator);
+}
+
+function registerCommitTool(orchestrator: Orchestrator): void {
+  const pi = orchestrator.pi;
+
+  pi.registerTool({
+    name: "pp_commit",
+    label: "pi-pi",
+    description:
+      "Commit modified files with a descriptive message. Call after completing a logical " +
+      "unit of work (e.g. implementing one plan item, fixing a bug, adding a test). " +
+      "The message should describe WHAT changed and WHY, not list files.",
+    parameters: Type.Object({
+      message: Type.String({ description: "Commit message describing the change (max 72 chars for first line)" }),
+    }),
+    async execute(_toolCallId, params: any) {
+      if (!orchestrator.active) {
+        return { content: [{ type: "text" as const, text: "No active task." }], isError: true as const, details: {} };
+      }
+      if (!orchestrator.config.autoCommit) {
+        return { content: [{ type: "text" as const, text: "autoCommit is disabled in config." }], details: {} };
+      }
+      if (orchestrator.active.modifiedFiles.size === 0) {
+        return { content: [{ type: "text" as const, text: "No modified files to commit." }], details: {} };
+      }
+
+      const files = [...orchestrator.active.modifiedFiles];
+      const result = autoCommit(files, params.message, orchestrator.cwd);
+      if (result.ok) {
+        orchestrator.active.modifiedFiles.clear();
+        return { content: [{ type: "text" as const, text: `Committed ${files.length} file(s): ${result.commitHash ?? "ok"}` }], details: {} };
+      }
+      return { content: [{ type: "text" as const, text: `Commit failed: ${result.error}` }], isError: true as const, details: {} };
+    },
+  });
+}
+
 function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
   const pi = orchestrator.pi;
 
@@ -140,7 +180,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
 
     registerCbmTools(pi, orchestrator.cwd);
     registerExaTools(pi);
-    registerPhaseCompleteTool(orchestrator);
+    registerOrchestratorTools(orchestrator);
     setExtensionOnlyMode(pi);
     orchestrator.registerAgents();
 
@@ -296,11 +336,14 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     orchestrator.updateStatus(ctx);
 
     if (orchestrator.active.state.phase === "implementation" && orchestrator.config.autoCommit && orchestrator.active.modifiedFiles.size > 0) {
-      const files = [...orchestrator.active.modifiedFiles];
-      const result = autoCommit(files, orchestrator.active.description, orchestrator.cwd);
-      if (result.ok) {
-        orchestrator.active.modifiedFiles.clear();
-      }
+      pi.sendMessage(
+        {
+          customType: "pp-commit-reminder",
+          content: `You have ${orchestrator.active.modifiedFiles.size} uncommitted file(s). If you've completed a logical unit of work, call pp_commit with a descriptive message.`,
+          display: false,
+        },
+        { deliverAs: "steer" },
+      );
     }
 
     const phase = orchestrator.active.state.phase;
