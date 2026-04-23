@@ -66,11 +66,12 @@ const DEFAULT_CONFIG: PiPiConfig = {
   planReviewers: {
     opus: { enabled: true, model: "anthropic/claude-opus-4-6", thinking: "high" },
     gpt: { enabled: true, model: "openai/gpt-5.4", thinking: "high" },
+    gemini: { enabled: true, model: "google/gemini-3.1-pro", thinking: "xhigh" },
   },
   codeReviewers: {
     opus: { enabled: true, model: "anthropic/claude-opus-4-6", thinking: "high" },
     gpt: { enabled: true, model: "openai/gpt-5.4", thinking: "high" },
-    gemini: { enabled: false, model: "google/gemini-3.1-pro", thinking: "high" },
+    gemini: { enabled: true, model: "google/gemini-3.1-pro", thinking: "xhigh" },
   },
   agents: {
     explore: { model: "google/gemini-3.1-flash", thinking: "low" },
