@@ -247,10 +247,7 @@ export class Orchestrator {
 
     this.injectContextAndArtifacts(this.active.dir, this.active.state.phase);
     this.createPhaseTasks();
-    this.pi.sendMessage(
-      { customType: "pp-phase-start", content: `[PI-PI] Entered ${this.active.state.phase} phase: ${this.active.description}`, display: true },
-      { deliverAs: "steer" },
-    );
+    this.pi.sendUserMessage(`[PI-PI] Entered ${this.active.state.phase} phase. Begin working.`);
 
     if (this.active.state.phase === "planning") {
       spawnPlanners(this.pi, this.cwd, this.active.dir, this.active.taskId, this.config).catch((err) => {
@@ -328,10 +325,7 @@ export class Orchestrator {
           this.phaseCompactionResolve = null;
         }
         this.injectContextAndArtifacts(taskDir, phase);
-        this.pi.sendMessage(
-          { customType: "pp-phase-start", content: `[PI-PI] Entered ${phase} phase.`, display: true },
-          { deliverAs: "steer" },
-        );
+        this.pi.sendUserMessage(`[PI-PI] Entered ${phase} phase. Begin working.`);
       },
       onError: (err) => {
         console.error(`[pi-pi] Phase compaction failed: ${err.message}`);
@@ -341,10 +335,7 @@ export class Orchestrator {
           this.phaseCompactionResolve = null;
         }
         this.injectContextAndArtifacts(taskDir, phase);
-        this.pi.sendMessage(
-          { customType: "pp-phase-start", content: `[PI-PI] Entered ${phase} phase.`, display: true },
-          { deliverAs: "steer" },
-        );
+        this.pi.sendUserMessage(`[PI-PI] Entered ${phase} phase. Begin working.`);
       },
     });
   }

@@ -138,7 +138,7 @@ describe("loadConfig", () => {
       "utf-8",
     );
 
-    const config = loadConfig(cwd);
+    const config = loadConfig(cwd, "/nonexistent/global/config.json");
 
     expect(config.mainModel.implement.model).toBe("custom/implement");
     expect(config.mainModel.debug.model).toBe("openai/gpt-5.4");
@@ -155,7 +155,7 @@ describe("loadConfig", () => {
     const cwd = makeTempDir();
     const configPath = join(cwd, ".pp", "config.json");
 
-    const config = loadConfig(cwd);
+    const config = loadConfig(cwd, "/nonexistent/global/config.json");
 
     expect(existsSync(configPath)).toBe(true);
     const written = JSON.parse(readFileSync(configPath, "utf-8"));
@@ -173,7 +173,7 @@ describe("loadConfig", () => {
     mkdirSync(ppDir, { recursive: true });
     writeFileSync(configPath, "{broken", "utf-8");
 
-    expect(() => loadConfig(cwd)).toThrow(`Failed to parse ${configPath}`);
+    expect(() => loadConfig(cwd, "/nonexistent/global/config.json")).toThrow(`Failed to parse ${configPath}`);
   });
 
   it("propagates validation errors", () => {
@@ -184,7 +184,7 @@ describe("loadConfig", () => {
     mkdirSync(ppDir, { recursive: true });
     writeFileSync(configPath, JSON.stringify({ maxAutoReviewRounds: -3 }), "utf-8");
 
-    expect(() => loadConfig(cwd)).toThrow("config.maxAutoReviewRounds must be a non-negative number");
+    expect(() => loadConfig(cwd, "/nonexistent/global/config.json")).toThrow("config.maxAutoReviewRounds must be a non-negative number");
   });
 });
 

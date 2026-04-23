@@ -193,7 +193,7 @@ function loadJsonFile(path: string): Record<string, any> | null {
 
 export const GLOBAL_CONFIG_PATH = join(getAgentDir(), "extensions", "pp", "config.json");
 
-export function loadConfig(cwd: string): PiPiConfig {
+export function loadConfig(cwd: string, globalConfigPath = GLOBAL_CONFIG_PATH): PiPiConfig {
   const ppDir = join(cwd, ".pp");
   const projectConfigPath = join(ppDir, "config.json");
 
@@ -201,7 +201,7 @@ export function loadConfig(cwd: string): PiPiConfig {
     mkdirSync(ppDir, { recursive: true });
   }
 
-  const globalConfig = loadJsonFile(GLOBAL_CONFIG_PATH);
+  const globalConfig = loadJsonFile(globalConfigPath);
   const projectConfig = loadJsonFile(projectConfigPath);
 
   if (!projectConfig && !globalConfig) {
