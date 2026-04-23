@@ -104,7 +104,7 @@ describe("validateExitCriteria", () => {
     const missing = makeTempDir();
     expect(validateExitCriteria(missing, "implement", "planning")).toEqual({
       ok: false,
-      reason: "No plans directory found",
+      reason: "No synthesized plan found in plans/",
     });
 
     const noSynth = makeTempDir();
@@ -125,7 +125,7 @@ describe("validateExitCriteria", () => {
     const missing = makeTempDir();
     expect(validateExitCriteria(missing, "implement", "implementation")).toEqual({
       ok: false,
-      reason: "No plans directory found",
+      reason: "No synthesized plan found",
     });
 
     const noSynth = makeTempDir();
@@ -152,6 +152,25 @@ describe("validateExitCriteria", () => {
     mkdirSync(join(checked, "plans"), { recursive: true });
     writeFileSync(join(checked, "plans", "synthesized-plan.md"), "- [x] done\n", "utf-8");
     expect(validateExitCriteria(checked, "implement", "implementation")).toEqual({ ok: true });
+  });
+
+  it("picks the numerically latest synthesized plan for implementation validation", () => {
+    const dir = makeTempDir();
+    mkdirSync(join(dir, "plans"), { recursive: true });
+    writeFileSync(join(dir, "plans", "2_synthesized.md"), "- [x] all done\n", "utf-8");
+    writeFileSync(join(dir, "plans", "11_synthesized.md"), "- [ ] not done\n", "utf-8");
+    expect(validateExitCriteria(dir, "implement", "implementation")).toEqual({
+      ok: false,
+      reason: "1 plan items still unchecked",
+    });
+  });
+
+  it("passes implementation validation when the numerically latest plan is fully checked", () => {
+    const dir = makeTempDir();
+    mkdirSync(join(dir, "plans"), { recursive: true });
+    writeFileSync(join(dir, "plans", "2_synthesized.md"), "- [ ] old unchecked\n", "utf-8");
+    writeFileSync(join(dir, "plans", "11_synthesized.md"), "- [x] all done\n", "utf-8");
+    expect(validateExitCriteria(dir, "implement", "implementation")).toEqual({ ok: true });
   });
 
   it("handles review and active phases", () => {

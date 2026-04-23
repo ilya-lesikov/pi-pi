@@ -1,6 +1,7 @@
-import { existsSync, readFileSync, readdirSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import type { TaskType, Phase } from "../state.js";
+import { getLatestSynthesizedPlan } from "../context.js";
 
 const TRANSITIONS: Record<TaskType, Record<string, string[]>> = {
   implement: {
@@ -46,28 +47,18 @@ export function validateExitCriteria(
     }
 
     case "planning": {
-      const plansDir = join(taskDir, "plans");
-      if (!existsSync(plansDir)) {
-        return { ok: false, reason: "No plans directory found" };
-      }
-      const files = readdirSync(plansDir).filter((f) => f.includes("synthesized"));
-      if (files.length === 0) {
+      const plan = getLatestSynthesizedPlan(taskDir);
+      if (!plan) {
         return { ok: false, reason: "No synthesized plan found in plans/" };
       }
       return { ok: true };
     }
 
     case "implementation": {
-      const plansDir = join(taskDir, "plans");
-      if (!existsSync(plansDir)) {
-        return { ok: false, reason: "No plans directory found" };
-      }
-      const synthFiles = readdirSync(plansDir).filter((f) => f.includes("synthesized"));
-      if (synthFiles.length === 0) {
+      const content = getLatestSynthesizedPlan(taskDir);
+      if (!content) {
         return { ok: false, reason: "No synthesized plan found" };
       }
-      const synthPath = join(plansDir, synthFiles[synthFiles.length - 1]);
-      const content = readFileSync(synthPath, "utf-8");
       const unchecked = content.match(/^- \[ \]/gm);
       if (unchecked && unchecked.length > 0) {
         return { ok: false, reason: `${unchecked.length} plan items still unchecked` };
