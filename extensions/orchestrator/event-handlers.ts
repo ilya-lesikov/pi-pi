@@ -3,7 +3,7 @@ import { Type } from "@sinclair/typebox";
 import { loadConfig } from "./config.js";
 import { runAfterEdit, autoCommit } from "./commands.js";
 import { taskName, getActiveTask, saveTask } from "./state.js";
-import { loadContextFiles, getPhaseArtifacts } from "./context.js";
+import { loadContextFiles, getPhaseArtifacts, getLatestSynthesizedPlan } from "./context.js";
 import { WORKING_PRINCIPLES, COMMUNICATION } from "./agents/tool-routing.js";
 import { registerCbmTools } from "./cbm.js";
 import { registerExaTools } from "./exa.js";
@@ -114,9 +114,16 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
       }
       if (choice === "Review in Plannotator") {
         const reviewAction = phase === "review" ? "code-review" : "plan-review";
-        const payload: Record<string, unknown> = reviewAction === "plan-review"
-          ? { planContent: params.summary, planFilePath: join(orchestrator.active!.dir, "plans") }
-          : { cwd: orchestrator.cwd, diffType: "branch" };
+        let payload: Record<string, unknown>;
+        if (reviewAction === "plan-review") {
+          const planContent = getLatestSynthesizedPlan(orchestrator.active!.dir);
+          if (!planContent) {
+            return ok("No synthesized plan found. Write the plan first, then try again.");
+          }
+          payload = { planContent, planFilePath: join(orchestrator.active!.dir, "plans") };
+        } else {
+          payload = { cwd: orchestrator.cwd, diffType: "branch" };
+        }
 
         const opened = await new Promise<boolean>((resolve) => {
           let handled = false;

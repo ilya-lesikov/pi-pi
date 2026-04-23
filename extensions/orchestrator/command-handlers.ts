@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "fs";
+import { existsSync, readFileSync, readdirSync } from "fs";
 import { join, relative } from "path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
@@ -199,19 +199,33 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
       pi.sendUserMessage(`[PI-PI] Resumed ${orchestrator.active.state.phase} phase. Continue working.`);
 
       if (orchestrator.active.state.phase === "planning") {
-        spawnPlanners(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, orchestrator.config).catch((err: any) => {
-          console.error(`[pi-pi] spawnPlanners failed: ${err.message}`);
-        });
+        const plansDir = join(orchestrator.active.dir, "plans");
+        const hasPlans = existsSync(plansDir) && readdirSync(plansDir).some((f) => f.endsWith(".md"));
+        if (!hasPlans) {
+          spawnPlanners(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, orchestrator.config).catch((err: any) => {
+            console.error(`[pi-pi] spawnPlanners failed: ${err.message}`);
+          });
+        }
       }
 
       if (orchestrator.active.state.phase === "review") {
-        const reviewChoice = await ctx.ui.select("Review mode", [
+        const reviewsDir = join(orchestrator.active.dir, "reviews");
+        const hasReviews = existsSync(reviewsDir) && readdirSync(reviewsDir).some((f) => f.endsWith(".md"));
+
+        const options = [
           "Normal auto-review",
           "Deep auto-review (higher reasoning)",
           "Manual review only",
-        ]);
+        ];
+        if (hasReviews) {
+          options.unshift("Continue with existing reviews");
+        }
 
-        if (reviewChoice !== "Manual review only") {
+        const reviewChoice = await ctx.ui.select("Review mode", options);
+
+        if (reviewChoice === "Continue with existing reviews") {
+          // Don't spawn new reviewers — agent will synthesize existing outputs
+        } else if (reviewChoice !== "Manual review only") {
           const deep = reviewChoice === "Deep auto-review (higher reasoning)";
           const reviewConfig = deep ? deepReviewConfig(orchestrator.config) : orchestrator.config;
           spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, reviewConfig, orchestrator.active.reviewRound).catch((err: any) => {
