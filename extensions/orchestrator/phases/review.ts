@@ -92,7 +92,7 @@ export async function spawnCodeReviewers(
     results.push(
       (async () => {
         try {
-          const { id } = await spawnViaRpc(pi, `code_reviewer_${variant}`, agent.prompt, {
+          const { id } = await spawnViaRpc(pi, `code_reviewer_${variant}`, "Begin code review.", {
             description: `Code reviewer (${variant})`,
           });
           await waitForCompletion(pi, id);

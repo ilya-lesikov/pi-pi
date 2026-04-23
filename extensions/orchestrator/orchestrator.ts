@@ -247,7 +247,10 @@ export class Orchestrator {
 
     this.injectContextAndArtifacts(this.active.dir, this.active.state.phase);
     this.createPhaseTasks();
-    this.pi.sendUserMessage(this.getPhasePrompt(ctx));
+    this.pi.sendMessage(
+      { customType: "pp-phase-start", content: `[PI-PI] Entered ${this.active.state.phase} phase: ${this.active.description}`, display: true },
+      { deliverAs: "steer" },
+    );
 
     if (this.active.state.phase === "planning") {
       spawnPlanners(this.pi, this.cwd, this.active.dir, this.active.taskId, this.config).catch((err) => {
@@ -282,10 +285,18 @@ export class Orchestrator {
     const explore = createExploreAgent(this.config);
     const librarian = createLibrarianAgent(this.config);
     const taskAgent = createTaskAgent(this.config, "{{subtask}}", { userRequest: "", synthesizedPlan: "" });
+
+    const appendContext = (agentType: string, prompt: string): string => {
+      const contextFiles = loadContextFiles(this.cwd, agentType as any, "system");
+      if (contextFiles.length === 0) return prompt;
+      const contextBlock = contextFiles.map((f) => f.content).join("\n\n");
+      return prompt + "\n\n# Project Context\n\n" + contextBlock;
+    };
+
     registerAgentDefinitions(this.pi, [
-      { type: "explore", variant: null, ...explore },
-      { type: "librarian", variant: null, ...librarian },
-      { type: "task", variant: null, ...taskAgent },
+      { type: "explore", variant: null, ...explore, prompt: appendContext("explore", explore.prompt) },
+      { type: "librarian", variant: null, ...librarian, prompt: appendContext("librarian", librarian.prompt) },
+      { type: "task", variant: null, ...taskAgent, prompt: appendContext("task", taskAgent.prompt) },
     ]);
   }
 
@@ -317,7 +328,10 @@ export class Orchestrator {
           this.phaseCompactionResolve = null;
         }
         this.injectContextAndArtifacts(taskDir, phase);
-        this.pi.sendUserMessage(this.getPhasePrompt(ctx));
+        this.pi.sendMessage(
+          { customType: "pp-phase-start", content: `[PI-PI] Entered ${phase} phase.`, display: true },
+          { deliverAs: "steer" },
+        );
       },
       onError: (err) => {
         console.error(`[pi-pi] Phase compaction failed: ${err.message}`);
@@ -327,7 +341,10 @@ export class Orchestrator {
           this.phaseCompactionResolve = null;
         }
         this.injectContextAndArtifacts(taskDir, phase);
-        this.pi.sendUserMessage(this.getPhasePrompt(ctx));
+        this.pi.sendMessage(
+          { customType: "pp-phase-start", content: `[PI-PI] Entered ${phase} phase.`, display: true },
+          { deliverAs: "steer" },
+        );
       },
     });
   }

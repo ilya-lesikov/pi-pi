@@ -65,7 +65,6 @@ function makeConfig() {
     commands: { afterEdit: [], afterImplement: [] },
     timeouts: { afterEdit: 1, afterImplement: 1, agentSpawn: 1, agentReadyPing: 1, lockStale: 1, lockUpdate: 1 },
     autoCommit: false,
-    injectAgentsMd: false,
     maxAutoReviewRounds: 3,
   };
 }

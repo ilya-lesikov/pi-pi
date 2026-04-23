@@ -119,7 +119,6 @@ describe("deepReviewConfig", () => {
         lockUpdate: 1,
       },
       autoCommit: true,
-      injectAgentsMd: true,
       maxAutoReviewRounds: 2,
     };
 

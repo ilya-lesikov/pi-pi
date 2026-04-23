@@ -73,7 +73,7 @@ export async function spawnPlanners(
     results.push(
       (async () => {
         try {
-          const { id } = await spawnViaRpc(pi, `planner_${variant}`, agent.prompt, {
+          const { id } = await spawnViaRpc(pi, `planner_${variant}`, "Begin planning.", {
             description: `Planner (${variant})`,
           });
           await waitForCompletion(pi, id);
@@ -155,7 +155,7 @@ export async function spawnPlanReviewers(
     results.push(
       (async () => {
         try {
-          const { id } = await spawnViaRpc(pi, `plan_reviewer_${variant}`, agent.prompt, {
+          const { id } = await spawnViaRpc(pi, `plan_reviewer_${variant}`, "Begin plan review.", {
             description: `Plan reviewer (${variant})`,
           });
           await waitForCompletion(pi, id);

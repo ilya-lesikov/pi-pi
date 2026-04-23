@@ -179,7 +179,10 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
       orchestrator.updateStatus(ctx);
 
       orchestrator.injectContextAndArtifacts(orchestrator.active.dir, orchestrator.active.state.phase);
-      pi.sendUserMessage(orchestrator.getPhasePrompt(ctx));
+      pi.sendMessage(
+        { customType: "pp-phase-start", content: `[PI-PI] Resumed ${orchestrator.active.state.phase} phase: ${orchestrator.active.description}`, display: true },
+        { deliverAs: "steer" },
+      );
 
       if (orchestrator.active.state.phase === "planning") {
         spawnPlanners(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, orchestrator.config).catch((err: any) => {

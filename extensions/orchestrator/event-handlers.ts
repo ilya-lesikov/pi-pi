@@ -3,7 +3,8 @@ import { Type } from "@sinclair/typebox";
 import { loadConfig } from "./config.js";
 import { runAfterEdit, autoCommit } from "./commands.js";
 import { taskName, getActiveTask, saveTask } from "./state.js";
-import { loadContextFiles, loadAgentsMd, getPhaseArtifacts } from "./context.js";
+import { loadContextFiles, getPhaseArtifacts } from "./context.js";
+import { WORKING_PRINCIPLES, COMMUNICATION } from "./agents/tool-routing.js";
 import { registerCbmTools } from "./cbm.js";
 import { registerExaTools } from "./exa.js";
 import { setExtensionOnlyMode, unregisterAgentDefinitions } from "./agents/registry.js";
@@ -202,9 +203,8 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     const phasePrompt = orchestrator.getPhasePrompt(ctx);
     const systemContextFiles = loadContextFiles(orchestrator.cwd, "main", "system");
     const systemSnippets = systemContextFiles.map((f) => f.content).join("\n\n");
-    const agentsMd = orchestrator.config.injectAgentsMd ? loadAgentsMd(orchestrator.cwd) : null;
 
-    const fullAddition = [systemSnippets, agentsMd, phasePrompt].filter(Boolean).join("\n\n");
+    const fullAddition = [WORKING_PRINCIPLES, COMMUNICATION, systemSnippets, phasePrompt].filter(Boolean).join("\n\n");
     if (!fullAddition) return;
 
     return {
