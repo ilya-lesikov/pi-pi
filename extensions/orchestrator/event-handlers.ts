@@ -1,4 +1,4 @@
-import { resolve, basename } from "path";
+import { resolve, basename, join } from "path";
 import { Type } from "@sinclair/typebox";
 import { loadConfig } from "./config.js";
 import { runAfterEdit, autoCommit } from "./commands.js";
@@ -76,9 +76,9 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
       if (phase === "brainstorm") {
         options.push("Approve & continue to planning", "Continue brainstorming");
       } else if (phase === "active") {
-        options.push("Approve & finish brainstorm", "Continue brainstorming");
+        options.push("Approve & start implementation", "Approve & finish brainstorm", "Continue brainstorming");
       } else if (phase === "diagnosing") {
-        options.push("Approve & finish diagnosis", "Continue diagnosing");
+        options.push("Approve & start implementation", "Approve & finish diagnosis", "Continue diagnosing");
       } else if (phase === "planning") {
         options.push("Approve plan & continue", "Review in Plannotator", "Let me review first");
       } else if (phase === "implementation") {
@@ -91,20 +91,68 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
 
       const choice = await ctx.ui.select(`${params.summary}`, options);
 
+      if (choice === "Approve & start implementation") {
+        const taskType = orchestrator.active!.type;
+        const taskBasename = basename(orchestrator.active!.dir);
+        const fromArg = `${taskType}/${taskBasename}`;
+
+        const result = await orchestrator.transitionToNextPhase(ctx);
+        if (!result.ok) {
+          return ok(`Transition blocked: ${result.error}. Address the issue and try again.`);
+        }
+
+        pi.sendUserMessage(`/pp:implement --from ${fromArg}`);
+        return ok("Starting implementation.");
+      }
+
       if (choice?.startsWith("Approve")) {
         const result = await orchestrator.transitionToNextPhase(ctx);
         if (!result.ok) {
           return ok(`Transition blocked: ${result.error}. Address the issue and try again.`);
         }
-        if (phase === "active" || phase === "diagnosing") {
-          const taskId = orchestrator.active?.taskId ?? "";
-          const taskType = orchestrator.active?.type ?? "";
-          return ok(`Done. To continue to implementation, run: /pp:implement --from ${taskType}/${taskId}`);
-        }
         return ok("User approved. Transitioned to next phase.");
       }
       if (choice === "Review in Plannotator") {
-        return ok("User wants visual review in Plannotator. Wait for their input.");
+        const reviewAction = phase === "review" ? "code-review" : "plan-review";
+        const payload: Record<string, unknown> = reviewAction === "plan-review"
+          ? { planContent: params.summary, planFilePath: join(orchestrator.active!.dir, "plans") }
+          : { cwd: orchestrator.cwd, diffType: "branch" };
+
+        const opened = await new Promise<boolean>((resolve) => {
+          let handled = false;
+          pi.events.emit("plannotator:request", {
+            requestId: crypto.randomUUID(),
+            action: reviewAction,
+            payload,
+            respond: (response: any) => {
+              handled = true;
+              resolve(response.status === "handled");
+            },
+          });
+          setTimeout(() => { if (!handled) resolve(false); }, 5000);
+        });
+
+        if (!opened) {
+          return ok("Plannotator is not available. Review manually or run /pp:review-plan.");
+        }
+
+        const reviewResult = await new Promise<{ approved: boolean; feedback?: string }>((resolve) => {
+          const unsub = pi.events.on("plannotator:review-result", (data: any) => {
+            unsub();
+            resolve({ approved: !!data?.approved, feedback: data?.feedback });
+          });
+        });
+
+        if (reviewResult.approved) {
+          const result = await orchestrator.transitionToNextPhase(ctx);
+          if (!result.ok) {
+            return ok(`Plannotator approved but transition blocked: ${result.error}`);
+          }
+          return ok("User approved in Plannotator. Transitioned to next phase.");
+        }
+
+        const feedback = reviewResult.feedback ? `\n\nFeedback:\n${reviewResult.feedback}` : "";
+        return ok(`User denied in Plannotator. Make the requested changes.${feedback}`);
       }
       if (choice?.startsWith("Continue")) {
         return ok("User wants to continue. Keep working.");
