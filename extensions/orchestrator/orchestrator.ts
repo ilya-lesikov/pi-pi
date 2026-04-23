@@ -47,6 +47,8 @@ export class Orchestrator {
   agentDescriptions = new Map<string, string>();
   phaseCompactionPending = false;
   phaseCompactionResolve: (() => void) | null = null;
+  nudgeTimestamps: number[] = [];
+  hadToolCallSinceLastNudge = false;
 
   constructor(readonly pi: ExtensionAPI) {}
 
