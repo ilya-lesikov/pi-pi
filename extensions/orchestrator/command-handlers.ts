@@ -1,5 +1,31 @@
 import { existsSync, readFileSync } from "fs";
 import { join, relative } from "path";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+
+function openPlannotator(pi: ExtensionAPI, action: string, payload: Record<string, unknown>): Promise<boolean> {
+  return new Promise((resolve) => {
+    let handled = false;
+    pi.events.emit("plannotator:request", {
+      requestId: crypto.randomUUID(),
+      action,
+      payload,
+      respond: (response: any) => {
+        handled = true;
+        resolve(response.status === "handled");
+      },
+    });
+    setTimeout(() => { if (!handled) resolve(false); }, 5000);
+  });
+}
+
+function waitForPlannotatorResult(pi: ExtensionAPI): Promise<{ approved: boolean; feedback?: string }> {
+  return new Promise((resolve) => {
+    const unsub = pi.events.on("plannotator:review-result", (data: any) => {
+      unsub();
+      resolve({ approved: !!data?.approved, feedback: data?.feedback });
+    });
+  });
+}
 import { loadConfig } from "./config.js";
 import { runAfterImplement } from "./commands.js";
 import { unregisterAgentDefinitions } from "./agents/registry.js";
@@ -347,7 +373,7 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
   });
 
   pi.registerCommand("pp:review-plan", {
-    description: "Open the synthesized plan in Plannotator browser UI for visual review",
+    description: "Open the synthesized plan in Plannotator for visual review (blocks until review completes)",
     handler: async (_args, ctx) => {
       if (!orchestrator.active) {
         ctx.ui.notify("No active task", "warning");
@@ -360,81 +386,60 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
         return;
       }
 
-      let handled = false;
-      const requestId = crypto.randomUUID();
-      const responded = new Promise<void>((resolve) => {
-        pi.events.emit("plannotator:request", {
-          requestId,
-          action: "plan-review",
-          payload: {
-            planContent,
-            planFilePath: join(orchestrator.active!.dir, "plans"),
-          },
-          respond: (response: any) => {
-            handled = true;
-            if (response.status === "handled") {
-              ctx.ui.notify("Plan review opened in browser", "info");
-            } else {
-              ctx.ui.notify(`Plannotator unavailable: ${response.error ?? "plannotator extension not loaded"}`, "error");
-            }
-            resolve();
-          },
-        });
+      const opened = await openPlannotator(pi, "plan-review", {
+        planContent,
+        planFilePath: join(orchestrator.active.dir, "plans"),
       });
+      if (!opened) {
+        ctx.ui.notify("Plannotator not responding — is the extension installed?", "error");
+        return;
+      }
 
-      const timeout = new Promise<void>((resolve) => {
-        setTimeout(() => {
-          if (!handled) {
-            ctx.ui.notify("Plannotator not responding — is the extension installed?", "error");
-          }
-          resolve();
-        }, 5000);
-      });
+      ctx.ui.notify("Plan review opened in browser. Waiting for result...", "info");
+      const result = await waitForPlannotatorResult(pi);
 
-      await Promise.race([responded, timeout]);
+      if (result.approved) {
+        pi.sendMessage(
+          { customType: "pp-plannotator-result", content: "[Plannotator] Plan APPROVED.", display: false },
+          { deliverAs: "steer" },
+        );
+      } else {
+        const feedback = result.feedback ? `\n\nFeedback:\n${result.feedback}` : "";
+        pi.sendMessage(
+          { customType: "pp-plannotator-result", content: `[Plannotator] Plan DENIED.${feedback}`, display: false },
+          { deliverAs: "steer" },
+        );
+      }
     },
   });
 
   pi.registerCommand("pp:review-code", {
-    description: "Open code changes in Plannotator code review browser UI",
+    description: "Open code changes in Plannotator for visual review (blocks until review completes)",
     handler: async (_args, ctx) => {
-      let handled = false;
-      const requestId = crypto.randomUUID();
-      const responded = new Promise<void>((resolve) => {
-        pi.events.emit("plannotator:request", {
-          requestId,
-          action: "code-review",
-          payload: {
-            cwd: orchestrator.cwd,
-            diffType: "branch",
-          },
-          respond: (response: any) => {
-            handled = true;
-            if (response.status === "handled") {
-              if (response.result?.feedback) {
-                pi.sendMessage(
-                  { customType: "pp-code-review-feedback", content: response.result.feedback, display: true },
-                  { deliverAs: "steer" },
-                );
-              }
-            } else {
-              ctx.ui.notify(`Plannotator unavailable: ${response.error ?? "plannotator extension not loaded"}`, "error");
-            }
-            resolve();
-          },
-        });
+      const opened = await openPlannotator(pi, "code-review", {
+        cwd: orchestrator.cwd,
+        diffType: "branch",
       });
+      if (!opened) {
+        ctx.ui.notify("Plannotator not responding — is the extension installed?", "error");
+        return;
+      }
 
-      const timeout = new Promise<void>((resolve) => {
-        setTimeout(() => {
-          if (!handled) {
-            ctx.ui.notify("Plannotator not responding — is the extension installed?", "error");
-          }
-          resolve();
-        }, 5000);
-      });
+      ctx.ui.notify("Code review opened in browser. Waiting for result...", "info");
+      const result = await waitForPlannotatorResult(pi);
 
-      await Promise.race([responded, timeout]);
+      if (result.approved) {
+        pi.sendMessage(
+          { customType: "pp-plannotator-result", content: "[Plannotator] Code review APPROVED.", display: false },
+          { deliverAs: "steer" },
+        );
+      } else {
+        const feedback = result.feedback ? `\n\nFeedback:\n${result.feedback}` : "";
+        pi.sendMessage(
+          { customType: "pp-plannotator-result", content: `[Plannotator] Code review DENIED.${feedback}`, display: false },
+          { deliverAs: "steer" },
+        );
+      }
     },
   });
 }

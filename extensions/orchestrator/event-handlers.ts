@@ -155,9 +155,9 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
         return ok(`User denied in Plannotator. Make the requested changes.${feedback}`);
       }
       if (choice?.startsWith("Continue")) {
-        return ok("User wants to continue. Keep working.");
+        return ok("User wants to continue the current phase. Keep working.");
       }
-      return ok("User wants to review first. Wait for their input.");
+      return ok("User chose to review manually. Do not call any more tools or generate further output — stop immediately and wait for the user's next message.");
     },
   });
 }
@@ -470,25 +470,5 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     sendNudge();
   });
 
-  pi.events.on("plannotator:review-result", (data: any) => {
-    if (!data) return;
-    const parts: string[] = [];
 
-    if (data.approved) {
-      parts.push("[Plannotator] Plan APPROVED by user.");
-    } else {
-      parts.push("[Plannotator] Plan DENIED by user.");
-    }
-
-    if (data.feedback) {
-      parts.push("", "User feedback:", data.feedback);
-    }
-
-    if (parts.length > 0) {
-      pi.sendMessage(
-        { customType: "pp-plannotator-result", content: parts.join("\n"), display: true },
-        { deliverAs: "steer" },
-      );
-    }
-  });
 }
