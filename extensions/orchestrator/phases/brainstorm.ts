@@ -55,12 +55,11 @@ export function brainstormSystemPrompt(taskType: TaskType, taskDescription: stri
       "IMPORTANT: Always specify subagent_type. Do NOT omit it.",
       "Do NOT modify project source code.",
       "",
-      "If the user asks to capture conclusions, write:",
+      "When you and the user reach conclusions or agree on an approach, write:",
       `- ${taskDir}/USER_REQUEST.md — what the user wants`,
       `- ${taskDir}/RESEARCH.md — findings, context, open questions`,
       "",
-      "These are optional — only produce them if the user asks.",
-      "When done, call pp_phase_complete with a brief summary.",
+      "Then call pp_phase_complete with a brief summary.",
     ].join("\n");
   }
 

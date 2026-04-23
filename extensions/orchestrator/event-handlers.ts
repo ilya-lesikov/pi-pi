@@ -73,8 +73,12 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
       const ok = (text: string) => ({ content: [{ type: "text" as const, text }], details: {} });
 
       const options: string[] = [];
-      if (phase === "brainstorm" || phase === "diagnosing" || phase === "active") {
-        options.push("Approve & continue", "Let me review first");
+      if (phase === "brainstorm") {
+        options.push("Approve & continue to planning", "Continue brainstorming");
+      } else if (phase === "active") {
+        options.push("Approve & finish brainstorm", "Continue brainstorming");
+      } else if (phase === "diagnosing") {
+        options.push("Approve & finish diagnosis", "Continue diagnosing");
       } else if (phase === "planning") {
         options.push("Approve plan & continue", "Review in Plannotator", "Let me review first");
       } else if (phase === "implementation") {
@@ -92,12 +96,20 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
         if (!result.ok) {
           return ok(`Transition blocked: ${result.error}. Address the issue and try again.`);
         }
+        if (phase === "active" || phase === "diagnosing") {
+          const taskId = orchestrator.active?.taskId ?? "";
+          const taskType = orchestrator.active?.type ?? "";
+          return ok(`Done. To continue to implementation, run: /pp:implement --from ${taskType}/${taskId}`);
+        }
         return ok("User approved. Transitioned to next phase.");
       }
       if (choice === "Review in Plannotator") {
         return ok("User wants visual review in Plannotator. Wait for their input.");
       }
-      return ok("User wants to review manually. Wait for their input.");
+      if (choice?.startsWith("Continue")) {
+        return ok("User wants to continue. Keep working.");
+      }
+      return ok("User wants to review first. Wait for their input.");
     },
   });
 }
@@ -122,18 +134,15 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     const duration = data.durationMs ? `${(data.durationMs / 1000).toFixed(1)}s` : "";
     const tokens = data.tokens?.total ? `${data.tokens.total} tok` : "";
     const stats = [duration, tokens].filter(Boolean).join(", ");
-    const resultPreview = orchestrator.truncateResult(data.result || "");
 
-    if (resultPreview) {
-      pi.sendMessage(
-        {
-          customType: "pp-subagent-result",
-          content: `**${desc}**${stats ? ` (${stats})` : ""}:\n${resultPreview}`,
-          display: true,
-        },
-        { deliverAs: "steer" },
-      );
-    }
+    pi.sendMessage(
+      {
+        customType: "pp-subagent-result",
+        content: `${desc} completed${stats ? ` (${stats})` : ""}. Use get_subagent_result to read the output.`,
+        display: false,
+      },
+      { deliverAs: "steer" },
+    );
   });
 
   pi.events.on("subagents:failed", (data: any) => {
