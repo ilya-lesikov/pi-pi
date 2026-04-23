@@ -37,10 +37,7 @@ export function planningSystemPrompt(taskDir: string): string {
     "- No code snippets",
     "- Group items under headings",
     "",
-    "When the synthesized plan is ready:",
-    "1. Present a brief summary of the plan to the user",
-    "2. Tell the user they can visually review it with /pp:review-plan",
-    "3. Do NOT run /pp:next yourself — wait for the user to approve and run it",
+    "When the synthesized plan is ready, call pp_phase_complete with a brief summary of the plan.",
   ].join("\n");
 }
 

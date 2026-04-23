@@ -1,12 +1,62 @@
 import { resolve, basename } from "path";
+import { Type } from "@sinclair/typebox";
 import { loadConfig } from "./config.js";
 import { runAfterEdit, autoCommit } from "./commands.js";
-import { taskName, getActiveTask } from "./state.js";
+import { taskName, getActiveTask, saveTask } from "./state.js";
 import { loadContextFiles, loadAgentsMd, getPhaseArtifacts } from "./context.js";
 import { registerCbmTools } from "./cbm.js";
 import { registerExaTools } from "./exa.js";
 import { setExtensionOnlyMode, unregisterAgentDefinitions } from "./agents/registry.js";
-import { Orchestrator } from "./orchestrator.js";
+import { spawnPlanners } from "./phases/planning.js";
+import { spawnCodeReviewers } from "./phases/review.js";
+import { Orchestrator, deepReviewConfig } from "./orchestrator.js";
+
+function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
+  const pi = orchestrator.pi;
+
+  pi.registerTool({
+    name: "pp_phase_complete",
+    label: "pi-pi",
+    description:
+      "Call when the current phase is complete. Shows a dialog to the user for " +
+      "approval. The user's choice is returned — act on it accordingly.",
+    parameters: Type.Object({
+      summary: Type.String({ description: "Brief summary of what was accomplished in this phase" }),
+    }),
+    async execute(_toolCallId, params: any, _signal, _onUpdate, ctx) {
+      if (!orchestrator.active) {
+        return { content: [{ type: "text" as const, text: "No active task." }], isError: true as const, details: {} };
+      }
+
+      const phase = orchestrator.active.state.phase;
+      const ok = (text: string) => ({ content: [{ type: "text" as const, text }], details: {} });
+
+      const options: string[] = [];
+      if (phase === "brainstorm" || phase === "diagnosing") {
+        options.push("Approve & continue", "Let me review first");
+      } else if (phase === "planning") {
+        options.push("Approve plan & continue", "Review in Plannotator", "Let me review first");
+      } else if (phase === "implementation") {
+        options.push("Approve & start review", "Let me check first");
+      } else if (phase === "review") {
+        options.push("Approve & finish", "Review in Plannotator", "Let me review first");
+      } else {
+        return ok("No dialog available for this phase.");
+      }
+
+      const choice = await ctx.ui.select(`${params.summary}`, options);
+
+      if (choice?.startsWith("Approve")) {
+        ctx.ui.notify("Run /pp:next to continue.", "info");
+        return ok(`User approved: "${choice}". Waiting for /pp:next.`);
+      }
+      if (choice === "Review in Plannotator") {
+        return ok("User wants visual review in Plannotator. Wait for their input.");
+      }
+      return ok("User wants to review manually. Wait for their input.");
+    },
+  });
+}
 
 export function registerEventHandlers(orchestrator: Orchestrator): void {
   const pi = orchestrator.pi;
@@ -87,6 +137,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
 
     registerCbmTools(pi, orchestrator.cwd);
     registerExaTools(pi);
+    registerPhaseCompleteTool(orchestrator);
     setExtensionOnlyMode(pi);
     orchestrator.registerAgents();
 

@@ -41,7 +41,7 @@ export function brainstormSystemPrompt(taskType: TaskType, taskDescription: stri
       "(things that need user clarification)",
       "## Recommended Approach",
       "",
-      "When both files are complete, tell the user and ask them to run /pp:done.",
+      "When both files are complete, call pp_phase_complete with a brief summary.",
     ].join("\n");
   }
 
@@ -60,7 +60,7 @@ export function brainstormSystemPrompt(taskType: TaskType, taskDescription: stri
       `- ${taskDir}/RESEARCH.md — findings, context, open questions`,
       "",
       "These are optional — only produce them if the user asks.",
-      "When done, tell the user and ask them to run /pp:done.",
+      "When done, call pp_phase_complete with a brief summary.",
     ].join("\n");
   }
 
@@ -106,6 +106,6 @@ export function brainstormSystemPrompt(taskType: TaskType, taskDescription: stri
     "## Recommended Approach",
     "",
     "Do NOT modify any files except .md files in the task directory.",
-    "When both files are produced and thorough, tell the user and ask them to run /pp:next.",
+    "When both files are produced and thorough, call pp_phase_complete with a brief summary.",
   ].join("\n");
 }

@@ -29,7 +29,6 @@ export function implementationSystemPrompt(taskDir: string): string {
     "Constraints:",
     "- Fix issues found by lsp diagnostics before moving on",
     "",
-    "When all plan items are checked off, tell the user implementation is complete.",
-    "The user will run /pp:next to start the review phase.",
+    "When all plan items are checked off, call pp_phase_complete with a brief summary.",
   ].join("\n");
 }

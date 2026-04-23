@@ -24,10 +24,7 @@ export function reviewSystemPrompt(taskDir: string, round: number, manualReview 
       "2. Implement the fixes",
       "3. Run afterImplement commands",
       "",
-      "When done:",
-      "1. Present a brief summary to the user",
-      "2. Tell the user they can visually review code with /pp:review-code",
-      "3. Do NOT run /pp:next yourself — wait for the user to decide",
+    "When done, call pp_phase_complete with a brief summary.",
     ].join("\n");
   }
 
@@ -56,10 +53,7 @@ export function reviewSystemPrompt(taskDir: string, round: number, manualReview 
     "3. Run afterImplement commands",
     "4. A new review round will begin",
     "",
-    "When the synthesized review is ready:",
-    "1. Present a brief summary to the user",
-    "2. Tell the user they can visually review code with /pp:review-code",
-    "3. Do NOT run /pp:next yourself — wait for the user to decide",
+    "When the synthesized review is ready, call pp_phase_complete with a brief summary.",
   ].join("\n");
 }
 
