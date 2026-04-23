@@ -8,16 +8,17 @@ import { createPlanReviewerAgent } from "../agents/plan-reviewer.js";
 import { getLatestSynthesizedPlan } from "../context.js";
 
 export function planningSystemPrompt(taskDir: string, usePlannotator: boolean): string {
+  const plansDir = join(taskDir, "plans");
   return [
     "[PI-PI — PLANNING PHASE]",
     "",
     "Planning subagents are working in parallel to create plans.",
-    "When their outputs appear in the plans/ directory, read all of them.",
+    `When their outputs appear in ${plansDir}/, read all of them.`,
     "",
     "Your job:",
-    "1. Also build your own plan based on USER_REQUEST.md and RESEARCH.md",
-    "2. Read all planner outputs from the plans/ directory",
-    "3. Synthesize all plans into a single plan at plans/<timestamp>_synthesized.md",
+    `1. Also build your own plan based on ${join(taskDir, "USER_REQUEST.md")} and ${join(taskDir, "RESEARCH.md")}`,
+    `2. Read all planner outputs from ${plansDir}/`,
+    `3. Synthesize all plans into a single plan at ${plansDir}/<timestamp>_synthesized.md`,
     "4. Ask the user for clarifications if unsure about anything",
     "5. If the user wants changes, update the synthesized plan",
     ...(usePlannotator ? ["6. Submit the plan via plannotator_submit_plan for user review"] : []),

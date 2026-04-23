@@ -7,20 +7,22 @@ import { createCodeReviewerAgent } from "../agents/code-reviewer.js";
 import { getLatestSynthesizedPlan } from "../context.js";
 
 export function reviewSystemPrompt(taskDir: string, round: number, usePlannotator: boolean): string {
+  const reviewsDir = join(taskDir, "reviews");
+  const plansDir = join(taskDir, "plans");
   return [
     `[PI-PI — REVIEW PHASE (round ${round})]`,
     "",
     "Code reviewer subagents are analyzing the implementation.",
-    "When their reviews appear in the reviews/ directory, read all of them.",
+    `When their reviews appear in ${reviewsDir}/, read all of them.`,
     "",
     "Your job:",
-    "1. Read all reviewer outputs from reviews/",
-    "2. Synthesize into reviews/<timestamp>_final_round-<N>.md",
+    `1. Read all reviewer outputs from ${reviewsDir}/`,
+    `2. Synthesize into ${reviewsDir}/<timestamp>_final_round-${round}.md`,
     "3. Present the synthesis to the user",
     ...(usePlannotator ? ["4. Submit the review via plannotator_submit_plan for user review"] : []),
     "",
     "If changes are needed:",
-    "1. Create a fix plan at plans/<timestamp>_<description>.md (do NOT modify the original synthesized plan)",
+    `1. Create a fix plan at ${plansDir}/<timestamp>_<description>.md (do NOT modify the original synthesized plan)`,
     "2. Implement the fixes",
     "3. Run afterImplement commands",
     "4. A new review round will begin",
