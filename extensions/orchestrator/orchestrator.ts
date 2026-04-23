@@ -247,7 +247,7 @@ export class Orchestrator {
 
     this.injectContextAndArtifacts(this.active.dir, this.active.state.phase);
     this.createPhaseTasks();
-    this.pi.sendUserMessage(`[PI-PI] Entered ${this.active.state.phase} phase. Begin working.`);
+    this.pi.sendUserMessage(`[PI-PI] Entered ${this.active.state.phase} phase.\n\nTask: ${this.active.description}\n\nBegin working on this task now.`);
 
     if (this.active.state.phase === "planning") {
       spawnPlanners(this.pi, this.cwd, this.active.dir, this.active.taskId, this.config).catch((err) => {
@@ -325,7 +325,7 @@ export class Orchestrator {
           this.phaseCompactionResolve = null;
         }
         this.injectContextAndArtifacts(taskDir, phase);
-        this.pi.sendUserMessage(`[PI-PI] Entered ${phase} phase. Begin working.`);
+        this.pi.sendUserMessage(`[PI-PI] Entered ${phase} phase.\n\nTask: ${this.active?.description ?? ""}\n\nBegin working on this task now.`);
       },
       onError: (err) => {
         console.error(`[pi-pi] Phase compaction failed: ${err.message}`);
@@ -335,7 +335,7 @@ export class Orchestrator {
           this.phaseCompactionResolve = null;
         }
         this.injectContextAndArtifacts(taskDir, phase);
-        this.pi.sendUserMessage(`[PI-PI] Entered ${phase} phase. Begin working.`);
+        this.pi.sendUserMessage(`[PI-PI] Entered ${phase} phase.\n\nTask: ${this.active?.description ?? ""}\n\nBegin working on this task now.`);
       },
     });
   }
