@@ -248,4 +248,26 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       }
     }
   });
+
+  pi.events.on("plannotator:review-result", (data: any) => {
+    if (!data) return;
+    const parts: string[] = [];
+
+    if (data.approved) {
+      parts.push("[Plannotator] Plan APPROVED by user.");
+    } else {
+      parts.push("[Plannotator] Plan DENIED by user.");
+    }
+
+    if (data.feedback) {
+      parts.push("", "User feedback:", data.feedback);
+    }
+
+    if (parts.length > 0) {
+      pi.sendMessage(
+        { customType: "pp-plannotator-result", content: parts.join("\n"), display: true },
+        { deliverAs: "steer" },
+      );
+    }
+  });
 }
