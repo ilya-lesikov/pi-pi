@@ -238,6 +238,6 @@ export class ConversationViewer implements Component {
       lines.push(truncateToWidth(th.fg("accent", "▍ ") + th.fg("dim", act), width));
     }
 
-    return lines.map(l => truncateToWidth(l, width));
+    return lines.map(l => truncateToWidth(l, Math.max(1, width - 1)));
   }
 }

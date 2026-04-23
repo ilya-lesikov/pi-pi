@@ -83,7 +83,7 @@ describe("agent type registry", () => {
 
     it("Explore has read-only tools", () => {
       const config = getConfig("Explore");
-      expect(config.builtinToolNames).toEqual(["read", "bash", "grep", "find", "ls"]);
+      expect(config.builtinToolNames).toEqual(["read", "bash", "grep", "find", "ls", "ast_search"]);
       expect(config.builtinToolNames).not.toContain("edit");
       expect(config.builtinToolNames).not.toContain("write");
     });
