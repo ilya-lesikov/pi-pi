@@ -317,6 +317,7 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
         return;
       }
 
+      let handled = false;
       const requestId = crypto.randomUUID();
       const responded = new Promise<void>((resolve) => {
         pi.events.emit("plannotator:request", {
@@ -327,6 +328,7 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
             planFilePath: join(orchestrator.active!.dir, "plans"),
           },
           respond: (response: any) => {
+            handled = true;
             if (response.status === "handled") {
               ctx.ui.notify("Plan review opened in browser", "info");
             } else {
@@ -339,7 +341,9 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
 
       const timeout = new Promise<void>((resolve) => {
         setTimeout(() => {
-          ctx.ui.notify("Plannotator not responding — is the extension installed?", "error");
+          if (!handled) {
+            ctx.ui.notify("Plannotator not responding — is the extension installed?", "error");
+          }
           resolve();
         }, 5000);
       });
@@ -351,6 +355,7 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
   pi.registerCommand("pp:review-code", {
     description: "Open code changes in Plannotator code review browser UI",
     handler: async (_args, ctx) => {
+      let handled = false;
       const requestId = crypto.randomUUID();
       const responded = new Promise<void>((resolve) => {
         pi.events.emit("plannotator:request", {
@@ -361,6 +366,7 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
             diffType: "branch",
           },
           respond: (response: any) => {
+            handled = true;
             if (response.status === "handled") {
               if (response.result?.feedback) {
                 pi.sendMessage(
@@ -378,7 +384,9 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
 
       const timeout = new Promise<void>((resolve) => {
         setTimeout(() => {
-          ctx.ui.notify("Plannotator not responding — is the extension installed?", "error");
+          if (!handled) {
+            ctx.ui.notify("Plannotator not responding — is the extension installed?", "error");
+          }
           resolve();
         }, 5000);
       });
