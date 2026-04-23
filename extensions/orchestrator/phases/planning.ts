@@ -37,8 +37,10 @@ export function planningSystemPrompt(taskDir: string): string {
     "- No code snippets",
     "- Group items under headings",
     "",
-    "When the synthesized plan is ready, run /pp:next (slash command, not a tool call).",
-    "The extension will ask the user for approval before transitioning.",
+    "When the synthesized plan is ready:",
+    "1. Present a brief summary of the plan to the user",
+    "2. Tell the user they can visually review it with /pp:review-plan",
+    "3. Do NOT run /pp:next yourself — wait for the user to approve and run it",
   ].join("\n");
 }
 

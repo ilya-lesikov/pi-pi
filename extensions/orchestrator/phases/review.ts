@@ -34,7 +34,10 @@ export function reviewSystemPrompt(taskDir: string, round: number): string {
     "3. Run afterImplement commands",
     "4. A new review round will begin",
     "",
-    "If the user approves, run /pp:next (slash command, not a tool call).",
+    "When the synthesized review is ready:",
+    "1. Present a brief summary to the user",
+    "2. Tell the user they can visually review code with /pp:review-code",
+    "3. Do NOT run /pp:next yourself — wait for the user to decide",
   ].join("\n");
 }
 
