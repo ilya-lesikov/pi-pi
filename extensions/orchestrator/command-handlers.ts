@@ -238,7 +238,28 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
       if (currentPhase === "review") {
         const approved = await ctx.ui.confirm("Approve implementation?", "Mark the task as done?");
         if (!approved) {
-          ctx.ui.notify("Implementation not approved. Continue reviewing.", "info");
+          if (orchestrator.active.reviewRound > orchestrator.config.maxAutoReviewRounds) {
+            ctx.ui.notify(
+              `Auto-review round limit reached (${orchestrator.config.maxAutoReviewRounds}). Continue with manual review.`,
+              "warning",
+            );
+            return;
+          }
+
+          const startNewRound = await ctx.ui.confirm(
+            "Start another auto-review round?",
+            `Round ${orchestrator.active.reviewRound} of ${orchestrator.config.maxAutoReviewRounds} max.`,
+          );
+          if (!startNewRound) {
+            ctx.ui.notify("Continue with manual review.", "info");
+            return;
+          }
+
+          spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, orchestrator.config, orchestrator.active.reviewRound).catch((err) => {
+            console.error(`[pi-pi] spawnCodeReviewers failed: ${err.message}`);
+          });
+          orchestrator.active.reviewRound++;
+          orchestrator.persistReviewRound();
           return;
         }
       }

@@ -140,8 +140,8 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     }
 
     if (event.toolName === "write" || event.toolName === "edit") {
-      const input = event.input as { file_path?: string; filePath?: string };
-      const rawPath = input.file_path || input.filePath || "";
+      const input = event.input as { file_path?: string; filePath?: string; path?: string };
+      const rawPath = input.file_path || input.filePath || input.path || "";
       const resolvedPath = resolve(orchestrator.cwd, rawPath);
       const ppStateDir = resolve(orchestrator.cwd, ".pp", "state");
       const ppDir = resolve(orchestrator.cwd, ".pp");
@@ -168,8 +168,8 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (!orchestrator.active || orchestrator.active.state.phase !== "implementation") return;
 
     if ((event.toolName === "edit" || event.toolName === "write") && !event.isError) {
-      const input = event.input as { file_path?: string; filePath?: string };
-      const filePath = input.file_path || input.filePath;
+      const input = event.input as { file_path?: string; filePath?: string; path?: string };
+      const filePath = input.file_path || input.filePath || input.path;
       if (!filePath) return;
 
       if (filePath.includes(".pp/")) return;
