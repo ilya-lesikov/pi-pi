@@ -157,7 +157,7 @@ The extension hardcodes three code intelligence tool suites, always available wi
 
 **LSP (via pi-lsp)** — Compiler-grade semantic analysis. Zero false positives. Supports goToDefinition, findReferences, hover, goToImplementation, documentSymbol, workspaceSymbol, incomingCalls, outgoingCalls, diagnostics, codeActions.
 
-**ast-grep (via pi-hashline-readmap)** — AST-aware structural pattern matching via the `ast_search` tool. Finds code shapes (e.g. `if err != nil { $$$ }`, `go $FUNC($$$)`) rather than text.
+**ast-grep** — AST-aware structural pattern matching via the `ast_search` tool. Registered directly by the orchestrator extension (wraps the `sg` binary). Finds code shapes (e.g. `if err != nil { $$$ }`, `go $FUNC($$$)`) rather than text.
 
 **Exa (web search)** — Always-available web search via Exa AI. No API key required.
 
@@ -376,5 +376,5 @@ pi-pi bundles modified forks of third-party extensions in `3p/`. These are loade
 Bundled:
 - `pi-subagents` — modified to support in-memory agent registration and extension-only mode
 - `pi-tasks` — modified to handle store upgrade in command handlers
-- `pi-hashline-readmap` — modified: nu tool disabled and removed
+- `pi-hashline-readmap` — no longer loaded; replaced by pi's built-in tools + standalone ast_search
 - `pi-lsp`, `pi-ask-user`, `pi-mcp-adapter`, `pi-plannotator` — forks with type fixes

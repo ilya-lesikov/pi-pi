@@ -7,6 +7,7 @@ import { loadContextFiles, getPhaseArtifacts, getLatestSynthesizedPlan } from ".
 import { WORKING_PRINCIPLES, COMMUNICATION } from "./agents/tool-routing.js";
 import { registerCbmTools } from "./cbm.js";
 import { registerExaTools } from "./exa.js";
+import { registerAstSearchTool } from "./ast-search.js";
 import { setExtensionOnlyMode, unregisterAgentDefinitions } from "./agents/registry.js";
 import { spawnPlanners } from "./phases/planning.js";
 import { spawnCodeReviewers } from "./phases/review.js";
@@ -298,6 +299,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
 
     registerCbmTools(pi, orchestrator.cwd);
     registerExaTools(pi);
+    registerAstSearchTool(pi, orchestrator.cwd);
     registerOrchestratorTools(orchestrator);
     setExtensionOnlyMode(pi);
     orchestrator.registerAgents();
