@@ -249,7 +249,9 @@ export class Orchestrator {
     this.createPhaseTasks();
 
     const isGenericDescription = ["implement", "debug", "brainstorm"].includes(this.active.description);
-    if (!isGenericDescription) {
+    if (isGenericDescription) {
+      ctx.ui.notify("Task created. Describe what you'd like to do.", "info");
+    } else {
       this.pi.sendUserMessage(`[PI-PI] Entered ${this.active.state.phase} phase. Begin working.`);
     }
 
