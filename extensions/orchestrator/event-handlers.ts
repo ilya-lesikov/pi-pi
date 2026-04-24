@@ -105,6 +105,10 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
       const phase = orchestrator.active.state.phase;
       const ok = (text: string) => ({ content: [{ type: "text" as const, text }], details: {} });
 
+      if (orchestrator.spawnedAgentIds.size > 0) {
+        return ok(`${orchestrator.spawnedAgentIds.size} subagent(s) still running. Call pp_wait first, then call pp_phase_complete after reading their outputs.`);
+      }
+
       const options: string[] = [];
       if (phase === "brainstorm") {
         options.push("Approve & continue to planning", "Continue brainstorming");
