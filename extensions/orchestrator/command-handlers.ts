@@ -138,25 +138,52 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
         return;
       }
 
-      const tasks = listTasks(orchestrator.cwd);
-      if (tasks.length === 0) {
+      const PAGE_SIZE = 10;
+      const allTasks = listTasks(orchestrator.cwd);
+      if (allTasks.length === 0) {
         ctx.ui.notify("No paused tasks found.", "info");
         return;
       }
 
-      const options = tasks.map((t) => {
-        const name = taskName(t.dir);
-        const age = taskAge(t.state);
-        return `${t.type}/${name} — ${t.state.phase} (${age} old)`;
-      });
+      let choice: string | undefined;
+      let page = 0;
+      const totalPages = Math.ceil(allTasks.length / PAGE_SIZE);
 
-      const choice = await ctx.ui.select("Select task to resume", options);
+      while (!choice) {
+        const start = page * PAGE_SIZE;
+        const pageTasks = allTasks.slice(start, start + PAGE_SIZE);
+
+        const options = pageTasks.map((t) => {
+          const name = taskName(t.dir);
+          const age = taskAge(t.state);
+          return `${t.type}/${name} — ${t.state.phase} (${age} old)`;
+        });
+
+        if (totalPages > 1) {
+          if (page < totalPages - 1) options.push("→ Next page");
+          if (page > 0) options.push("← Previous page");
+        }
+
+        const header = totalPages > 1
+          ? `Select task to resume (page ${page + 1}/${totalPages})`
+          : "Select task to resume";
+
+        const selected = await ctx.ui.select(header, options);
+        if (!selected) return;
+
+        if (selected === "→ Next page") { page++; continue; }
+        if (selected === "← Previous page") { page--; continue; }
+
+        choice = selected;
+      }
       if (!choice) return;
 
-      const idx = options.indexOf(choice);
-      if (idx < 0) return;
-
-      const task = tasks[idx];
+      const task = allTasks.find((t) => {
+        const name = taskName(t.dir);
+        const age = taskAge(t.state);
+        return choice === `${t.type}/${name} — ${t.state.phase} (${age} old)`;
+      });
+      if (!task) return;
 
       try {
         orchestrator.config = loadConfig(orchestrator.cwd);
