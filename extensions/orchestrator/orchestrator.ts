@@ -51,6 +51,7 @@ export class Orchestrator {
   cooldownHits: number[] = [];
   nudgeHalted = false;
   manualReview = false;
+  pendingSubagentSpawns = 0;
   transitionToNextPhase: (ctx: any) => Promise<{ ok: boolean; error?: string }> = async () => ({ ok: false, error: "not initialized" });
 
   constructor(readonly pi: ExtensionAPI) {}
@@ -256,7 +257,9 @@ export class Orchestrator {
     }
 
     if (this.active.state.phase === "planning") {
+      this.pendingSubagentSpawns = Object.values(this.config.planners).filter((v) => v.enabled).length;
       spawnPlanners(this.pi, this.cwd, this.active.dir, this.active.taskId, this.config).catch((err) => {
+        this.pendingSubagentSpawns = 0;
         console.error(`[pi-pi] spawnPlanners failed: ${err.message}`);
       });
     }

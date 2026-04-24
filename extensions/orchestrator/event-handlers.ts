@@ -30,13 +30,15 @@ function registerWaitTool(orchestrator: Orchestrator): void {
       "Returns when all subagents have finished.",
     parameters: Type.Object({}),
     async execute() {
-      if (orchestrator.spawnedAgentIds.size === 0) {
+      const hasWork = () => orchestrator.spawnedAgentIds.size > 0 || orchestrator.pendingSubagentSpawns > 0;
+
+      if (!hasWork()) {
         return { content: [{ type: "text" as const, text: "No subagents running. Proceed." }], details: {} };
       }
 
       await new Promise<void>((resolve) => {
         const check = () => {
-          if (orchestrator.spawnedAgentIds.size === 0) {
+          if (!hasWork()) {
             resolve();
           } else {
             setTimeout(check, 1000);
@@ -105,8 +107,9 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
       const phase = orchestrator.active.state.phase;
       const ok = (text: string) => ({ content: [{ type: "text" as const, text }], details: {} });
 
-      if (orchestrator.spawnedAgentIds.size > 0) {
-        return ok(`${orchestrator.spawnedAgentIds.size} subagent(s) still running. Call pp_wait first, then call pp_phase_complete after reading their outputs.`);
+      if (orchestrator.spawnedAgentIds.size > 0 || orchestrator.pendingSubagentSpawns > 0) {
+        const count = orchestrator.spawnedAgentIds.size + orchestrator.pendingSubagentSpawns;
+        return ok(`${count} subagent(s) still running or spawning. Call pp_wait first, then call pp_phase_complete after reading their outputs.`);
       }
 
       const options: string[] = [];
@@ -154,7 +157,9 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
         orchestrator.active.reviewRound++;
         orchestrator.persistReviewRound();
         const reviewConfig = choice === "Deep review round" ? deepReviewConfig(orchestrator.config) : orchestrator.config;
+        orchestrator.pendingSubagentSpawns = Object.values(reviewConfig.codeReviewers).filter((v) => v.enabled).length;
         spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, reviewConfig, orchestrator.active.reviewRound).catch((err) => {
+          orchestrator.pendingSubagentSpawns = 0;
           console.error(`[pi-pi] spawnCodeReviewers failed: ${err.message}`);
         });
         return ok(`Starting review round ${orchestrator.active.reviewRound}${choice === "Deep review round" ? " (deep)" : ""}. Call pp_wait to block until reviewers complete.`);
@@ -222,6 +227,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   pi.events.on("subagents:created", (data: any) => {
     if (!orchestrator.active || !data?.id) return;
     orchestrator.spawnedAgentIds.add(data.id);
+    if (orchestrator.pendingSubagentSpawns > 0) orchestrator.pendingSubagentSpawns--;
     if (data.description) {
       orchestrator.agentDescriptions.set(data.id, data.description);
     }
@@ -467,7 +473,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
 
     if (!turnWasEmpty) return;
     if (orchestrator.nudgeHalted) return;
-    if (orchestrator.spawnedAgentIds.size > 0) return;
+    if (orchestrator.spawnedAgentIds.size > 0 || orchestrator.pendingSubagentSpawns > 0) return;
 
     const now = Date.now();
 

@@ -229,7 +229,9 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
         const plansDir = join(orchestrator.active.dir, "plans");
         const hasPlans = existsSync(plansDir) && readdirSync(plansDir).some((f) => f.endsWith(".md"));
         if (!hasPlans) {
+          orchestrator.pendingSubagentSpawns = Object.values(orchestrator.config.planners).filter((v) => v.enabled).length;
           spawnPlanners(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, orchestrator.config).catch((err: any) => {
+            orchestrator.pendingSubagentSpawns = 0;
             console.error(`[pi-pi] spawnPlanners failed: ${err.message}`);
           });
         }
@@ -255,7 +257,9 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
         } else if (reviewChoice !== "Manual review only") {
           const deep = reviewChoice === "Deep auto-review (higher reasoning)";
           const reviewConfig = deep ? deepReviewConfig(orchestrator.config) : orchestrator.config;
+          orchestrator.pendingSubagentSpawns = Object.values(reviewConfig.codeReviewers).filter((v) => v.enabled).length;
           spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, reviewConfig, orchestrator.active.reviewRound).catch((err: any) => {
+            orchestrator.pendingSubagentSpawns = 0;
             console.error(`[pi-pi] spawnCodeReviewers failed: ${err.message}`);
           });
         }
@@ -333,7 +337,9 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
       if (!orchestrator.manualReview) {
         const deep = reviewChoice === "Deep auto-review (higher reasoning)";
         const reviewConfig = deep ? deepReviewConfig(orchestrator.config) : orchestrator.config;
+        orchestrator.pendingSubagentSpawns = Object.values(reviewConfig.codeReviewers).filter((v) => v.enabled).length;
         spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, reviewConfig, orchestrator.active.reviewRound).catch((err) => {
+          orchestrator.pendingSubagentSpawns = 0;
           console.error(`[pi-pi] spawnCodeReviewers failed: ${err.message}`);
         });
       }
@@ -342,7 +348,9 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
     orchestrator.compactAndTransition(ctx, orchestrator.active.dir, orchestrator.active.state.phase);
 
     if (next === "planning") {
+      orchestrator.pendingSubagentSpawns = Object.values(orchestrator.config.planners).filter((v) => v.enabled).length;
       spawnPlanners(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, orchestrator.config).catch((err) => {
+        orchestrator.pendingSubagentSpawns = 0;
         console.error(`[pi-pi] spawnPlanners failed: ${err.message}`);
       });
     }
@@ -382,7 +390,9 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
           orchestrator.active.reviewRound++;
           orchestrator.persistReviewRound();
           const reviewConfig = reviewChoice === "Deep review round" ? deepReviewConfig(orchestrator.config) : orchestrator.config;
+          orchestrator.pendingSubagentSpawns = Object.values(reviewConfig.codeReviewers).filter((v) => v.enabled).length;
           spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, reviewConfig, orchestrator.active.reviewRound).catch((err) => {
+            orchestrator.pendingSubagentSpawns = 0;
             console.error(`[pi-pi] spawnCodeReviewers failed: ${err.message}`);
           });
           ctx.ui.notify(`Starting review round ${orchestrator.active.reviewRound}${reviewChoice === "Deep review round" ? " (deep)" : ""}`, "info");
