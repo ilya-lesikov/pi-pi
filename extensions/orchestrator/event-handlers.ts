@@ -1,4 +1,4 @@
-import { existsSync } from "fs";
+import { existsSync, readdirSync } from "fs";
 import { resolve, basename, join } from "path";
 import { Type } from "@sinclair/typebox";
 import { loadConfig } from "./config.js";
@@ -586,6 +586,42 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       return;
     }
     orchestrator.errorRetryCount = 0;
+
+    if (orchestrator.active.state.step === "await_planners" || orchestrator.active.state.step === "await_reviewers") {
+      const taskDir = orchestrator.active.dir;
+      if (orchestrator.active.state.step === "await_planners") {
+        const plansDir = join(taskDir, "plans");
+        const plannerCount = Object.values(orchestrator.config.planners).filter((v) => v.enabled).length;
+        if (existsSync(plansDir)) {
+          const planFiles = readdirSync(plansDir).filter((f) => f.endsWith(".md") && !f.includes("synthesized") && !f.includes("review_"));
+          if (planFiles.length >= plannerCount) {
+            orchestrator.active.state.step = "synthesize";
+            saveTask(orchestrator.active.dir, orchestrator.active.state);
+            pi.sendMessage(
+              { customType: "pp-planners-ready", content: "[PI-PI] All planners completed. Read their outputs and synthesize the plan.", display: false },
+              { deliverAs: "followUp" },
+            );
+          }
+        }
+      } else if (orchestrator.active.state.reviewCycle) {
+        const cycle = orchestrator.active.state.reviewCycle;
+        const reviewConfig = cycle.kind === "auto-deep" ? deepReviewConfig(orchestrator.config) : orchestrator.config;
+        const reviewerCount = Object.values(reviewConfig.codeReviewers).filter((v) => v.enabled).length;
+        const outputs = loadReviewOutputs(taskDir, cycle.pass);
+        if (outputs.length >= reviewerCount) {
+          cycle.step = "apply_feedback";
+          orchestrator.active.state.step = "apply_feedback";
+          saveTask(orchestrator.active.dir, orchestrator.active.state);
+          const rendered = outputs.map((o) => `=== ${o.name} ===\n${o.content}`).join("\n\n");
+          pi.sendMessage(
+            { customType: "pp-review-ready", content: `[PI-PI] Reviewer outputs are ready.\n\n${rendered}`, display: false },
+            { deliverAs: "followUp" },
+          );
+          pi.sendUserMessage("[PI-PI] Review cycle is ready for apply_feedback. Read reviewer outputs and proceed.", { deliverAs: "followUp" });
+        }
+      }
+      return;
+    }
 
     if (orchestrator.active.type === "brainstorm" && phase === "brainstorm") return;
 
