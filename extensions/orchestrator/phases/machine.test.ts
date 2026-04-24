@@ -171,11 +171,22 @@ describe("validateExitCriteria", () => {
     expect(validateExitCriteria(dir, "implement", "implement")).toEqual({ ok: true });
   });
 
-  it("handles brainstorm phase for brainstorm task", () => {
+  it("handles brainstorm phase for brainstorm task — always passes", () => {
     const dir = makeTempDir();
-    writeFileSync(join(dir, "USER_REQUEST.md"), "request", "utf-8");
-    writeFileSync(join(dir, "RESEARCH.md"), "research", "utf-8");
     expect(validateExitCriteria(dir, "brainstorm", "brainstorm")).toEqual({ ok: true });
+  });
+
+  it("validates brainstorm phase for implement task — requires artifacts", () => {
+    const missing = makeTempDir();
+    expect(validateExitCriteria(missing, "implement", "brainstorm")).toEqual({
+      ok: false,
+      reason: "USER_REQUEST.md does not exist or is empty",
+    });
+
+    const pass = makeTempDir();
+    writeFileSync(join(pass, "USER_REQUEST.md"), "request", "utf-8");
+    writeFileSync(join(pass, "RESEARCH.md"), "research", "utf-8");
+    expect(validateExitCriteria(pass, "implement", "brainstorm")).toEqual({ ok: true });
   });
 
   it("validates debug artifacts", () => {

@@ -34,6 +34,7 @@ export function validateExitCriteria(
 ): { ok: true } | { ok: false; reason: string } {
   switch (phase) {
     case "brainstorm": {
+      if (taskType === "brainstorm") return { ok: true };
       const ur = join(taskDir, "USER_REQUEST.md");
       const res = join(taskDir, "RESEARCH.md");
       if (!existsSync(ur) || readFileSync(ur, "utf-8").trim().length === 0) {
@@ -76,9 +77,6 @@ export function validateExitCriteria(
       }
       return { ok: true };
     }
-
-    case "brainstorm":
-      return { ok: true };
 
     default:
       return { ok: false, reason: `Unknown phase: ${phase}` };
