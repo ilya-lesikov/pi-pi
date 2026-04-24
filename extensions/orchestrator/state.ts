@@ -163,7 +163,21 @@ export function validateFromPath(cwd: string, fromPath: string): { ok: true; dir
 export function taskName(taskDir: string): string {
   try {
     const state = loadTask(taskDir);
-    if (state.description) return state.description;
+    let desc = state.description ?? "";
+
+    if (["implement", "debug", "brainstorm"].includes(desc)) {
+      const urPath = join(taskDir, "USER_REQUEST.md");
+      if (existsSync(urPath)) {
+        const firstLine = readFileSync(urPath, "utf-8")
+          .split("\n")
+          .map((l) => l.replace(/^#+\s*/, "").trim())
+          .find((l) => l.length > 0);
+        if (firstLine) desc = firstLine;
+      }
+    }
+
+    if (desc && desc.length > 80) desc = desc.slice(0, 77) + "...";
+    if (desc) return desc;
   } catch {
     console.error(`[pi-pi] Failed to read task name from ${taskDir}`);
   }
