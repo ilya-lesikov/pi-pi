@@ -572,14 +572,9 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       orchestrator.errorRetryCount = (orchestrator.errorRetryCount ?? 0) + 1;
       if (orchestrator.errorRetryCount <= 3) {
         ctx.ui.notify(`API error (attempt ${orchestrator.errorRetryCount}/3): ${errorMsg}. Retrying...`, "warning");
-        pi.sendMessage(
-          {
-            customType: "pp-error-retry",
-            content: `[PI-PI] Previous request failed due to an API error. Continue working on the current phase (${phase}).`,
-            display: false,
-          },
-          { deliverAs: "followUp" },
-        );
+        setTimeout(() => {
+          pi.sendUserMessage(`[PI-PI] Previous request failed due to an API error. Continue working on the current phase (${phase}).`);
+        }, 1000);
       } else {
         ctx.ui.notify(`API error persisted after 3 retries: ${errorMsg}. Stopping auto-retry.`, "error");
         orchestrator.errorRetryCount = 0;
