@@ -247,7 +247,11 @@ export class Orchestrator {
 
     this.injectContextAndArtifacts(this.active.dir, this.active.state.phase);
     this.createPhaseTasks();
-    this.pi.sendUserMessage(`[PI-PI] Entered ${this.active.state.phase} phase. Begin working.`);
+
+    const isGenericDescription = ["implement", "debug", "brainstorm"].includes(this.active.description);
+    if (!isGenericDescription) {
+      this.pi.sendUserMessage(`[PI-PI] Entered ${this.active.state.phase} phase. Begin working.`);
+    }
 
     if (this.active.state.phase === "planning") {
       spawnPlanners(this.pi, this.cwd, this.active.dir, this.active.taskId, this.config).catch((err) => {
