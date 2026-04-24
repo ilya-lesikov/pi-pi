@@ -1,38 +1,14 @@
-import { existsSync, readFileSync, readdirSync } from "fs";
+import { existsSync, readdirSync } from "fs";
 import { join, relative } from "path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-
-function openPlannotator(pi: ExtensionAPI, action: string, payload: Record<string, unknown>): Promise<boolean> {
-  return new Promise((resolve) => {
-    let handled = false;
-    pi.events.emit("plannotator:request", {
-      requestId: crypto.randomUUID(),
-      action,
-      payload,
-      respond: (response: any) => {
-        handled = true;
-        resolve(response.status === "handled");
-      },
-    });
-    setTimeout(() => { if (!handled) resolve(false); }, 5000);
-  });
-}
-
-function waitForPlannotatorResult(pi: ExtensionAPI): Promise<{ approved: boolean; feedback?: string }> {
-  return new Promise((resolve) => {
-    const unsub = pi.events.on("plannotator:review-result", (data: any) => {
-      unsub();
-      resolve({ approved: !!data?.approved, feedback: data?.feedback });
-    });
-  });
-}
+import { openPlannotator, waitForPlannotatorResult, cancelPendingPlannotatorWait } from "./plannotator.js";
 import { loadConfig } from "./config.js";
 import { runAfterImplement } from "./commands.js";
 import { unregisterAgentDefinitions } from "./agents/registry.js";
 import { spawnPlanners } from "./phases/planning.js";
 import { spawnCodeReviewers } from "./phases/review.js";
 import { validateExitCriteria, nextPhase } from "./phases/machine.js";
-import { getLatestSynthesizedPlan } from "./context.js";
+import { getLatestSynthesizedPlan, loadReviewOutputs } from "./context.js";
 import { runUserGateDialog } from "./event-handlers.js";
 import {
   saveTask,
@@ -43,15 +19,6 @@ import {
   validateFromPath,
 } from "./state.js";
 import { Orchestrator, deepReviewConfig } from "./orchestrator.js";
-
-function loadReviewOutputs(taskDir: string, pass: number): { name: string; content: string }[] {
-  const reviewsDir = join(taskDir, "reviews");
-  if (!existsSync(reviewsDir)) return [];
-  return readdirSync(reviewsDir)
-    .filter((f) => f.includes(`round-${pass}`) && f.endsWith(".md"))
-    .sort()
-    .map((name) => ({ name, content: readFileSync(join(reviewsDir, name), "utf-8") }));
-}
 
 export function registerCommandHandlers(orchestrator: Orchestrator): void {
   const pi = orchestrator.pi;
@@ -110,6 +77,7 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
         return;
       }
 
+      cancelPendingPlannotatorWait(orchestrator);
       orchestrator.abortAllSubagents();
       ctx.abort();
       await ctx.waitForIdle();
@@ -232,7 +200,6 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
       orchestrator.updateStatus(ctx);
 
       orchestrator.injectContextAndArtifacts(orchestrator.active.dir, orchestrator.active.state.phase);
-      pi.sendUserMessage(`[PI-PI] Resumed ${orchestrator.active.state.phase} phase. Continue working.`);
 
       if (orchestrator.active.state.phase === "plan" && orchestrator.active.state.step === "await_planners") {
         const plansDir = join(orchestrator.active.dir, "plans");
@@ -240,8 +207,11 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
         const planFiles = existsSync(plansDir)
           ? readdirSync(plansDir).filter((f) => f.endsWith(".md") && !f.includes("synthesized") && !f.includes("review_"))
           : [];
-        if (planFiles.length < plannerCount) {
-          orchestrator.pendingSubagentSpawns = Object.values(orchestrator.config.planners).filter((v) => v.enabled).length;
+        if (planFiles.length >= plannerCount) {
+          orchestrator.active.state.step = "synthesize";
+          saveTask(orchestrator.active.dir, orchestrator.active.state);
+        } else {
+          orchestrator.pendingSubagentSpawns = plannerCount;
           spawnPlanners(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, orchestrator.config).catch((err: any) => {
             orchestrator.pendingSubagentSpawns = 0;
             console.error(`[pi-pi] spawnPlanners failed: ${err.message}`);
@@ -253,23 +223,30 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
         const cycle = orchestrator.active.state.reviewCycle;
         const reviewConfig = cycle.kind === "auto-deep" ? deepReviewConfig(orchestrator.config) : orchestrator.config;
 
-        if ((cycle.kind === "auto" || cycle.kind === "auto-deep") && cycle.step === "spawn_reviewers") {
-          orchestrator.pendingSubagentSpawns = Object.values(reviewConfig.codeReviewers).filter((v) => v.enabled).length;
-          spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, reviewConfig, cycle.pass).catch((err: any) => {
-            orchestrator.pendingSubagentSpawns = 0;
-            console.error(`[pi-pi] spawnCodeReviewers failed: ${err.message}`);
-          });
-          cycle.step = "await_reviewers";
-          saveTask(orchestrator.active.dir, orchestrator.active.state);
-        } else if ((cycle.kind === "auto" || cycle.kind === "auto-deep") && cycle.step === "await_reviewers") {
+        if ((cycle.kind === "auto" || cycle.kind === "auto-deep") && (cycle.step === "spawn_reviewers" || cycle.step === "await_reviewers")) {
           const outputs = loadReviewOutputs(orchestrator.active.dir, cycle.pass);
           const reviewerCount = Object.values(reviewConfig.codeReviewers).filter((v) => v.enabled).length;
-          if (outputs.length < reviewerCount) {
+          if (outputs.length >= reviewerCount) {
+            cycle.step = "apply_feedback";
+            orchestrator.active.state.step = "apply_feedback";
+            saveTask(orchestrator.active.dir, orchestrator.active.state);
+            const rendered = outputs.map((o) => `=== ${o.name} ===\n${o.content}`).join("\n\n");
+            pi.sendMessage(
+              {
+                customType: "pp-review-ready",
+                content: `[PI-PI] Reviewer outputs are ready.\n\n${rendered}`,
+                display: false,
+              },
+              { deliverAs: "steer" },
+            );
+          } else {
             orchestrator.pendingSubagentSpawns = reviewerCount;
             spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, reviewConfig, cycle.pass).catch((err: any) => {
               orchestrator.pendingSubagentSpawns = 0;
               console.error(`[pi-pi] spawnCodeReviewers failed: ${err.message}`);
             });
+            cycle.step = "await_reviewers";
+            saveTask(orchestrator.active.dir, orchestrator.active.state);
           }
         } else if (cycle.step === "apply_feedback") {
           const outputs = loadReviewOutputs(orchestrator.active.dir, cycle.pass)
@@ -284,6 +261,15 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
             { deliverAs: "steer" },
           );
         }
+      }
+
+      const step = orchestrator.active.state.step;
+      if (step === "await_planners" || step === "await_reviewers") {
+        pi.sendUserMessage(`[PI-PI] Resumed ${orchestrator.active.state.phase} phase. Awaiting subagents.`);
+      } else if (step === "apply_feedback") {
+        pi.sendUserMessage(`[PI-PI] Resumed ${orchestrator.active.state.phase} phase. Read reviewer outputs and apply feedback.`);
+      } else {
+        pi.sendUserMessage(`[PI-PI] Resumed ${orchestrator.active.state.phase} phase. Continue working.`);
       }
     },
   });
@@ -398,7 +384,7 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
         return;
       }
 
-      const opened = await openPlannotator(pi, "plan-review", {
+      const { opened, requestId } = await openPlannotator(pi, "plan-review", {
         planContent,
         planFilePath: join(orchestrator.active.dir, "plans"),
       });
@@ -408,7 +394,13 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
       }
 
       ctx.ui.notify("Plan review opened in browser. Waiting for result...", "info");
-      const result = await waitForPlannotatorResult(pi);
+      let result: { approved: boolean; feedback?: string };
+      try {
+        result = await waitForPlannotatorResult(orchestrator, requestId);
+      } catch {
+        ctx.ui.notify("Plan review cancelled.", "info");
+        return;
+      }
 
       if (result.approved) {
         pi.sendMessage(
@@ -428,7 +420,7 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
   pi.registerCommand("pp:review-code", {
     description: "Open code changes in Plannotator for visual review (blocks until review completes)",
     handler: async (_args, ctx) => {
-      const opened = await openPlannotator(pi, "code-review", {
+      const { opened, requestId } = await openPlannotator(pi, "code-review", {
         cwd: orchestrator.cwd,
         diffType: "branch",
       });
@@ -438,7 +430,13 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
       }
 
       ctx.ui.notify("Code review opened in browser. Waiting for result...", "info");
-      const result = await waitForPlannotatorResult(pi);
+      let result: { approved: boolean; feedback?: string };
+      try {
+        result = await waitForPlannotatorResult(orchestrator, requestId);
+      } catch {
+        ctx.ui.notify("Code review cancelled.", "info");
+        return;
+      }
 
       if (result.approved) {
         pi.sendMessage(

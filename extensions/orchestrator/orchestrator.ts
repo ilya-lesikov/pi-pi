@@ -51,6 +51,8 @@ export class Orchestrator {
   cooldownHits: number[] = [];
   nudgeHalted = false;
   pendingSubagentSpawns = 0;
+  plannotatorReject: ((reason: Error) => void) | null = null;
+  plannotatorUnsub: (() => void) | null = null;
   transitionToNextPhase: (ctx: any) => Promise<{ ok: boolean; error?: string }> = async () => ({ ok: false, error: "not initialized" });
 
   constructor(readonly pi: ExtensionAPI) {}
@@ -276,6 +278,7 @@ export class Orchestrator {
       });
     }
     this.spawnedAgentIds.clear();
+    this.pendingSubagentSpawns = 0;
   }
 
   async cleanupActive(): Promise<void> {

@@ -1,10 +1,10 @@
-import { existsSync, readdirSync, readFileSync } from "fs";
-import { resolve, basename, join, relative } from "path";
+import { existsSync } from "fs";
+import { resolve, basename, join } from "path";
 import { Type } from "@sinclair/typebox";
 import { loadConfig } from "./config.js";
 import { runAfterEdit, autoCommit } from "./commands.js";
 import { taskName, getActiveTask, saveTask } from "./state.js";
-import { loadContextFiles, getPhaseArtifacts, getLatestSynthesizedPlan } from "./context.js";
+import { loadContextFiles, getPhaseArtifacts, getLatestSynthesizedPlan, loadReviewOutputs } from "./context.js";
 import { WORKING_PRINCIPLES, COMMUNICATION } from "./agents/tool-routing.js";
 import { registerCbmTools } from "./cbm.js";
 import { registerExaTools } from "./exa.js";
@@ -12,43 +12,8 @@ import { registerAstSearchTool } from "./ast-search.js";
 import { setExtensionOnlyMode, unregisterAgentDefinitions } from "./agents/registry.js";
 import { spawnPlanners } from "./phases/planning.js";
 import { spawnCodeReviewers } from "./phases/review.js";
-import { Orchestrator, deepReviewConfig } from "./orchestrator.js";
-
-async function openPlannotator(pi: any, action: string, payload: Record<string, unknown>): Promise<boolean> {
-  return new Promise((resolve) => {
-    let handled = false;
-    pi.events.emit("plannotator:request", {
-      requestId: crypto.randomUUID(),
-      action,
-      payload,
-      respond: (response: any) => {
-        handled = true;
-        resolve(response.status === "handled");
-      },
-    });
-    setTimeout(() => {
-      if (!handled) resolve(false);
-    }, 5000);
-  });
-}
-
-async function waitForPlannotatorResult(pi: any): Promise<{ approved: boolean; feedback?: string }> {
-  return new Promise((resolve) => {
-    const unsub = pi.events.on("plannotator:review-result", (data: any) => {
-      unsub();
-      resolve({ approved: !!data?.approved, feedback: data?.feedback });
-    });
-  });
-}
-
-function loadReviewOutputs(taskDir: string, pass: number): { name: string; content: string }[] {
-  const reviewsDir = join(taskDir, "reviews");
-  if (!existsSync(reviewsDir)) return [];
-  return readdirSync(reviewsDir)
-    .filter((f) => f.includes(`round-${pass}`) && f.endsWith(".md"))
-    .sort()
-    .map((name) => ({ name, content: readFileSync(join(reviewsDir, name), "utf-8") }));
-}
+import { openPlannotator, waitForPlannotatorResult, cancelPendingPlannotatorWait } from "./plannotator.js";
+import { Orchestrator, deepReviewConfig, type ActiveTask } from "./orchestrator.js";
 
 function setStep(orchestrator: Orchestrator, step: string): void {
   if (!orchestrator.active) return;
@@ -78,14 +43,21 @@ async function enterReviewCycle(orchestrator: Orchestrator, ctx: any, kind: "aut
       payload = { cwd: orchestrator.cwd, diffType: "branch" };
     }
 
-    const opened = await openPlannotator(pi, isPlan ? "plan-review" : "code-review", payload);
+    const { opened, requestId } = await openPlannotator(pi, isPlan ? "plan-review" : "code-review", payload);
     if (!opened) {
       orchestrator.active.state.reviewCycle = null;
       saveTask(orchestrator.active.dir, orchestrator.active.state);
       return "Plannotator is not available. Try another review mode.";
     }
 
-    const result = await waitForPlannotatorResult(pi);
+    let result: { approved: boolean; feedback?: string };
+    try {
+      result = await waitForPlannotatorResult(orchestrator, requestId);
+    } catch {
+      orchestrator.active.state.reviewCycle = null;
+      saveTask(orchestrator.active.dir, orchestrator.active.state);
+      return "Plannotator review cancelled.";
+    }
     orchestrator.active.state.reviewCycle = null;
     if (result.approved) {
       orchestrator.active.state.reviewPass += 1;
@@ -102,7 +74,14 @@ async function enterReviewCycle(orchestrator: Orchestrator, ctx: any, kind: "aut
   }
 
   const config = kind === "auto-deep" ? deepReviewConfig(orchestrator.config) : orchestrator.config;
-  orchestrator.pendingSubagentSpawns = Object.values(config.codeReviewers).filter((v) => v.enabled).length;
+  const enabledCount = Object.values(config.codeReviewers).filter((v) => v.enabled).length;
+  if (enabledCount === 0) {
+    orchestrator.active.state.reviewCycle = null;
+    saveTask(orchestrator.active.dir, orchestrator.active.state);
+    return "No code reviewers enabled. Choose another review mode or review manually.";
+  }
+
+  orchestrator.pendingSubagentSpawns = enabledCount;
   spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, config, pass).catch((err) => {
     orchestrator.pendingSubagentSpawns = 0;
     console.error(`[pi-pi] spawnCodeReviewers failed: ${err.message}`);
@@ -111,6 +90,15 @@ async function enterReviewCycle(orchestrator: Orchestrator, ctx: any, kind: "aut
   orchestrator.active.state.reviewCycle.step = "await_reviewers";
   saveTask(orchestrator.active.dir, orchestrator.active.state);
   return `Started review cycle pass ${pass} (${kind}). Awaiting reviewers.`;
+}
+
+function finalizeReviewCycle(task: ActiveTask): void {
+  if (!task.state.reviewCycle) return;
+  task.state.reviewPass = task.state.reviewCycle.pass;
+  task.reviewPass = task.state.reviewPass;
+  task.state.reviewCycle = null;
+  task.state.step = "user_gate";
+  saveTask(task.dir, task.state);
 }
 
 export async function runUserGateDialog(orchestrator: Orchestrator, ctx: any, summary: string): Promise<string> {
@@ -124,7 +112,8 @@ export async function runUserGateDialog(orchestrator: Orchestrator, ctx: any, su
     return `${count} subagent(s) still running or spawning.`;
   }
 
-  const nextPass = task.state.reviewPass + 1;
+  const pendingPass = task.state.reviewCycle?.pass ?? 0;
+  const nextPass = Math.max(task.state.reviewPass, pendingPass) + 1;
   const autoLabel = nextPass > 1 ? `Automatic review (pass ${nextPass})` : "Automatic review";
   const deepLabel = nextPass > 1 ? `Automatic deep review (pass ${nextPass})` : "Automatic deep review";
 
@@ -182,6 +171,7 @@ export async function runUserGateDialog(orchestrator: Orchestrator, ctx: any, su
       "Review on my own",
       "Continue planning",
     ]);
+    finalizeReviewCycle(task);
     if (choice === "Approve plan") {
       const result = await orchestrator.transitionToNextPhase(ctx);
       return result.ok ? "Plan approved. Transitioned to implement." : `Transition blocked: ${result.error}`;
@@ -202,6 +192,7 @@ export async function runUserGateDialog(orchestrator: Orchestrator, ctx: any, su
       "Review on my own",
       "Continue implementation",
     ]);
+    finalizeReviewCycle(task);
     if (choice === "Approve implementation") {
       const result = await orchestrator.transitionToNextPhase(ctx);
       return result.ok ? "Implementation approved. Task completed." : `Transition blocked: ${result.error}`;
@@ -290,6 +281,49 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     }
   });
 
+  function checkPlannerCompletion(): void {
+    if (
+      !orchestrator.active ||
+      orchestrator.active.state.phase !== "plan" ||
+      orchestrator.active.state.step !== "await_planners" ||
+      orchestrator.spawnedAgentIds.size > 0 ||
+      orchestrator.pendingSubagentSpawns > 0
+    ) return;
+
+    orchestrator.active.state.step = "synthesize";
+    saveTask(orchestrator.active.dir, orchestrator.active.state);
+    pi.sendUserMessage("[PI-PI] All planners completed. Read their outputs and synthesize the plan.", { deliverAs: "followUp" });
+  }
+
+  function checkReviewCycleCompletion(): void {
+    if (
+      !orchestrator.active?.state.reviewCycle ||
+      orchestrator.active.state.reviewCycle.step !== "await_reviewers" ||
+      orchestrator.spawnedAgentIds.size > 0 ||
+      orchestrator.pendingSubagentSpawns > 0
+    ) return;
+
+    const cycle = orchestrator.active.state.reviewCycle;
+    cycle.step = "apply_feedback";
+    orchestrator.active.state.step = "apply_feedback";
+    saveTask(orchestrator.active.dir, orchestrator.active.state);
+
+    const outputs = loadReviewOutputs(orchestrator.active.dir, cycle.pass);
+    const rendered = outputs.length
+      ? outputs.map((o) => `=== ${o.name} ===\n${o.content}`).join("\n\n")
+      : "No reviewer outputs found. Continue with manual review of current implementation.";
+
+    pi.sendMessage(
+      {
+        customType: "pp-review-ready",
+        content: `[PI-PI] Reviewer outputs are ready.\n\n${rendered}`,
+        display: false,
+      },
+      { deliverAs: "followUp" },
+    );
+    pi.sendUserMessage("[PI-PI] Review cycle is ready for apply_feedback. Read reviewer outputs and proceed.", { deliverAs: "followUp" });
+  }
+
   pi.events.on("subagents:completed", (data: any) => {
     if (!orchestrator.active || !data?.id) return;
     orchestrator.spawnedAgentIds.delete(data.id);
@@ -309,31 +343,8 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       { deliverAs: "steer" },
     );
 
-    if (
-      orchestrator.active?.state.reviewCycle?.step === "await_reviewers" &&
-      orchestrator.spawnedAgentIds.size === 0 &&
-      orchestrator.pendingSubagentSpawns === 0
-    ) {
-      const cycle = orchestrator.active.state.reviewCycle;
-      cycle.step = "apply_feedback";
-      orchestrator.active.state.step = "apply_feedback";
-      saveTask(orchestrator.active.dir, orchestrator.active.state);
-
-      const outputs = loadReviewOutputs(orchestrator.active.dir, cycle.pass);
-      const rendered = outputs.length
-        ? outputs.map((o) => `=== ${o.name} ===\n${o.content}`).join("\n\n")
-        : "No reviewer outputs found. Continue with manual review of current implementation.";
-
-      pi.sendMessage(
-        {
-          customType: "pp-review-ready",
-          content: `[PI-PI] Reviewer outputs are ready.\n\n${rendered}`,
-          display: false,
-        },
-        { deliverAs: "steer" },
-      );
-      pi.sendUserMessage("[PI-PI] Review cycle is ready for apply_feedback. Read reviewer outputs and proceed.");
-    }
+    checkPlannerCompletion();
+    checkReviewCycleCompletion();
   });
 
   pi.events.on("subagents:failed", (data: any) => {
@@ -350,10 +361,14 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       },
       { deliverAs: "steer" },
     );
+
+    checkPlannerCompletion();
+    checkReviewCycleCompletion();
   });
 
   pi.on("session_before_switch" as any, async () => {
     if (!orchestrator.active) return;
+    cancelPendingPlannotatorWait(orchestrator);
     orchestrator.abortAllSubagents();
     unregisterAgentDefinitions(pi);
     await orchestrator.cleanupActive();
@@ -551,13 +566,18 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (orchestrator.active.type === "brainstorm" && phase === "brainstorm") return;
 
     const msg = event.message as any;
-    const msgContent = typeof msg?.content === "string" ? msg.content : "";
+    const contentParts = Array.isArray(msg?.content) ? msg.content : [];
+    const hasText = contentParts.some((c: any) => c.type === "text" && c.text?.trim());
+    const hasToolCalls = contentParts.some((c: any) => c.type === "toolCall");
     const hasToolResults = event.toolResults && event.toolResults.length > 0;
-    const turnWasEmpty = !msgContent.trim() && !hasToolResults;
+    const turnWasEmpty = !hasText && !hasToolCalls && !hasToolResults;
 
     if (!turnWasEmpty) return;
     if (orchestrator.nudgeHalted) return;
     if (orchestrator.spawnedAgentIds.size > 0 || orchestrator.pendingSubagentSpawns > 0) return;
+
+    const step = orchestrator.active.state.step;
+    if (step === "await_planners" || step === "await_reviewers") return;
 
     const now = Date.now();
 
@@ -568,10 +588,10 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       pi.sendMessage(
         {
           customType: "pp-continuation",
-          content: `Your previous response was interrupted. Continue working on the current phase (${phase}). Pick up where you left off.`,
+          content: `[PI-PI] Your previous response was interrupted. Continue working on the current phase (${phase}). Pick up where you left off.`,
           display: false,
         },
-        { deliverAs: "steer" },
+        { deliverAs: "followUp" },
       );
     };
 
