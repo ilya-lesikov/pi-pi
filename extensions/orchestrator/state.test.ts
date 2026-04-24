@@ -37,16 +37,24 @@ describe("createTask", () => {
     expect(raw.endsWith("\n")).toBe(true);
   });
 
-  it("uses diagnosing as initial phase for debug", () => {
+  it("uses debug as initial phase for debug", () => {
     const cwd = makeCwd();
     const taskDir = createTask(cwd, "debug", "Fix timeout issue");
-    expect(loadTask(taskDir).phase).toBe("diagnosing");
+    const state = loadTask(taskDir);
+    expect(state.phase).toBe("debug");
+    expect(state.step).toBe("llm_work");
+    expect(state.reviewCycle).toBeNull();
+    expect(state.reviewPass).toBe(0);
   });
 
-  it("uses active as initial phase for brainstorm", () => {
+  it("uses brainstorm as initial phase for brainstorm", () => {
     const cwd = makeCwd();
     const taskDir = createTask(cwd, "brainstorm", "Explore ideas");
-    expect(loadTask(taskDir).phase).toBe("active");
+    const state = loadTask(taskDir);
+    expect(state.phase).toBe("brainstorm");
+    expect(state.step).toBe("llm_work");
+    expect(state.reviewCycle).toBeNull();
+    expect(state.reviewPass).toBe(0);
   });
 });
 
@@ -72,11 +80,13 @@ describe("saveTask", () => {
     const cwd = makeCwd();
     const taskDir = createTask(cwd, "implement", "Initial");
     const state: TaskState = {
-      phase: "review",
+      phase: "implement",
+      step: "user_gate",
+      reviewCycle: { kind: "auto", step: "await_reviewers", pass: 2 },
+      reviewPass: 1,
       from: "implement/some-task",
       description: "Updated",
       startedAt: "2026-04-20T00:00:00.000Z",
-      reviewRound: 2,
     };
 
     saveTask(taskDir, state);
@@ -202,6 +212,9 @@ describe("taskAge", () => {
   it("formats minutes", () => {
     const state: TaskState = {
       phase: "brainstorm",
+      step: null,
+      reviewCycle: null,
+      reviewPass: 0,
       from: null,
       description: "x",
       startedAt: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
@@ -212,6 +225,9 @@ describe("taskAge", () => {
   it("formats hours", () => {
     const state: TaskState = {
       phase: "brainstorm",
+      step: null,
+      reviewCycle: null,
+      reviewPass: 0,
       from: null,
       description: "x",
       startedAt: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
@@ -222,6 +238,9 @@ describe("taskAge", () => {
   it("formats days", () => {
     const state: TaskState = {
       phase: "brainstorm",
+      step: null,
+      reviewCycle: null,
+      reviewPass: 0,
       from: null,
       description: "x",
       startedAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
@@ -232,6 +251,9 @@ describe("taskAge", () => {
   it("returns '?' for empty startedAt", () => {
     const state: TaskState = {
       phase: "brainstorm",
+      step: null,
+      reviewCycle: null,
+      reviewPass: 0,
       from: null,
       description: "x",
       startedAt: "",
@@ -242,6 +264,9 @@ describe("taskAge", () => {
   it("returns '?' for non-date startedAt", () => {
     const state: TaskState = {
       phase: "brainstorm",
+      step: null,
+      reviewCycle: null,
+      reviewPass: 0,
       from: null,
       description: "x",
       startedAt: "not-a-date",
@@ -252,6 +277,9 @@ describe("taskAge", () => {
   it("returns '?' for undefined startedAt", () => {
     const state = {
       phase: "brainstorm",
+      step: null,
+      reviewCycle: null,
+      reviewPass: 0,
       from: null,
       description: "x",
       startedAt: undefined,

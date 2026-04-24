@@ -5,11 +5,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerCommandHandlers } from "./command-handlers.js";
 import { Orchestrator, type ActiveTask } from "./orchestrator.js";
 
-vi.mock("./phases/review.js", () => ({
-  spawnCodeReviewers: vi.fn().mockResolvedValue(undefined),
+vi.mock("./event-handlers.js", () => ({
+  runUserGateDialog: vi.fn().mockResolvedValue("User wants to continue. Run /pp:next when ready to advance."),
 }));
 
-import { spawnCodeReviewers } from "./phases/review.js";
+import { runUserGateDialog } from "./event-handlers.js";
 
 type Handler = (args: string | undefined, ctx: any) => any;
 
@@ -22,7 +22,7 @@ function makeTempDir(): string {
 }
 
 afterEach(() => {
-  vi.mocked(spawnCodeReviewers).mockClear();
+  vi.mocked(runUserGateDialog).mockClear();
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
     if (dir) rmSync(dir, { recursive: true, force: true });
@@ -68,7 +68,7 @@ function makeConfig() {
   };
 }
 
-function makeActiveReviewTask(taskDir: string, reviewRound = 1): ActiveTask {
+function makeActiveTask(taskDir: string): ActiveTask {
   const stateDir = join(taskDir, "plans");
   mkdirSync(stateDir, { recursive: true });
   writeFileSync(join(stateDir, "1_synthesized.md"), "- [x] done\n", "utf-8");
@@ -77,11 +77,19 @@ function makeActiveReviewTask(taskDir: string, reviewRound = 1): ActiveTask {
   return {
     dir: taskDir,
     type: "implement",
-    state: { phase: "review", from: null, description: "Test", startedAt: new Date().toISOString() },
+    state: {
+      phase: "implement",
+      step: "user_gate",
+      reviewCycle: null,
+      reviewPass: 1,
+      from: null,
+      description: "Test",
+      startedAt: new Date().toISOString(),
+    },
     release: null,
     taskId: "123",
     modifiedFiles: new Set(),
-    reviewRound,
+    reviewPass: 1,
     description: "Test",
   };
 }
@@ -100,66 +108,55 @@ function makeCtx() {
   };
 }
 
-describe("pp:next review-round orchestration", () => {
-  it("triggers a second review round when user selects another round", async () => {
+describe("pp:next user gate", () => {
+  it("routes pp:next to shared user gate dialog", async () => {
     const pi = makePi();
     const orchestrator = new Orchestrator(pi as any);
     const taskDir = makeTempDir();
     orchestrator.cwd = taskDir;
     orchestrator.config = makeConfig() as any;
-    orchestrator.active = makeActiveReviewTask(taskDir, 1);
-    orchestrator.persistReviewRound = vi.fn();
+    orchestrator.active = makeActiveTask(taskDir);
     registerCommandHandlers(orchestrator);
 
     const ctx = makeCtx();
-    ctx.ui.select.mockResolvedValueOnce("Another review round");
 
     const ppNext = pi._commands.get("pp:next");
     await ppNext!.handler(undefined, ctx);
 
-    expect(spawnCodeReviewers).toHaveBeenCalledOnce();
-    expect(orchestrator.active!.reviewRound).toBe(2);
-    expect(orchestrator.persistReviewRound).toHaveBeenCalledOnce();
-    expect(orchestrator.active!.state.phase).toBe("review");
+    expect(runUserGateDialog).toHaveBeenCalledOnce();
+    expect(ctx.ui.notify).toHaveBeenCalledWith("User wants to continue. Run /pp:next when ready to advance.", "info");
   });
 
-  it("starts new review round via pp:next select", async () => {
+  it("returns error when no active task", async () => {
     const pi = makePi();
     const orchestrator = new Orchestrator(pi as any);
-    const taskDir = makeTempDir();
-    orchestrator.cwd = taskDir;
+    orchestrator.cwd = makeTempDir();
     orchestrator.config = makeConfig() as any;
-    orchestrator.active = makeActiveReviewTask(taskDir, 2);
-    orchestrator.persistReviewRound = vi.fn();
     registerCommandHandlers(orchestrator);
 
     const ctx = makeCtx();
-    ctx.ui.select.mockResolvedValueOnce("Another review round");
 
     const ppNext = pi._commands.get("pp:next");
     await ppNext!.handler(undefined, ctx);
 
-    expect(orchestrator.active!.reviewRound).toBe(3);
-    expect(orchestrator.persistReviewRound).toHaveBeenCalledOnce();
+    expect(ctx.ui.notify).toHaveBeenCalledWith("No active task.", "error");
+    expect(runUserGateDialog).not.toHaveBeenCalled();
   });
 
-  it("falls back to manual review when user selects it", async () => {
+  it("passes standard summary text to user gate dialog", async () => {
     const pi = makePi();
     const orchestrator = new Orchestrator(pi as any);
     const taskDir = makeTempDir();
     orchestrator.cwd = taskDir;
     orchestrator.config = makeConfig() as any;
-    orchestrator.active = makeActiveReviewTask(taskDir, 1);
+    orchestrator.active = makeActiveTask(taskDir);
     registerCommandHandlers(orchestrator);
 
     const ctx = makeCtx();
-    ctx.ui.select.mockResolvedValueOnce("Continue with manual review");
 
     const ppNext = pi._commands.get("pp:next");
     await ppNext!.handler(undefined, ctx);
 
-    expect(spawnCodeReviewers).not.toHaveBeenCalled();
-    expect(ctx.ui.notify).toHaveBeenCalledWith("Continue with manual review.", "info");
-    expect(orchestrator.active!.state.phase).toBe("review");
+    expect(runUserGateDialog).toHaveBeenCalledWith(orchestrator, ctx, "Choose next action");
   });
 });

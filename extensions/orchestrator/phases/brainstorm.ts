@@ -3,7 +3,7 @@ import type { TaskType } from "../state.js";
 export function brainstormSystemPrompt(taskType: TaskType, taskDescription: string, taskDir: string): string {
   if (taskType === "debug") {
     return [
-      "[PI-PI — DIAGNOSING PHASE]",
+      "[PI-PI — DEBUG PHASE]",
       `Problem: ${taskDescription}`,
       "",
     "Read-only diagnosis mode.",

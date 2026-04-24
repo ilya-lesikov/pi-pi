@@ -35,7 +35,7 @@ export interface ActiveTask {
   release: (() => Promise<void>) | null;
   taskId: string;
   modifiedFiles: Set<string>;
-  reviewRound: number;
+  reviewPass: number;
   description: string;
 }
 
@@ -50,7 +50,6 @@ export class Orchestrator {
   nudgeTimestamps: number[] = [];
   cooldownHits: number[] = [];
   nudgeHalted = false;
-  manualReview = false;
   pendingSubagentSpawns = 0;
   transitionToNextPhase: (ctx: any) => Promise<{ ok: boolean; error?: string }> = async () => ({ ok: false, error: "not initialized" });
 
@@ -142,17 +141,21 @@ export class Orchestrator {
   getPhasePrompt(_ctx: ExtensionContext): string {
     if (!this.active) return "";
 
+    if (this.active.state.reviewCycle?.step === "apply_feedback") {
+      const pass = this.active.state.reviewCycle.pass;
+      const manualReview = this.active.state.reviewCycle.kind === "manual";
+      return reviewSystemPrompt(this.active.dir, pass, manualReview);
+    }
+
     switch (this.active.state.phase) {
       case "brainstorm":
-      case "active":
-      case "diagnosing":
         return brainstormSystemPrompt(this.active.type, this.active.description, this.active.dir);
-      case "planning":
+      case "debug":
+        return brainstormSystemPrompt(this.active.type, this.active.description, this.active.dir);
+      case "plan":
         return planningSystemPrompt(this.active.dir);
-      case "implementation":
+      case "implement":
         return implementationSystemPrompt(this.active.dir);
-      case "review":
-        return reviewSystemPrompt(this.active.dir, this.active.reviewRound, this.manualReview);
       default:
         return "";
     }
@@ -163,9 +166,9 @@ export class Orchestrator {
     return name.split("_")[0];
   }
 
-  persistReviewRound(): void {
+  persistReviewPass(): void {
     if (!this.active) return;
-    this.active.state.reviewRound = this.active.reviewRound;
+    this.active.state.reviewPass = this.active.reviewPass;
     saveTask(this.active.dir, this.active.state);
   }
 
@@ -207,7 +210,7 @@ export class Orchestrator {
       if (existsSync(srcRes)) copyFileSync(srcRes, join(dir, "RESEARCH.md"));
       state.from = relative(join(this.cwd, ".pp", "state"), fromTaskDir);
       if (skipBrainstorm && type === "implement") {
-        state.phase = "planning";
+        state.phase = "plan";
       }
       saveTask(dir, state);
     }
@@ -232,7 +235,7 @@ export class Orchestrator {
       release,
       taskId: this.taskIdFromDir(dir),
       modifiedFiles: new Set(),
-      reviewRound: 1,
+      reviewPass: state.reviewPass,
       description: state.description,
     };
 
@@ -256,7 +259,7 @@ export class Orchestrator {
       this.pi.sendUserMessage(`[PI-PI] Entered ${this.active.state.phase} phase. Begin working.`);
     }
 
-    if (this.active.state.phase === "planning") {
+    if (this.active.state.phase === "plan") {
       this.pendingSubagentSpawns = Object.values(this.config.planners).filter((v) => v.enabled).length;
       spawnPlanners(this.pi, this.cwd, this.active.dir, this.active.taskId, this.config).catch((err) => {
         this.pendingSubagentSpawns = 0;

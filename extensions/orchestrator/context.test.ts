@@ -150,18 +150,18 @@ describe("loadContextFiles", () => {
 });
 
 describe("getPhaseArtifacts", () => {
-  it("returns user request and research artifacts for planning", () => {
+  it("returns user request and research artifacts for plan", () => {
     const taskDir = makeTempDir();
     writeFileSync(join(taskDir, "USER_REQUEST.md"), "user request", "utf-8");
     writeFileSync(join(taskDir, "RESEARCH.md"), "research notes", "utf-8");
 
-    expect(getPhaseArtifacts(taskDir, "planning")).toEqual([
+    expect(getPhaseArtifacts(taskDir, "plan")).toEqual([
       { name: "USER_REQUEST.md", content: "user request" },
       { name: "RESEARCH.md", content: "research notes" },
     ]);
   });
 
-  it("includes latest synthesized plan for implementation and review", () => {
+  it("includes latest synthesized plan for plan and implement", () => {
     const taskDir = makeTempDir();
     const plansDir = join(taskDir, "plans");
     mkdirSync(plansDir, { recursive: true });
@@ -169,12 +169,12 @@ describe("getPhaseArtifacts", () => {
     writeFileSync(join(plansDir, "20260101_synthesized.md"), "old plan", "utf-8");
     writeFileSync(join(plansDir, "20260102_synthesized.md"), "new plan", "utf-8");
 
-    expect(getPhaseArtifacts(taskDir, "implementation")).toEqual([
+    expect(getPhaseArtifacts(taskDir, "implement")).toEqual([
       { name: "USER_REQUEST.md", content: "request" },
       { name: "Synthesized Plan", content: "new plan" },
     ]);
 
-    expect(getPhaseArtifacts(taskDir, "review")).toEqual([
+    expect(getPhaseArtifacts(taskDir, "plan")).toEqual([
       { name: "USER_REQUEST.md", content: "request" },
       { name: "Synthesized Plan", content: "new plan" },
     ]);
@@ -232,7 +232,7 @@ describe("context regressions", () => {
     expect(getLatestSynthesizedPlan(taskDir)).toBe("new");
   });
 
-  it("selects numerically latest synthesized plan in getPhaseArtifacts implementation phase", () => {
+  it("selects numerically latest synthesized plan in getPhaseArtifacts implement phase", () => {
     const taskDir = makeTempDir();
     const plansDir = join(taskDir, "plans");
     mkdirSync(plansDir, { recursive: true });
@@ -240,6 +240,6 @@ describe("context regressions", () => {
     writeFileSync(join(plansDir, "999_synthesized.md"), "old", "utf-8");
     writeFileSync(join(plansDir, "1000_synthesized.md"), "new", "utf-8");
 
-    expect(getPhaseArtifacts(taskDir, "implementation")).toEqual([{ name: "Synthesized Plan", content: "new" }]);
+    expect(getPhaseArtifacts(taskDir, "implement")).toEqual([{ name: "Synthesized Plan", content: "new" }]);
   });
 });

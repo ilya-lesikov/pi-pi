@@ -8,7 +8,7 @@ All commands are prefixed with `pp:`.
 
 ### /pp:implement `<description>` [--from `<task-path>`]
 
-Full pipeline: brainstorm → planning → implementation → review.
+Full pipeline: brainstorm → plan → implement.
 
 `--from <task-path>` inherits USER_REQUEST.md and RESEARCH.md from a previous debug or brainstorm task. When the source is a debug task, brainstorm phase is skipped.
 
@@ -16,19 +16,19 @@ Starting a new task while another is active auto-finishes the old one.
 
 ### /pp:debug `<description>`
 
-Read-only diagnosis. The agent investigates the problem using bash, git, and subagents, but does not modify project source code. Produces USER_REQUEST.md (the derived fix request) and RESEARCH.md (root cause analysis, evidence, recommended fix approach). On completion, suggests `/pp:implement --from debug/<task-id>` to continue with a fix.
+Read-only diagnosis. The agent investigates the problem using bash, git, and subagents, but does not modify project source code. Produces USER_REQUEST.md (the derived fix request) and RESEARCH.md (root cause analysis, evidence, recommended fix approach). On completion, the user can choose to start an implementation task from the diagnosis.
 
 ### /pp:brainstorm `<description>`
 
-Open-ended conversation. No phases, no required output. Spawns explore/librarian subagents on demand. Does not modify source code. If the user asks to capture conclusions, writes USER_REQUEST.md and RESEARCH.md.
+Open-ended conversation. Spawns explore/librarian subagents on demand. Does not modify source code. If the user asks to capture conclusions, writes USER_REQUEST.md and RESEARCH.md. On completion, the user can choose to start an implementation task if artifacts exist.
 
 ### /pp:next
 
-Manual override: validates exit criteria for the current phase and transitions to the next. Includes confirmation dialogs (plan approval, review approval, new round selection). Typically not needed — the `pp_phase_complete` tool handles this automatically.
+Manual trigger for the phase-ending dialog. When the user picks a "continue" option (e.g. "Continue implementation", "Review on my own"), the extension prints that `/pp:next` can be used to re-open the dialog. This is also the manual override for advancing phases without the agent calling `pp_phase_complete`.
 
 ### /pp:resume
 
-Lists all paused (non-done) tasks. User picks one to resume. Respawns planners/reviewers if the resumed task is in a planning or review phase.
+Lists all paused (non-done) tasks. User picks one to resume. The step machine resumes at the persisted step — if the task was mid-review-cycle, it picks up there.
 
 ### /pp:done
 
@@ -36,7 +36,7 @@ Aborts all subagents, marks the task done, releases the lock.
 
 ### /pp:status
 
-Shows current task info (type, phase, age, directory, review round).
+Shows current task info (type, phase, step, age, directory, review pass).
 
 ### /pp:review-plan
 
@@ -48,51 +48,128 @@ Opens the code diff in Plannotator's code review browser UI. Shows committed cha
 
 ---
 
+## Architecture: Phases and Steps
+
+Each task type defines a sequence of **phases**. Each phase defines a sequence of **steps**. Steps are the atomic unit of execution. The step machine advances through steps automatically — the LLM only has agency during `llm_work` steps. Everything else is system-driven.
+
+### Step Kinds
+
+| Kind | Who runs it | LLM involved? | Duration |
+|------|-------------|----------------|----------|
+| `spawn_subagents` | System | No | Instant |
+| `await_subagents` | System (event-driven) | No | Seconds to minutes |
+| `llm_work` | LLM agent | Yes | Variable |
+| `user_gate` | System (UI dialog) | No | Until user responds |
+| `external_gate` | System (Plannotator) | No | Until user responds |
+
+On session restore, the system reads `phase` + `step` from state.json and resumes the correct behavior. If the step is `await_subagents`, the system checks subagent state — it does not prompt the LLM. If the step is `llm_work`, it injects artifacts and prompts the LLM. If the step is `user_gate`, it re-shows the dialog.
+
+### Review Cycles
+
+Review cycles are nested sequences within a phase. They are tracked separately in state.json as a `reviewCycle` object. A review cycle runs its own step sequence, then returns to the parent phase's `user_gate` step.
+
+Review cycle kinds:
+- `auto` — spawn reviewer subagents, await, LLM applies feedback
+- `auto-deep` — same but with higher thinking levels
+- `plannotator` — open Plannotator, await user verdict
+
+The `reviewPass` counter tracks how many review cycles have completed within a phase. Dialog options show the pass number: "Automatic review (pass 2)", "Automatic deep review (pass 3)", etc.
+
+---
+
 ## Implement Flow
 
-### Phase 1: Brainstorm
+### Phase: brainstorm
 
 **Goal:** Produce USER_REQUEST.md and RESEARCH.md — complete enough for downstream agents.
 
-The main agent interviews the user, spawns explore/librarian subagents for codebase and external research, and iteratively builds the two documents.
+Steps:
+```
+llm_work       — research, spawn explore/librarian subagents, produce USER_REQUEST.md + RESEARCH.md
+user_gate      — dialog options (see below)
+```
+
+User gate options:
+- **"Approve brainstorm"** → transition to plan phase
+- **"Continue brainstorming"** → return to llm_work, print "/pp:next to advance"
 
 RESEARCH.md follows a structured template: Affected Code, Architecture Context, Constraints & Edge Cases, Open Questions, Recommended Approach.
 
-When complete, the agent calls `pp_phase_complete` which shows a dialog to the user. On approval, the extension transitions to the planning phase automatically.
-
-### Phase 2: Planning
+### Phase: plan
 
 **Goal:** Produce a synthesized plan in `plans/<timestamp>_synthesized.md`.
 
-Multiple planner subagents run in parallel (opus, gpt, gemini — each configurable/disablable). Each reads USER_REQUEST.md and RESEARCH.md and writes its own plan. The main agent waits for the "N planner(s) completed" notification, then synthesizes all plans into a final plan.
+Steps:
+```
+spawn_planners   — auto-spawn all enabled planner subagents
+await_planners   — block until all planners complete (no LLM)
+synthesize       — LLM reads planner outputs, synthesizes single plan
+user_gate        — dialog options (see below)
+```
 
-The main agent is a SYNTHESIZER — it must NOT write its own plan from scratch or proceed before all planners complete.
+User gate options:
+- **"Approve plan"** → transition to implement phase
+- **"Automatic review"** / **"Automatic review (pass N)"** → enter review cycle (auto)
+- **"Automatic deep review"** / **"Automatic deep review (pass N)"** → enter review cycle (auto-deep)
+- **"Review in Plannotator"** → enter review cycle (plannotator)
+- **"Review on my own"** → return to synthesize step, print "/pp:next to advance"
+- **"Continue planning"** → return to synthesize step, print "/pp:next to advance"
+
+Review cycle (auto / auto-deep):
+```
+spawn_reviewers   — spawn plan reviewer subagents
+await_reviewers   — block until complete
+apply_feedback    — LLM synthesizes feedback, revises plan
+→ reviewCycle = null, return to user_gate
+```
+
+Review cycle (plannotator):
+```
+await_result      — open Plannotator, block until user responds
+→ if approved: transition to implement phase
+→ if denied: apply_feedback (LLM applies feedback) → return to user_gate
+```
+
+Multiple planner subagents run in parallel (opus, gpt, gemini — each configurable/disablable). Each reads USER_REQUEST.md and RESEARCH.md and writes its own plan. The main agent is a SYNTHESIZER — it must NOT write its own plan from scratch.
 
 Plans use checkboxes for progress tracking. They describe *what* to do, not *how* at the code level.
 
-When the synthesized plan is ready, the agent calls `pp_phase_complete`. The user can approve (auto-transitions to implementation), review in Plannotator, or review manually.
+### Phase: implement
 
-### Phase 3: Implementation
+**Goal:** Execute the plan, review the implementation, iterate until approved.
 
-**Goal:** Execute the plan.
+Steps:
+```
+llm_work       — implement plan items, delegate subtasks, commit
+user_gate      — dialog options (see below)
+```
+
+User gate options:
+- **"Approve implementation"** → run afterImplement commands, transition to done
+- **"Automatic review"** / **"Automatic review (pass N)"** → enter review cycle (auto)
+- **"Automatic deep review"** / **"Automatic deep review (pass N)"** → enter review cycle (auto-deep)
+- **"Review in Plannotator"** → enter review cycle (plannotator)
+- **"Review on my own"** → return to llm_work, print "/pp:next to advance"
+- **"Continue implementation"** → return to llm_work, print "/pp:next to advance"
+
+Review cycle (auto / auto-deep):
+```
+spawn_reviewers   — spawn code reviewer subagents
+await_reviewers   — block until complete
+apply_feedback    — LLM synthesizes reviews, implements fixes
+→ reviewCycle = null, return to user_gate
+```
+
+Review cycle (plannotator):
+```
+await_result      — open Plannotator, block until user responds
+→ if approved: transition to done
+→ if denied: apply_feedback (LLM fixes) → return to user_gate
+```
 
 The main agent implements the plan, checking off items as it completes them. Subtasks can be delegated to task subagents. LSP diagnostics run on each edit. `afterEdit` commands (formatters, type checkers) run after each file change — advisory, not blocking. If a fix fails 3 times, the agent stops and re-plans the approach.
 
-When all items are checked, the agent calls `pp_phase_complete`. On approval, `afterImplement` commands run (full test suite, linters) — these ARE gates, failures block the transition.
-
-### Phase 4: Review
-
-**Goal:** Validate the implementation.
-
-The user chooses: manual review only, normal auto-review, or deep auto-review (higher thinking levels).
-
-**Auto-review:** Code-reviewer subagents run in parallel, each writing a review with structured output (CRITICAL/MAJOR/MINOR/OPEN QUESTIONS/VERDICT), evidence requirements (file:line for every CRITICAL/MAJOR), and confidence tagging (HIGH/MEDIUM/LOW). The main agent waits for the "N code reviewer(s) completed" notification, then synthesizes reviews.
-
-**Manual review:** No auto-reviewers run. The main agent conducts the review itself using the available tools. The phase prompt reflects this mode.
-
-When the review is ready, the agent calls `pp_phase_complete`. The user can approve (finishes task), review in Plannotator, or review manually.
-
-If changes are needed, the agent creates a separate fix plan (the original plan is never modified), implements fixes, and a new review round begins. Auto-review rounds are capped by `maxAutoReviewRounds` (default 2).
+When all items are checked, the agent calls `pp_phase_complete`. On "Approve implementation", `afterImplement` commands run (full test suite, linters) — these ARE gates, failures block the transition.
 
 ### Phase Transitions
 
@@ -100,10 +177,10 @@ Phase transitions are triggered either by the `pp_phase_complete` tool (agent-in
 
 On transition, the extension:
 1. Validates exit criteria (required files exist, plan items checked, etc.)
-2. Runs `afterImplement` commands if leaving implementation phase
+2. Runs `afterImplement` commands if leaving implement phase
 3. Aggressively compacts the conversation context
 4. Re-injects task artifacts (USER_REQUEST.md, RESEARCH.md, synthesized plan) as fresh messages
-5. Spawns subagents for the next phase (planners for planning, reviewers for review)
+5. Auto-advances through non-LLM steps (spawn, await) before giving control to the LLM
 
 During long phases, pi's auto-compaction may trigger. When it does, artifacts are re-injected after compaction to ensure they're never lost.
 
@@ -113,13 +190,114 @@ On task start and resume, the configured model is set. If the model isn't found,
 
 ## Debug Flow
 
-Main agent (configurable model, high reasoning) investigates the problem with bash access but no source code modification. Spawns explore/librarian subagents as needed. Produces USER_REQUEST.md and RESEARCH.md. On completion via `pp_phase_complete`, suggests the `--from` command to continue with implementation.
+### Phase: debug
+
+Steps:
+```
+llm_work       — read-only diagnosis, explore/librarian subagents, produce USER_REQUEST.md + RESEARCH.md
+user_gate      — dialog options (see below)
+```
+
+User gate options:
+- **"Implement a fix"** → creates new implement task with --from, starts at plan phase
+- **"Continue debugging"** → return to llm_work, print "/pp:next to advance"
+- **"Finish debugging"** → transition to done
+
+The agent investigates with bash access but no source code modification. Spawns explore/librarian subagents as needed.
 
 ---
 
 ## Brainstorm Flow
 
-Open-ended conversation. No phases. Spawns explore/librarian on demand. If conclusions are captured, writes USER_REQUEST.md and RESEARCH.md. Can feed into `/pp:implement --from <brainstorm-task>`.
+### Phase: brainstorm
+
+Steps:
+```
+llm_work       — open-ended conversation, optionally produce artifacts
+user_gate      — dialog options (see below)
+```
+
+User gate options:
+- **"Start implementation"** → creates new implement task with --from, starts at plan phase (only shown if USER_REQUEST.md + RESEARCH.md exist)
+- **"Continue brainstorming"** → return to llm_work, print "/pp:next to advance"
+- **"Finish brainstorming"** → transition to done
+
+---
+
+## State & Directory Structure
+
+All state lives in `.pp/` at the project root.
+
+```
+.pp/
+├── config.json               # User config (gitignored)
+├── context/                   # Injection files (committed)
+│   ├── hard-rules.md
+│   └── project-overview.md
+├── .gitignore                 # Ignores state/ and config.json
+└── state/                     # Runtime state (gitignored)
+    ├── implement/
+    │   └── <id>_<name>/
+    │       ├── state.json
+    │       ├── USER_REQUEST.md
+    │       ├── RESEARCH.md
+    │       ├── plans/
+    │       └── reviews/
+    ├── debug/
+    │   └── <id>_<name>/
+    └── brainstorm/
+        └── <id>_<name>/
+```
+
+### state.json
+
+```json
+{
+  "phase": "implement",
+  "step": "llm_work",
+  "reviewCycle": null,
+  "reviewPass": 0,
+  "from": null,
+  "description": "fix auth token expiry",
+  "startedAt": "2026-04-15T12:00:00Z"
+}
+```
+
+Phase values by task type:
+- implement: `brainstorm → plan → implement → done`
+- debug: `debug → done`
+- brainstorm: `brainstorm → done`
+
+Step values are descriptive strings (e.g. `"llm_work"`, `"await_planners"`, `"user_gate"`, `"spawn_reviewers"`). The step machine in code defines transitions; state.json only records the current position.
+
+When `reviewCycle` is non-null, the system is inside a review cycle:
+
+```json
+{
+  "phase": "implement",
+  "step": "user_gate",
+  "reviewCycle": { "kind": "auto-deep", "step": "await_reviewers", "pass": 2 },
+  "reviewPass": 1
+}
+```
+
+`reviewPass` counts completed review cycles. `reviewCycle` is only present during an active cycle — once the cycle finishes, it becomes null and `reviewPass` increments.
+
+### Exit Criteria
+
+Validated before every phase transition:
+
+| Phase | Criteria |
+|-------|----------|
+| brainstorm (implement) | USER_REQUEST.md and RESEARCH.md exist and are non-empty |
+| plan | Synthesized plan exists in plans/ |
+| implement | All plan checkboxes checked (no `- [ ]` remaining) |
+| debug | USER_REQUEST.md and RESEARCH.md exist and are non-empty |
+| brainstorm (brainstorm task) | Always passes |
+
+### Locking
+
+File-based locking via `proper-lockfile` with configurable stale timeout. If a process crashes, the lock becomes stale and the next session can take over. Tasks from crashed sessions appear as "paused" on next startup — the user must explicitly `/pp:resume` to continue.
 
 ---
 
@@ -132,9 +310,9 @@ Open-ended conversation. No phases. Spawns explore/librarian on demand. If concl
 | explore | Internal codebase search | LLM via Agent() | read, grep, find, ls, bash, lsp, ast_search, cbm_*, exa_* |
 | librarian | External docs research | LLM via Agent() | read, grep, find, bash, exa_search, exa_fetch |
 | task | Delegated implementation subtask | LLM via Agent() | all (read, write, edit, bash, grep, find, ls, lsp, ast_search, cbm_*, exa_*) |
-| planner | Creates plans from requirements | Extension on planning phase entry | read, grep, find, bash, write (restricted), lsp, ast_search, cbm_*, exa_* |
+| planner | Creates plans from requirements | Extension on plan phase entry | read, grep, find, bash, write (restricted), lsp, ast_search, cbm_*, exa_* |
 | plan-reviewer | Validates plan executability | Extension on demand | read, grep, find, bash, write (restricted), lsp, ast_search, cbm_*, exa_* |
-| code-reviewer | Reviews implementation diffs | Extension on review phase entry | read, grep, find, ls, bash, write (restricted), lsp, ast_search, cbm_*, exa_* |
+| code-reviewer | Reviews implementation diffs | Extension on demand | read, grep, find, ls, bash, write (restricted), lsp, ast_search, cbm_*, exa_* |
 
 Planner, plan-reviewer, and code-reviewer have per-model variants (opus, gpt, gemini), each independently configurable/disablable.
 
@@ -194,16 +372,13 @@ Prompts are structured for prompt caching: static blocks first, dynamic content 
 
 ### Phase Completion Tool
 
-The `pp_phase_complete` tool is the primary mechanism for phase transitions. When the agent calls it with a summary, the extension shows an interactive dialog to the user with phase-appropriate options:
-
-| Phase | Options |
-|-------|---------|
-| Brainstorm/Debug | Approve & continue, Let me review first |
-| Planning | Approve plan & continue, Review in Plannotator, Let me review first |
-| Implementation | Approve & start review, Let me check first |
-| Review | Approve & finish, Review in Plannotator, Let me review first |
+The `pp_phase_complete` tool is the primary mechanism for triggering the user gate. When the agent calls it with a summary, the extension shows an interactive dialog with phase-appropriate options (see each phase's user gate section above).
 
 On approval, the extension validates exit criteria and transitions automatically — no manual `/pp:next` needed.
+
+### Commit Tool
+
+The `pp_commit` tool lets the agent commit modified files during implementation. Takes a commit message. Only works when `autoCommit` is enabled in config and there are tracked modified files. On commit, the modified files set is cleared.
 
 ### Agent Registration
 
@@ -218,51 +393,6 @@ The extension intercepts Agent() tool calls and routes them to the appropriate r
 - **plan-reviewer:** USER_REQUEST.md, RESEARCH.md, synthesized plan.
 - **task:** USER_REQUEST.md, synthesized plan, specific subtask description.
 - **code-reviewer:** USER_REQUEST.md, RESEARCH.md, synthesized plan (uses `git diff` to see changes).
-
----
-
-## State & Directory Structure
-
-All state lives in `.pp/` at the project root.
-
-```
-.pp/
-├── config.json               # User config (gitignored)
-├── context/                   # Injection files (committed)
-│   ├── hard-rules.md
-│   └── project-overview.md
-├── .gitignore                 # Ignores state/ and config.json
-└── state/                     # Runtime state (gitignored)
-    ├── implement/
-    │   └── <id>_<name>/
-    │       ├── state.json
-    │       ├── USER_REQUEST.md
-    │       ├── RESEARCH.md
-    │       ├── plans/
-    │       └── reviews/
-    ├── debug/
-    │   └── <id>_<name>/
-    └── brainstorm/
-        └── <id>_<name>/
-```
-
-### state.json
-
-```json
-{
-  "phase": "planning",
-  "from": null,
-  "description": "fix auth token expiry",
-  "startedAt": "2026-04-15T12:00:00Z",
-  "reviewRound": 1
-}
-```
-
-Phase values: implement (`brainstorm → planning → implementation → review → done`), debug (`diagnosing → done`), brainstorm (`active → done`).
-
-### Locking
-
-File-based locking via `proper-lockfile` with configurable stale timeout. If a process crashes, the lock becomes stale and the next session can take over. Tasks from crashed sessions appear as "paused" on next startup — the user must explicitly `/pp:resume` to continue.
 
 ---
 
@@ -287,7 +417,7 @@ Targeting via `agents` (specific types) and/or `agentGroups` (`all`, `subagents`
 
 ### AGENTS.md
 
-Project's AGENTS.md is injected into the main agent's system prompt. Configurable via `injectAgentsMd`.
+Project's AGENTS.md is injected into the main agent's system prompt.
 
 ---
 
@@ -308,12 +438,6 @@ When the agent's turn ends with an empty response (content filter, timeout, rate
 - 5th empty turn in 60 seconds: notify user, wait 60 seconds, then nudge (resets window)
 - 5 cooldown cycles in 20 minutes: halt nudging, notify user
 - Any user message resumes nudging
-
----
-
-## Auto-Commit
-
-During implementation, modified files are committed on each `turn_end` via `git add` + `git commit`. Commit messages are derived from the task description. Configurable via `autoCommit`.
 
 ---
 
@@ -345,7 +469,7 @@ Runs after each file edit during implementation. Advisory — output is appended
 
 ### afterImplement
 
-Runs after all plan items are checked. Gate — failures block phase transition.
+Runs after all plan items are checked and user approves implementation. Gate — failures block phase transition.
 
 ```json
 { "run": "go test ./..." }
@@ -355,7 +479,7 @@ Runs after all plan items are checked. Gate — failures block phase transition.
 
 ## Configuration
 
-`.pp/config.json` — gitignored, generated with defaults on first run.
+Config is loaded by merging three layers: defaults → global config → project config. Global config lives at `~/.pi/extensions/pp/config.json`. Project config lives at `.pp/config.json` (gitignored). Both are optional.
 
 Key settings:
 - `mainModel` — model/thinking per command type (implement, debug, brainstorm)
@@ -363,9 +487,7 @@ Key settings:
 - `agents` — model/thinking for explore, librarian, task subagents
 - `commands` — afterEdit (with glob), afterImplement
 - `timeouts` — afterEdit, afterImplement, agentSpawn, lockStale, lockUpdate
-- `autoCommit` — enable/disable auto-commit (default: true)
-- `injectAgentsMd` — inject AGENTS.md into main agent (default: true)
-- `maxAutoReviewRounds` — cap on automated review iterations (default: 2)
+- `autoCommit` — enable/disable pp_commit tool (default: true)
 
 ---
 
@@ -376,5 +498,4 @@ pi-pi bundles modified forks of third-party extensions in `3p/`. These are loade
 Bundled:
 - `pi-subagents` — modified to support in-memory agent registration and extension-only mode
 - `pi-tasks` — modified to handle store upgrade in command handlers
-- `pi-hashline-readmap` — no longer loaded; replaced by pi's built-in tools + standalone ast_search
 - `pi-lsp`, `pi-ask-user`, `pi-mcp-adapter`, `pi-plannotator` — forks with type fixes

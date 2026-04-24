@@ -33,6 +33,7 @@ import { spawnPlanners } from "./phases/planning.js";
 import { spawnCodeReviewers } from "./phases/review.js";
 import { validateExitCriteria, nextPhase } from "./phases/machine.js";
 import { getLatestSynthesizedPlan } from "./context.js";
+import { runUserGateDialog } from "./event-handlers.js";
 import {
   saveTask,
   listTasks,
@@ -43,11 +44,20 @@ import {
 } from "./state.js";
 import { Orchestrator, deepReviewConfig } from "./orchestrator.js";
 
+function loadReviewOutputs(taskDir: string, pass: number): { name: string; content: string }[] {
+  const reviewsDir = join(taskDir, "reviews");
+  if (!existsSync(reviewsDir)) return [];
+  return readdirSync(reviewsDir)
+    .filter((f) => f.includes(`round-${pass}`) && f.endsWith(".md"))
+    .sort()
+    .map((name) => ({ name, content: readFileSync(join(reviewsDir, name), "utf-8") }));
+}
+
 export function registerCommandHandlers(orchestrator: Orchestrator): void {
   const pi = orchestrator.pi;
 
   pi.registerCommand("pp:implement", {
-    description: "Start implementation workflow: brainstorm → planning → implementation → review",
+    description: "Start implementation workflow: brainstorm → plan → implement",
     handler: async (args, ctx) => {
       let fromTaskDir: string | undefined;
       let skipBrainstorm = false;
@@ -200,7 +210,6 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
         return;
       }
 
-      const reviewRound = task.state.reviewRound ?? 1;
       orchestrator.active = {
         dir: task.dir,
         type: task.type,
@@ -208,7 +217,7 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
         release,
         taskId: orchestrator.taskIdFromDir(task.dir),
         modifiedFiles: new Set(),
-        reviewRound,
+        reviewPass: task.state.reviewPass,
         description: task.state.description,
       };
 
@@ -225,10 +234,13 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
       orchestrator.injectContextAndArtifacts(orchestrator.active.dir, orchestrator.active.state.phase);
       pi.sendUserMessage(`[PI-PI] Resumed ${orchestrator.active.state.phase} phase. Continue working.`);
 
-      if (orchestrator.active.state.phase === "planning") {
+      if (orchestrator.active.state.phase === "plan" && orchestrator.active.state.step === "await_planners") {
         const plansDir = join(orchestrator.active.dir, "plans");
-        const hasPlans = existsSync(plansDir) && readdirSync(plansDir).some((f) => f.endsWith(".md"));
-        if (!hasPlans) {
+        const plannerCount = Object.values(orchestrator.config.planners).filter((v) => v.enabled).length;
+        const planFiles = existsSync(plansDir)
+          ? readdirSync(plansDir).filter((f) => f.endsWith(".md") && !f.includes("synthesized") && !f.includes("review_"))
+          : [];
+        if (planFiles.length < plannerCount) {
           orchestrator.pendingSubagentSpawns = Object.values(orchestrator.config.planners).filter((v) => v.enabled).length;
           spawnPlanners(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, orchestrator.config).catch((err: any) => {
             orchestrator.pendingSubagentSpawns = 0;
@@ -237,31 +249,40 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
         }
       }
 
-      if (orchestrator.active.state.phase === "review") {
-        const reviewsDir = join(orchestrator.active.dir, "reviews");
-        const hasReviews = existsSync(reviewsDir) && readdirSync(reviewsDir).some((f) => f.endsWith(".md"));
+      if (orchestrator.active.state.reviewCycle) {
+        const cycle = orchestrator.active.state.reviewCycle;
+        const reviewConfig = cycle.kind === "auto-deep" ? deepReviewConfig(orchestrator.config) : orchestrator.config;
 
-        const options = [
-          "Normal auto-review",
-          "Deep auto-review (higher reasoning)",
-          "Manual review only",
-        ];
-        if (hasReviews) {
-          options.unshift("Continue with existing reviews");
-        }
-
-        const reviewChoice = await ctx.ui.select("Review mode", options);
-
-        if (reviewChoice === "Continue with existing reviews") {
-          // Don't spawn new reviewers — agent will synthesize existing outputs
-        } else if (reviewChoice !== "Manual review only") {
-          const deep = reviewChoice === "Deep auto-review (higher reasoning)";
-          const reviewConfig = deep ? deepReviewConfig(orchestrator.config) : orchestrator.config;
+        if ((cycle.kind === "auto" || cycle.kind === "auto-deep") && cycle.step === "spawn_reviewers") {
           orchestrator.pendingSubagentSpawns = Object.values(reviewConfig.codeReviewers).filter((v) => v.enabled).length;
-          spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, reviewConfig, orchestrator.active.reviewRound).catch((err: any) => {
+          spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, reviewConfig, cycle.pass).catch((err: any) => {
             orchestrator.pendingSubagentSpawns = 0;
             console.error(`[pi-pi] spawnCodeReviewers failed: ${err.message}`);
           });
+          cycle.step = "await_reviewers";
+          saveTask(orchestrator.active.dir, orchestrator.active.state);
+        } else if ((cycle.kind === "auto" || cycle.kind === "auto-deep") && cycle.step === "await_reviewers") {
+          const outputs = loadReviewOutputs(orchestrator.active.dir, cycle.pass);
+          const reviewerCount = Object.values(reviewConfig.codeReviewers).filter((v) => v.enabled).length;
+          if (outputs.length < reviewerCount) {
+            orchestrator.pendingSubagentSpawns = reviewerCount;
+            spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, reviewConfig, cycle.pass).catch((err: any) => {
+              orchestrator.pendingSubagentSpawns = 0;
+              console.error(`[pi-pi] spawnCodeReviewers failed: ${err.message}`);
+            });
+          }
+        } else if (cycle.step === "apply_feedback") {
+          const outputs = loadReviewOutputs(orchestrator.active.dir, cycle.pass)
+            .map((o) => `=== ${o.name} ===\n${o.content}`)
+            .join("\n\n");
+          pi.sendMessage(
+            {
+              customType: "pp-review-ready",
+              content: `[PI-PI] Review cycle is in apply_feedback step.\n\n${outputs}`,
+              display: false,
+            },
+            { deliverAs: "steer" },
+          );
         }
       }
     },
@@ -274,11 +295,11 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
         ctx.ui.notify("No active task.", "info");
         return;
       }
-      const roundInfo = orchestrator.active.type === "implement" && orchestrator.active.state.phase === "review"
-        ? ` | Review round: ${orchestrator.active.reviewRound}`
+      const cycle = orchestrator.active.state.reviewCycle
+        ? ` | ReviewCycle: ${orchestrator.active.state.reviewCycle.kind}/${orchestrator.active.state.reviewCycle.step} (pass ${orchestrator.active.state.reviewCycle.pass})`
         : "";
       ctx.ui.notify(
-        `Type: ${orchestrator.active.type} | Phase: ${orchestrator.active.state.phase} | Task: ${orchestrator.active.description} | Age: ${taskAge(orchestrator.active.state)}${roundInfo} | Dir: ${orchestrator.active.dir}`,
+        `Type: ${orchestrator.active.type} | Phase: ${orchestrator.active.state.phase} | Step: ${orchestrator.active.state.step} | ReviewPass: ${orchestrator.active.state.reviewPass}${cycle} | Task: ${orchestrator.active.description} | Age: ${taskAge(orchestrator.active.state)} | Dir: ${orchestrator.active.dir}`,
         "info",
       );
     },
@@ -299,7 +320,7 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
     const next = nextPhase(orchestrator.active.type, currentPhase);
     if (!next) return { ok: false, error: "No next phase available." };
 
-    if (currentPhase === "implementation") {
+    if (currentPhase === "implement") {
       const afterResults = runAfterImplement(orchestrator.config, orchestrator.cwd);
       const failures = afterResults.filter((r) => !r.ok);
       if (failures.length > 0) {
@@ -311,6 +332,15 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
     }
 
     orchestrator.active.state.phase = next;
+    if (next === "plan") {
+      orchestrator.active.state.step = "spawn_planners";
+    } else if (next === "implement") {
+      orchestrator.active.state.step = "llm_work";
+    } else if (next === "brainstorm" || next === "debug") {
+      orchestrator.active.state.step = "llm_work";
+    } else if (next === "done") {
+      orchestrator.active.state.step = null;
+    }
     saveTask(orchestrator.active.dir, orchestrator.active.state);
 
     if (next === "done") {
@@ -325,34 +355,16 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
     orchestrator.updateStatus(ctx);
     orchestrator.updatePhaseTasks();
 
-    if (next === "review") {
-      const reviewChoice = await ctx.ui.select("Review mode", [
-        "Normal auto-review",
-        "Deep auto-review (higher reasoning)",
-        "Manual review only",
-      ]);
-
-      orchestrator.manualReview = reviewChoice === "Manual review only";
-
-      if (!orchestrator.manualReview) {
-        const deep = reviewChoice === "Deep auto-review (higher reasoning)";
-        const reviewConfig = deep ? deepReviewConfig(orchestrator.config) : orchestrator.config;
-        orchestrator.pendingSubagentSpawns = Object.values(reviewConfig.codeReviewers).filter((v) => v.enabled).length;
-        spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, reviewConfig, orchestrator.active.reviewRound).catch((err) => {
-          orchestrator.pendingSubagentSpawns = 0;
-          console.error(`[pi-pi] spawnCodeReviewers failed: ${err.message}`);
-        });
-      }
-    }
-
     orchestrator.compactAndTransition(ctx, orchestrator.active.dir, orchestrator.active.state.phase);
 
-    if (next === "planning") {
+    if (next === "plan") {
       orchestrator.pendingSubagentSpawns = Object.values(orchestrator.config.planners).filter((v) => v.enabled).length;
       spawnPlanners(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, orchestrator.config).catch((err) => {
         orchestrator.pendingSubagentSpawns = 0;
         console.error(`[pi-pi] spawnPlanners failed: ${err.message}`);
       });
+      orchestrator.active.state.step = "await_planners";
+      saveTask(orchestrator.active.dir, orchestrator.active.state);
     }
 
     return { ok: true };
@@ -361,54 +373,14 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
   orchestrator.transitionToNextPhase = transitionToNextPhase;
 
   pi.registerCommand("pp:next", {
-    description: "Validate exit criteria and transition to next phase",
+    description: "Open user gate dialog for current step",
     handler: async (_args, ctx) => {
       if (!orchestrator.active) {
         ctx.ui.notify("No active task.", "error");
         return;
       }
-
-      const currentPhase = orchestrator.active.state.phase;
-
-      if (currentPhase === "planning") {
-        const approved = await ctx.ui.confirm("Approve plan?", "The synthesized plan will be used for implementation.");
-        if (!approved) {
-          ctx.ui.notify("Plan not approved. Continue editing.", "info");
-          return;
-        }
-      }
-
-      if (currentPhase === "review") {
-        const reviewChoice = await ctx.ui.select("Review result", [
-          "Approve & finish",
-          "Another review round",
-          "Deep review round",
-          "Continue with manual review",
-        ]);
-
-        if (reviewChoice === "Another review round" || reviewChoice === "Deep review round") {
-          orchestrator.active.reviewRound++;
-          orchestrator.persistReviewRound();
-          const reviewConfig = reviewChoice === "Deep review round" ? deepReviewConfig(orchestrator.config) : orchestrator.config;
-          orchestrator.pendingSubagentSpawns = Object.values(reviewConfig.codeReviewers).filter((v) => v.enabled).length;
-          spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, reviewConfig, orchestrator.active.reviewRound).catch((err) => {
-            orchestrator.pendingSubagentSpawns = 0;
-            console.error(`[pi-pi] spawnCodeReviewers failed: ${err.message}`);
-          });
-          ctx.ui.notify(`Starting review round ${orchestrator.active.reviewRound}${reviewChoice === "Deep review round" ? " (deep)" : ""}`, "info");
-          return;
-        }
-
-        if (reviewChoice === "Continue with manual review") {
-          ctx.ui.notify("Continue with manual review.", "info");
-          return;
-        }
-      }
-
-      const result = await transitionToNextPhase(ctx);
-      if (!result.ok) {
-        ctx.ui.notify(result.error ?? "Transition failed.", "error");
-      }
+      const text = await runUserGateDialog(orchestrator, ctx, "Choose next action");
+      ctx.ui.notify(text, "info");
     },
   });
 

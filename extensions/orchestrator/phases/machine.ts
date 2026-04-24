@@ -5,16 +5,15 @@ import { getLatestSynthesizedPlan } from "../context.js";
 
 const TRANSITIONS: Record<TaskType, Record<string, string[]>> = {
   implement: {
-    brainstorm: ["planning"],
-    planning: ["implementation"],
-    implementation: ["review"],
-    review: ["done"],
+    brainstorm: ["plan"],
+    plan: ["implement"],
+    implement: ["done"],
   },
   debug: {
-    diagnosing: ["done"],
+    debug: ["done"],
   },
   brainstorm: {
-    active: ["done"],
+    brainstorm: ["done"],
   },
 };
 
@@ -46,7 +45,7 @@ export function validateExitCriteria(
       return { ok: true };
     }
 
-    case "planning": {
+    case "plan": {
       const plan = getLatestSynthesizedPlan(taskDir);
       if (!plan) {
         return { ok: false, reason: "No synthesized plan found in plans/" };
@@ -54,7 +53,7 @@ export function validateExitCriteria(
       return { ok: true };
     }
 
-    case "implementation": {
+    case "implement": {
       const content = getLatestSynthesizedPlan(taskDir);
       if (!content) {
         return { ok: false, reason: "No synthesized plan found" };
@@ -66,10 +65,7 @@ export function validateExitCriteria(
       return { ok: true };
     }
 
-    case "review":
-      return { ok: true };
-
-    case "diagnosing": {
+    case "debug": {
       const ur = join(taskDir, "USER_REQUEST.md");
       const res = join(taskDir, "RESEARCH.md");
       if (!existsSync(ur) || readFileSync(ur, "utf-8").trim().length === 0) {
@@ -81,7 +77,7 @@ export function validateExitCriteria(
       return { ok: true };
     }
 
-    case "active":
+    case "brainstorm":
       return { ok: true };
 
     default:
@@ -92,10 +88,10 @@ export function validateExitCriteria(
 export function phasePipeline(taskType: TaskType): Phase[] {
   switch (taskType) {
     case "implement":
-      return ["brainstorm", "planning", "implementation", "review", "done"];
+      return ["brainstorm", "plan", "implement", "done"];
     case "debug":
-      return ["diagnosing", "done"];
+      return ["debug", "done"];
     case "brainstorm":
-      return ["active", "done"];
+      return ["brainstorm", "done"];
   }
 }

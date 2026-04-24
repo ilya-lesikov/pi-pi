@@ -6,18 +6,17 @@ import { registerAgentDefinitions, spawnViaRpc, waitForCompletion } from "../age
 import { createCodeReviewerAgent } from "../agents/code-reviewer.js";
 import { getLatestSynthesizedPlan } from "../context.js";
 
-export function reviewSystemPrompt(taskDir: string, round: number, manualReview = false): string {
+export function reviewSystemPrompt(taskDir: string, pass: number, manualReview = false): string {
   const reviewsDir = join(taskDir, "reviews");
   const plansDir = join(taskDir, "plans");
 
   if (manualReview) {
     return [
-      `[PI-PI — REVIEW PHASE (round ${round}, manual)]`,
+      `[PI-PI — REVIEW CYCLE (pass ${pass}, manual)]`,
       "",
-      "Manual review mode — no auto-reviewers are running.",
       "Review the implementation yourself using the available tools.",
       "",
-      `Write your review to ${reviewsDir}/<timestamp>_final_round-${round}.md`,
+      `Write your review to ${reviewsDir}/<timestamp>_final_pass-${pass}.md`,
       "",
       "If changes are needed:",
       `1. Create a fix plan at ${plansDir}/<timestamp>_<description>.md`,
@@ -29,29 +28,26 @@ export function reviewSystemPrompt(taskDir: string, round: number, manualReview 
   }
 
   return [
-    `[PI-PI — REVIEW PHASE (round ${round})]`,
+    `[PI-PI — REVIEW CYCLE (pass ${pass})]`,
     "",
-    "Code reviewer subagents are analyzing the implementation.",
-    `They will write their outputs to ${reviewsDir}/. This may take several minutes.`,
+    "Code reviewer outputs are ready.",
+    `Read them from ${reviewsDir}/, synthesize feedback, and implement fixes if needed.`,
     "",
     "# FORBIDDEN — do NOT do any of these:",
     "- Do NOT write your own code review from scratch. You are a SYNTHESIZER, not a reviewer.",
     "- Do NOT create the reviews/ directory yourself — the extension manages it.",
-    "- Do NOT check the reviews directory yourself — call pp_wait to block until all reviewers complete.",
     "- Do NOT call plannotator_submit_plan — code review is handled by the user via /pp:review-code.",
-    "- If no reviewer outputs appear after a few minutes, tell the user reviewers may have failed.",
     "",
     "# Your job (in this order):",
-    "1. Call pp_wait — this blocks until all reviewer subagents complete. Do NOT poll the directory.",
-    `2. Read ALL reviewer outputs from ${reviewsDir}/`,
-    `3. Synthesize into ${reviewsDir}/<timestamp>_final_round-${round}.md`,
-    "4. Present the synthesis to the user",
+    `1. Read ALL reviewer outputs from ${reviewsDir}/`,
+    `2. Synthesize into ${reviewsDir}/<timestamp>_final_pass-${pass}.md`,
+    "3. Present the synthesis to the user",
     "",
     "If changes are needed:",
     `1. Create a fix plan at ${plansDir}/<timestamp>_<description>.md (do NOT modify the original synthesized plan)`,
     "2. Implement the fixes",
     "3. Run afterImplement commands",
-    "4. A new review round will begin",
+    "4. A new review pass will begin",
     "",
     "When the synthesized review is ready, call pp_phase_complete with a brief summary.",
   ].join("\n");

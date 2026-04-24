@@ -143,7 +143,7 @@ export function getPhaseArtifacts(taskDir: string, phase: Phase): { name: string
   tryAdd("USER_REQUEST.md", join(taskDir, "USER_REQUEST.md"));
   tryAdd("RESEARCH.md", join(taskDir, "RESEARCH.md"));
 
-  if (phase === "implementation" || phase === "review") {
+  if (phase === "plan" || phase === "implement") {
     const plansDir = join(taskDir, "plans");
     if (existsSync(plansDir)) {
       const synthFiles = readdirSync(plansDir)

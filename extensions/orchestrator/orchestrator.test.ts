@@ -34,6 +34,9 @@ function makeActiveTask(release: (() => Promise<void>) | null): ActiveTask {
     type: "implement",
     state: {
       phase: "brainstorm",
+      step: "llm_work",
+      reviewCycle: null,
+      reviewPass: 0,
       from: null,
       description: "Task",
       startedAt: new Date().toISOString(),
@@ -41,7 +44,7 @@ function makeActiveTask(release: (() => Promise<void>) | null): ActiveTask {
     release,
     taskId: "123",
     modifiedFiles: new Set(),
-    reviewRound: 1,
+    reviewPass: 0,
     description: "Task",
   };
 }

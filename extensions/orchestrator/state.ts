@@ -5,17 +5,19 @@ import type { TimeoutConfig } from "./config.js";
 
 export type TaskType = "implement" | "debug" | "brainstorm";
 
-export type ImplementPhase = "brainstorm" | "planning" | "implementation" | "review" | "done";
-export type DebugPhase = "diagnosing" | "done";
-export type BrainstormPhase = "active" | "done";
+export type ImplementPhase = "brainstorm" | "plan" | "implement" | "done";
+export type DebugPhase = "debug" | "done";
+export type BrainstormPhase = "brainstorm" | "done";
 export type Phase = ImplementPhase | DebugPhase | BrainstormPhase;
 
 export interface TaskState {
   phase: Phase;
+  step: string | null;
+  reviewCycle: { kind: string; step: string; pass: number } | null;
+  reviewPass: number;
   from: string | null;
   description: string;
   startedAt: string;
-  reviewRound?: number;
 }
 
 export interface TaskInfo {
@@ -45,7 +47,10 @@ export function createTask(cwd: string, type: TaskType, description: string): st
   mkdirSync(taskDir, { recursive: true });
 
   const state: TaskState = {
-    phase: type === "implement" ? "brainstorm" : type === "debug" ? "diagnosing" : "active",
+    phase: type === "implement" ? "brainstorm" : type === "debug" ? "debug" : "brainstorm",
+    step: "llm_work",
+    reviewCycle: null,
+    reviewPass: 0,
     from: null,
     description,
     startedAt: new Date().toISOString(),

@@ -1,6 +1,6 @@
 export function implementationSystemPrompt(taskDir: string): string {
   return [
-    "[PI-PI — IMPLEMENTATION PHASE]",
+    "[PI-PI — IMPLEMENT PHASE]",
     "",
     "The plan has been approved. Implement it.",
     "",

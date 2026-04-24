@@ -53,11 +53,19 @@ function makeActiveTask(): ActiveTask {
   return {
     dir: "/tmp/task",
     type: "implement",
-    state: { phase: "implementation", from: null, description: "Test", startedAt: new Date().toISOString() },
+    state: {
+      phase: "implement",
+      step: "llm_work",
+      reviewCycle: null,
+      reviewPass: 0,
+      from: null,
+      description: "Test",
+      startedAt: new Date().toISOString(),
+    },
     release: null,
     taskId: "123",
     modifiedFiles: new Set(),
-    reviewRound: 1,
+    reviewPass: 0,
     description: "Test",
   };
 }
