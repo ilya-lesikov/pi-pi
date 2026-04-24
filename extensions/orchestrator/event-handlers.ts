@@ -604,6 +604,8 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
               if (planFiles.length >= plannerCount) {
                 clearInterval(orchestrator.awaitPollTimer!);
                 orchestrator.awaitPollTimer = null;
+                orchestrator.spawnedAgentIds.clear();
+                orchestrator.pendingSubagentSpawns = 0;
                 orchestrator.active.state.step = "synthesize";
                 saveTask(orchestrator.active.dir, orchestrator.active.state);
                 pi.sendUserMessage("[PI-PI] All planners completed. Read their outputs and synthesize the plan.");
@@ -617,6 +619,8 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
             if (outputs.length >= reviewerCount) {
               clearInterval(orchestrator.awaitPollTimer!);
               orchestrator.awaitPollTimer = null;
+              orchestrator.spawnedAgentIds.clear();
+              orchestrator.pendingSubagentSpawns = 0;
               cycle.step = "apply_feedback";
               orchestrator.active.state.step = "apply_feedback";
               saveTask(orchestrator.active.dir, orchestrator.active.state);
