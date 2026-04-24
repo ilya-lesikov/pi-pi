@@ -176,8 +176,11 @@ export function taskName(taskDir: string): string {
       }
     }
 
-    if (desc && desc.length > 80) desc = desc.slice(0, 77) + "...";
-    if (desc) return desc;
+    if (desc) {
+      desc = desc.replace(/\s+/g, " ").trim();
+      if (desc.length > 80) desc = desc.slice(0, 77) + "...";
+      return desc;
+    }
   } catch {
     console.error(`[pi-pi] Failed to read task name from ${taskDir}`);
   }
