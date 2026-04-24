@@ -51,6 +51,7 @@ export class Orchestrator {
   cooldownHits: number[] = [];
   nudgeHalted = false;
   pendingSubagentSpawns = 0;
+  errorRetryCount = 0;
   plannotatorReject: ((reason: Error) => void) | null = null;
   plannotatorUnsub: (() => void) | null = null;
   transitionToNextPhase: (ctx: any) => Promise<{ ok: boolean; error?: string }> = async () => ({ ok: false, error: "not initialized" });

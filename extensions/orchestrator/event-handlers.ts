@@ -563,9 +563,32 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     }
 
     const phase = orchestrator.active.state.phase;
-    if (orchestrator.active.type === "brainstorm" && phase === "brainstorm") return;
 
     const msg = event.message as any;
+    if (msg?.stopReason === "error") {
+      const errorMsg = msg.errorMessage || "unknown error";
+      console.error(`[pi-pi] Turn ended with error: ${errorMsg}`);
+      orchestrator.errorRetryCount = (orchestrator.errorRetryCount ?? 0) + 1;
+      if (orchestrator.errorRetryCount <= 3) {
+        ctx.ui.notify(`API error (attempt ${orchestrator.errorRetryCount}/3): ${errorMsg}. Retrying...`, "warning");
+        pi.sendMessage(
+          {
+            customType: "pp-error-retry",
+            content: `[PI-PI] Previous request failed due to an API error. Continue working on the current phase (${phase}).`,
+            display: false,
+          },
+          { deliverAs: "followUp" },
+        );
+      } else {
+        ctx.ui.notify(`API error persisted after 3 retries: ${errorMsg}. Stopping auto-retry.`, "error");
+        orchestrator.errorRetryCount = 0;
+      }
+      return;
+    }
+    orchestrator.errorRetryCount = 0;
+
+    if (orchestrator.active.type === "brainstorm" && phase === "brainstorm") return;
+
     const contentParts = Array.isArray(msg?.content) ? msg.content : [];
     const hasText = contentParts.some((c: any) => c.type === "text" && c.text?.trim());
     const hasToolCalls = contentParts.some((c: any) => c.type === "toolCall");
