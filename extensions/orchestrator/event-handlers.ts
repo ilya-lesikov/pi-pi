@@ -88,6 +88,7 @@ async function enterReviewCycle(orchestrator: Orchestrator, ctx: any, kind: "aut
   });
 
   orchestrator.active.state.reviewCycle.step = "await_reviewers";
+  orchestrator.active.state.step = "await_reviewers";
   saveTask(orchestrator.active.dir, orchestrator.active.state);
   return `Started review cycle pass ${pass} (${kind}). Awaiting reviewers.`;
 }
