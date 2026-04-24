@@ -588,39 +588,56 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     orchestrator.errorRetryCount = 0;
 
     if (orchestrator.active.state.step === "await_planners" || orchestrator.active.state.step === "await_reviewers") {
-      const taskDir = orchestrator.active.dir;
-      if (orchestrator.active.state.step === "await_planners") {
-        const plansDir = join(taskDir, "plans");
-        const plannerCount = Object.values(orchestrator.config.planners).filter((v) => v.enabled).length;
-        if (existsSync(plansDir)) {
-          const planFiles = readdirSync(plansDir).filter((f) => f.endsWith(".md") && !f.includes("synthesized") && !f.includes("review_"));
-          if (planFiles.length >= plannerCount) {
-            orchestrator.active.state.step = "synthesize";
-            saveTask(orchestrator.active.dir, orchestrator.active.state);
-            pi.sendMessage(
-              { customType: "pp-planners-ready", content: "[PI-PI] All planners completed. Read their outputs and synthesize the plan.", display: false },
-              { deliverAs: "followUp" },
-            );
+      if (!orchestrator.awaitPollTimer) {
+        orchestrator.awaitPollTimer = setInterval(() => {
+          if (!orchestrator.active) {
+            clearInterval(orchestrator.awaitPollTimer!);
+            orchestrator.awaitPollTimer = null;
+            return;
           }
-        }
-      } else if (orchestrator.active.state.reviewCycle) {
-        const cycle = orchestrator.active.state.reviewCycle;
-        const reviewConfig = cycle.kind === "auto-deep" ? deepReviewConfig(orchestrator.config) : orchestrator.config;
-        const reviewerCount = Object.values(reviewConfig.codeReviewers).filter((v) => v.enabled).length;
-        const outputs = loadReviewOutputs(taskDir, cycle.pass);
-        if (outputs.length >= reviewerCount) {
-          cycle.step = "apply_feedback";
-          orchestrator.active.state.step = "apply_feedback";
-          saveTask(orchestrator.active.dir, orchestrator.active.state);
-          const rendered = outputs.map((o) => `=== ${o.name} ===\n${o.content}`).join("\n\n");
-          pi.sendMessage(
-            { customType: "pp-review-ready", content: `[PI-PI] Reviewer outputs are ready.\n\n${rendered}`, display: false },
-            { deliverAs: "followUp" },
-          );
-          pi.sendUserMessage("[PI-PI] Review cycle is ready for apply_feedback. Read reviewer outputs and proceed.", { deliverAs: "followUp" });
-        }
+          const taskDir = orchestrator.active.dir;
+          if (orchestrator.active.state.step === "await_planners") {
+            const plansDir = join(taskDir, "plans");
+            const plannerCount = Object.values(orchestrator.config.planners).filter((v) => v.enabled).length;
+            if (existsSync(plansDir)) {
+              const planFiles = readdirSync(plansDir).filter((f) => f.endsWith(".md") && !f.includes("synthesized") && !f.includes("review_"));
+              if (planFiles.length >= plannerCount) {
+                clearInterval(orchestrator.awaitPollTimer!);
+                orchestrator.awaitPollTimer = null;
+                orchestrator.active.state.step = "synthesize";
+                saveTask(orchestrator.active.dir, orchestrator.active.state);
+                pi.sendUserMessage("[PI-PI] All planners completed. Read their outputs and synthesize the plan.");
+              }
+            }
+          } else if (orchestrator.active.state.step === "await_reviewers" && orchestrator.active.state.reviewCycle) {
+            const cycle = orchestrator.active.state.reviewCycle;
+            const reviewConfig = cycle.kind === "auto-deep" ? deepReviewConfig(orchestrator.config) : orchestrator.config;
+            const reviewerCount = Object.values(reviewConfig.codeReviewers).filter((v) => v.enabled).length;
+            const outputs = loadReviewOutputs(taskDir, cycle.pass);
+            if (outputs.length >= reviewerCount) {
+              clearInterval(orchestrator.awaitPollTimer!);
+              orchestrator.awaitPollTimer = null;
+              cycle.step = "apply_feedback";
+              orchestrator.active.state.step = "apply_feedback";
+              saveTask(orchestrator.active.dir, orchestrator.active.state);
+              const rendered = outputs.map((o) => `=== ${o.name} ===\n${o.content}`).join("\n\n");
+              pi.sendMessage(
+                { customType: "pp-review-ready", content: `[PI-PI] Reviewer outputs are ready.\n\n${rendered}`, display: false },
+                { deliverAs: "followUp" },
+              );
+              pi.sendUserMessage("[PI-PI] Review cycle is ready for apply_feedback. Read reviewer outputs and proceed.");
+            }
+          } else {
+            clearInterval(orchestrator.awaitPollTimer!);
+            orchestrator.awaitPollTimer = null;
+          }
+        }, 5000);
       }
       return;
+    }
+    if (orchestrator.awaitPollTimer) {
+      clearInterval(orchestrator.awaitPollTimer);
+      orchestrator.awaitPollTimer = null;
     }
 
     if (orchestrator.active.type === "brainstorm" && phase === "brainstorm") return;

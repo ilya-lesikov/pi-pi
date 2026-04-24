@@ -52,6 +52,7 @@ export class Orchestrator {
   nudgeHalted = false;
   pendingSubagentSpawns = 0;
   errorRetryCount = 0;
+  awaitPollTimer: ReturnType<typeof setInterval> | null = null;
   plannotatorReject: ((reason: Error) => void) | null = null;
   plannotatorUnsub: (() => void) | null = null;
   transitionToNextPhase: (ctx: any) => Promise<{ ok: boolean; error?: string }> = async () => ({ ok: false, error: "not initialized" });
@@ -284,6 +285,10 @@ export class Orchestrator {
 
   async cleanupActive(): Promise<void> {
     if (!this.active) return;
+    if (this.awaitPollTimer) {
+      clearInterval(this.awaitPollTimer);
+      this.awaitPollTimer = null;
+    }
     if (this.active.release) {
       try {
         await this.active.release();
