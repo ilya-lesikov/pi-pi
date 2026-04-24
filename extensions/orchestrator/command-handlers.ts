@@ -244,7 +244,7 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
         return;
       }
       const roundInfo = orchestrator.active.type === "implement" && orchestrator.active.state.phase === "review"
-        ? ` | Review round: ${orchestrator.active.reviewRound}/${orchestrator.config.maxAutoReviewRounds}`
+        ? ` | Review round: ${orchestrator.active.reviewRound}`
         : "";
       ctx.ui.notify(
         `Type: ${orchestrator.active.type} | Phase: ${orchestrator.active.state.phase} | Task: ${orchestrator.active.description} | Age: ${taskAge(orchestrator.active.state)}${roundInfo} | Dir: ${orchestrator.active.dir}`,
@@ -304,18 +304,11 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
       orchestrator.manualReview = reviewChoice === "Manual review only";
 
       if (!orchestrator.manualReview) {
-        if (orchestrator.active.reviewRound > orchestrator.config.maxAutoReviewRounds) {
-          ctx.ui.notify(
-            `Auto-review round limit reached (${orchestrator.config.maxAutoReviewRounds}). Switching to manual review.`,
-            "warning",
-          );
-        } else {
-          const deep = reviewChoice === "Deep auto-review (higher reasoning)";
-          const reviewConfig = deep ? deepReviewConfig(orchestrator.config) : orchestrator.config;
-          spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, reviewConfig, orchestrator.active.reviewRound).catch((err) => {
-            console.error(`[pi-pi] spawnCodeReviewers failed: ${err.message}`);
-          });
-        }
+        const deep = reviewChoice === "Deep auto-review (higher reasoning)";
+        const reviewConfig = deep ? deepReviewConfig(orchestrator.config) : orchestrator.config;
+        spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, reviewConfig, orchestrator.active.reviewRound).catch((err) => {
+          console.error(`[pi-pi] spawnCodeReviewers failed: ${err.message}`);
+        });
       }
     }
 
@@ -351,30 +344,26 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
       }
 
       if (currentPhase === "review") {
-        const approved = await ctx.ui.confirm("Approve implementation?", "Mark the task as done?");
-        if (!approved) {
-          if (orchestrator.active.reviewRound > orchestrator.config.maxAutoReviewRounds) {
-            ctx.ui.notify(
-              `Auto-review round limit reached (${orchestrator.config.maxAutoReviewRounds}). Continue with manual review.`,
-              "warning",
-            );
-            return;
-          }
+        const reviewChoice = await ctx.ui.select("Review result", [
+          "Approve & finish",
+          "Another review round",
+          "Deep review round",
+          "Continue with manual review",
+        ]);
 
-          const startNewRound = await ctx.ui.confirm(
-            "Start another auto-review round?",
-            `Round ${orchestrator.active.reviewRound} of ${orchestrator.config.maxAutoReviewRounds} max.`,
-          );
-          if (!startNewRound) {
-            ctx.ui.notify("Continue with manual review.", "info");
-            return;
-          }
-
-          spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, orchestrator.config, orchestrator.active.reviewRound).catch((err) => {
-            console.error(`[pi-pi] spawnCodeReviewers failed: ${err.message}`);
-          });
+        if (reviewChoice === "Another review round" || reviewChoice === "Deep review round") {
           orchestrator.active.reviewRound++;
           orchestrator.persistReviewRound();
+          const reviewConfig = reviewChoice === "Deep review round" ? deepReviewConfig(orchestrator.config) : orchestrator.config;
+          spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, reviewConfig, orchestrator.active.reviewRound).catch((err) => {
+            console.error(`[pi-pi] spawnCodeReviewers failed: ${err.message}`);
+          });
+          ctx.ui.notify(`Starting review round ${orchestrator.active.reviewRound}${reviewChoice === "Deep review round" ? " (deep)" : ""}`, "info");
+          return;
+        }
+
+        if (reviewChoice === "Continue with manual review") {
+          ctx.ui.notify("Continue with manual review.", "info");
           return;
         }
       }

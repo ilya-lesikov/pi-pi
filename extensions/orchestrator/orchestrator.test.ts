@@ -119,7 +119,6 @@ describe("deepReviewConfig", () => {
         lockUpdate: 1,
       },
       autoCommit: true,
-      maxAutoReviewRounds: 2,
     };
 
     const upgraded = deepReviewConfig(config as any);

@@ -15,6 +15,39 @@ import { Orchestrator, deepReviewConfig } from "./orchestrator.js";
 function registerOrchestratorTools(orchestrator: Orchestrator): void {
   registerPhaseCompleteTool(orchestrator);
   registerCommitTool(orchestrator);
+  registerWaitTool(orchestrator);
+}
+
+function registerWaitTool(orchestrator: Orchestrator): void {
+  const pi = orchestrator.pi;
+
+  pi.registerTool({
+    name: "pp_wait",
+    label: "pi-pi",
+    description:
+      "Block until all running subagents (planners, reviewers) complete. " +
+      "Call this in planning and review phases instead of polling the directory. " +
+      "Returns when all subagents have finished.",
+    parameters: Type.Object({}),
+    async execute() {
+      if (orchestrator.spawnedAgentIds.size === 0) {
+        return { content: [{ type: "text" as const, text: "No subagents running. Proceed." }], details: {} };
+      }
+
+      await new Promise<void>((resolve) => {
+        const check = () => {
+          if (orchestrator.spawnedAgentIds.size === 0) {
+            resolve();
+          } else {
+            setTimeout(check, 1000);
+          }
+        };
+        check();
+      });
+
+      return { content: [{ type: "text" as const, text: "All subagents completed. Read their outputs now." }], details: {} };
+    },
+  });
 }
 
 function registerCommitTool(orchestrator: Orchestrator): void {
@@ -84,7 +117,7 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
       } else if (phase === "implementation") {
         options.push("Approve & start review", "Let me check first");
       } else if (phase === "review") {
-        options.push("Approve & finish", "Review in Plannotator", "Let me review first");
+        options.push("Approve & finish", "Another review round", "Deep review round", "Review in Plannotator", "Let me review first");
       } else {
         return ok("No dialog available for this phase.");
       }
@@ -111,6 +144,16 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
           return ok(`Transition blocked: ${result.error}. Address the issue and try again.`);
         }
         return ok("User approved. Transitioned to next phase.");
+      }
+      if (choice === "Another review round" || choice === "Deep review round") {
+        if (!orchestrator.active) return ok("No active task.");
+        orchestrator.active.reviewRound++;
+        orchestrator.persistReviewRound();
+        const reviewConfig = choice === "Deep review round" ? deepReviewConfig(orchestrator.config) : orchestrator.config;
+        spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, reviewConfig, orchestrator.active.reviewRound).catch((err) => {
+          console.error(`[pi-pi] spawnCodeReviewers failed: ${err.message}`);
+        });
+        return ok(`Starting review round ${orchestrator.active.reviewRound}${choice === "Deep review round" ? " (deep)" : ""}. Call pp_wait to block until reviewers complete.`);
       }
       if (choice === "Review in Plannotator") {
         const reviewAction = phase === "review" ? "code-review" : "plan-review";
@@ -420,6 +463,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
 
     if (!turnWasEmpty) return;
     if (orchestrator.nudgeHalted) return;
+    if (orchestrator.spawnedAgentIds.size > 0) return;
 
     const now = Date.now();
 

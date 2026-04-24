@@ -65,7 +65,6 @@ function makeConfig() {
     commands: { afterEdit: [], afterImplement: [] },
     timeouts: { afterEdit: 1, afterImplement: 1, agentSpawn: 1, agentReadyPing: 1, lockStale: 1, lockUpdate: 1 },
     autoCommit: false,
-    maxAutoReviewRounds: 3,
   };
 }
 
@@ -102,7 +101,7 @@ function makeCtx() {
 }
 
 describe("pp:next review-round orchestration", () => {
-  it("triggers a second review round when user declines approval and confirms new round", async () => {
+  it("triggers a second review round when user selects another round", async () => {
     const pi = makePi();
     const orchestrator = new Orchestrator(pi as any);
     const taskDir = makeTempDir();
@@ -113,9 +112,7 @@ describe("pp:next review-round orchestration", () => {
     registerCommandHandlers(orchestrator);
 
     const ctx = makeCtx();
-    ctx.ui.confirm
-      .mockResolvedValueOnce(false)
-      .mockResolvedValueOnce(true);
+    ctx.ui.select.mockResolvedValueOnce("Another review round");
 
     const ppNext = pi._commands.get("pp:next");
     await ppNext!.handler(undefined, ctx);
@@ -126,30 +123,7 @@ describe("pp:next review-round orchestration", () => {
     expect(orchestrator.active!.state.phase).toBe("review");
   });
 
-  it("enforces maxAutoReviewRounds and falls back to manual review", async () => {
-    const pi = makePi();
-    const orchestrator = new Orchestrator(pi as any);
-    const taskDir = makeTempDir();
-    orchestrator.cwd = taskDir;
-    orchestrator.config = makeConfig() as any;
-    orchestrator.active = makeActiveReviewTask(taskDir, 4);
-    registerCommandHandlers(orchestrator);
-
-    const ctx = makeCtx();
-    ctx.ui.confirm.mockResolvedValueOnce(false);
-
-    const ppNext = pi._commands.get("pp:next");
-    await ppNext!.handler(undefined, ctx);
-
-    expect(spawnCodeReviewers).not.toHaveBeenCalled();
-    expect(ctx.ui.notify).toHaveBeenCalledWith(
-      expect.stringContaining("Auto-review round limit reached"),
-      "warning",
-    );
-    expect(orchestrator.active!.state.phase).toBe("review");
-  });
-
-  it("increments reviewRound and persists state on new round", async () => {
+  it("starts new review round via pp:next select", async () => {
     const pi = makePi();
     const orchestrator = new Orchestrator(pi as any);
     const taskDir = makeTempDir();
@@ -160,9 +134,7 @@ describe("pp:next review-round orchestration", () => {
     registerCommandHandlers(orchestrator);
 
     const ctx = makeCtx();
-    ctx.ui.confirm
-      .mockResolvedValueOnce(false)
-      .mockResolvedValueOnce(true);
+    ctx.ui.select.mockResolvedValueOnce("Another review round");
 
     const ppNext = pi._commands.get("pp:next");
     await ppNext!.handler(undefined, ctx);
@@ -171,7 +143,7 @@ describe("pp:next review-round orchestration", () => {
     expect(orchestrator.persistReviewRound).toHaveBeenCalledOnce();
   });
 
-  it("falls back to manual review when user declines new round", async () => {
+  it("falls back to manual review when user selects it", async () => {
     const pi = makePi();
     const orchestrator = new Orchestrator(pi as any);
     const taskDir = makeTempDir();
@@ -181,9 +153,7 @@ describe("pp:next review-round orchestration", () => {
     registerCommandHandlers(orchestrator);
 
     const ctx = makeCtx();
-    ctx.ui.confirm
-      .mockResolvedValueOnce(false)
-      .mockResolvedValueOnce(false);
+    ctx.ui.select.mockResolvedValueOnce("Continue with manual review");
 
     const ppNext = pi._commands.get("pp:next");
     await ppNext!.handler(undefined, ctx);

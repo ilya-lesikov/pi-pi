@@ -76,12 +76,6 @@ describe("validateConfig", () => {
     );
   });
 
-  it("throws for negative maxAutoReviewRounds", () => {
-    expect(() => validateConfig({ maxAutoReviewRounds: -1 })).toThrow(
-      "config.maxAutoReviewRounds must be a non-negative number",
-    );
-  });
-
   it("throws for negative timeout values", () => {
     expect(() => validateConfig({ timeouts: { afterEdit: -1 } })).toThrow(
       "config.timeouts.afterEdit must be a non-negative number",
@@ -104,7 +98,6 @@ describe("validateConfig", () => {
           afterEdit: [{ run: "npm test", glob: ["*.ts"] }],
           afterImplement: [{ run: "npm run build" }],
         },
-        maxAutoReviewRounds: 0,
         timeouts: { afterEdit: 0, afterImplement: 1 },
       }),
     ).not.toThrow();
@@ -160,9 +153,7 @@ describe("loadConfig", () => {
     expect(existsSync(configPath)).toBe(true);
     const written = JSON.parse(readFileSync(configPath, "utf-8"));
     expect(written.mainModel.implement.model).toBe("anthropic/claude-opus-4-6");
-    expect(written.maxAutoReviewRounds).toBe(2);
     expect(config.mainModel.implement.model).toBe("anthropic/claude-opus-4-6");
-    expect(config.maxAutoReviewRounds).toBe(2);
   });
 
   it("throws parse errors with config file path", () => {
@@ -182,9 +173,9 @@ describe("loadConfig", () => {
     const configPath = join(ppDir, "config.json");
 
     mkdirSync(ppDir, { recursive: true });
-    writeFileSync(configPath, JSON.stringify({ maxAutoReviewRounds: -3 }), "utf-8");
+    writeFileSync(configPath, JSON.stringify({ timeouts: { afterEdit: -1 } }), "utf-8");
 
-    expect(() => loadConfig(cwd, "/nonexistent/global/config.json")).toThrow("config.maxAutoReviewRounds must be a non-negative number");
+    expect(() => loadConfig(cwd, "/nonexistent/global/config.json")).toThrow("config.timeouts.afterEdit must be a non-negative number");
   });
 });
 

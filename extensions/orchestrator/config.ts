@@ -49,7 +49,6 @@ export interface PiPiConfig {
   };
   timeouts: TimeoutConfig;
   autoCommit: boolean;
-  maxAutoReviewRounds: number;
 }
 
 const DEFAULT_CONFIG: PiPiConfig = {
@@ -91,7 +90,6 @@ const DEFAULT_CONFIG: PiPiConfig = {
     lockUpdate: 30000,
   },
   autoCommit: true,
-  maxAutoReviewRounds: 2,
 };
 
 const DANGEROUS_KEYS = new Set(["__proto__", "constructor", "prototype"]);
@@ -158,10 +156,6 @@ export function validateConfig(config: Record<string, any>): void {
         throw new Error(`config.commands.afterImplement[${i}] must have a 'run' field`);
       }
     }
-  }
-
-  if (config.maxAutoReviewRounds !== undefined && (typeof config.maxAutoReviewRounds !== "number" || config.maxAutoReviewRounds < 0)) {
-    throw new Error("config.maxAutoReviewRounds must be a non-negative number");
   }
 
   if (config.timeouts) {
