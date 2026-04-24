@@ -170,3 +170,12 @@ export function getLatestSynthesizedPlan(taskDir: string): string | null {
 
   return readFileSync(join(plansDir, synthFiles[synthFiles.length - 1]), "utf-8");
 }
+
+export function loadReviewOutputs(taskDir: string, pass: number): { name: string; content: string }[] {
+  const reviewsDir = join(taskDir, "reviews");
+  if (!existsSync(reviewsDir)) return [];
+  return readdirSync(reviewsDir)
+    .filter((f) => f.includes(`round-${pass}`) && f.endsWith(".md"))
+    .sort()
+    .map((name) => ({ name, content: readFileSync(join(reviewsDir, name), "utf-8") }));
+}
