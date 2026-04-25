@@ -569,12 +569,22 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (msg?.stopReason === "error") {
       const errorMsg = msg.errorMessage || "unknown error";
       console.error(`[pi-pi] Turn ended with error: ${errorMsg}`);
+      console.error(`[pi-pi]   model=${msg.model} provider=${msg.provider} api=${msg.api}`);
+      console.error(`[pi-pi]   usage: input=${msg.usage?.input} output=${msg.usage?.output} cache_read=${msg.usage?.cacheRead}`);
+      console.error(`[pi-pi]   content blocks: ${msg.content?.length ?? 0}`);
+      for (const c of msg.content || []) {
+        if (c.type === "toolCall") console.error(`[pi-pi]   toolCall: ${c.name}`);
+        if (c.type === "text" && c.text) console.error(`[pi-pi]   text: ${c.text.slice(0, 100)}`);
+        if (c.type === "thinking") console.error(`[pi-pi]   thinking: ${c.thinking?.slice(0, 100) || "(redacted)"}`);
+      }
       orchestrator.errorRetryCount = (orchestrator.errorRetryCount ?? 0) + 1;
-      if (orchestrator.errorRetryCount <= 3) {
-        ctx.ui.notify(`API error (attempt ${orchestrator.errorRetryCount}/3): ${errorMsg}. Retrying...`, "warning");
+      const retryDelays = [2000, 6000, 24000];
+      if (orchestrator.errorRetryCount <= retryDelays.length) {
+        const delay = retryDelays[orchestrator.errorRetryCount - 1];
+        ctx.ui.notify(`API error (attempt ${orchestrator.errorRetryCount}/${retryDelays.length}): ${errorMsg}. Retrying in ${delay / 1000}s...`, "warning");
         setTimeout(() => {
           pi.sendUserMessage(`[PI-PI] Previous request failed due to an API error. Continue working on the current phase (${phase}).`);
-        }, 1000);
+        }, delay);
       } else {
         ctx.ui.notify(`API error persisted after 3 retries: ${errorMsg}. Stopping auto-retry.`, "error");
         orchestrator.errorRetryCount = 0;
