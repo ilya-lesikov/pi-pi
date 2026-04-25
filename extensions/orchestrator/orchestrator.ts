@@ -55,6 +55,10 @@ export class Orchestrator {
   commitReminderSent = false;
   phaseStartTime = 0;
   awaitPollTimer: ReturnType<typeof setInterval> | null = null;
+  pendingRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  activeTaskToken = 0;
+  userGatePending = false;
+  reviewTransitionToken = -1;
   plannotatorReject: ((reason: Error) => void) | null = null;
   plannotatorUnsub: (() => void) | null = null;
   transitionToNextPhase: (ctx: any) => Promise<{ ok: boolean; error?: string }> = async () => ({ ok: false, error: "not initialized" });
@@ -96,7 +100,8 @@ export class Orchestrator {
     const ok = await this.pi.setModel(resolved);
     if (!ok) return false;
 
-    const thinkingLevel = thinking as "off" | "low" | "medium" | "high";
+    const VALID_THINKING = new Set(["off", "low", "medium", "high"]);
+    const thinkingLevel = (VALID_THINKING.has(thinking) ? thinking : "high") as "off" | "low" | "medium" | "high";
     this.pi.setThinkingLevel(thinkingLevel);
     return true;
   }
@@ -234,6 +239,9 @@ export class Orchestrator {
       return;
     }
 
+    this.resetTaskScopedState();
+    this.activeTaskToken++;
+
     this.active = {
       dir,
       type,
@@ -268,7 +276,9 @@ export class Orchestrator {
 
     if (this.active.state.phase === "plan") {
       this.pendingSubagentSpawns = Object.values(this.config.planners).filter((v) => v.enabled).length;
-      spawnPlanners(this.pi, this.cwd, this.active.dir, this.active.taskId, this.config).catch((err) => {
+      spawnPlanners(this.pi, this.cwd, this.active.dir, this.active.taskId, this.config).then((result) => {
+        if (result.spawned === 0) this.pendingSubagentSpawns = 0;
+      }).catch((err) => {
         this.pendingSubagentSpawns = 0;
         console.error(`[pi-pi] spawnPlanners failed: ${err.message}`);
       });
@@ -286,12 +296,34 @@ export class Orchestrator {
     this.pendingSubagentSpawns = 0;
   }
 
-  async cleanupActive(): Promise<void> {
-    if (!this.active) return;
+  resetTaskScopedState(): void {
+    this.spawnedAgentIds.clear();
+    this.agentDescriptions.clear();
+    this.pendingSubagentSpawns = 0;
+    this.errorRetryCount = 0;
+    this.commitReminderSent = false;
+    this.nudgeTimestamps = [];
+    this.cooldownHits = [];
+    this.nudgeHalted = false;
+    this.phaseCompactionPending = false;
+    this.phaseCompactionResolve = null;
+    this.phaseStartTime = 0;
+    this.userGatePending = false;
+    this.reviewTransitionToken = -1;
+    this.phaseTaskIds.clear();
     if (this.awaitPollTimer) {
       clearInterval(this.awaitPollTimer);
       this.awaitPollTimer = null;
     }
+    if (this.pendingRetryTimer) {
+      clearTimeout(this.pendingRetryTimer);
+      this.pendingRetryTimer = null;
+    }
+  }
+
+  async cleanupActive(): Promise<void> {
+    if (!this.active) return;
+    this.resetTaskScopedState();
     if (this.active.release) {
       try {
         await this.active.release();

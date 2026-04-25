@@ -4,7 +4,7 @@ import { Type } from "@sinclair/typebox";
 import { loadConfig } from "./config.js";
 import { runAfterEdit, autoCommit } from "./commands.js";
 import { taskName, getActiveTask, saveTask } from "./state.js";
-import { loadContextFiles, getPhaseArtifacts, getLatestSynthesizedPlan, loadReviewOutputs } from "./context.js";
+import { loadContextFiles, getPhaseArtifacts, getLatestSynthesizedPlan, loadReviewOutputs, loadPlanReviewOutputs } from "./context.js";
 import { WORKING_PRINCIPLES, COMMUNICATION } from "./agents/tool-routing.js";
 import { registerCbmTools } from "./cbm.js";
 import { registerExaTools } from "./exa.js";
@@ -83,11 +83,14 @@ async function enterReviewCycle(orchestrator: Orchestrator, ctx: any, kind: "aut
     return `No ${isPlan ? "plan" : "code"} reviewers enabled. Choose another review mode or review manually.`;
   }
 
+  orchestrator.reviewTransitionToken = -1;
   orchestrator.pendingSubagentSpawns = enabledCount;
   const spawnFn = isPlan
     ? () => spawnPlanReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, config)
     : () => spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, config, pass);
-  spawnFn().catch((err) => {
+  spawnFn().then((result) => {
+    if (result.spawned === 0) orchestrator.pendingSubagentSpawns = 0;
+  }).catch((err) => {
     orchestrator.pendingSubagentSpawns = 0;
     console.error(`[pi-pi] spawn${isPlan ? "Plan" : "Code"}Reviewers failed: ${err.message}`);
   });
@@ -108,6 +111,18 @@ function finalizeReviewCycle(task: ActiveTask): void {
 }
 
 export async function runUserGateDialog(orchestrator: Orchestrator, ctx: any, summary: string): Promise<string> {
+  if (!orchestrator.active) return "No active task.";
+  if (orchestrator.userGatePending) return "A user-gate dialog is already in progress.";
+  orchestrator.userGatePending = true;
+
+  try {
+    return await runUserGateDialogInner(orchestrator, ctx, summary);
+  } finally {
+    orchestrator.userGatePending = false;
+  }
+}
+
+async function runUserGateDialogInner(orchestrator: Orchestrator, ctx: any, summary: string): Promise<string> {
   if (!orchestrator.active) return "No active task.";
   const pi = orchestrator.pi;
   const phase = orchestrator.active.state.phase;
@@ -297,6 +312,24 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       orchestrator.pendingSubagentSpawns > 0
     ) return;
 
+    const plansDir = join(orchestrator.active.dir, "plans");
+    const hasPlanFiles = existsSync(plansDir) &&
+      readdirSync(plansDir).some((f) => f.endsWith(".md") && !f.includes("synthesized") && !f.includes("review_"));
+
+    if (!hasPlanFiles) {
+      pi.sendMessage(
+        {
+          customType: "pp-planners-error",
+          content: "All planner subagents finished but no plan files were produced. You must create the plan yourself based on USER_REQUEST.md and RESEARCH.md.",
+          display: true,
+        },
+        { deliverAs: "followUp" },
+      );
+      orchestrator.active.state.step = "synthesize";
+      saveTask(orchestrator.active.dir, orchestrator.active.state);
+      return;
+    }
+
     orchestrator.active.state.step = "synthesize";
     saveTask(orchestrator.active.dir, orchestrator.active.state);
     pi.sendUserMessage("[PI-PI] All planners completed. Read their outputs and synthesize the plan.", { deliverAs: "followUp" });
@@ -310,15 +343,22 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       orchestrator.pendingSubagentSpawns > 0
     ) return;
 
+    if (orchestrator.reviewTransitionToken === orchestrator.activeTaskToken) return;
+
     const cycle = orchestrator.active.state.reviewCycle;
+    const isPlanReview = orchestrator.active.state.phase === "plan";
+    const outputs = isPlanReview
+      ? loadPlanReviewOutputs(orchestrator.active.dir)
+      : loadReviewOutputs(orchestrator.active.dir, cycle.pass);
+
+    orchestrator.reviewTransitionToken = orchestrator.activeTaskToken;
     cycle.step = "apply_feedback";
     orchestrator.active.state.step = "apply_feedback";
     saveTask(orchestrator.active.dir, orchestrator.active.state);
 
-    const outputs = loadReviewOutputs(orchestrator.active.dir, cycle.pass);
     const rendered = outputs.length
       ? outputs.map((o) => `=== ${o.name} ===\n${o.content}`).join("\n\n")
-      : "No reviewer outputs found. Continue with manual review of current implementation.";
+      : "No reviewer outputs found. Review the implementation yourself and decide whether to approve or request changes.";
 
     pi.sendMessage(
       {
@@ -594,7 +634,11 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       if (orchestrator.errorRetryCount <= retryDelays.length) {
         const delay = retryDelays[orchestrator.errorRetryCount - 1];
         ctx.ui.notify(`API error (attempt ${orchestrator.errorRetryCount}/${retryDelays.length}): ${errorMsg}. Retrying in ${delay / 1000}s...`, "warning");
-        setTimeout(() => {
+        const taskToken = orchestrator.activeTaskToken;
+        if (orchestrator.pendingRetryTimer) clearTimeout(orchestrator.pendingRetryTimer);
+        orchestrator.pendingRetryTimer = setTimeout(() => {
+          orchestrator.pendingRetryTimer = null;
+          if (orchestrator.activeTaskToken !== taskToken || !orchestrator.active) return;
           pi.sendUserMessage(`[PI-PI] Previous request failed due to an API error. Continue working on the current phase (${phase}).`);
         }, delay);
       } else {
@@ -632,13 +676,21 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
           } else if (orchestrator.active.state.step === "await_reviewers" && orchestrator.active.state.reviewCycle) {
             const cycle = orchestrator.active.state.reviewCycle;
             const reviewConfig = cycle.kind === "auto-deep" ? deepReviewConfig(orchestrator.config) : orchestrator.config;
-            const reviewerCount = Object.values(reviewConfig.codeReviewers).filter((v) => v.enabled).length;
-            const outputs = loadReviewOutputs(taskDir, cycle.pass);
+            const isPlanReview = orchestrator.active.state.phase === "plan";
+            const reviewers = isPlanReview ? reviewConfig.planReviewers : reviewConfig.codeReviewers;
+            const reviewerCount = Object.values(reviewers).filter((v) => v.enabled).length;
+            const outputs = isPlanReview
+              ? loadPlanReviewOutputs(taskDir)
+              : loadReviewOutputs(taskDir, cycle.pass);
             if (outputs.length >= reviewerCount) {
               clearInterval(orchestrator.awaitPollTimer!);
               orchestrator.awaitPollTimer = null;
               orchestrator.spawnedAgentIds.clear();
               orchestrator.pendingSubagentSpawns = 0;
+
+              if (orchestrator.reviewTransitionToken === orchestrator.activeTaskToken) return;
+              orchestrator.reviewTransitionToken = orchestrator.activeTaskToken;
+
               cycle.step = "apply_feedback";
               orchestrator.active.state.step = "apply_feedback";
               saveTask(orchestrator.active.dir, orchestrator.active.state);
@@ -726,7 +778,11 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
         { deliverAs: "steer" },
       );
       orchestrator.nudgeTimestamps = [];
-      setTimeout(sendNudge, 60000);
+      const cooldownToken = orchestrator.activeTaskToken;
+      setTimeout(() => {
+        if (orchestrator.activeTaskToken !== cooldownToken || !orchestrator.active) return;
+        sendNudge();
+      }, 60000);
       return;
     }
 

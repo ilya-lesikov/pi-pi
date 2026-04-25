@@ -45,10 +45,10 @@ export async function spawnPlanners(
   taskDir: string,
   taskId: string,
   config: PiPiConfig,
-): Promise<void> {
+): Promise<{ spawned: number }> {
   const urPath = join(taskDir, "USER_REQUEST.md");
   const resPath = join(taskDir, "RESEARCH.md");
-  if (!existsSync(urPath) || !existsSync(resPath)) return;
+  if (!existsSync(urPath) || !existsSync(resPath)) return { spawned: 0 };
 
   const userRequest = readFileSync(urPath, "utf-8");
   const research = readFileSync(resPath, "utf-8");
@@ -91,7 +91,7 @@ export async function spawnPlanners(
 
   await Promise.allSettled(results);
 
-  const planFiles = existsSync(plansDir) ? readdirSync(plansDir).filter((f) => !f.includes("synthesized")) : [];
+  const planFiles = existsSync(plansDir) ? readdirSync(plansDir).filter((f) => !f.includes("synthesized") && !f.includes("review_")) : [];
   if (planFiles.length > 0) {
     pi.sendMessage(
       {
@@ -119,6 +119,8 @@ export async function spawnPlanners(
       { deliverAs: "steer" },
     );
   }
+
+  return { spawned: enabledVariants.length };
 }
 
 export async function spawnPlanReviewers(
@@ -127,15 +129,15 @@ export async function spawnPlanReviewers(
   taskDir: string,
   taskId: string,
   config: PiPiConfig,
-): Promise<string[]> {
+): Promise<{ spawned: number; files: string[] }> {
   const urPath = join(taskDir, "USER_REQUEST.md");
   const resPath = join(taskDir, "RESEARCH.md");
-  if (!existsSync(urPath) || !existsSync(resPath)) return [];
+  if (!existsSync(urPath) || !existsSync(resPath)) return { spawned: 0, files: [] };
 
   const userRequest = readFileSync(urPath, "utf-8");
   const research = readFileSync(resPath, "utf-8");
   const synthesizedPlan = getLatestSynthesizedPlan(taskDir);
-  if (!synthesizedPlan) return [];
+  if (!synthesizedPlan) return { spawned: 0, files: [] };
 
   const timestamp = Math.floor(Date.now() / 1000);
   const enabledVariants = Object.entries(config.planReviewers).filter(([, v]) => v.enabled);
@@ -203,5 +205,5 @@ export async function spawnPlanReviewers(
     );
   }
 
-  return reviewFiles;
+  return { spawned: enabledVariants.length, files: reviewFiles };
 }

@@ -60,15 +60,27 @@ export async function spawnCodeReviewers(
   taskId: string,
   config: PiPiConfig,
   round: number,
-): Promise<void> {
+): Promise<{ spawned: number }> {
   const urPath = join(taskDir, "USER_REQUEST.md");
   const resPath = join(taskDir, "RESEARCH.md");
-  if (!existsSync(urPath) || !existsSync(resPath)) return;
+  if (!existsSync(urPath) || !existsSync(resPath)) {
+    pi.sendMessage(
+      { customType: "pp-code-reviews-error", content: "Cannot start code review: USER_REQUEST.md or RESEARCH.md is missing.", display: true },
+      { deliverAs: "steer" },
+    );
+    return { spawned: 0 };
+  }
 
   const userRequest = readFileSync(urPath, "utf-8");
   const research = readFileSync(resPath, "utf-8");
   const synthesizedPlan = getLatestSynthesizedPlan(taskDir);
-  if (!synthesizedPlan) return;
+  if (!synthesizedPlan) {
+    pi.sendMessage(
+      { customType: "pp-code-reviews-error", content: "Cannot start code review: no synthesized plan found.", display: true },
+      { deliverAs: "steer" },
+    );
+    return { spawned: 0 };
+  }
 
   const reviewsDir = join(taskDir, "reviews");
   if (!existsSync(reviewsDir)) {
@@ -139,4 +151,6 @@ export async function spawnCodeReviewers(
       { deliverAs: "steer" },
     );
   }
+
+  return { spawned: enabledVariants.length };
 }

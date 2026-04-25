@@ -5,10 +5,10 @@ import { openPlannotator, waitForPlannotatorResult, cancelPendingPlannotatorWait
 import { loadConfig } from "./config.js";
 import { runAfterImplement } from "./commands.js";
 import { unregisterAgentDefinitions } from "./agents/registry.js";
-import { spawnPlanners } from "./phases/planning.js";
+import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
 import { spawnCodeReviewers } from "./phases/review.js";
 import { validateExitCriteria, nextPhase } from "./phases/machine.js";
-import { getLatestSynthesizedPlan, loadReviewOutputs } from "./context.js";
+import { getLatestSynthesizedPlan, loadReviewOutputs, loadPlanReviewOutputs } from "./context.js";
 import { runUserGateDialog } from "./event-handlers.js";
 import {
   saveTask,
@@ -178,6 +178,9 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
         return;
       }
 
+      orchestrator.resetTaskScopedState();
+      orchestrator.activeTaskToken++;
+
       orchestrator.active = {
         dir: task.dir,
         type: task.type,
@@ -198,34 +201,51 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
       orchestrator.registerAgents();
       pi.setSessionName(orchestrator.active.description.slice(0, 50));
       orchestrator.updateStatus(ctx);
+      orchestrator.createPhaseTasks();
 
       orchestrator.injectContextAndArtifacts(orchestrator.active.dir, orchestrator.active.state.phase);
 
       if (orchestrator.active.state.phase === "plan" && orchestrator.active.state.step === "await_planners") {
         const plansDir = join(orchestrator.active.dir, "plans");
-        const plannerCount = Object.values(orchestrator.config.planners).filter((v) => v.enabled).length;
+        const enabledVariants = Object.entries(orchestrator.config.planners).filter(([, v]) => v.enabled);
         const planFiles = existsSync(plansDir)
           ? readdirSync(plansDir).filter((f) => f.endsWith(".md") && !f.includes("synthesized") && !f.includes("review_"))
           : [];
-        if (planFiles.length >= plannerCount) {
+        if (planFiles.length >= enabledVariants.length) {
           orchestrator.active.state.step = "synthesize";
           saveTask(orchestrator.active.dir, orchestrator.active.state);
         } else {
-          orchestrator.pendingSubagentSpawns = plannerCount;
-          spawnPlanners(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, orchestrator.config).catch((err: any) => {
-            orchestrator.pendingSubagentSpawns = 0;
-            console.error(`[pi-pi] spawnPlanners failed: ${err.message}`);
-          });
+          const completedVariants = new Set(planFiles.map((f) => f.replace(/^\d+_/, "").replace(/\.md$/, "")));
+          const missingVariants = enabledVariants.filter(([name]) => !completedVariants.has(name));
+          if (missingVariants.length > 0) {
+            const missingConfig: Record<string, any> = {};
+            for (const [name, cfg] of missingVariants) missingConfig[name] = cfg;
+            const partialConfig = { ...orchestrator.config, planners: missingConfig };
+            orchestrator.pendingSubagentSpawns = missingVariants.length;
+            spawnPlanners(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, partialConfig).then((result) => {
+              if (result.spawned === 0) orchestrator.pendingSubagentSpawns = 0;
+            }).catch((err: any) => {
+              orchestrator.pendingSubagentSpawns = 0;
+              console.error(`[pi-pi] spawnPlanners failed: ${err.message}`);
+            });
+          } else {
+            orchestrator.active.state.step = "synthesize";
+            saveTask(orchestrator.active.dir, orchestrator.active.state);
+          }
         }
       }
 
       if (orchestrator.active.state.reviewCycle) {
         const cycle = orchestrator.active.state.reviewCycle;
         const reviewConfig = cycle.kind === "auto-deep" ? deepReviewConfig(orchestrator.config) : orchestrator.config;
+        const isPlanReview = orchestrator.active.state.phase === "plan";
+        const reviewers = isPlanReview ? reviewConfig.planReviewers : reviewConfig.codeReviewers;
+        const reviewerCount = Object.values(reviewers).filter((v) => v.enabled).length;
 
         if ((cycle.kind === "auto" || cycle.kind === "auto-deep") && (cycle.step === "spawn_reviewers" || cycle.step === "await_reviewers")) {
-          const outputs = loadReviewOutputs(orchestrator.active.dir, cycle.pass);
-          const reviewerCount = Object.values(reviewConfig.codeReviewers).filter((v) => v.enabled).length;
+          const outputs = isPlanReview
+            ? loadPlanReviewOutputs(orchestrator.active.dir)
+            : loadReviewOutputs(orchestrator.active.dir, cycle.pass);
           if (outputs.length >= reviewerCount) {
             cycle.step = "apply_feedback";
             orchestrator.active.state.step = "apply_feedback";
@@ -241,21 +261,27 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
             );
           } else {
             orchestrator.pendingSubagentSpawns = reviewerCount;
-            spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, reviewConfig, cycle.pass).catch((err: any) => {
+            const spawnFn = isPlanReview
+              ? () => spawnPlanReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, reviewConfig)
+              : () => spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, reviewConfig, cycle.pass);
+            spawnFn().then((result) => {
+              if (result.spawned === 0) orchestrator.pendingSubagentSpawns = 0;
+            }).catch((err: any) => {
               orchestrator.pendingSubagentSpawns = 0;
-              console.error(`[pi-pi] spawnCodeReviewers failed: ${err.message}`);
+              console.error(`[pi-pi] spawn reviewers failed: ${err.message}`);
             });
             cycle.step = "await_reviewers";
             saveTask(orchestrator.active.dir, orchestrator.active.state);
           }
         } else if (cycle.step === "apply_feedback") {
-          const outputs = loadReviewOutputs(orchestrator.active.dir, cycle.pass)
-            .map((o) => `=== ${o.name} ===\n${o.content}`)
-            .join("\n\n");
+          const outputs = isPlanReview
+            ? loadPlanReviewOutputs(orchestrator.active.dir)
+            : loadReviewOutputs(orchestrator.active.dir, cycle.pass);
+          const rendered = outputs.map((o) => `=== ${o.name} ===\n${o.content}`).join("\n\n");
           pi.sendMessage(
             {
               customType: "pp-review-ready",
-              content: `[PI-PI] Review cycle is in apply_feedback step.\n\n${outputs}`,
+              content: `[PI-PI] Review cycle is in apply_feedback step.\n\n${rendered}`,
               display: false,
             },
             { deliverAs: "steer" },
@@ -352,7 +378,9 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
 
     if (next === "plan") {
       orchestrator.pendingSubagentSpawns = Object.values(orchestrator.config.planners).filter((v) => v.enabled).length;
-      spawnPlanners(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, orchestrator.config).catch((err) => {
+      spawnPlanners(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, orchestrator.config).then((result) => {
+        if (result.spawned === 0) orchestrator.pendingSubagentSpawns = 0;
+      }).catch((err) => {
         orchestrator.pendingSubagentSpawns = 0;
         console.error(`[pi-pi] spawnPlanners failed: ${err.message}`);
       });

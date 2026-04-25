@@ -179,3 +179,12 @@ export function loadReviewOutputs(taskDir: string, pass: number): { name: string
     .sort()
     .map((name) => ({ name, content: readFileSync(join(reviewsDir, name), "utf-8") }));
 }
+
+export function loadPlanReviewOutputs(taskDir: string): { name: string; content: string }[] {
+  const plansDir = join(taskDir, "plans");
+  if (!existsSync(plansDir)) return [];
+  return readdirSync(plansDir)
+    .filter((f) => f.includes("review_") && f.endsWith(".md"))
+    .sort()
+    .map((name) => ({ name, content: readFileSync(join(plansDir, name), "utf-8") }));
+}
