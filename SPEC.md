@@ -30,6 +30,12 @@ Manual trigger for the phase-ending dialog. When the user picks a "continue" opt
 
 Lists all paused (non-done) tasks. User picks one to resume. The step machine resumes at the persisted step — if the task was mid-review-cycle, it picks up there.
 
+Resume behavior:
+- Resets all task-scoped state (spawned agent IDs, retry counters, nudge state, timers) before resuming
+- Recreates phase task entries for progress tracking
+- If resuming `await_planners`, only respawns planner variants that haven't produced output files yet (not all planners)
+- If resuming a review cycle, uses phase-aware logic: plan phase uses `planReviewers`/`spawnPlanReviewers`, implement phase uses `codeReviewers`/`spawnCodeReviewers`
+
 ### /pp:done
 
 Aborts all subagents, marks the task done, releases the lock.
@@ -432,12 +438,42 @@ Project's AGENTS.md is injected into the main agent's system prompt.
 
 ## Auto-Continuation
 
+### API Error Retry
+
+When the agent's turn ends with an API error (provider timeout, rate limit, JSON parse error), the extension retries with exponential backoff:
+
+- Attempt 1: wait 2s, then send continuation message
+- Attempt 2: wait 6s
+- Attempt 3: wait 24s
+- After 3 failures: stop retrying, notify user
+
+Retry timers are cancelled on task switch/done to prevent stale retries from firing into a different task. Each retry is guarded by a task token — if the active task changes before the timer fires, the retry is silently discarded.
+
+On any successful turn, the retry counter resets to 0.
+
+### Empty-Turn Auto-Continuation
+
 When the agent's turn ends with an empty response (content filter, timeout, rate limit), the extension automatically sends a continuation nudge:
 
 - Up to 3 empty turns in 60 seconds: instant nudge
 - 5th empty turn in 60 seconds: notify user, wait 60 seconds, then nudge (resets window)
 - 5 cooldown cycles in 20 minutes: halt nudging, notify user
 - Any user message resumes nudging
+
+Cooldown nudge timers are guarded by the task token — stale timers from a previous task are discarded.
+
+---
+
+## Concurrency Safety
+
+Several mechanisms prevent race conditions and stale state mutations:
+
+- **Task token** — An incrementing counter (`activeTaskToken`) is assigned on each `startTask`/`resume`. All deferred callbacks (retry timers, cooldown nudges) capture the token and verify it before executing. Stale callbacks from a previous task are silently discarded.
+- **Review transition guard** — A `reviewTransitionToken` prevents both the event-driven completion handler and the 5s poller from independently transitioning `await_reviewers → apply_feedback`. Only the first to fire performs the transition.
+- **User-gate reentrancy** — A `userGatePending` flag prevents overlapping `runUserGateDialog()` calls. Concurrent invocations (e.g. from `pp_phase_complete` and `/pp:next`) return immediately while a dialog is already open.
+- **Subagent failure handling** — When all planners or reviewers fail, the system checks for actual output files before transitioning. Zero output files → sends a manual-work fallback message instead of falsely claiming "all completed."
+- **Spawn no-op detection** — Spawn functions return `{ spawned: number }`. When prerequisites are missing and nothing is spawned, `pendingSubagentSpawns` is reset to prevent the system from waiting indefinitely.
+- **Task-scoped state reset** — `resetTaskScopedState()` clears all mutable per-task state (spawned agent IDs, descriptions, retry/nudge/cooldown counters, timers, phase task IDs) on task start, resume, and cleanup.
 
 ---
 
@@ -479,12 +515,14 @@ Runs after all plan items are checked and user approves implementation. Gate —
 
 ## Configuration
 
-Config is loaded by merging three layers: defaults → global config → project config. Global config lives at `~/.pi/extensions/pp/config.json`. Project config lives at `.pp/config.json` (gitignored). Both are optional.
+Config is loaded by merging three layers: defaults → global config → project config. Global config lives at `~/.pi/agent/extensions/pp/config.json` (resolved via `getAgentDir()`). Project config lives at `.pp/config.json` (gitignored). Both are optional.
 
 Key settings:
 - `mainModel` — model/thinking per command type (implement, debug, brainstorm)
 - `planners`, `planReviewers`, `codeReviewers` — per-variant model configs with enable/disable
 - `agents` — model/thinking for explore, librarian, task subagents
+
+Valid `thinking` values: `"off"`, `"low"`, `"medium"`, `"high"`. Invalid values (e.g. `"xhigh"`) are normalized to `"high"` at runtime.
 - `commands` — afterEdit (with glob), afterImplement
 - `timeouts` — afterEdit, afterImplement, agentSpawn, lockStale, lockUpdate
 - `autoCommit` — enable/disable pp_commit tool (default: true)
@@ -498,4 +536,5 @@ pi-pi bundles modified forks of third-party extensions in `3p/`. These are loade
 Bundled:
 - `pi-subagents` — modified to support in-memory agent registration and extension-only mode
 - `pi-tasks` — modified to handle store upgrade in command handlers
+- `pi-hashline-readmap` — provides hash-line read/write/edit tools with content-addressable anchors
 - `pi-lsp`, `pi-ask-user`, `pi-mcp-adapter`, `pi-plannotator` — forks with type fixes
