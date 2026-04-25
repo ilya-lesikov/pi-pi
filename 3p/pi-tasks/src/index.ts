@@ -77,6 +77,14 @@ export default function (pi: ExtensionAPI) {
   const tracker = new ProcessTracker();
   const widget = new TaskWidget(store);
 
+  const STORE_KEY = Symbol.for("pi-tasks:store");
+  (globalThis as any)[STORE_KEY] = {
+    create: (subject: string, description: string, activeForm?: string) => store.create(subject, description, activeForm),
+    update: (id: string, fields: Record<string, any>) => store.update(id, fields),
+    list: () => store.list(),
+    get: (id: string) => store.get(id),
+  };
+
   // ── Subagent integration state ──
   /** Latest ExtensionContext — refreshed on every tool execution so cascade always has a valid one. */
   let latestCtx: ExtensionContext | undefined;

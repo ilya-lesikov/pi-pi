@@ -10,7 +10,7 @@ import { registerCbmTools } from "./cbm.js";
 import { registerExaTools } from "./exa.js";
 import { registerAstSearchTool } from "./ast-search.js";
 import { setExtensionOnlyMode, unregisterAgentDefinitions } from "./agents/registry.js";
-import { spawnPlanners } from "./phases/planning.js";
+import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
 import { spawnCodeReviewers } from "./phases/review.js";
 import { openPlannotator, waitForPlannotatorResult, cancelPendingPlannotatorWait } from "./plannotator.js";
 import { Orchestrator, deepReviewConfig, type ActiveTask } from "./orchestrator.js";
@@ -73,18 +73,23 @@ async function enterReviewCycle(orchestrator: Orchestrator, ctx: any, kind: "aut
     return `Plannotator requested changes.${feedback}\n\nUser wants to continue. Run /pp:next when ready to advance.`;
   }
 
+  const isPlan = orchestrator.active.state.phase === "plan";
   const config = kind === "auto-deep" ? deepReviewConfig(orchestrator.config) : orchestrator.config;
-  const enabledCount = Object.values(config.codeReviewers).filter((v) => v.enabled).length;
+  const reviewers = isPlan ? config.planReviewers : config.codeReviewers;
+  const enabledCount = Object.values(reviewers).filter((v) => v.enabled).length;
   if (enabledCount === 0) {
     orchestrator.active.state.reviewCycle = null;
     saveTask(orchestrator.active.dir, orchestrator.active.state);
-    return "No code reviewers enabled. Choose another review mode or review manually.";
+    return `No ${isPlan ? "plan" : "code"} reviewers enabled. Choose another review mode or review manually.`;
   }
 
   orchestrator.pendingSubagentSpawns = enabledCount;
-  spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, config, pass).catch((err) => {
+  const spawnFn = isPlan
+    ? () => spawnPlanReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, config)
+    : () => spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, config, pass);
+  spawnFn().catch((err) => {
     orchestrator.pendingSubagentSpawns = 0;
-    console.error(`[pi-pi] spawnCodeReviewers failed: ${err.message}`);
+    console.error(`[pi-pi] spawn${isPlan ? "Plan" : "Code"}Reviewers failed: ${err.message}`);
   });
 
   orchestrator.active.state.reviewCycle.step = "await_reviewers";
@@ -241,6 +246,7 @@ function registerCommitTool(orchestrator: Orchestrator): void {
       const result = autoCommit(files, params.message, orchestrator.cwd);
       if (result.ok) {
         orchestrator.active.modifiedFiles.clear();
+        orchestrator.commitReminderSent = false;
         return { content: [{ type: "text" as const, text: `Committed ${files.length} file(s): ${result.commitHash ?? "ok"}` }], details: {} };
       }
       return { content: [{ type: "text" as const, text: `Commit failed: ${result.error}` }], isError: true as const, details: {} };
@@ -552,7 +558,13 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (!orchestrator.active || orchestrator.active.state.phase === "done") return;
     orchestrator.updateStatus(ctx);
 
-    if (orchestrator.active.state.phase === "implement" && orchestrator.config.autoCommit && orchestrator.active.modifiedFiles.size > 0) {
+    if (
+      orchestrator.active.state.phase === "implement" &&
+      orchestrator.config.autoCommit &&
+      orchestrator.active.modifiedFiles.size > 0 &&
+      !orchestrator.commitReminderSent
+    ) {
+      orchestrator.commitReminderSent = true;
       pi.sendMessage(
         {
           customType: "pp-commit-reminder",

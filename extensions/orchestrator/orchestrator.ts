@@ -52,6 +52,8 @@ export class Orchestrator {
   nudgeHalted = false;
   pendingSubagentSpawns = 0;
   errorRetryCount = 0;
+  commitReminderSent = false;
+  phaseStartTime = 0;
   awaitPollTimer: ReturnType<typeof setInterval> | null = null;
   plannotatorReject: ((reason: Error) => void) | null = null;
   plannotatorUnsub: (() => void) | null = null;
@@ -99,47 +101,47 @@ export class Orchestrator {
     return true;
   }
 
-  updateStatus(ctx: ExtensionContext): void {
-    if (!this.active) {
-      ctx.ui.setStatus("pi-pi", undefined);
-      return;
-    }
-    ctx.ui.setStatus("pi-pi", `${this.active.state.phase} — ${this.active.description}`);
+  updateStatus(_ctx: ExtensionContext): void {
   }
+
+  private phaseTaskIds = new Map<string, string>();
 
   createPhaseTasks(): void {
     if (!this.active || this.active.type !== "implement") return;
+    const store = (globalThis as any)[Symbol.for("pi-tasks:store")];
+    if (!store) return;
 
-    const currentPhase = this.active.state.phase;
+    this.phaseTaskIds.clear();
     const phases = phasePipeline(this.active.type).filter((p) => p !== "done");
+    const currentPhase = this.active.state.phase;
     const currentIdx = phases.indexOf(currentPhase as typeof phases[number]);
-    const lines = phases.map((p, i) => {
-      const status = i < currentIdx ? "completed" : p === currentPhase ? "in_progress" : "pending";
-      const blockedBy = i > currentIdx ? ` (blocked by #${i})` : "";
-      return `${i + 1}. "${p}" (status: ${status})${blockedBy}`;
-    });
 
-    this.pi.sendMessage(
-      {
-        customType: "pp-task-init",
-        content: `Create tracking tasks for the orchestration phases using TaskCreate:\n${lines.join("\n")}`,
-        display: false,
-      },
-      { deliverAs: "steer" },
-    );
+    for (let i = 0; i < phases.length; i++) {
+      const p = phases[i];
+      const status = i < currentIdx ? "completed" : p === currentPhase ? "in_progress" : "pending";
+      const task = store.create(p, `Orchestration phase: ${p}`);
+      this.phaseTaskIds.set(p, task.id);
+      if (status !== "pending") {
+        store.update(task.id, { status });
+      }
+    }
   }
 
   updatePhaseTasks(): void {
     if (!this.active || this.active.type !== "implement") return;
+    const store = (globalThis as any)[Symbol.for("pi-tasks:store")];
+    if (!store || this.phaseTaskIds.size === 0) return;
 
-    this.pi.sendMessage(
-      {
-        customType: "pp-task-update",
-        content: `Update tracking tasks: mark current phase "${this.active.state.phase}" as in_progress, mark previous phases as completed using TaskUpdate.`,
-        display: false,
-      },
-      { deliverAs: "steer" },
-    );
+    const currentPhase = this.active.state.phase;
+    const phases = phasePipeline(this.active.type).filter((p) => p !== "done");
+    const currentIdx = phases.indexOf(currentPhase as typeof phases[number]);
+
+    for (let i = 0; i < phases.length; i++) {
+      const taskId = this.phaseTaskIds.get(phases[i]);
+      if (!taskId) continue;
+      const status = i < currentIdx ? "completed" : phases[i] === currentPhase ? "in_progress" : "pending";
+      store.update(taskId, { status });
+    }
   }
 
   getPhasePrompt(_ctx: ExtensionContext): string {
@@ -256,6 +258,7 @@ export class Orchestrator {
     this.injectContextAndArtifacts(this.active.dir, this.active.state.phase);
     this.createPhaseTasks();
 
+    this.phaseStartTime = Date.now();
     const isGenericDescription = ["implement", "debug", "brainstorm"].includes(this.active.description);
     if (isGenericDescription) {
       ctx.ui.notify("Task created. Describe what you'd like to do.", "info");
@@ -345,6 +348,7 @@ export class Orchestrator {
           this.phaseCompactionResolve();
           this.phaseCompactionResolve = null;
         }
+        this.phaseStartTime = Date.now();
         this.injectContextAndArtifacts(taskDir, phase);
         this.pi.sendUserMessage(`[PI-PI] Entered ${phase} phase. Begin working.`);
       },
@@ -355,6 +359,7 @@ export class Orchestrator {
           this.phaseCompactionResolve();
           this.phaseCompactionResolve = null;
         }
+        this.phaseStartTime = Date.now();
         this.injectContextAndArtifacts(taskDir, phase);
         this.pi.sendUserMessage(`[PI-PI] Entered ${phase} phase. Begin working.`);
       },

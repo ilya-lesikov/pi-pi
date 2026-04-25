@@ -303,6 +303,13 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
       return { ok: false, error: exitCheck.reason };
     }
 
+    if (orchestrator.phaseStartTime > 0) {
+      const elapsed = Math.round((Date.now() - orchestrator.phaseStartTime) / 1000);
+      const min = Math.floor(elapsed / 60);
+      const sec = elapsed % 60;
+      ctx.ui.notify(`Phase "${currentPhase}" completed in ${min > 0 ? `${min}m ${sec}s` : `${sec}s`}`, "info");
+    }
+
     const next = nextPhase(orchestrator.active.type, currentPhase);
     if (!next) return { ok: false, error: "No next phase available." };
 
