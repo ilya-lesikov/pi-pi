@@ -17,9 +17,7 @@
       "./3p/pi-tasks/src/index.ts",
       "./3p/pi-lsp/extensions/lsp",
       "./3p/pi-ask-user",
-      "./3p/pi-mcp-adapter",
-      "./3p/pi-plannotator/apps/pi-extension",
-      "./3p/pi-hashline-readmap"
+      "./3p/pi-plannotator/apps/pi-extension"
     ]
   },
   "dependencies": {

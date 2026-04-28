@@ -536,5 +536,4 @@ pi-pi bundles modified forks of third-party extensions in `3p/`. These are loade
 Bundled:
 - `pi-subagents` — modified to support in-memory agent registration and extension-only mode
 - `pi-tasks` — modified to handle store upgrade in command handlers
-- `pi-hashline-readmap` — provides hash-line read/write/edit tools with content-addressable anchors
-- `pi-lsp`, `pi-ask-user`, `pi-mcp-adapter`, `pi-plannotator` — forks with type fixes
+- `pi-lsp`, `pi-ask-user`, `pi-plannotator` — forks with type fixes
