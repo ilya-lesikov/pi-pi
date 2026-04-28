@@ -312,11 +312,16 @@ export async function runAgent(
   const maxTurns = normalizeMaxTurns(options.maxTurns ?? agentConfig?.maxTurns ?? defaultMaxTurns);
   let softLimitReached = false;
   let aborted = false;
+  let lastTurnError: string | undefined;
 
   let currentMessageText = "";
   const unsubTurns = session.subscribe((event: AgentSessionEvent) => {
     if (event.type === "turn_end") {
       turnCount++;
+      const msg = (event as any).message;
+      if (msg?.stopReason === "error") {
+        lastTurnError = msg.errorMessage || "Model API error";
+      }
       options.onTurnEnd?.(turnCount);
       if (maxTurns != null) {
         if (!softLimitReached && turnCount >= maxTurns) {
@@ -363,7 +368,15 @@ export async function runAgent(
     cleanupAbort();
   }
 
+  if (lastTurnError && turnCount <= 1) {
+    throw new Error(lastTurnError);
+  }
+
   const responseText = collector.getText().trim() || getLastAssistantText(session);
+  if (lastTurnError) {
+    const errorSuffix = `\n\n[Agent error on final turn: ${lastTurnError}]`;
+    return { responseText: (responseText || "No output.") + errorSuffix, session, aborted, steered: softLimitReached };
+  }
   return { responseText, session, aborted, steered: softLimitReached };
 }
 
