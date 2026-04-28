@@ -137,8 +137,8 @@ function makeCtx(overrides: Record<string, any> = {}) {
     },
     abort: vi.fn(),
     waitForIdle: vi.fn().mockResolvedValue(undefined),
-    compact: vi.fn(({ onComplete }: any) => {
-      if (onComplete) setTimeout(onComplete, 0);
+    compact: vi.fn((opts?: any) => {
+      if (opts?.onComplete) setTimeout(opts.onComplete, 0);
     }),
     modelRegistry: {
       getAvailable: vi.fn().mockReturnValue([

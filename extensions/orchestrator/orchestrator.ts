@@ -47,6 +47,8 @@ export class Orchestrator {
   agentDescriptions = new Map<string, string>();
   phaseCompactionPending = false;
   phaseCompactionResolve: (() => void) | null = null;
+  taskDoneCompactionPending = false;
+  taskDoneCompactionSummary = "";
   nudgeTimestamps: number[] = [];
   cooldownHits: number[] = [];
   nudgeHalted = false;

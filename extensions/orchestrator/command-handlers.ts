@@ -86,12 +86,16 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
       const type = orchestrator.active.type;
       const dir = orchestrator.active.dir;
 
+      orchestrator.taskDoneCompactionPending = true;
+      orchestrator.taskDoneCompactionSummary = `Task "${name}" (${type}) completed.`;
+
       orchestrator.active.state.phase = "done";
       saveTask(orchestrator.active.dir, orchestrator.active.state);
       unregisterAgentDefinitions(pi);
       await orchestrator.cleanupActive();
 
       orchestrator.updateStatus(ctx);
+      ctx.compact();
 
       const urExists = existsSync(join(dir, "USER_REQUEST.md"));
       const resExists = existsSync(join(dir, "RESEARCH.md"));
@@ -363,10 +367,16 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
     saveTask(orchestrator.active.dir, orchestrator.active.state);
 
     if (next === "done") {
+      const name = orchestrator.active!.description;
+      const type = orchestrator.active!.type;
+      orchestrator.taskDoneCompactionPending = true;
+      orchestrator.taskDoneCompactionSummary = `Task "${name}" (${type}) completed.`;
+
       orchestrator.abortAllSubagents();
       unregisterAgentDefinitions(pi);
       await orchestrator.cleanupActive();
       orchestrator.updateStatus(ctx);
+      ctx.compact();
       ctx.ui.notify("Task completed!", "info");
       return { ok: true };
     }

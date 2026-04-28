@@ -400,10 +400,23 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     const desc = orchestrator.agentDescriptions.get(data.id) || data.type || data.id;
     orchestrator.agentDescriptions.delete(data.id);
 
+    if (data.status === "stopped" || data.status === "aborted") {
+      checkPlannerCompletion();
+      checkReviewCycleCompletion();
+      return;
+    }
+
+    const isApiError = data.status === "error" && (data.toolUses ?? 0) === 0;
+    if (isApiError && orchestrator.spawnedAgentIds.size > 0) {
+      orchestrator.abortAllSubagents();
+    }
+
     pi.sendMessage(
       {
         customType: "pp-subagent-error",
-        content: `**${desc}** failed: ${data.error || "unknown error"}`,
+        content: isApiError
+          ? `**${desc}** failed (model/API error): ${data.error || "unknown error"}. All subagents aborted. Do NOT retry — the model is likely unavailable. Report the error to the user and ask how to proceed.`
+          : `**${desc}** failed: ${data.error || "unknown error"}`,
         display: true,
       },
       { deliverAs: "steer" },
@@ -458,6 +471,10 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
+    if (orchestrator.taskDoneCompactionPending) {
+      ctx.abort();
+      return;
+    }
     if (!orchestrator.active || orchestrator.active.state.phase === "done") return;
 
     orchestrator.nudgeHalted = false;
@@ -563,6 +580,19 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   });
 
   pi.on("session_before_compact", async (event, _ctx) => {
+    if (orchestrator.taskDoneCompactionPending) {
+      const summary = orchestrator.taskDoneCompactionSummary;
+      orchestrator.taskDoneCompactionPending = false;
+      orchestrator.taskDoneCompactionSummary = "";
+      return {
+        compaction: {
+          summary,
+          firstKeptEntryId: event.preparation.firstKeptEntryId,
+          tokensBefore: event.preparation.tokensBefore,
+        },
+      };
+    }
+
     if (!orchestrator.active || orchestrator.active.state.phase === "done") return;
 
     if (orchestrator.phaseCompactionPending) {
