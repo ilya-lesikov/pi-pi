@@ -1,14 +1,21 @@
-import { spawn, type ChildProcess } from "child_process";
-import { existsSync } from "fs";
-import { join } from "path";
+import { spawn, execFileSync, type ChildProcess } from "child_process";
 import { createInterface, type Interface as ReadlineInterface } from "readline";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 
-const CBM_BIN = join(process.env.HOME ?? "", ".local", "bin", "codebase-memory-mcp");
+function findCbmBin(): string | null {
+  try {
+    return execFileSync("which", ["codebase-memory-mcp"], { encoding: "utf-8", stdio: "pipe" }).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+let CBM_BIN: string | null = null;
 
 function isCbmAvailable(): boolean {
-  return existsSync(CBM_BIN);
+  if (CBM_BIN === null) CBM_BIN = findCbmBin();
+  return CBM_BIN !== null;
 }
 
 class CbmDaemon {
@@ -23,7 +30,7 @@ class CbmDaemon {
   start(): void {
     if (this.proc) return;
 
-    this.proc = spawn(CBM_BIN, [], { stdio: ["pipe", "pipe", "ignore"] });
+    this.proc = spawn(CBM_BIN!, [], { stdio: ["pipe", "pipe", "ignore"] });
     this.proc.unref();
     (this.proc.stdout as any)?.unref?.();
     (this.proc.stdin as any)?.unref?.();
