@@ -129,9 +129,11 @@ function makeConfig() {
 function makeCtx(overrides: Record<string, any> = {}) {
   return {
     cwd: "/project",
+    hasUI: true,
     ui: {
       confirm: vi.fn(),
       select: vi.fn(),
+      custom: vi.fn().mockResolvedValue(undefined),
       notify: vi.fn(),
       setStatus: vi.fn(),
     },

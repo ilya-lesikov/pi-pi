@@ -27,7 +27,7 @@ import {
    truncateToWidth,
    wrapTextWithAnsi,
 } from "@mariozechner/pi-tui";
-import { renderSingleSelectRows } from "./single-select-layout";
+import { renderSingleSelectRows, type QuestionOption } from "./single-select-layout";
 
 import { createRequire } from "node:module";
 const _require = createRequire(import.meta.url);
@@ -1287,6 +1287,82 @@ async function askViaDialogs(
    return createSelectionResponse([selected], comment);
 }
 
+export type { AskResponse, QuestionOption };
+
+export interface AskUserOptions {
+   question: string;
+   context?: string;
+   options?: AskOptionInput[];
+   allowMultiple?: boolean;
+   allowFreeform?: boolean;
+   allowComment?: boolean;
+   timeout?: number;
+   signal?: AbortSignal;
+}
+
+export async function askUser(
+   ctx: { hasUI: boolean; ui: any },
+   opts: AskUserOptions,
+): Promise<AskResponse | null> {
+   const {
+      question,
+      context,
+      options: rawOptions = [],
+      allowMultiple = false,
+      allowFreeform = true,
+      allowComment = false,
+      timeout,
+      signal,
+   } = opts;
+   const options = normalizeOptions(rawOptions);
+   const normalizedContext = context?.trim() || undefined;
+
+   if (!ctx.hasUI || !ctx.ui) return null;
+
+   if (options.length === 0) {
+      const prompt = normalizedContext ? `${question}\n\nContext:\n${normalizedContext}` : question;
+      const answer = await ctx.ui.input(prompt, "Type your answer...", timeout ? { timeout } : undefined);
+      return createFreeformResponse(answer);
+   }
+
+   const customResult = await ctx.ui.custom<AskResponse | null>(
+      (tui: TUI, theme: Theme, keybindings: KeybindingsManager, done: (result: AskResponse | null) => void) => {
+         if (signal) {
+            const onAbort = () => done(null);
+            signal.addEventListener("abort", onAbort, { once: true });
+         }
+         if (timeout && timeout > 0) {
+            setTimeout(() => done(null), timeout);
+         }
+         return new AskComponent(
+            question,
+            normalizedContext,
+            options,
+            allowMultiple,
+            allowFreeform,
+            allowComment,
+            tui,
+            theme,
+            keybindings,
+            done,
+         );
+      },
+      {
+         overlay: true,
+         overlayOptions: {
+            anchor: "bottom-center",
+            width: ASK_OVERLAY_WIDTH,
+            minWidth: ASK_OVERLAY_MIN_WIDTH,
+            maxHeight: "85%",
+         },
+      },
+   );
+
+   if (customResult !== undefined) return customResult;
+
+   return askViaDialogs(ctx.ui, question, normalizedContext, options, allowMultiple, allowFreeform, allowComment, timeout);
+}
+
 export default function(pi: ExtensionAPI) {
    pi.registerTool({
       name: "ask_user",
@@ -1423,16 +1499,15 @@ export default function(pi: ExtensionAPI) {
                      done,
                   );
                },
-               {
-                  overlay: true,
-                  overlayOptions: {
-                     anchor: "center",
-                     width: ASK_OVERLAY_WIDTH,
-                     minWidth: ASK_OVERLAY_MIN_WIDTH,
-                     maxHeight: "85%",
-                     margin: 1,
-                  },
-               },
+                {
+                   overlay: true,
+                   overlayOptions: {
+                      anchor: "bottom-center",
+                      width: ASK_OVERLAY_WIDTH,
+                      minWidth: ASK_OVERLAY_MIN_WIDTH,
+                      maxHeight: "85%",
+                   },
+                },
             );
 
             if (customResult !== undefined) {

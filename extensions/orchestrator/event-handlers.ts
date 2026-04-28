@@ -14,6 +14,19 @@ import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
 import { spawnCodeReviewers } from "./phases/review.js";
 import { openPlannotator, waitForPlannotatorResult, cancelPendingPlannotatorWait } from "./plannotator.js";
 import { Orchestrator, deepReviewConfig, type ActiveTask } from "./orchestrator.js";
+import { askUser } from "../../3p/pi-ask-user/index.js";
+
+async function selectOption(ctx: any, question: string, options: string[]): Promise<string | undefined> {
+  const result = await askUser(ctx, {
+    question,
+    options,
+    allowFreeform: false,
+    allowComment: false,
+    allowMultiple: false,
+  });
+  if (!result || result.kind !== "selection") return undefined;
+  return result.selections[0];
+}
 
 function setStep(orchestrator: Orchestrator, step: string): void {
   if (!orchestrator.active) return;
@@ -141,7 +154,7 @@ async function runUserGateDialogInner(orchestrator: Orchestrator, ctx: any, summ
   const continueMessage = "User wants to continue. Run /pp:next when ready to advance.";
 
   if (phase === "brainstorm" && task.type === "implement") {
-    const choice = await ctx.ui.select(summary, ["Approve brainstorm", "Continue brainstorming"]);
+    const choice = await selectOption(ctx, summary, ["Approve brainstorm", "Continue brainstorming"]);
     if (choice === "Approve brainstorm") {
       const result = await orchestrator.transitionToNextPhase(ctx);
       return result.ok ? "Brainstorm approved. Transitioned to plan." : `Transition blocked: ${result.error}`;
@@ -154,7 +167,7 @@ async function runUserGateDialogInner(orchestrator: Orchestrator, ctx: any, summ
     const canStartImpl = existsSync(join(task.dir, "USER_REQUEST.md")) && existsSync(join(task.dir, "RESEARCH.md"));
     const options = ["Continue brainstorming", "Finish brainstorming"];
     if (canStartImpl) options.unshift("Start implementation");
-    const choice = await ctx.ui.select(summary, options);
+    const choice = await selectOption(ctx, summary, options);
     if (choice === "Start implementation") {
       const fromArg = `${task.type}/${basename(task.dir)}`;
       pi.sendUserMessage(`/pp:implement --from ${fromArg}`);
@@ -169,7 +182,7 @@ async function runUserGateDialogInner(orchestrator: Orchestrator, ctx: any, summ
   }
 
   if (phase === "debug") {
-    const choice = await ctx.ui.select(summary, ["Implement a fix", "Continue debugging", "Finish debugging"]);
+    const choice = await selectOption(ctx, summary, ["Implement a fix", "Continue debugging", "Finish debugging"]);
     if (choice === "Implement a fix") {
       const fromArg = `${task.type}/${basename(task.dir)}`;
       pi.sendUserMessage(`/pp:implement --from ${fromArg}`);
@@ -184,7 +197,7 @@ async function runUserGateDialogInner(orchestrator: Orchestrator, ctx: any, summ
   }
 
   if (phase === "plan") {
-    const choice = await ctx.ui.select(summary, [
+    const choice = await selectOption(ctx, summary, [
       "Approve plan",
       autoLabel,
       deepLabel,
@@ -205,7 +218,7 @@ async function runUserGateDialogInner(orchestrator: Orchestrator, ctx: any, summ
   }
 
   if (phase === "implement") {
-    const choice = await ctx.ui.select(summary, [
+    const choice = await selectOption(ctx, summary, [
       "Approve implementation",
       autoLabel,
       deepLabel,
