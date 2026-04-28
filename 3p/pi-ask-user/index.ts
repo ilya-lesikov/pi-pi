@@ -1298,6 +1298,7 @@ export interface AskUserOptions {
    allowComment?: boolean;
    timeout?: number;
    signal?: AbortSignal;
+   overlay?: boolean;
 }
 
 export async function askUser(
@@ -1313,6 +1314,7 @@ export async function askUser(
       allowComment = false,
       timeout,
       signal,
+      overlay = false,
    } = opts;
    const options = normalizeOptions(rawOptions);
    const normalizedContext = context?.trim() || undefined;
@@ -1324,6 +1326,10 @@ export async function askUser(
       const answer = await ctx.ui.input(prompt, "Type your answer...", timeout ? { timeout } : undefined);
       return createFreeformResponse(answer);
    }
+
+   const customOpts = overlay
+      ? { overlay: true, overlayOptions: { anchor: "bottom-center" as const, width: ASK_OVERLAY_WIDTH, minWidth: ASK_OVERLAY_MIN_WIDTH, maxHeight: "85%" as const } }
+      : {};
 
    const customResult = await ctx.ui.custom<AskResponse | null>(
       (tui: TUI, theme: Theme, keybindings: KeybindingsManager, done: (result: AskResponse | null) => void) => {
@@ -1347,15 +1353,7 @@ export async function askUser(
             done,
          );
       },
-      {
-         overlay: true,
-         overlayOptions: {
-            anchor: "bottom-center",
-            width: ASK_OVERLAY_WIDTH,
-            minWidth: ASK_OVERLAY_MIN_WIDTH,
-            maxHeight: "85%",
-         },
-      },
+      customOpts,
    );
 
    if (customResult !== undefined) return customResult;
