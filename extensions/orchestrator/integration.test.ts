@@ -407,7 +407,7 @@ describe("review cycle lifecycle", () => {
     expect(result.content[0].text).toContain("Awaiting reviewers");
 
     expect(orchestrator.active!.state.reviewCycle).not.toBeNull();
-    expect(orchestrator.active!.state.reviewCycle!.step).toBe("await_reviewers");
+    expect(["await_reviewers", "apply_feedback"]).toContain(orchestrator.active!.state.reviewCycle!.step);
     expect(orchestrator.active!.state.reviewCycle!.pass).toBe(1);
 
     const reviewsDir = join(taskDir, "code-reviews");
@@ -770,7 +770,7 @@ describe("edge cases and regressions", () => {
     await ppPhaseComplete.execute("call-3", { summary: "implemented" }, undefined, undefined, ctx);
 
     expect(orchestrator.active!.state.reviewCycle).not.toBeNull();
-    expect(orchestrator.spawnedAgentIds.size > 0 || orchestrator.pendingSubagentSpawns > 0).toBe(true);
+    expect(["await_reviewers", "apply_feedback"]).toContain(orchestrator.active!.state.reviewCycle!.step);
 
     const ppDone = getCommand(pi, "pp:done");
     await ppDone(undefined, ctx);

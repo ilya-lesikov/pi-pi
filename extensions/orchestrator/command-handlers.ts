@@ -240,6 +240,10 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
             orchestrator.pendingSubagentSpawns = missingVariants.length;
             spawnPlanners(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, partialConfig).then((result) => {
               if (result.spawned === 0) orchestrator.pendingSubagentSpawns = 0;
+              for (const id of result.agentIds ?? []) {
+                orchestrator.spawnedAgentIds.delete(id);
+              }
+              orchestrator.pendingSubagentSpawns = 0;
             }).catch((err: any) => {
               orchestrator.pendingSubagentSpawns = 0;
               console.error(`[pi-pi] spawnPlanners failed: ${err.message}`);
@@ -286,6 +290,10 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
               : () => spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, reviewConfig, cycle.pass);
             spawnFn().then((result) => {
               if (result.spawned === 0) orchestrator.pendingSubagentSpawns = 0;
+              for (const id of result.agentIds ?? []) {
+                orchestrator.spawnedAgentIds.delete(id);
+              }
+              orchestrator.pendingSubagentSpawns = 0;
             }).catch((err: any) => {
               orchestrator.pendingSubagentSpawns = 0;
               console.error(`[pi-pi] spawn reviewers failed: ${err.message}`);
@@ -404,6 +412,10 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
       orchestrator.pendingSubagentSpawns = Object.values(orchestrator.config.planners).filter((v) => v.enabled).length;
       spawnPlanners(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, orchestrator.config).then((result) => {
         if (result.spawned === 0) orchestrator.pendingSubagentSpawns = 0;
+        for (const id of result.agentIds ?? []) {
+          orchestrator.spawnedAgentIds.delete(id);
+        }
+        orchestrator.pendingSubagentSpawns = 0;
       }).catch((err) => {
         orchestrator.pendingSubagentSpawns = 0;
         console.error(`[pi-pi] spawnPlanners failed: ${err.message}`);

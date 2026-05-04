@@ -150,10 +150,10 @@ export async function spawnBrainstormReviewers(
   taskId: string,
   config: PiPiConfig,
   round: number,
-): Promise<{ spawned: number; files: string[] }> {
+): Promise<{ spawned: number; files: string[]; agentIds: string[] }> {
   const urPath = join(taskDir, "USER_REQUEST.md");
   const resPath = join(taskDir, "RESEARCH.md");
-  if (!existsSync(urPath) || !existsSync(resPath)) return { spawned: 0, files: [] };
+  if (!existsSync(urPath) || !existsSync(resPath)) return { spawned: 0, files: [], agentIds: [] };
 
   const userRequest = readFileSync(urPath, "utf-8");
   const research = readFileSync(resPath, "utf-8");
@@ -166,6 +166,7 @@ export async function spawnBrainstormReviewers(
   const timestamp = Math.floor(Date.now() / 1000);
   const enabledVariants = Object.entries(config.brainstormReviewers).filter(([, v]) => v.enabled);
   const reviewFiles: string[] = [];
+  const agentIds: string[] = [];
   const results: Promise<void>[] = [];
 
   for (const [variant] of enabledVariants) {
@@ -181,6 +182,7 @@ export async function spawnBrainstormReviewers(
           const { id } = await spawnViaRpc(pi, `brainstorm_reviewer_${variant}`, "Begin brainstorm artifact review.", {
             description: `Brainstorm reviewer (${variant})`,
           });
+          agentIds.push(id);
           await waitForCompletion(pi, id);
         } catch (err: any) {
           pi.sendMessage(
@@ -230,5 +232,5 @@ export async function spawnBrainstormReviewers(
     );
   }
 
-  return { spawned: enabledVariants.length, files: reviewFiles };
+  return { spawned: enabledVariants.length, files: reviewFiles, agentIds };
 }

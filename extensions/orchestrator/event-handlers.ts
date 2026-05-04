@@ -42,6 +42,41 @@ function setStep(orchestrator: Orchestrator, step: string): void {
   saveTask(orchestrator.active.dir, orchestrator.active.state);
 }
 
+function tryCompleteReviewCycle(orchestrator: Orchestrator): void {
+  if (
+    !orchestrator.active?.state.reviewCycle ||
+    orchestrator.active.state.reviewCycle.step !== "await_reviewers" ||
+    orchestrator.spawnedAgentIds.size > 0 ||
+    orchestrator.pendingSubagentSpawns > 0
+  ) return;
+
+  if (orchestrator.reviewTransitionToken === orchestrator.activeTaskToken) return;
+
+  const cycle = orchestrator.active.state.reviewCycle;
+  const phase = orchestrator.active.state.phase;
+  const outputs = loadPhaseReviewOutputs(orchestrator.active.dir, phase, cycle.pass);
+  const pi = orchestrator.pi;
+
+  orchestrator.reviewTransitionToken = orchestrator.activeTaskToken;
+  cycle.step = "apply_feedback";
+  orchestrator.active.state.step = "apply_feedback";
+  saveTask(orchestrator.active.dir, orchestrator.active.state);
+
+  const rendered = outputs.length
+    ? outputs.map((o) => `=== ${o.name} ===\n${o.content}`).join("\n\n")
+    : "No reviewer outputs found. Review the implementation yourself and decide whether to approve or request changes.";
+
+  pi.sendMessage(
+    {
+      customType: "pp-review-ready",
+      content: `[PI-PI] Reviewer outputs are ready.\n\n${rendered}`,
+      display: false,
+    },
+    { deliverAs: "followUp" },
+  );
+  pi.sendUserMessage("[PI-PI] Review cycle is ready for apply_feedback. Read reviewer outputs and proceed.", { deliverAs: "followUp" });
+}
+
 async function enterReviewCycle(orchestrator: Orchestrator, ctx: any, kind: "auto" | "auto-deep" | "plannotator") {
   if (!orchestrator.active) return "No active task.";
   const pi = orchestrator.pi;
@@ -124,8 +159,14 @@ async function enterReviewCycle(orchestrator: Orchestrator, ctx: any, kind: "aut
     : () => spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, config, pass);
   spawnFn().then((result) => {
     if (result.spawned === 0) orchestrator.pendingSubagentSpawns = 0;
+    for (const id of result.agentIds ?? []) {
+      orchestrator.spawnedAgentIds.delete(id);
+    }
+    orchestrator.pendingSubagentSpawns = 0;
+    tryCompleteReviewCycle(orchestrator);
   }).catch((err) => {
     orchestrator.pendingSubagentSpawns = 0;
+    tryCompleteReviewCycle(orchestrator);
     console.error(`[pi-pi] spawn reviewers failed (${phase}): ${err.message}`);
   });
 
@@ -379,37 +420,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   }
 
   function checkReviewCycleCompletion(): void {
-    if (
-      !orchestrator.active?.state.reviewCycle ||
-      orchestrator.active.state.reviewCycle.step !== "await_reviewers" ||
-      orchestrator.spawnedAgentIds.size > 0 ||
-      orchestrator.pendingSubagentSpawns > 0
-    ) return;
-
-    if (orchestrator.reviewTransitionToken === orchestrator.activeTaskToken) return;
-
-    const cycle = orchestrator.active.state.reviewCycle;
-    const phase = orchestrator.active.state.phase;
-    const outputs = loadPhaseReviewOutputs(orchestrator.active.dir, phase, cycle.pass);
-
-    orchestrator.reviewTransitionToken = orchestrator.activeTaskToken;
-    cycle.step = "apply_feedback";
-    orchestrator.active.state.step = "apply_feedback";
-    saveTask(orchestrator.active.dir, orchestrator.active.state);
-
-    const rendered = outputs.length
-      ? outputs.map((o) => `=== ${o.name} ===\n${o.content}`).join("\n\n")
-      : "No reviewer outputs found. Review the implementation yourself and decide whether to approve or request changes.";
-
-    pi.sendMessage(
-      {
-        customType: "pp-review-ready",
-        content: `[PI-PI] Reviewer outputs are ready.\n\n${rendered}`,
-        display: false,
-      },
-      { deliverAs: "followUp" },
-    );
-    pi.sendUserMessage("[PI-PI] Review cycle is ready for apply_feedback. Read reviewer outputs and proceed.", { deliverAs: "followUp" });
+    tryCompleteReviewCycle(orchestrator);
   }
 
   pi.events.on("subagents:completed", (data: any) => {

@@ -280,6 +280,10 @@ export class Orchestrator {
       this.pendingSubagentSpawns = Object.values(this.config.planners).filter((v) => v.enabled).length;
       spawnPlanners(this.pi, this.cwd, this.active.dir, this.active.taskId, this.config).then((result) => {
         if (result.spawned === 0) this.pendingSubagentSpawns = 0;
+        for (const id of result.agentIds ?? []) {
+          this.spawnedAgentIds.delete(id);
+        }
+        this.pendingSubagentSpawns = 0;
       }).catch((err) => {
         this.pendingSubagentSpawns = 0;
         console.error(`[pi-pi] spawnPlanners failed: ${err.message}`);
