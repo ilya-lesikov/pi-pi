@@ -43,6 +43,8 @@ export function createTaskAgent(
       "",
       "=== SYNTHESIZED PLAN (for broader context) ===",
       taskArtifacts.synthesizedPlan,
+      "",
+      "The artifacts above are already in your context. Do NOT re-read them from disk.",
     ].join("\n"),
   };
 }

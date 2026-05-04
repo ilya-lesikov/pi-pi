@@ -81,6 +81,8 @@ export function createCodeReviewerAgent(
       "",
       "=== SYNTHESIZED PLAN ===",
       taskArtifacts.synthesizedPlan,
+      "",
+      "The artifacts above are already in your context. Do NOT re-read them from disk.",
     ].join("\n"),
   };
 }
