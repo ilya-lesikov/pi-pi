@@ -38,6 +38,7 @@ function makeConfig() {
     planners: {},
     planReviewers: {},
     codeReviewers: {},
+    brainstormReviewers: {},
     agents: {
       explore: { model: "x/e", thinking: "low" },
       librarian: { model: "x/l", thinking: "medium" },

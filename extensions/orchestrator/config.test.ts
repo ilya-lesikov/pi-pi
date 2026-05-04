@@ -94,6 +94,9 @@ describe("validateConfig", () => {
           good: { enabled: true, model: "provider/model-4" },
           disabled: { enabled: false },
         },
+        brainstormReviewers: {
+          good: { enabled: true, model: "provider/model-5" },
+        },
         commands: {
           afterEdit: [{ run: "npm test", glob: ["*.ts"] }],
           afterImplement: [{ run: "npm run build" }],

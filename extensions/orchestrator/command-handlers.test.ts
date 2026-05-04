@@ -57,6 +57,7 @@ function makeConfig() {
     planners: {},
     planReviewers: {},
     codeReviewers: { variant1: { enabled: true, model: "x/1", thinking: "low" } },
+    brainstormReviewers: { variant1: { enabled: true, model: "x/1", thinking: "low" } },
     agents: {
       explore: { model: "x/e", thinking: "low" },
       librarian: { model: "x/l", thinking: "medium" },

@@ -26,6 +26,7 @@ vi.mock("./config.js", async (importOriginal) => {
     },
     planners: { test: { enabled: true, model: "test/planner", thinking: "low" } },
     planReviewers: {},
+    brainstormReviewers: { test: { enabled: true, model: "test/reviewer", thinking: "low" } },
     codeReviewers: { test: { enabled: true, model: "test/reviewer", thinking: "low" } },
     agents: {
       explore: { model: "test/explore", thinking: "low" },
@@ -144,6 +145,9 @@ function makeConfig() {
       test: { enabled: true, model: "test/planner", thinking: "low" },
     },
     planReviewers: {},
+    brainstormReviewers: {
+      test: { enabled: true, model: "test/reviewer", thinking: "low" },
+    },
     codeReviewers: {
       test: { enabled: true, model: "test/reviewer", thinking: "low" },
     },

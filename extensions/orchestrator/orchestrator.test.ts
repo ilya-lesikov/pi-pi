@@ -101,6 +101,12 @@ describe("deepReviewConfig", () => {
       },
       planners: {},
       planReviewers: {},
+      brainstormReviewers: {
+        low: { enabled: true, model: "x/b1", thinking: "low" },
+        medium: { enabled: true, model: "x/b2", thinking: "medium" },
+        high: { enabled: true, model: "x/b3", thinking: "high" },
+        other: { enabled: true, model: "x/b4", thinking: "off" },
+      },
       codeReviewers: {
         low: { enabled: true, model: "x/1", thinking: "low" },
         medium: { enabled: true, model: "x/2", thinking: "medium" },
@@ -130,6 +136,10 @@ describe("deepReviewConfig", () => {
     expect(upgraded.codeReviewers.medium.thinking).toBe("high");
     expect(upgraded.codeReviewers.high.thinking).toBe("high");
     expect(upgraded.codeReviewers.other.thinking).toBe("high");
+    expect(upgraded.brainstormReviewers.low.thinking).toBe("medium");
+    expect(upgraded.brainstormReviewers.medium.thinking).toBe("high");
+    expect(upgraded.brainstormReviewers.high.thinking).toBe("high");
+    expect(upgraded.brainstormReviewers.other.thinking).toBe("high");
   });
 });
 
