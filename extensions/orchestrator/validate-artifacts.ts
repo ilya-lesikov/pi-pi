@@ -1,0 +1,215 @@
+type ValidationResult = { ok: true } | { ok: false; errors: string[] };
+
+const USER_REQUEST_REQUIRED_SECTIONS = ["Problem", "Constraints"] as const;
+const USER_REQUEST_ALLOWED_SECTIONS = ["Problem", "Constraints"] as const;
+const RESEARCH_REQUIRED_SECTIONS = ["Affected Code", "Architecture Context", "Constraints & Edge Cases"] as const;
+const RESEARCH_ALLOWED_SECTIONS = ["Affected Code", "Architecture Context", "Constraints & Edge Cases", "Open Questions"] as const;
+const PLAN_REQUIRED_SECTIONS = ["Scope", "Checklist"] as const;
+const PLAN_ALLOWED_SECTIONS = ["Scope", "Checklist", "Blockers"] as const;
+
+function splitLines(content: string): string[] {
+  return content.split(/\r?\n/);
+}
+
+function getH1(content: string): { line: number; text: string } | null {
+  const lines = splitLines(content);
+  for (let i = 0; i < lines.length; i += 1) {
+    const match = lines[i]?.match(/^\s*#\s+(.+?)\s*$/);
+    if (match) {
+      return { line: i + 1, text: match[1] };
+    }
+  }
+  return null;
+}
+
+function getFirstHeading(content: string): { level: number; line: number; text: string } | null {
+  const lines = splitLines(content);
+  for (let i = 0; i < lines.length; i += 1) {
+    const match = lines[i]?.match(/^\s*(#{1,6})\s+(.+?)\s*$/);
+    if (match) {
+      return { level: match[1].length, line: i + 1, text: match[2] };
+    }
+  }
+  return null;
+}
+
+function parseH2Sections(content: string): Array<{ name: string; line: number; start: number; end: number }> {
+  const lines = splitLines(content);
+  const sections: Array<{ name: string; line: number; start: number; end: number }> = [];
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const match = lines[i]?.match(/^\s*##\s+(.+?)\s*$/);
+    if (match) {
+      sections.push({
+        name: match[1],
+        line: i + 1,
+        start: i + 1,
+        end: lines.length,
+      });
+    }
+  }
+
+  for (let i = 0; i < sections.length; i += 1) {
+    const next = sections[i + 1];
+    sections[i]!.end = next ? next.line - 1 : lines.length;
+  }
+
+  return sections;
+}
+
+function sectionBody(content: string, section: { line: number; end: number }): string {
+  const lines = splitLines(content);
+  return lines.slice(section.line, section.end).join("\n");
+}
+
+function hasNonEmptySectionBody(content: string, section: { line: number; end: number }): boolean {
+  return sectionBody(content, section).trim().length > 0;
+}
+
+function firstH2Line(content: string): number | null {
+  const lines = splitLines(content);
+  for (let i = 0; i < lines.length; i += 1) {
+    if (/^\s*##\s+.+$/.test(lines[i] ?? "")) {
+      return i + 1;
+    }
+  }
+  return null;
+}
+
+function formatSectionList(sections: readonly string[], optional: readonly string[] = []): string {
+  const required = sections.map((s) => `## ${s}`);
+  const optionalParts = optional.map((s) => `## ${s} (optional)`);
+  return [...required, ...optionalParts].join(", ");
+}
+
+export function validateUserRequest(content: string): ValidationResult {
+  const errors: string[] = [];
+  const h1 = getH1(content);
+  const firstHeading = getFirstHeading(content);
+  const expectedSections = formatSectionList(USER_REQUEST_REQUIRED_SECTIONS);
+
+  if (!firstHeading) {
+    errors.push("Missing required heading: # User Request. Expected first heading: # User Request");
+  } else if (firstHeading.level !== 1 || firstHeading.text !== "User Request") {
+    errors.push(
+      `First heading is '${"#".repeat(firstHeading.level)} ${firstHeading.text}' on line ${firstHeading.line}. Expected first heading: # User Request`,
+    );
+  }
+
+  const sections = parseH2Sections(content);
+  const sectionMap = new Map(sections.map((s) => [s.name, s]));
+
+  for (const section of sections) {
+    if (!USER_REQUEST_ALLOWED_SECTIONS.includes(section.name as (typeof USER_REQUEST_ALLOWED_SECTIONS)[number])) {
+      errors.push(`Unexpected section: ## ${section.name}. Expected sections: ${expectedSections}`);
+    }
+  }
+
+  for (const sectionName of USER_REQUEST_REQUIRED_SECTIONS) {
+    if (!sectionMap.has(sectionName)) {
+      errors.push(`Missing required section: ## ${sectionName}. Expected sections: ${expectedSections}`);
+    }
+  }
+
+  const problem = sectionMap.get("Problem");
+  if (problem && !hasNonEmptySectionBody(content, problem)) {
+    errors.push("Section ## Problem is empty. Expected non-empty problem description.");
+  }
+
+  if (h1 && h1.text === "User Request") {
+    const lines = splitLines(content);
+    const start = h1.line;
+    const firstH2 = firstH2Line(content);
+    const endExclusive = firstH2 ? firstH2 - 1 : lines.length;
+    const distillation = lines.slice(start, endExclusive).join("\n").trim();
+    if (distillation.length === 0) {
+      errors.push(
+        "Distillation is missing between # User Request and the first ## section. Expected 1-3 non-empty sentences.",
+      );
+    }
+  }
+
+  return errors.length > 0 ? { ok: false, errors } : { ok: true };
+}
+
+export function validateResearch(content: string): ValidationResult {
+  const errors: string[] = [];
+  const expectedSections = formatSectionList(RESEARCH_REQUIRED_SECTIONS, ["Open Questions"]);
+  const sections = parseH2Sections(content);
+  const sectionMap = new Map(sections.map((s) => [s.name, s]));
+
+  for (const section of sections) {
+    if (!RESEARCH_ALLOWED_SECTIONS.includes(section.name as (typeof RESEARCH_ALLOWED_SECTIONS)[number])) {
+      errors.push(`Unexpected section: ## ${section.name}. Expected sections: ${expectedSections}`);
+    }
+  }
+
+  for (const sectionName of RESEARCH_REQUIRED_SECTIONS) {
+    const section = sectionMap.get(sectionName);
+    if (!section) {
+      errors.push(`Missing required section: ## ${sectionName}. Expected sections: ${expectedSections}`);
+      continue;
+    }
+    if (!hasNonEmptySectionBody(content, section)) {
+      errors.push(`Section ## ${sectionName} is empty. Expected non-empty content.`);
+    }
+  }
+
+  return errors.length > 0 ? { ok: false, errors } : { ok: true };
+}
+
+export function validatePlan(content: string): ValidationResult {
+  const errors: string[] = [];
+  const h1 = getH1(content);
+  const firstHeading = getFirstHeading(content);
+  const expectedSections = formatSectionList(PLAN_REQUIRED_SECTIONS, ["Blockers"]);
+
+  if (!firstHeading) {
+    errors.push("Missing required heading: # Plan. Expected first heading: # Plan");
+  } else if (firstHeading.level !== 1 || firstHeading.text !== "Plan") {
+    errors.push(
+      `First heading is '${"#".repeat(firstHeading.level)} ${firstHeading.text}' on line ${firstHeading.line}. Expected first heading: # Plan`,
+    );
+  }
+
+  const sections = parseH2Sections(content);
+  const sectionMap = new Map(sections.map((s) => [s.name, s]));
+
+  for (const section of sections) {
+    if (!PLAN_ALLOWED_SECTIONS.includes(section.name as (typeof PLAN_ALLOWED_SECTIONS)[number])) {
+      errors.push(`Unexpected section: ## ${section.name}. Expected sections: ${expectedSections}`);
+    }
+  }
+
+  for (const sectionName of PLAN_REQUIRED_SECTIONS) {
+    if (!sectionMap.has(sectionName)) {
+      errors.push(`Missing required section: ## ${sectionName}. Expected sections: ${expectedSections}`);
+    }
+  }
+
+  const scope = sectionMap.get("Scope");
+  if (scope && !hasNonEmptySectionBody(content, scope)) {
+    errors.push("Section ## Scope is empty. Expected 2-4 lines summarizing scope and constraints.");
+  }
+
+  const lines = splitLines(content);
+  const checklistMatches: Array<{ line: number; text: string }> = [];
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i] ?? "";
+    if (/^\s*- \[(?: |x|X)\]/.test(line)) {
+      checklistMatches.push({ line: i + 1, text: line.trim() });
+      if (!/done when\s*:/i.test(line)) {
+        errors.push(`Checklist item on line ${i + 1} missing 'Done when:' clause: '${line.trim()}'`);
+      }
+    }
+  }
+
+  if (checklistMatches.length === 0) {
+    errors.push(
+      "Checklist has no items. Expected at least one checklist item matching '- [ ]' or '- [x]' with 'Done when:' clause.",
+    );
+  }
+
+  return errors.length > 0 ? { ok: false, errors } : { ok: true };
+}
