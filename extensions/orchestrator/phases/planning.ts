@@ -6,6 +6,7 @@ import { registerAgentDefinitions, spawnViaRpc, waitForCompletion } from "../age
 import { createPlannerAgent } from "../agents/planner.js";
 import { createPlanReviewerAgent } from "../agents/plan-reviewer.js";
 import { getLatestSynthesizedPlan } from "../context.js";
+import { validatePlan } from "../validate-artifacts.js";
 
 export function planningSystemPrompt(taskDir: string): string {
   const plansDir = join(taskDir, "plans");
@@ -30,10 +31,13 @@ export function planningSystemPrompt(taskDir: string): string {
     "5. Ask the user for clarifications if unsure about anything",
     "",
     "Plan format:",
-    "- Use checkboxes (- [ ]) for every actionable item",
-    "- Describe WHAT, not HOW at the code level",
-    "- No code snippets",
-    "- Group items under headings",
+    "- Start with # Plan",
+    "- ## Scope: 2-4 lines — what changes, what doesn't, critical constraints",
+    "- ## Checklist: each item is - [ ] <outcome> — Done when: <observable condition>",
+    "  Each item = one independently verifiable outcome. No code snippets or file-by-file instructions.",
+    "- ## Blockers: unresolved issues blocking implementation (omit if none)",
+    "- No other top-level sections allowed",
+    "- Describe outcomes, not code-level mechanics",
     "",
     "When the synthesized plan is ready, call pp_phase_complete with a brief summary of the plan.",
   ].join("\n");
@@ -75,6 +79,36 @@ export async function spawnPlanners(
             description: `Planner (${variant})`,
           });
           await waitForCompletion(pi, id);
+
+          if (existsSync(outputPath)) {
+            const planContent = readFileSync(outputPath, "utf-8");
+            const validation = validatePlan(planContent);
+            if (!validation.ok) {
+              pi.sendMessage(
+                {
+                  customType: "pp-planner-error",
+                  content: [
+                    `Planner variant "${variant}" produced invalid plan structure:`,
+                    ...validation.errors.map((error) => `- ${error}`),
+                    "",
+                    "Expected structure:",
+                    "# Plan",
+                    "",
+                    "## Scope",
+                    "<2-4 lines summarizing what changes and what doesn't>",
+                    "",
+                    "## Checklist",
+                    "- [ ] <Outcome> — Done when: <observable condition>",
+                    "",
+                    "## Blockers",
+                    "<Unresolved issues. Omit section if none.>",
+                  ].join("\n"),
+                  display: true,
+                },
+                { deliverAs: "steer" },
+              );
+            }
+          }
         } catch (err: any) {
           pi.sendMessage(
             {
