@@ -5,6 +5,7 @@ import { getAgentDir } from "@mariozechner/pi-coding-agent";
 export interface ModelConfig {
   model: string;
   thinking: string;
+  maxTurns?: number;
 }
 
 export interface VariantConfig extends ModelConfig {

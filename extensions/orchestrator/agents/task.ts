@@ -12,7 +12,7 @@ export function createTaskAgent(
       tools: `read, write, edit, bash, grep, find, ls, lsp, ast_search, ${ALL_CBM_TOOLS}, ${EXA_TOOLS}`,
       model: config.agents.task.model,
       thinking: config.agents.task.thinking,
-      max_turns: 50,
+      max_turns: config.agents.task.maxTurns ?? 100,
       prompt_mode: "replace",
     },
     prompt: [
