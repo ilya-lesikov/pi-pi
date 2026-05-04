@@ -38,6 +38,7 @@ export interface PiPiConfig {
   planners: Record<string, VariantConfig>;
   planReviewers: Record<string, VariantConfig>;
   codeReviewers: Record<string, VariantConfig>;
+  brainstormReviewers: Record<string, VariantConfig>;
   agents: {
     explore: ModelConfig;
     librarian: ModelConfig;
@@ -68,6 +69,11 @@ const DEFAULT_CONFIG: PiPiConfig = {
     gemini: { enabled: true, model: "google/gemini-3.1-pro", thinking: "xhigh" },
   },
   codeReviewers: {
+    opus: { enabled: true, model: "anthropic/claude-opus-4-6", thinking: "high" },
+    gpt: { enabled: true, model: "openai/gpt-5.4", thinking: "high" },
+    gemini: { enabled: true, model: "google/gemini-3.1-pro", thinking: "xhigh" },
+  },
+  brainstormReviewers: {
     opus: { enabled: true, model: "anthropic/claude-opus-4-6", thinking: "high" },
     gpt: { enabled: true, model: "openai/gpt-5.4", thinking: "high" },
     gemini: { enabled: true, model: "google/gemini-3.1-pro", thinking: "xhigh" },
@@ -125,7 +131,7 @@ export function validateConfig(config: Record<string, any>): void {
     }
   }
 
-  for (const group of ["planners", "planReviewers", "codeReviewers"]) {
+  for (const group of ["planners", "planReviewers", "codeReviewers", "brainstormReviewers"]) {
     const variants = config[group];
     if (!variants || typeof variants !== "object") continue;
     for (const [name, v] of Object.entries(variants)) {

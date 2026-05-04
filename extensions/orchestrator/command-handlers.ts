@@ -7,6 +7,7 @@ import { runAfterImplement } from "./commands.js";
 import { unregisterAgentDefinitions } from "./agents/registry.js";
 import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
 import { spawnCodeReviewers } from "./phases/review.js";
+import { spawnBrainstormReviewers } from "./phases/brainstorm.js";
 import { validateExitCriteria, nextPhase } from "./phases/machine.js";
 import { getLatestSynthesizedPlan, loadReviewOutputs, loadPlanReviewOutputs } from "./context.js";
 import { runUserGateDialog } from "./event-handlers.js";
@@ -242,12 +243,16 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
       if (orchestrator.active.state.reviewCycle) {
         const cycle = orchestrator.active.state.reviewCycle;
         const reviewConfig = cycle.kind === "auto-deep" ? deepReviewConfig(orchestrator.config) : orchestrator.config;
-        const isPlanReview = orchestrator.active.state.phase === "plan";
-        const reviewers = isPlanReview ? reviewConfig.planReviewers : reviewConfig.codeReviewers;
+        const phase = orchestrator.active.state.phase;
+        const reviewers = phase === "brainstorm"
+          ? reviewConfig.brainstormReviewers
+          : phase === "plan"
+          ? reviewConfig.planReviewers
+          : reviewConfig.codeReviewers;
         const reviewerCount = Object.values(reviewers).filter((v) => v.enabled).length;
 
         if ((cycle.kind === "auto" || cycle.kind === "auto-deep") && (cycle.step === "spawn_reviewers" || cycle.step === "await_reviewers")) {
-          const outputs = isPlanReview
+          const outputs = phase === "plan"
             ? loadPlanReviewOutputs(orchestrator.active.dir)
             : loadReviewOutputs(orchestrator.active.dir, cycle.pass);
           if (outputs.length >= reviewerCount) {
@@ -265,7 +270,9 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
             );
           } else {
             orchestrator.pendingSubagentSpawns = reviewerCount;
-            const spawnFn = isPlanReview
+            const spawnFn = phase === "brainstorm"
+              ? () => spawnBrainstormReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, reviewConfig, cycle.pass)
+              : phase === "plan"
               ? () => spawnPlanReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, reviewConfig)
               : () => spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, reviewConfig, cycle.pass);
             spawnFn().then((result) => {
@@ -278,7 +285,7 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
             saveTask(orchestrator.active.dir, orchestrator.active.state);
           }
         } else if (cycle.step === "apply_feedback") {
-          const outputs = isPlanReview
+          const outputs = phase === "plan"
             ? loadPlanReviewOutputs(orchestrator.active.dir)
             : loadReviewOutputs(orchestrator.active.dir, cycle.pass);
           const rendered = outputs.map((o) => `=== ${o.name} ===\n${o.content}`).join("\n\n");

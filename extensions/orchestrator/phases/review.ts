@@ -6,9 +6,30 @@ import { registerAgentDefinitions, spawnViaRpc, waitForCompletion } from "../age
 import { createCodeReviewerAgent } from "../agents/code-reviewer.js";
 import { getLatestSynthesizedPlan } from "../context.js";
 
-export function reviewSystemPrompt(taskDir: string, pass: number, manualReview = false): string {
+export function reviewSystemPrompt(taskDir: string, pass: number, manualReview = false, phase?: string): string {
   const reviewsDir = join(taskDir, "reviews");
   const plansDir = join(taskDir, "plans");
+
+  if (phase === "brainstorm") {
+    return [
+      `[PI-PI — BRAINSTORM REVIEW CYCLE (pass ${pass})]`,
+      "",
+      "Brainstorm reviewer outputs are ready.",
+      `Read them from ${reviewsDir}/, synthesize feedback, and revise USER_REQUEST.md + RESEARCH.md if needed.`,
+      "",
+      "# FORBIDDEN:",
+      "- Do NOT modify project source code",
+      "- Do NOT write your own review from scratch",
+      "",
+      "# Your job:",
+      `1. Read ALL reviewer outputs from ${reviewsDir}/`,
+      "2. Identify valid gaps and inaccuracies",
+      "3. Revise USER_REQUEST.md and/or RESEARCH.md to address legitimate issues",
+      "4. Ignore suggestions that don't affect downstream planning quality",
+      "",
+      "When revisions are complete (or no changes needed), call pp_phase_complete with a brief summary.",
+    ].join("\n");
+  }
 
   if (manualReview) {
     return [

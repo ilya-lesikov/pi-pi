@@ -157,7 +157,7 @@ export class Orchestrator {
     if (this.active.state.reviewCycle?.step === "apply_feedback") {
       const pass = this.active.state.reviewCycle.pass;
       const manualReview = this.active.state.reviewCycle.kind === "manual";
-      return reviewSystemPrompt(this.active.dir, pass, manualReview);
+      return reviewSystemPrompt(this.active.dir, pass, manualReview, this.active.state.phase);
     }
 
     switch (this.active.state.phase) {
@@ -414,11 +414,15 @@ export class Orchestrator {
 
 export function deepReviewConfig(config: PiPiConfig): PiPiConfig {
   const THINKING_UPGRADE: Record<string, string> = { low: "medium", medium: "high", high: "high" };
-  const upgraded: Record<string, VariantConfig> = {};
+  const upgradedCode: Record<string, VariantConfig> = {};
   for (const [name, variant] of Object.entries(config.codeReviewers)) {
-    upgraded[name] = { ...variant, thinking: THINKING_UPGRADE[variant.thinking] ?? "high" };
+    upgradedCode[name] = { ...variant, thinking: THINKING_UPGRADE[variant.thinking] ?? "high" };
   }
-  return { ...config, codeReviewers: upgraded };
+  const upgradedBrainstorm: Record<string, VariantConfig> = {};
+  for (const [name, variant] of Object.entries(config.brainstormReviewers)) {
+    upgradedBrainstorm[name] = { ...variant, thinking: THINKING_UPGRADE[variant.thinking] ?? "high" };
+  }
+  return { ...config, codeReviewers: upgradedCode, brainstormReviewers: upgradedBrainstorm };
 }
 
 export function ensureGitignore(cwd: string): void {

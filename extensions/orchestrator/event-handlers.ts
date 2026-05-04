@@ -12,6 +12,7 @@ import { registerAstSearchTool } from "./ast-search.js";
 import { setExtensionOnlyMode, unregisterAgentDefinitions } from "./agents/registry.js";
 import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
 import { spawnCodeReviewers } from "./phases/review.js";
+import { spawnBrainstormReviewers } from "./phases/brainstorm.js";
 import { openPlannotator, waitForPlannotatorResult, cancelPendingPlannotatorWait } from "./plannotator.js";
 import { Orchestrator, deepReviewConfig, type ActiveTask } from "./orchestrator.js";
 import { askUser } from "../../3p/pi-ask-user/index.js";
@@ -42,7 +43,13 @@ async function enterReviewCycle(orchestrator: Orchestrator, ctx: any, kind: "aut
   saveTask(orchestrator.active.dir, orchestrator.active.state);
 
   if (kind === "plannotator") {
-    const isPlan = orchestrator.active.state.phase === "plan";
+    const phase = orchestrator.active.state.phase;
+    if (phase === "brainstorm") {
+      orchestrator.active.state.reviewCycle = null;
+      saveTask(orchestrator.active.dir, orchestrator.active.state);
+      return "Plannotator review is only available for plan and implement phases.";
+    }
+    const isPlan = phase === "plan";
     let payload: Record<string, unknown>;
     if (isPlan) {
       const planContent = getLatestSynthesizedPlan(orchestrator.active.dir);
@@ -86,26 +93,33 @@ async function enterReviewCycle(orchestrator: Orchestrator, ctx: any, kind: "aut
     return `Plannotator requested changes.${feedback}\n\nUser wants to continue. Run /pp:next when ready to advance.`;
   }
 
-  const isPlan = orchestrator.active.state.phase === "plan";
+  const phase = orchestrator.active.state.phase;
   const config = kind === "auto-deep" ? deepReviewConfig(orchestrator.config) : orchestrator.config;
-  const reviewers = isPlan ? config.planReviewers : config.codeReviewers;
+  const reviewers = phase === "brainstorm"
+    ? config.brainstormReviewers
+    : phase === "plan"
+    ? config.planReviewers
+    : config.codeReviewers;
   const enabledCount = Object.values(reviewers).filter((v) => v.enabled).length;
   if (enabledCount === 0) {
     orchestrator.active.state.reviewCycle = null;
     saveTask(orchestrator.active.dir, orchestrator.active.state);
-    return `No ${isPlan ? "plan" : "code"} reviewers enabled. Choose another review mode or review manually.`;
+    const label = phase === "brainstorm" ? "brainstorm" : phase === "plan" ? "plan" : "code";
+    return `No ${label} reviewers enabled. Choose another review mode or review manually.`;
   }
 
   orchestrator.reviewTransitionToken = -1;
   orchestrator.pendingSubagentSpawns = enabledCount;
-  const spawnFn = isPlan
+  const spawnFn = phase === "brainstorm"
+    ? () => spawnBrainstormReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, config, pass)
+    : phase === "plan"
     ? () => spawnPlanReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, config)
     : () => spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, config, pass);
   spawnFn().then((result) => {
     if (result.spawned === 0) orchestrator.pendingSubagentSpawns = 0;
   }).catch((err) => {
     orchestrator.pendingSubagentSpawns = 0;
-    console.error(`[pi-pi] spawn${isPlan ? "Plan" : "Code"}Reviewers failed: ${err.message}`);
+    console.error(`[pi-pi] spawn reviewers failed (${phase}): ${err.message}`);
   });
 
   orchestrator.active.state.reviewCycle.step = "await_reviewers";
@@ -154,11 +168,14 @@ async function runUserGateDialogInner(orchestrator: Orchestrator, ctx: any, summ
   const continueMessage = "User wants to continue. Run /pp:next when ready to advance.";
 
   if (phase === "brainstorm" && task.type === "implement") {
-    const choice = await selectOption(ctx, summary, ["Approve brainstorm", "Continue brainstorming"]);
+    const choice = await selectOption(ctx, summary, ["Approve brainstorm", autoLabel, deepLabel, "Continue brainstorming"]);
+    finalizeReviewCycle(task);
     if (choice === "Approve brainstorm") {
       const result = await orchestrator.transitionToNextPhase(ctx);
       return result.ok ? "Brainstorm approved. Transitioned to plan." : `Transition blocked: ${result.error}`;
     }
+    if (choice === autoLabel) return enterReviewCycle(orchestrator, ctx, "auto");
+    if (choice === deepLabel) return enterReviewCycle(orchestrator, ctx, "auto-deep");
     setStep(orchestrator, "llm_work");
     return continueMessage;
   }
@@ -359,8 +376,8 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (orchestrator.reviewTransitionToken === orchestrator.activeTaskToken) return;
 
     const cycle = orchestrator.active.state.reviewCycle;
-    const isPlanReview = orchestrator.active.state.phase === "plan";
-    const outputs = isPlanReview
+    const phase = orchestrator.active.state.phase;
+    const outputs = phase === "plan"
       ? loadPlanReviewOutputs(orchestrator.active.dir)
       : loadReviewOutputs(orchestrator.active.dir, cycle.pass);
 
@@ -719,10 +736,14 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
           } else if (orchestrator.active.state.step === "await_reviewers" && orchestrator.active.state.reviewCycle) {
             const cycle = orchestrator.active.state.reviewCycle;
             const reviewConfig = cycle.kind === "auto-deep" ? deepReviewConfig(orchestrator.config) : orchestrator.config;
-            const isPlanReview = orchestrator.active.state.phase === "plan";
-            const reviewers = isPlanReview ? reviewConfig.planReviewers : reviewConfig.codeReviewers;
+            const phase = orchestrator.active.state.phase;
+            const reviewers = phase === "brainstorm"
+              ? reviewConfig.brainstormReviewers
+              : phase === "plan"
+              ? reviewConfig.planReviewers
+              : reviewConfig.codeReviewers;
             const reviewerCount = Object.values(reviewers).filter((v) => v.enabled).length;
-            const outputs = isPlanReview
+            const outputs = phase === "plan"
               ? loadPlanReviewOutputs(taskDir)
               : loadReviewOutputs(taskDir, cycle.pass);
             if (outputs.length >= reviewerCount) {

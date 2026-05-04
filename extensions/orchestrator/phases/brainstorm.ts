@@ -1,3 +1,9 @@
+import { readFileSync, existsSync, mkdirSync, readdirSync } from "fs";
+import { join } from "path";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { PiPiConfig } from "../config.js";
+import { registerAgentDefinitions, spawnViaRpc, waitForCompletion } from "../agents/registry.js";
+import { createBrainstormReviewerAgent } from "../agents/brainstorm-reviewer.js";
 import type { TaskType } from "../state.js";
 
 export function brainstormSystemPrompt(taskType: TaskType, taskDescription: string, taskDir: string): string {
@@ -135,4 +141,94 @@ export function brainstormSystemPrompt(taskType: TaskType, taskDescription: stri
     "Do NOT modify any files except .md files in the task directory.",
     "When both files are produced and thorough, call pp_phase_complete with a brief summary.",
   ].join("\n");
+}
+
+export async function spawnBrainstormReviewers(
+  pi: ExtensionAPI,
+  cwd: string,
+  taskDir: string,
+  taskId: string,
+  config: PiPiConfig,
+  round: number,
+): Promise<{ spawned: number; files: string[] }> {
+  const urPath = join(taskDir, "USER_REQUEST.md");
+  const resPath = join(taskDir, "RESEARCH.md");
+  if (!existsSync(urPath) || !existsSync(resPath)) return { spawned: 0, files: [] };
+
+  const userRequest = readFileSync(urPath, "utf-8");
+  const research = readFileSync(resPath, "utf-8");
+
+  const reviewsDir = join(taskDir, "reviews");
+  if (!existsSync(reviewsDir)) {
+    mkdirSync(reviewsDir, { recursive: true });
+  }
+
+  const timestamp = Math.floor(Date.now() / 1000);
+  const enabledVariants = Object.entries(config.brainstormReviewers).filter(([, v]) => v.enabled);
+  const reviewFiles: string[] = [];
+  const results: Promise<void>[] = [];
+
+  for (const [variant] of enabledVariants) {
+    const outputPath = join(reviewsDir, `${timestamp}_brainstorm_${variant}_round-${round}.md`);
+    reviewFiles.push(outputPath);
+    const agent = createBrainstormReviewerAgent(variant, config, { userRequest, research }, outputPath);
+
+    registerAgentDefinitions(pi, [{ type: "brainstorm_reviewer", variant, ...agent }]);
+
+    results.push(
+      (async () => {
+        try {
+          const { id } = await spawnViaRpc(pi, `brainstorm_reviewer_${variant}`, "Begin brainstorm artifact review.", {
+            description: `Brainstorm reviewer (${variant})`,
+          });
+          await waitForCompletion(pi, id);
+        } catch (err: any) {
+          pi.sendMessage(
+            {
+              customType: "pp-brainstorm-reviewer-error",
+              content: `Brainstorm reviewer variant "${variant}" failed: ${err.message}`,
+              display: true,
+            },
+            { deliverAs: "steer" },
+          );
+        }
+      })(),
+    );
+  }
+
+  await Promise.allSettled(results);
+
+  const reviewOutputFiles = existsSync(reviewsDir)
+    ? readdirSync(reviewsDir).filter((f) => f.includes(`round-${round}`) && f.includes("_brainstorm_") && f.endsWith(".md"))
+    : [];
+
+  if (reviewOutputFiles.length > 0) {
+    pi.sendMessage(
+      {
+        customType: "pp-brainstorm-reviews-done",
+        content: [
+          `${reviewOutputFiles.length} brainstorm reviewer(s) completed (round ${round}). Reviews in ${reviewsDir}:`,
+          ...reviewOutputFiles.map((f) => `  - ${f}`),
+          "",
+          "Read all reviews and update USER_REQUEST.md and RESEARCH.md if needed.",
+        ].join("\n"),
+        display: true,
+      },
+      { deliverAs: "steer" },
+    );
+  } else if (enabledVariants.length > 0) {
+    pi.sendMessage(
+      {
+        customType: "pp-brainstorm-reviews-error",
+        content: [
+          `All brainstorm reviewer variants failed (round ${round}) — no reviews were produced.`,
+          "Proceeding without automatic brainstorm review.",
+        ].join("\n"),
+        display: true,
+      },
+      { deliverAs: "steer" },
+    );
+  }
+
+  return { spawned: enabledVariants.length, files: reviewFiles };
 }
