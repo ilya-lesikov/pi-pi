@@ -171,20 +171,29 @@ export function getLatestSynthesizedPlan(taskDir: string): string | null {
   return readFileSync(join(plansDir, synthFiles[synthFiles.length - 1]), "utf-8");
 }
 
-export function loadReviewOutputs(taskDir: string, pass: number): { name: string; content: string }[] {
-  const reviewsDir = join(taskDir, "reviews");
-  if (!existsSync(reviewsDir)) return [];
-  return readdirSync(reviewsDir)
+export function loadBrainstormReviewOutputs(taskDir: string, pass: number): { name: string; content: string }[] {
+  const dir = join(taskDir, "brainstorm-reviews");
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
     .filter((f) => f.includes(`round-${pass}`) && f.endsWith(".md"))
     .sort()
-    .map((name) => ({ name, content: readFileSync(join(reviewsDir, name), "utf-8") }));
+    .map((name) => ({ name, content: readFileSync(join(dir, name), "utf-8") }));
+}
+
+export function loadCodeReviewOutputs(taskDir: string, pass: number): { name: string; content: string }[] {
+  const dir = join(taskDir, "code-reviews");
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((f) => f.includes(`round-${pass}`) && f.endsWith(".md"))
+    .sort()
+    .map((name) => ({ name, content: readFileSync(join(dir, name), "utf-8") }));
 }
 
 export function loadPlanReviewOutputs(taskDir: string): { name: string; content: string }[] {
-  const plansDir = join(taskDir, "plans");
-  if (!existsSync(plansDir)) return [];
-  return readdirSync(plansDir)
-    .filter((f) => f.includes("review_") && f.endsWith(".md"))
+  const dir = join(taskDir, "plan-reviews");
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((f) => f.endsWith(".md"))
     .sort()
-    .map((name) => ({ name, content: readFileSync(join(plansDir, name), "utf-8") }));
+    .map((name) => ({ name, content: readFileSync(join(dir, name), "utf-8") }));
 }

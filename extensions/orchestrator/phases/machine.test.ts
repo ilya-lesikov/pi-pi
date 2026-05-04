@@ -231,6 +231,27 @@ describe("validateExitCriteria", () => {
     expect(validateExitCriteria(dir, "implement", "implement")).toEqual({ ok: true });
   });
 
+  it("counts unchecked items only within checklist section", () => {
+    const dir = makeTempDir();
+    mkdirSync(join(dir, "plans"), { recursive: true });
+    writeFileSync(
+      join(dir, "plans", "synthesized-plan.md"),
+      `# Plan
+
+## Scope
+Fix bug.
+
+## Checklist
+- [x] Main task — Done when: implemented
+
+## Blockers
+- [ ] waiting on external team
+`,
+      "utf-8",
+    );
+    expect(validateExitCriteria(dir, "implement", "implement")).toEqual({ ok: true });
+  });
+
   it("handles brainstorm phase for brainstorm task — always passes", () => {
     const dir = makeTempDir();
     expect(validateExitCriteria(dir, "brainstorm", "brainstorm")).toEqual({ ok: true });

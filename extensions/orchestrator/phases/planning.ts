@@ -173,13 +173,18 @@ export async function spawnPlanReviewers(
   const synthesizedPlan = getLatestSynthesizedPlan(taskDir);
   if (!synthesizedPlan) return { spawned: 0, files: [] };
 
+  const planReviewsDir = join(taskDir, "plan-reviews");
+  if (!existsSync(planReviewsDir)) {
+    mkdirSync(planReviewsDir, { recursive: true });
+  }
+
   const timestamp = Math.floor(Date.now() / 1000);
   const enabledVariants = Object.entries(config.planReviewers).filter(([, v]) => v.enabled);
   const reviewFiles: string[] = [];
 
   const results: Promise<void>[] = [];
   for (const [variant] of enabledVariants) {
-    const outputPath = join(taskDir, "plans", `${timestamp}_review_${variant}.md`);
+    const outputPath = join(planReviewsDir, `${timestamp}_${variant}.md`);
     reviewFiles.push(outputPath);
 
     const agent = createPlanReviewerAgent(variant, config, { userRequest, research, synthesizedPlan }, outputPath);
@@ -209,17 +214,16 @@ export async function spawnPlanReviewers(
 
   await Promise.allSettled(results);
 
-  const plansDir = join(taskDir, "plans");
-  const actualReviewFiles = existsSync(plansDir)
-    ? readdirSync(plansDir).filter((f) => f.includes("review_") && f.startsWith(`${timestamp}`))
+  const actualReviewFiles = existsSync(planReviewsDir)
+    ? readdirSync(planReviewsDir).filter((f) => f.startsWith(`${timestamp}`) && f.endsWith(".md"))
     : [];
 
   if (actualReviewFiles.length > 0) {
     pi.sendMessage(
       {
-        customType: "pp-plan-reviews-done",
-        content: [
-          `${actualReviewFiles.length} plan reviewer(s) completed. Reviews in ${plansDir}:`,
+          customType: "pp-plan-reviews-done",
+          content: [
+          `${actualReviewFiles.length} plan reviewer(s) completed. Reviews in ${planReviewsDir}:`,
           ...actualReviewFiles.map((f) => `  - ${f}`),
           "",
           "Read all plan reviews and incorporate feedback into the synthesized plan if needed.",

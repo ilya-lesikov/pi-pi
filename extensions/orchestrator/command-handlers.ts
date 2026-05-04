@@ -9,7 +9,12 @@ import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
 import { spawnCodeReviewers } from "./phases/review.js";
 import { spawnBrainstormReviewers } from "./phases/brainstorm.js";
 import { validateExitCriteria, nextPhase } from "./phases/machine.js";
-import { getLatestSynthesizedPlan, loadReviewOutputs, loadPlanReviewOutputs } from "./context.js";
+import {
+  getLatestSynthesizedPlan,
+  loadBrainstormReviewOutputs,
+  loadCodeReviewOutputs,
+  loadPlanReviewOutputs,
+} from "./context.js";
 import { runUserGateDialog } from "./event-handlers.js";
 import {
   saveTask,
@@ -20,6 +25,12 @@ import {
   validateFromPath,
 } from "./state.js";
 import { Orchestrator, deepReviewConfig } from "./orchestrator.js";
+
+function loadPhaseReviewOutputs(taskDir: string, phase: string, pass: number): { name: string; content: string }[] {
+  if (phase === "brainstorm") return loadBrainstormReviewOutputs(taskDir, pass);
+  if (phase === "plan") return loadPlanReviewOutputs(taskDir);
+  return loadCodeReviewOutputs(taskDir, pass);
+}
 
 export function registerCommandHandlers(orchestrator: Orchestrator): void {
   const pi = orchestrator.pi;
@@ -252,9 +263,7 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
         const reviewerCount = Object.values(reviewers).filter((v) => v.enabled).length;
 
         if ((cycle.kind === "auto" || cycle.kind === "auto-deep") && (cycle.step === "spawn_reviewers" || cycle.step === "await_reviewers")) {
-          const outputs = phase === "plan"
-            ? loadPlanReviewOutputs(orchestrator.active.dir)
-            : loadReviewOutputs(orchestrator.active.dir, cycle.pass);
+          const outputs = loadPhaseReviewOutputs(orchestrator.active.dir, phase, cycle.pass);
           if (outputs.length >= reviewerCount) {
             cycle.step = "apply_feedback";
             orchestrator.active.state.step = "apply_feedback";
@@ -285,9 +294,7 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
             saveTask(orchestrator.active.dir, orchestrator.active.state);
           }
         } else if (cycle.step === "apply_feedback") {
-          const outputs = phase === "plan"
-            ? loadPlanReviewOutputs(orchestrator.active.dir)
-            : loadReviewOutputs(orchestrator.active.dir, cycle.pass);
+          const outputs = loadPhaseReviewOutputs(orchestrator.active.dir, phase, cycle.pass);
           const rendered = outputs.map((o) => `=== ${o.name} ===\n${o.content}`).join("\n\n");
           pi.sendMessage(
             {

@@ -414,15 +414,19 @@ export class Orchestrator {
 
 export function deepReviewConfig(config: PiPiConfig): PiPiConfig {
   const THINKING_UPGRADE: Record<string, string> = { low: "medium", medium: "high", high: "high" };
-  const upgradedCode: Record<string, VariantConfig> = {};
-  for (const [name, variant] of Object.entries(config.codeReviewers)) {
-    upgradedCode[name] = { ...variant, thinking: THINKING_UPGRADE[variant.thinking] ?? "high" };
-  }
-  const upgradedBrainstorm: Record<string, VariantConfig> = {};
-  for (const [name, variant] of Object.entries(config.brainstormReviewers)) {
-    upgradedBrainstorm[name] = { ...variant, thinking: THINKING_UPGRADE[variant.thinking] ?? "high" };
-  }
-  return { ...config, codeReviewers: upgradedCode, brainstormReviewers: upgradedBrainstorm };
+  const upgrade = (reviewers: Record<string, VariantConfig>) => {
+    const upgraded: Record<string, VariantConfig> = {};
+    for (const [name, variant] of Object.entries(reviewers)) {
+      upgraded[name] = { ...variant, thinking: THINKING_UPGRADE[variant.thinking] ?? "high" };
+    }
+    return upgraded;
+  };
+  return {
+    ...config,
+    codeReviewers: upgrade(config.codeReviewers),
+    planReviewers: upgrade(config.planReviewers),
+    brainstormReviewers: upgrade(config.brainstormReviewers),
+  };
 }
 
 export function ensureGitignore(cwd: string): void {

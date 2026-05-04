@@ -4,7 +4,14 @@ import { Type } from "@sinclair/typebox";
 import { loadConfig } from "./config.js";
 import { runAfterEdit, autoCommit } from "./commands.js";
 import { taskName, getActiveTask, saveTask } from "./state.js";
-import { loadContextFiles, getPhaseArtifacts, getLatestSynthesizedPlan, loadReviewOutputs, loadPlanReviewOutputs } from "./context.js";
+import {
+  loadContextFiles,
+  getPhaseArtifacts,
+  getLatestSynthesizedPlan,
+  loadBrainstormReviewOutputs,
+  loadCodeReviewOutputs,
+  loadPlanReviewOutputs,
+} from "./context.js";
 import { WORKING_PRINCIPLES, COMMUNICATION } from "./agents/tool-routing.js";
 import { registerCbmTools } from "./cbm.js";
 import { registerExaTools } from "./exa.js";
@@ -263,6 +270,12 @@ function registerOrchestratorTools(orchestrator: Orchestrator): void {
   registerCommitTool(orchestrator);
 }
 
+function loadPhaseReviewOutputs(taskDir: string, phase: string, pass: number): { name: string; content: string }[] {
+  if (phase === "brainstorm") return loadBrainstormReviewOutputs(taskDir, pass);
+  if (phase === "plan") return loadPlanReviewOutputs(taskDir);
+  return loadCodeReviewOutputs(taskDir, pass);
+}
+
 function registerCommitTool(orchestrator: Orchestrator): void {
   const pi = orchestrator.pi;
 
@@ -377,9 +390,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
 
     const cycle = orchestrator.active.state.reviewCycle;
     const phase = orchestrator.active.state.phase;
-    const outputs = phase === "plan"
-      ? loadPlanReviewOutputs(orchestrator.active.dir)
-      : loadReviewOutputs(orchestrator.active.dir, cycle.pass);
+    const outputs = loadPhaseReviewOutputs(orchestrator.active.dir, phase, cycle.pass);
 
     orchestrator.reviewTransitionToken = orchestrator.activeTaskToken;
     cycle.step = "apply_feedback";
@@ -743,9 +754,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
               ? reviewConfig.planReviewers
               : reviewConfig.codeReviewers;
             const reviewerCount = Object.values(reviewers).filter((v) => v.enabled).length;
-            const outputs = phase === "plan"
-              ? loadPlanReviewOutputs(taskDir)
-              : loadReviewOutputs(taskDir, cycle.pass);
+            const outputs = loadPhaseReviewOutputs(taskDir, phase, cycle.pass);
             if (outputs.length >= reviewerCount) {
               clearInterval(orchestrator.awaitPollTimer!);
               orchestrator.awaitPollTimer = null;

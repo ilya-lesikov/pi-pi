@@ -7,7 +7,7 @@ import { createCodeReviewerAgent } from "../agents/code-reviewer.js";
 import { getLatestSynthesizedPlan } from "../context.js";
 
 export function reviewSystemPrompt(taskDir: string, pass: number, manualReview = false, phase?: string): string {
-  const reviewsDir = join(taskDir, "reviews");
+  const reviewsDir = phase === "brainstorm" ? join(taskDir, "brainstorm-reviews") : join(taskDir, "code-reviews");
   const plansDir = join(taskDir, "plans");
 
   if (phase === "brainstorm") {
@@ -56,7 +56,7 @@ export function reviewSystemPrompt(taskDir: string, pass: number, manualReview =
     "",
     "# FORBIDDEN — do NOT do any of these:",
     "- Do NOT write your own code review from scratch. You are a SYNTHESIZER, not a reviewer.",
-    "- Do NOT create the reviews/ directory yourself — the extension manages it.",
+    "- Do NOT create the code-reviews/ directory yourself — the extension manages it.",
     "- Do NOT call plannotator_submit_plan — code review is handled by the user via /pp:review-code.",
     "",
     "# Your job (in this order):",
@@ -103,7 +103,7 @@ export async function spawnCodeReviewers(
     return { spawned: 0 };
   }
 
-  const reviewsDir = join(taskDir, "reviews");
+  const reviewsDir = join(taskDir, "code-reviews");
   if (!existsSync(reviewsDir)) {
     mkdirSync(reviewsDir, { recursive: true });
   }

@@ -158,7 +158,7 @@ export async function spawnBrainstormReviewers(
   const userRequest = readFileSync(urPath, "utf-8");
   const research = readFileSync(resPath, "utf-8");
 
-  const reviewsDir = join(taskDir, "reviews");
+  const reviewsDir = join(taskDir, "brainstorm-reviews");
   if (!existsSync(reviewsDir)) {
     mkdirSync(reviewsDir, { recursive: true });
   }
@@ -169,7 +169,7 @@ export async function spawnBrainstormReviewers(
   const results: Promise<void>[] = [];
 
   for (const [variant] of enabledVariants) {
-    const outputPath = join(reviewsDir, `${timestamp}_brainstorm_${variant}_round-${round}.md`);
+    const outputPath = join(reviewsDir, `${timestamp}_${variant}_round-${round}.md`);
     reviewFiles.push(outputPath);
     const agent = createBrainstormReviewerAgent(variant, config, { userRequest, research }, outputPath);
 
@@ -199,7 +199,7 @@ export async function spawnBrainstormReviewers(
   await Promise.allSettled(results);
 
   const reviewOutputFiles = existsSync(reviewsDir)
-    ? readdirSync(reviewsDir).filter((f) => f.includes(`round-${round}`) && f.includes("_brainstorm_") && f.endsWith(".md"))
+    ? readdirSync(reviewsDir).filter((f) => f.includes(`round-${round}`) && f.endsWith(".md"))
     : [];
 
   if (reviewOutputFiles.length > 0) {

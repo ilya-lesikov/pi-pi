@@ -410,7 +410,7 @@ describe("review cycle lifecycle", () => {
     expect(orchestrator.active!.state.reviewCycle!.step).toBe("await_reviewers");
     expect(orchestrator.active!.state.reviewCycle!.pass).toBe(1);
 
-    const reviewsDir = join(taskDir, "reviews");
+    const reviewsDir = join(taskDir, "code-reviews");
     mkdirSync(reviewsDir, { recursive: true });
     writeFileSync(join(reviewsDir, `${Math.floor(Date.now() / 1000)}_test_round-1.md`), "LGTM", "utf-8");
 
@@ -819,7 +819,7 @@ describe("edge cases and regressions", () => {
     ctx.ui.select.mockResolvedValueOnce("Automatic review");
     await ppPhaseComplete.execute("call-3", { summary: "implemented" }, undefined, undefined, ctx);
 
-    const reviewsDir = join(taskDir, "reviews");
+    const reviewsDir = join(taskDir, "code-reviews");
     mkdirSync(reviewsDir, { recursive: true });
     writeFileSync(join(reviewsDir, `${Math.floor(Date.now() / 1000)}_test_round-1.md`), "Needs fixes", "utf-8");
 

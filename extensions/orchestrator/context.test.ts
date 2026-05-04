@@ -2,7 +2,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { getLatestSynthesizedPlan, getPhaseArtifacts, loadContextFiles } from "./context.js";
+import {
+  getLatestSynthesizedPlan,
+  getPhaseArtifacts,
+  loadContextFiles,
+  loadBrainstormReviewOutputs,
+  loadCodeReviewOutputs,
+  loadPlanReviewOutputs,
+} from "./context.js";
 
 const tempDirs: string[] = [];
 
@@ -241,5 +248,46 @@ describe("context regressions", () => {
     writeFileSync(join(plansDir, "1000_synthesized.md"), "new", "utf-8");
 
     expect(getPhaseArtifacts(taskDir, "implement")).toEqual([{ name: "Synthesized Plan", content: "new" }]);
+  });
+
+  it("filters brainstorm and code review outputs by pass", () => {
+    const taskDir = makeTempDir();
+    const brainstormReviewsDir = join(taskDir, "brainstorm-reviews");
+    const codeReviewsDir = join(taskDir, "code-reviews");
+    mkdirSync(brainstormReviewsDir, { recursive: true });
+    mkdirSync(codeReviewsDir, { recursive: true });
+
+    writeFileSync(join(brainstormReviewsDir, "001_alpha_round-1.md"), "brainstorm", "utf-8");
+    writeFileSync(join(brainstormReviewsDir, "003_alpha_round-2.md"), "round2", "utf-8");
+    writeFileSync(join(codeReviewsDir, "002_alpha_round-1.md"), "implement", "utf-8");
+    writeFileSync(join(codeReviewsDir, "004_alpha_round-2.md"), "round2", "utf-8");
+
+    expect(loadBrainstormReviewOutputs(taskDir, 1).map((r) => r.name)).toEqual([
+      "001_alpha_round-1.md",
+    ]);
+    expect(loadCodeReviewOutputs(taskDir, 1).map((r) => r.name)).toEqual([
+      "002_alpha_round-1.md",
+    ]);
+
+    expect(loadBrainstormReviewOutputs(taskDir, 2).map((r) => r.name)).toEqual([
+      "003_alpha_round-2.md",
+    ]);
+    expect(loadCodeReviewOutputs(taskDir, 2).map((r) => r.name)).toEqual([
+      "004_alpha_round-2.md",
+    ]);
+  });
+
+  it("loads all plan review outputs regardless of pass", () => {
+    const taskDir = makeTempDir();
+    const planReviewsDir = join(taskDir, "plan-reviews");
+    mkdirSync(planReviewsDir, { recursive: true });
+
+    writeFileSync(join(planReviewsDir, "001_alpha.md"), "a", "utf-8");
+    writeFileSync(join(planReviewsDir, "002_beta.md"), "b", "utf-8");
+
+    expect(loadPlanReviewOutputs(taskDir).map((r) => r.name)).toEqual([
+      "001_alpha.md",
+      "002_beta.md",
+    ]);
   });
 });

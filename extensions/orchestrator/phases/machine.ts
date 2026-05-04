@@ -144,7 +144,14 @@ export function validateExitCriteria(
         };
       }
 
-      const unchecked = content.match(/^- \[ \]/gm);
+      const checklistStart = content.indexOf("## Checklist");
+      const checklistEnd = checklistStart === -1 ? -1 : content.indexOf("\n## ", checklistStart + 1);
+      const checklistContent = checklistStart === -1
+        ? ""
+        : checklistEnd === -1
+        ? content.slice(checklistStart)
+        : content.slice(checklistStart, checklistEnd);
+      const unchecked = checklistContent.match(/^- \[ \]/gm);
       if (unchecked && unchecked.length > 0) {
         return { ok: false, reason: `${unchecked.length} plan items still unchecked` };
       }

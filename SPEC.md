@@ -306,7 +306,9 @@ All state lives in `.pp/` at the project root.
     │       ├── USER_REQUEST.md
     │       ├── RESEARCH.md
     │       ├── plans/
-    │       └── reviews/
+    │       ├── plan-reviews/
+    │       ├── brainstorm-reviews/
+    │       └── code-reviews/
     ├── debug/
     │   └── <id>_<name>/
     └── brainstorm/

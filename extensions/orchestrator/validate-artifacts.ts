@@ -6,6 +6,7 @@ const RESEARCH_REQUIRED_SECTIONS = ["Affected Code", "Architecture Context", "Co
 const RESEARCH_ALLOWED_SECTIONS = ["Affected Code", "Architecture Context", "Constraints & Edge Cases", "Open Questions"] as const;
 const PLAN_REQUIRED_SECTIONS = ["Scope", "Checklist"] as const;
 const PLAN_ALLOWED_SECTIONS = ["Scope", "Checklist", "Blockers"] as const;
+const PLACEHOLDER_PATTERNS = /^(?:[-*.…—]|tbd|todo|n\/a|na|none|\.{2,})$/i;
 
 function splitLines(content: string): string[] {
   return content.split(/\r?\n/);
@@ -62,8 +63,14 @@ function sectionBody(content: string, section: { line: number; end: number }): s
   return lines.slice(section.line, section.end).join("\n");
 }
 
+function isPlaceholderContent(text: string): boolean {
+  const trimmed = text.trim();
+  return trimmed.length === 0 || PLACEHOLDER_PATTERNS.test(trimmed);
+}
+
 function hasNonEmptySectionBody(content: string, section: { line: number; end: number }): boolean {
-  return sectionBody(content, section).trim().length > 0;
+  const body = sectionBody(content, section).trim();
+  return !isPlaceholderContent(body);
 }
 
 function firstH2Line(content: string): number | null {
@@ -116,13 +123,18 @@ export function validateUserRequest(content: string): ValidationResult {
     errors.push("Section ## Problem is empty. Expected non-empty problem description.");
   }
 
+  const constraints = sectionMap.get("Constraints");
+  if (constraints && !hasNonEmptySectionBody(content, constraints)) {
+    errors.push("Section ## Constraints is empty. Expected non-empty constraints.");
+  }
+
   if (h1 && h1.text === "User Request") {
     const lines = splitLines(content);
     const start = h1.line;
     const firstH2 = firstH2Line(content);
     const endExclusive = firstH2 ? firstH2 - 1 : lines.length;
     const distillation = lines.slice(start, endExclusive).join("\n").trim();
-    if (distillation.length === 0) {
+    if (isPlaceholderContent(distillation)) {
       errors.push(
         "Distillation is missing between # User Request and the first ## section. Expected 1-3 non-empty sentences.",
       );
@@ -195,12 +207,30 @@ export function validatePlan(content: string): ValidationResult {
   const lines = splitLines(content);
   const checklistMatches: Array<{ line: number; text: string }> = [];
 
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i] ?? "";
-    if (/^\s*- \[(?: |x|X)\]/.test(line)) {
-      checklistMatches.push({ line: i + 1, text: line.trim() });
-      if (!/done when\s*:/i.test(line)) {
-        errors.push(`Checklist item on line ${i + 1} missing 'Done when:' clause: '${line.trim()}'`);
+  const checklistSection = sectionMap.get("Checklist");
+  if (checklistSection) {
+    const sectionLines = lines.slice(checklistSection.line, checklistSection.end);
+    for (let i = 0; i < sectionLines.length; i += 1) {
+      const line = sectionLines[i] ?? "";
+      if (/^\s*- \[(?: |x|X)\]/.test(line)) {
+        const globalLine = checklistSection.line + i + 1;
+        checklistMatches.push({ line: globalLine, text: line.trim() });
+
+        let hasDoneWhen = /done when\s*:/i.test(line);
+        if (!hasDoneWhen) {
+          for (let j = i + 1; j < sectionLines.length; j += 1) {
+            const nextLine = sectionLines[j] ?? "";
+            if (/^\s*- \[(?: |x|X)\]/.test(nextLine) || nextLine.trim() === "") break;
+            if (/done when\s*:/i.test(nextLine)) {
+              hasDoneWhen = true;
+              break;
+            }
+          }
+        }
+
+        if (!hasDoneWhen) {
+          errors.push(`Checklist item on line ${globalLine} missing 'Done when:' clause: '${line.trim()}'`);
+        }
       }
     }
   }
