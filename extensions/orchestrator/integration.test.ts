@@ -42,6 +42,38 @@ type Handler = (...args: any[]) => any;
 
 const tempDirs: string[] = [];
 
+const VALID_USER_REQUEST = `# User Request
+Fix the auth bug.
+
+## Problem
+Auth tokens expire incorrectly.
+
+## Constraints
+Must be backward compatible.
+`;
+
+const VALID_RESEARCH = `## Affected Code
+src/auth.ts:validateToken — validates JWT tokens
+
+## Architecture Context
+- Auth middleware calls validateToken on every request
+
+## Constraints & Edge Cases
+- MUST: Existing tokens must remain valid
+- RISK: Token refresh flow may break
+`;
+
+function makeValidPlan(checklist: string[]): string {
+  return `# Plan
+
+## Scope
+Fix token validation in auth middleware. Does not change token format.
+
+## Checklist
+${checklist.join("\n")}
+`;
+}
+
 function makeTempDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "pi-pi-integration-"));
   tempDirs.push(dir);
@@ -203,8 +235,8 @@ describe("implement pipeline: brainstorm → plan → implement → done", () =>
     expect(orchestrator.active!.type).toBe("implement");
     const taskDir = orchestrator.active!.dir;
 
-    writeFileSync(join(taskDir, "USER_REQUEST.md"), "Add feature X to the system", "utf-8");
-    writeFileSync(join(taskDir, "RESEARCH.md"), "## Affected Code\nsrc/main.ts\n## Recommended Approach\nDo it.", "utf-8");
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
 
     ctx.ui.select.mockResolvedValueOnce("Approve brainstorm");
 
@@ -220,13 +252,27 @@ describe("implement pipeline: brainstorm → plan → implement → done", () =>
     expect(existsSync(plansDir)).toBe(true);
 
     emitSubagentCreated(pi, "planner-1", "Planner (test)");
-    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000)}_test.md`), "# Plan\n- Do X\n- Do Y", "utf-8");
+    writeFileSync(
+      join(plansDir, `${Math.floor(Date.now() / 1000)}_test.md`),
+      makeValidPlan([
+        "- [ ] P1. Draft implementation step — Done when: first proposed step is documented",
+        "- [ ] P2. Draft verification step — Done when: second proposed step is documented",
+      ]),
+      "utf-8",
+    );
     emitSubagentCompleted(pi, "planner-1", "Planner (test)");
 
     expect(orchestrator.active!.state.step).toBe("synthesize");
 
     const synthPath = join(plansDir, `${Math.floor(Date.now() / 1000)}_synthesized.md`);
-    writeFileSync(synthPath, "- [ ] Implement X\n- [ ] Implement Y\n", "utf-8");
+    writeFileSync(
+      synthPath,
+      makeValidPlan([
+        "- [ ] P1. Implement X — Done when: implementation for X is complete",
+        "- [ ] P2. Implement Y — Done when: implementation for Y is complete",
+      ]),
+      "utf-8",
+    );
 
     ctx.ui.select.mockResolvedValueOnce("Approve plan");
 
@@ -276,8 +322,8 @@ describe("implement pipeline: brainstorm → plan → implement → done", () =>
     await orchestrator.startTask(ctx as any, "implement", "Test task");
     const taskDir = orchestrator.active!.dir;
 
-    writeFileSync(join(taskDir, "USER_REQUEST.md"), "request", "utf-8");
-    writeFileSync(join(taskDir, "RESEARCH.md"), "research", "utf-8");
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
 
     ctx.ui.select.mockResolvedValueOnce("Approve brainstorm");
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
@@ -286,10 +332,19 @@ describe("implement pipeline: brainstorm → plan → implement → done", () =>
 
     emitSubagentCreated(pi, "planner-1", "Planner (test)");
     const plansDir = join(taskDir, "plans");
-    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000)}_test.md`), "plan", "utf-8");
+    mkdirSync(plansDir, { recursive: true });
+    writeFileSync(
+      join(plansDir, `${Math.floor(Date.now() / 1000)}_test.md`),
+      makeValidPlan(["- [ ] P1. Planner draft item — Done when: planner output exists"]),
+      "utf-8",
+    );
     emitSubagentCompleted(pi, "planner-1", "Planner (test)");
 
-    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000) + 1}_synthesized.md`), "- [ ] Unchecked item\n", "utf-8");
+    writeFileSync(
+      join(plansDir, `${Math.floor(Date.now() / 1000) + 1}_synthesized.md`),
+      makeValidPlan(["- [ ] P1. Unchecked item — Done when: this item remains unchecked"]),
+      "utf-8",
+    );
 
     ctx.ui.select.mockResolvedValueOnce("Approve plan");
     await ppPhaseComplete.execute("call-2", { summary: "plan done" }, undefined, undefined, ctx);
@@ -313,8 +368,8 @@ describe("review cycle lifecycle", () => {
     await orchestrator.startTask(ctx as any, "implement", "Test review");
     const taskDir = orchestrator.active!.dir;
 
-    writeFileSync(join(taskDir, "USER_REQUEST.md"), "request", "utf-8");
-    writeFileSync(join(taskDir, "RESEARCH.md"), "research", "utf-8");
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
 
     ctx.ui.select.mockResolvedValueOnce("Approve brainstorm");
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
@@ -323,10 +378,19 @@ describe("review cycle lifecycle", () => {
 
     emitSubagentCreated(pi, "planner-1", "Planner (test)");
     const plansDir = join(taskDir, "plans");
-    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000)}_test.md`), "plan", "utf-8");
+    mkdirSync(plansDir, { recursive: true });
+    writeFileSync(
+      join(plansDir, `${Math.floor(Date.now() / 1000)}_test.md`),
+      makeValidPlan(["- [ ] P1. Planner draft item — Done when: planner output exists"]),
+      "utf-8",
+    );
     emitSubagentCompleted(pi, "planner-1", "Planner (test)");
 
-    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000) + 1}_synthesized.md`), "- [x] Done\n", "utf-8");
+    writeFileSync(
+      join(plansDir, `${Math.floor(Date.now() / 1000) + 1}_synthesized.md`),
+      makeValidPlan(["- [x] P1. Done item — Done when: synthesized plan is fully checked"]),
+      "utf-8",
+    );
 
     ctx.ui.select.mockResolvedValueOnce("Approve plan");
     await ppPhaseComplete.execute("call-2", { summary: "plan done" }, undefined, undefined, ctx);
@@ -372,8 +436,8 @@ describe("review cycle lifecycle", () => {
     await orchestrator.startTask(ctx as any, "implement", "Test failure");
     const taskDir = orchestrator.active!.dir;
 
-    writeFileSync(join(taskDir, "USER_REQUEST.md"), "request", "utf-8");
-    writeFileSync(join(taskDir, "RESEARCH.md"), "research", "utf-8");
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
     ctx.ui.select.mockResolvedValueOnce("Approve brainstorm");
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
@@ -381,10 +445,19 @@ describe("review cycle lifecycle", () => {
 
     emitSubagentCreated(pi, "planner-1", "Planner (test)");
     const plansDir = join(taskDir, "plans");
-    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000)}_test.md`), "plan", "utf-8");
+    mkdirSync(plansDir, { recursive: true });
+    writeFileSync(
+      join(plansDir, `${Math.floor(Date.now() / 1000)}_test.md`),
+      makeValidPlan(["- [ ] P1. Planner draft item — Done when: planner output exists"]),
+      "utf-8",
+    );
     emitSubagentCompleted(pi, "planner-1", "Planner (test)");
 
-    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000) + 1}_synthesized.md`), "- [x] Done\n", "utf-8");
+    writeFileSync(
+      join(plansDir, `${Math.floor(Date.now() / 1000) + 1}_synthesized.md`),
+      makeValidPlan(["- [x] P1. Done item — Done when: synthesized plan is fully checked"]),
+      "utf-8",
+    );
     ctx.ui.select.mockResolvedValueOnce("Approve plan");
     await ppPhaseComplete.execute("call-2", { summary: "plan done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
@@ -407,8 +480,8 @@ describe("review cycle lifecycle", () => {
     orchestrator.config = { ...orchestrator.config, codeReviewers: {} } as any;
     const taskDir = orchestrator.active!.dir;
 
-    writeFileSync(join(taskDir, "USER_REQUEST.md"), "request", "utf-8");
-    writeFileSync(join(taskDir, "RESEARCH.md"), "research", "utf-8");
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
     ctx.ui.select.mockResolvedValueOnce("Approve brainstorm");
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
@@ -416,10 +489,19 @@ describe("review cycle lifecycle", () => {
 
     emitSubagentCreated(pi, "planner-1", "Planner (test)");
     const plansDir = join(taskDir, "plans");
-    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000)}_test.md`), "plan", "utf-8");
+    mkdirSync(plansDir, { recursive: true });
+    writeFileSync(
+      join(plansDir, `${Math.floor(Date.now() / 1000)}_test.md`),
+      makeValidPlan(["- [ ] P1. Planner draft item — Done when: planner output exists"]),
+      "utf-8",
+    );
     emitSubagentCompleted(pi, "planner-1", "Planner (test)");
 
-    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000) + 1}_synthesized.md`), "- [x] Done\n", "utf-8");
+    writeFileSync(
+      join(plansDir, `${Math.floor(Date.now() / 1000) + 1}_synthesized.md`),
+      makeValidPlan(["- [x] P1. Done item — Done when: synthesized plan is fully checked"]),
+      "utf-8",
+    );
     ctx.ui.select.mockResolvedValueOnce("Approve plan");
     await ppPhaseComplete.execute("call-2", { summary: "plan done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
@@ -441,8 +523,8 @@ describe("subagent tracking", () => {
     await orchestrator.startTask(ctx as any, "implement", "Test blocking");
     const taskDir = orchestrator.active!.dir;
 
-    writeFileSync(join(taskDir, "USER_REQUEST.md"), "request", "utf-8");
-    writeFileSync(join(taskDir, "RESEARCH.md"), "research", "utf-8");
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
 
     emitSubagentCreated(pi, "explore-1", "Explore agent");
 
@@ -459,8 +541,8 @@ describe("subagent tracking", () => {
     await orchestrator.startTask(ctx as any, "implement", "Test pending");
     const taskDir = orchestrator.active!.dir;
 
-    writeFileSync(join(taskDir, "USER_REQUEST.md"), "request", "utf-8");
-    writeFileSync(join(taskDir, "RESEARCH.md"), "research", "utf-8");
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
 
     orchestrator.pendingSubagentSpawns = 2;
 
@@ -511,8 +593,8 @@ describe("standalone brainstorm", () => {
     await orchestrator.startTask(ctx as any, "brainstorm", "Explore ideas");
     const taskDir = orchestrator.active!.dir;
 
-    writeFileSync(join(taskDir, "USER_REQUEST.md"), "request", "utf-8");
-    writeFileSync(join(taskDir, "RESEARCH.md"), "research", "utf-8");
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
 
     ctx.ui.select.mockResolvedValueOnce("Start implementation");
 
@@ -537,8 +619,8 @@ describe("debug flow", () => {
     expect(orchestrator.active!.type).toBe("debug");
 
     const taskDir = orchestrator.active!.dir;
-    writeFileSync(join(taskDir, "USER_REQUEST.md"), "Fix the timeout", "utf-8");
-    writeFileSync(join(taskDir, "RESEARCH.md"), "Root cause: missing retry logic", "utf-8");
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
 
     ctx.ui.select.mockResolvedValueOnce("Implement a fix");
 
@@ -560,8 +642,8 @@ describe("planner completion tracking", () => {
     await orchestrator.startTask(ctx as any, "implement", "Test planners");
     const taskDir = orchestrator.active!.dir;
 
-    writeFileSync(join(taskDir, "USER_REQUEST.md"), "request", "utf-8");
-    writeFileSync(join(taskDir, "RESEARCH.md"), "research", "utf-8");
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
 
     ctx.ui.select.mockResolvedValueOnce("Approve brainstorm");
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
@@ -575,7 +657,12 @@ describe("planner completion tracking", () => {
     expect(orchestrator.pendingSubagentSpawns).toBe(0);
 
     const plansDir = join(taskDir, "plans");
-    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000)}_test.md`), "plan content", "utf-8");
+    mkdirSync(plansDir, { recursive: true });
+    writeFileSync(
+      join(plansDir, `${Math.floor(Date.now() / 1000)}_test.md`),
+      makeValidPlan(["- [ ] P1. Plan content item — Done when: planner plan is written"]),
+      "utf-8",
+    );
 
     emitSubagentCompleted(pi, "planner-1", "Planner (test)");
     expect(orchestrator.active!.state.step).toBe("synthesize");
@@ -589,8 +676,8 @@ describe("planner completion tracking", () => {
     await orchestrator.startTask(ctx as any, "implement", "Test planner fail");
     const taskDir = orchestrator.active!.dir;
 
-    writeFileSync(join(taskDir, "USER_REQUEST.md"), "request", "utf-8");
-    writeFileSync(join(taskDir, "RESEARCH.md"), "research", "utf-8");
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
 
     ctx.ui.select.mockResolvedValueOnce("Approve brainstorm");
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
@@ -649,8 +736,8 @@ describe("edge cases and regressions", () => {
     await orchestrator.startTask(ctx as any, "implement", "Test review done");
     const taskDir = orchestrator.active!.dir;
 
-    writeFileSync(join(taskDir, "USER_REQUEST.md"), "request", "utf-8");
-    writeFileSync(join(taskDir, "RESEARCH.md"), "research", "utf-8");
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
     ctx.ui.select.mockResolvedValueOnce("Approve brainstorm");
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
@@ -658,10 +745,19 @@ describe("edge cases and regressions", () => {
 
     emitSubagentCreated(pi, "planner-1", "Planner (test)");
     const plansDir = join(taskDir, "plans");
-    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000)}_test.md`), "plan", "utf-8");
+    mkdirSync(plansDir, { recursive: true });
+    writeFileSync(
+      join(plansDir, `${Math.floor(Date.now() / 1000)}_test.md`),
+      makeValidPlan(["- [ ] P1. Planner draft item — Done when: planner output exists"]),
+      "utf-8",
+    );
     emitSubagentCompleted(pi, "planner-1", "Planner (test)");
 
-    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000) + 1}_synthesized.md`), "- [x] Done\n", "utf-8");
+    writeFileSync(
+      join(plansDir, `${Math.floor(Date.now() / 1000) + 1}_synthesized.md`),
+      makeValidPlan(["- [x] P1. Done item — Done when: synthesized plan is fully checked"]),
+      "utf-8",
+    );
     ctx.ui.select.mockResolvedValueOnce("Approve plan");
     await ppPhaseComplete.execute("call-2", { summary: "plan done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
@@ -688,8 +784,8 @@ describe("edge cases and regressions", () => {
     await orchestrator.startTask(ctx as any, "implement", "Multi-review test");
     const taskDir = orchestrator.active!.dir;
 
-    writeFileSync(join(taskDir, "USER_REQUEST.md"), "request", "utf-8");
-    writeFileSync(join(taskDir, "RESEARCH.md"), "research", "utf-8");
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
     ctx.ui.select.mockResolvedValueOnce("Approve brainstorm");
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
@@ -697,10 +793,19 @@ describe("edge cases and regressions", () => {
 
     emitSubagentCreated(pi, "planner-1", "Planner (test)");
     const plansDir = join(taskDir, "plans");
-    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000)}_test.md`), "plan", "utf-8");
+    mkdirSync(plansDir, { recursive: true });
+    writeFileSync(
+      join(plansDir, `${Math.floor(Date.now() / 1000)}_test.md`),
+      makeValidPlan(["- [ ] P1. Planner draft item — Done when: planner output exists"]),
+      "utf-8",
+    );
     emitSubagentCompleted(pi, "planner-1", "Planner (test)");
 
-    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000) + 1}_synthesized.md`), "- [x] Done\n", "utf-8");
+    writeFileSync(
+      join(plansDir, `${Math.floor(Date.now() / 1000) + 1}_synthesized.md`),
+      makeValidPlan(["- [x] P1. Done item — Done when: synthesized plan is fully checked"]),
+      "utf-8",
+    );
     ctx.ui.select.mockResolvedValueOnce("Approve plan");
     await ppPhaseComplete.execute("call-2", { summary: "plan done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
@@ -766,8 +871,8 @@ describe("edge cases and regressions", () => {
     await orchestrator.startTask(ctx as any, "implement", "Continue impl test");
     const taskDir = orchestrator.active!.dir;
 
-    writeFileSync(join(taskDir, "USER_REQUEST.md"), "request", "utf-8");
-    writeFileSync(join(taskDir, "RESEARCH.md"), "research", "utf-8");
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
     ctx.ui.select.mockResolvedValueOnce("Approve brainstorm");
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
@@ -775,10 +880,19 @@ describe("edge cases and regressions", () => {
 
     emitSubagentCreated(pi, "planner-1", "Planner (test)");
     const plansDir = join(taskDir, "plans");
-    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000)}_test.md`), "plan", "utf-8");
+    mkdirSync(plansDir, { recursive: true });
+    writeFileSync(
+      join(plansDir, `${Math.floor(Date.now() / 1000)}_test.md`),
+      makeValidPlan(["- [ ] P1. Planner draft item — Done when: planner output exists"]),
+      "utf-8",
+    );
     emitSubagentCompleted(pi, "planner-1", "Planner (test)");
 
-    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000) + 1}_synthesized.md`), "- [ ] Todo\n", "utf-8");
+    writeFileSync(
+      join(plansDir, `${Math.floor(Date.now() / 1000) + 1}_synthesized.md`),
+      makeValidPlan(["- [ ] P1. Todo item — Done when: item intentionally remains unchecked"]),
+      "utf-8",
+    );
     ctx.ui.select.mockResolvedValueOnce("Approve plan");
     await ppPhaseComplete.execute("call-2", { summary: "plan done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
@@ -799,8 +913,8 @@ describe("edge cases and regressions", () => {
     await orchestrator.startTask(ctx as any, "implement", "Review own plan");
     const taskDir = orchestrator.active!.dir;
 
-    writeFileSync(join(taskDir, "USER_REQUEST.md"), "request", "utf-8");
-    writeFileSync(join(taskDir, "RESEARCH.md"), "research", "utf-8");
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
     ctx.ui.select.mockResolvedValueOnce("Approve brainstorm");
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
@@ -808,10 +922,19 @@ describe("edge cases and regressions", () => {
 
     emitSubagentCreated(pi, "planner-1", "Planner (test)");
     const plansDir = join(taskDir, "plans");
-    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000)}_test.md`), "plan", "utf-8");
+    mkdirSync(plansDir, { recursive: true });
+    writeFileSync(
+      join(plansDir, `${Math.floor(Date.now() / 1000)}_test.md`),
+      makeValidPlan(["- [ ] P1. Planner draft item — Done when: planner output exists"]),
+      "utf-8",
+    );
     emitSubagentCompleted(pi, "planner-1", "Planner (test)");
 
-    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000) + 1}_synthesized.md`), "- [ ] Todo\n", "utf-8");
+    writeFileSync(
+      join(plansDir, `${Math.floor(Date.now() / 1000) + 1}_synthesized.md`),
+      makeValidPlan(["- [ ] P1. Todo item — Done when: item intentionally remains unchecked"]),
+      "utf-8",
+    );
 
     ctx.ui.select.mockResolvedValueOnce("Review on my own");
     const result = await ppPhaseComplete.execute("call-2", { summary: "plan ready" }, undefined, undefined, ctx);
@@ -842,8 +965,8 @@ describe("edge cases and regressions", () => {
 
     await orchestrator.startTask(ctx as any, "debug", "Find bug");
     const debugDir = orchestrator.active!.dir;
-    writeFileSync(join(debugDir, "USER_REQUEST.md"), "Fix this bug", "utf-8");
-    writeFileSync(join(debugDir, "RESEARCH.md"), "Root cause found", "utf-8");
+    writeFileSync(join(debugDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(debugDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
 
     await orchestrator.startTask(ctx as any, "implement", "Fix it", debugDir, true);
 
