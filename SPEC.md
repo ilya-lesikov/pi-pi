@@ -99,7 +99,37 @@ User gate options:
 - **"Approve brainstorm"** → transition to plan phase
 - **"Continue brainstorming"** → return to llm_work, print "/pp:next to advance"
 
-RESEARCH.md follows a structured template: Affected Code, Architecture Context, Constraints & Edge Cases, Open Questions, Recommended Approach.
+USER_REQUEST.md follows a fixed, validated structure:
+
+```
+# User Request
+<1-3 sentence distillation>
+
+## Problem
+<What's broken / what's missing, in the user's words>
+
+## Constraints
+<User-stated boundaries only>
+```
+
+RESEARCH.md follows a fixed, validated structure:
+
+```
+## Affected Code
+<file:symbol — one-line role, per line>
+
+## Architecture Context
+<Dense bullets. How affected pieces connect.>
+
+## Constraints & Edge Cases
+- MUST: <hard requirements from code>
+- RISK: <things that could break>
+
+## Open Questions (optional)
+<Unresolved items needing user input. Omit if none.>
+```
+
+Both files are validated programmatically at phase transition. Missing or unexpected sections are rejected.
 
 ### Phase: plan
 
@@ -138,7 +168,23 @@ await_result      — open Plannotator, block until user responds
 
 Multiple planner subagents run in parallel (opus, gpt, gemini — each configurable/disablable). Each reads USER_REQUEST.md and RESEARCH.md and writes its own plan. The main agent is a SYNTHESIZER — it must NOT write its own plan from scratch.
 
-Plans use checkboxes for progress tracking. They describe *what* to do, not *how* at the code level.
+Plans follow a fixed, validated structure:
+
+```
+# Plan
+
+## Scope
+<2-4 lines: what changes, what doesn't, critical constraints>
+
+## Checklist
+- [ ] P1. <Outcome> — Done when: <observable condition>
+- [ ] P2. <Outcome> — Done when: <observable condition>
+
+## Blockers (optional)
+<Unresolved issues. Omit if none.>
+```
+
+Each checklist item must describe one independently verifiable outcome with a `Done when:` acceptance criterion. No code snippets, no file-by-file instructions. Plans are validated programmatically — missing sections, unexpected sections, or checklist items without `Done when:` clauses are rejected. Individual planner outputs are also validated after completion.
 
 ### Phase: implement
 
@@ -295,10 +341,10 @@ Validated before every phase transition:
 
 | Phase | Criteria |
 |-------|----------|
-| brainstorm (implement) | USER_REQUEST.md and RESEARCH.md exist and are non-empty |
-| plan | Synthesized plan exists in plans/ |
-| implement | All plan checkboxes checked (no `- [ ]` remaining) |
-| debug | USER_REQUEST.md and RESEARCH.md exist and are non-empty |
+| brainstorm (implement) | USER_REQUEST.md and RESEARCH.md exist, are non-empty, and pass structural validation |
+| plan | Synthesized plan exists in plans/ and passes structural validation |
+| implement | Synthesized plan passes structural validation and all checkboxes checked (no `- [ ]` remaining) |
+| debug | USER_REQUEST.md and RESEARCH.md exist, are non-empty, and pass structural validation |
 | brainstorm (brainstorm task) | Always passes |
 
 ### Locking
