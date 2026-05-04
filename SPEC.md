@@ -97,7 +97,19 @@ user_gate      — dialog options (see below)
 
 User gate options:
 - **"Approve brainstorm"** → transition to plan phase
+- **"Automatic review"** / **"Automatic review (pass N)"** → enter review cycle (auto)
+- **"Automatic deep review"** / **"Automatic deep review (pass N)"** → enter review cycle (auto-deep)
 - **"Continue brainstorming"** → return to llm_work, print "/pp:next to advance"
+
+Review cycle (auto / auto-deep):
+```
+spawn_reviewers   — spawn brainstorm reviewer subagents
+await_reviewers   — block until complete
+apply_feedback    — LLM synthesizes feedback, revises USER_REQUEST.md + RESEARCH.md
+→ reviewCycle = null, return to user_gate
+```
+
+Brainstorm reviewers independently investigate the codebase to verify research thoroughness. They check for gaps, inaccuracies, and missing constraints. Configurable via `brainstormReviewers` in config (same pattern as `planReviewers`/`codeReviewers`).
 
 USER_REQUEST.md follows a fixed, validated structure:
 
