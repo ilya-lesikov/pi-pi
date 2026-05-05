@@ -366,7 +366,6 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
 
     const exitCheck = validateExitCriteria(orchestrator.active.dir, orchestrator.active.type, currentPhase);
     if (!exitCheck.ok) {
-      pi.sendUserMessage(`Phase transition blocked: ${exitCheck.reason}. Please address this before advancing.`);
       return { ok: false, error: exitCheck.reason };
     }
 
@@ -385,9 +384,7 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
       const failures = afterResults.filter((r) => !r.ok);
       if (failures.length > 0) {
         const failureText = failures.map((f) => `${f.command}: ${f.output}`).join("\n");
-        ctx.ui.notify(`afterImplement commands failed:\n${failureText}`, "error");
-        pi.sendUserMessage(`afterImplement failed:\n${failureText}\n\nFix these issues before advancing.`);
-        return { ok: false, error: "afterImplement commands failed" };
+        return { ok: false, error: `afterImplement commands failed:\n${failureText}\n\nFix these issues before advancing.` };
       }
     }
 
