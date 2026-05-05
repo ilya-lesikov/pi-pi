@@ -173,12 +173,20 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
       }
       if (!choice) return;
 
-      const task = allTasks.find((t) => {
-        const name = taskName(t.dir);
-        const age = taskAge(t.state);
-        return choice === `${t.type}/${name} — ${t.state.phase} (${age} old)`;
-      });
-      if (!task) return;
+      const choiceIdx = (() => {
+        const start = page * PAGE_SIZE;
+        const pageTasks = allTasks.slice(start, start + PAGE_SIZE);
+        for (let i = 0; i < pageTasks.length; i++) {
+          const t = pageTasks[i]!;
+          const name = taskName(t.dir);
+          const age = taskAge(t.state);
+          const phase = t.state.phase === t.type ? "" : ` [${t.state.phase}]`;
+          if (choice === `[${t.type}]${phase} ${name} (${age})`) return start + i;
+        }
+        return -1;
+      })();
+      if (choiceIdx === -1) return;
+      const task = allTasks[choiceIdx]!;
 
       try {
         orchestrator.config = loadConfig(orchestrator.cwd);
