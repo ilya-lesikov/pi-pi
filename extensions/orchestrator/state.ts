@@ -179,17 +179,16 @@ export function taskName(taskDir: string): string {
     if (["implement", "debug", "brainstorm"].includes(desc)) {
       const urPath = join(taskDir, "USER_REQUEST.md");
       if (existsSync(urPath)) {
-        const firstLine = readFileSync(urPath, "utf-8")
-          .split("\n")
-          .map((l) => l.replace(/^#+\s*/, "").trim())
-          .find((l) => l.length > 0);
-        if (firstLine) desc = firstLine;
+        const content = readFileSync(urPath, "utf-8");
+        const lines = content.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+        const firstContent = lines.find((l) => !l.startsWith("#"));
+        if (firstContent) desc = firstContent;
       }
     }
 
     if (desc) {
       desc = desc.replace(/\s+/g, " ").trim();
-      if (desc.length > 80) desc = desc.slice(0, 77) + "...";
+      if (desc.length > 60) desc = desc.slice(0, 57) + "...";
       return desc;
     }
   } catch {

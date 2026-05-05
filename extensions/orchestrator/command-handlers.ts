@@ -150,7 +150,8 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
         const options = pageTasks.map((t) => {
           const name = taskName(t.dir);
           const age = taskAge(t.state);
-          return `${t.type}/${name} — ${t.state.phase} (${age} old)`;
+          const phase = t.state.phase === t.type ? "" : ` [${t.state.phase}]`;
+          return `[${t.type}]${phase} ${name} (${age})`;
         });
 
         if (totalPages > 1) {
