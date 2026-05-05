@@ -313,6 +313,7 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
               console.error(`[pi-pi] spawn reviewers failed: ${err.message}`);
             });
             cycle.step = "await_reviewers";
+            orchestrator.active.state.step = "await_reviewers";
             saveTask(orchestrator.active.dir, orchestrator.active.state);
           }
         } else if (cycle.step === "apply_feedback") {
@@ -331,7 +332,7 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
 
       const step = orchestrator.active.state.step;
       if (step === "await_planners" || step === "await_reviewers") {
-        pi.sendUserMessage(`[PI-PI] Resumed ${orchestrator.active.state.phase} phase. Awaiting subagents.`);
+        ctx.ui.notify(`Resumed task. Awaiting subagents (${step}).`, "info");
       } else if (step === "apply_feedback") {
         pi.sendUserMessage(`[PI-PI] Resumed ${orchestrator.active.state.phase} phase. Read reviewer outputs and apply feedback.`);
       } else {
