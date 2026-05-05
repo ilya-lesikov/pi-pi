@@ -402,7 +402,7 @@ describe("review cycle lifecycle", () => {
 
     expect(orchestrator.active!.state.phase).toBe("implement");
 
-    ctx.ui.select.mockResolvedValueOnce("Automatic review");
+    ctx.ui.select.mockResolvedValueOnce("Review");
     const result = await ppPhaseComplete.execute("call-3", { summary: "implemented" }, undefined, undefined, ctx);
     expect(result.content[0].text).toContain("Awaiting reviewers");
 
@@ -466,7 +466,7 @@ describe("review cycle lifecycle", () => {
     await ppPhaseComplete.execute("call-2", { summary: "plan done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
 
-    ctx.ui.select.mockResolvedValueOnce("Automatic review");
+    ctx.ui.select.mockResolvedValueOnce("Review");
     await ppPhaseComplete.execute("call-3", { summary: "implemented" }, undefined, undefined, ctx);
 
     emitSubagentCreated(pi, "reviewer-1", "Code reviewer (test)");
@@ -510,7 +510,7 @@ describe("review cycle lifecycle", () => {
     await ppPhaseComplete.execute("call-2", { summary: "plan done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
 
-    ctx.ui.select.mockResolvedValueOnce("Automatic review");
+    ctx.ui.select.mockResolvedValueOnce("Review");
     const result = await ppPhaseComplete.execute("call-3", { summary: "implemented" }, undefined, undefined, ctx);
 
     expect(result.content[0].text).toContain("No code reviewers enabled");
@@ -766,7 +766,7 @@ describe("edge cases and regressions", () => {
     await ppPhaseComplete.execute("call-2", { summary: "plan done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
 
-    ctx.ui.select.mockResolvedValueOnce("Automatic review");
+    ctx.ui.select.mockResolvedValueOnce("Review");
     await ppPhaseComplete.execute("call-3", { summary: "implemented" }, undefined, undefined, ctx);
 
     expect(orchestrator.active!.state.reviewCycle).not.toBeNull();
@@ -816,7 +816,7 @@ describe("edge cases and regressions", () => {
 
     expect(orchestrator.active!.state.phase).toBe("implement");
 
-    ctx.ui.select.mockResolvedValueOnce("Automatic review");
+    ctx.ui.select.mockResolvedValueOnce("Review");
     await ppPhaseComplete.execute("call-3", { summary: "implemented" }, undefined, undefined, ctx);
 
     const reviewsDir = join(taskDir, "code-reviews");
@@ -828,10 +828,11 @@ describe("edge cases and regressions", () => {
 
     expect(orchestrator.active!.state.reviewCycle!.step).toBe("apply_feedback");
 
-    ctx.ui.select.mockResolvedValueOnce("Automatic review (pass 2)");
+    ctx.ui.select.mockResolvedValueOnce("Review");
     await ppPhaseComplete.execute("call-4", { summary: "fixes applied" }, undefined, undefined, ctx);
 
     expect(orchestrator.active!.state.reviewPass).toBe(1);
+    expect(orchestrator.active!.state.reviewPassByKind?.auto).toBe(1);
     expect(orchestrator.active!.state.reviewCycle).not.toBeNull();
     expect(orchestrator.active!.state.reviewCycle!.pass).toBe(2);
 

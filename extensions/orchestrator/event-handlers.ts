@@ -1,5 +1,6 @@
-import { existsSync, readdirSync } from "fs";
+import { existsSync, readdirSync, readFileSync } from "fs";
 import { resolve, basename, join } from "path";
+import { validateUserRequest, validateResearch } from "./validate-artifacts.js";
 import { Type } from "@sinclair/typebox";
 import { loadConfig } from "./config.js";
 import { runAfterEdit, autoCommit } from "./commands.js";
@@ -178,8 +179,11 @@ async function enterReviewCycle(orchestrator: Orchestrator, ctx: any, kind: "aut
 
 function finalizeReviewCycle(task: ActiveTask): void {
   if (!task.state.reviewCycle) return;
+  const kind = task.state.reviewCycle.kind;
   task.state.reviewPass = task.state.reviewCycle.pass;
   task.reviewPass = task.state.reviewPass;
+  if (!task.state.reviewPassByKind) task.state.reviewPassByKind = {};
+  task.state.reviewPassByKind[kind] = (task.state.reviewPassByKind[kind] ?? 0) + 1;
   task.state.reviewCycle = null;
   task.state.step = "user_gate";
   saveTask(task.dir, task.state);
@@ -208,10 +212,11 @@ async function runUserGateDialogInner(orchestrator: Orchestrator, ctx: any, summ
     return `${count} subagent(s) still running or spawning.`;
   }
 
-  const pendingPass = task.state.reviewCycle?.pass ?? 0;
-  const nextPass = Math.max(task.state.reviewPass, pendingPass) + 1;
-  const autoLabel = nextPass > 1 ? `Automatic review (pass ${nextPass})` : "Automatic review";
-  const deepLabel = nextPass > 1 ? `Automatic deep review (pass ${nextPass})` : "Automatic deep review";
+    const byKind = task.state.reviewPassByKind ?? {};
+    const autoCount = byKind["auto"] ?? 0;
+    const deepCount = byKind["auto-deep"] ?? 0;
+    const autoLabel = autoCount > 0 ? `Review (pass ${autoCount + 1})` : "Review";
+    const deepLabel = deepCount > 0 ? `Deep review (pass ${deepCount + 1})` : "Deep review";
 
   const continueMessage = "User wants to continue. Run /pp:next when ready to advance.";
 
@@ -598,14 +603,43 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   });
 
   pi.on("tool_result", async (event, _ctx) => {
-    if (!orchestrator.active || orchestrator.active.state.phase !== "implement") return;
+    if (!orchestrator.active) return;
 
     if ((event.toolName === "edit" || event.toolName === "write") && !event.isError) {
       const input = event.input as { file_path?: string; filePath?: string; path?: string };
       const filePath = input.file_path || input.filePath || input.path;
       if (!filePath) return;
 
+      const resolvedWrite = resolve(orchestrator.cwd, filePath);
+      const taskDir = orchestrator.active.dir;
+      if (resolvedWrite === join(taskDir, "USER_REQUEST.md")) {
+        const content = readFileSync(resolvedWrite, "utf-8");
+        const result = validateUserRequest(content);
+        if (!result.ok) {
+          return {
+            content: [
+              ...event.content,
+              { type: "text" as const, text: `\n\n<validation-error>\nUSER_REQUEST.md structure is invalid:\n${result.errors.map((e) => `- ${e}`).join("\n")}\n\nFix immediately. Keep exactly: # User Request, ## Problem, ## Constraints. No other sections.\n</validation-error>` },
+            ],
+          };
+        }
+      }
+      if (resolvedWrite === join(taskDir, "RESEARCH.md")) {
+        const content = readFileSync(resolvedWrite, "utf-8");
+        const result = validateResearch(content);
+        if (!result.ok) {
+          return {
+            content: [
+              ...event.content,
+              { type: "text" as const, text: `\n\n<validation-error>\nRESEARCH.md structure is invalid:\n${result.errors.map((e) => `- ${e}`).join("\n")}\n\nFix immediately. Keep exactly: ## Affected Code, ## Architecture Context, ## Constraints & Edge Cases, ## Open Questions (optional). No other sections.\n</validation-error>` },
+            ],
+          };
+        }
+      }
+
       if (filePath.includes(".pp/")) return;
+
+      if (orchestrator.active.state.phase !== "implement") return;
 
       orchestrator.active.modifiedFiles.add(filePath);
 

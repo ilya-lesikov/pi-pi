@@ -15,6 +15,7 @@ export interface TaskState {
   step: string | null;
   reviewCycle: { kind: string; step: string; pass: number } | null;
   reviewPass: number;
+  reviewPassByKind?: Record<string, number>;
   from: string | null;
   description: string;
   startedAt: string;
