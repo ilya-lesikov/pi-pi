@@ -177,6 +177,16 @@ async function enterReviewCycle(orchestrator: Orchestrator, ctx: any, kind: "aut
   return `Started review cycle pass ${pass} (${kind}). Awaiting reviewers.`;
 }
 
+function stopTask(orchestrator: Orchestrator): string {
+  if (!orchestrator.active) return "No active task.";
+  orchestrator.abortAllSubagents();
+  orchestrator.active.state.phase = "done";
+  saveTask(orchestrator.active.dir, orchestrator.active.state);
+  const desc = orchestrator.active.description;
+  orchestrator.cleanupActive();
+  return `Task "${desc}" stopped.`;
+}
+
 function finalizeReviewCycle(task: ActiveTask): void {
   if (!task.state.reviewCycle) return;
   const kind = task.state.reviewCycle.kind;
@@ -221,7 +231,7 @@ async function runUserGateDialogInner(orchestrator: Orchestrator, ctx: any, summ
   const continueMessage = "User wants to continue. Run /pp:next when ready to advance.";
 
   if (phase === "brainstorm" && task.type === "implement") {
-    const choice = await selectOption(ctx, summary, ["Approve brainstorm", autoLabel, deepLabel, "Continue brainstorming"]);
+    const choice = await selectOption(ctx, summary, ["Approve brainstorm", autoLabel, deepLabel, "Continue brainstorming", "Stop task"]);
     finalizeReviewCycle(task);
     if (choice === "Approve brainstorm") {
       const result = await orchestrator.transitionToNextPhase(ctx);
@@ -229,6 +239,7 @@ async function runUserGateDialogInner(orchestrator: Orchestrator, ctx: any, summ
     }
     if (choice === autoLabel) return enterReviewCycle(orchestrator, ctx, "auto");
     if (choice === deepLabel) return enterReviewCycle(orchestrator, ctx, "auto-deep");
+    if (choice === "Stop task") return stopTask(orchestrator);
     setStep(orchestrator, "llm_work");
     return continueMessage;
   }
@@ -274,6 +285,7 @@ async function runUserGateDialogInner(orchestrator: Orchestrator, ctx: any, summ
       "Review in Plannotator",
       "Review on my own",
       "Continue planning",
+      "Stop task",
     ]);
     finalizeReviewCycle(task);
     if (choice === "Approve plan") {
@@ -283,6 +295,7 @@ async function runUserGateDialogInner(orchestrator: Orchestrator, ctx: any, summ
     if (choice === autoLabel) return enterReviewCycle(orchestrator, ctx, "auto");
     if (choice === deepLabel) return enterReviewCycle(orchestrator, ctx, "auto-deep");
     if (choice === "Review in Plannotator") return enterReviewCycle(orchestrator, ctx, "plannotator");
+    if (choice === "Stop task") return stopTask(orchestrator);
     setStep(orchestrator, "synthesize");
     return continueMessage;
   }
@@ -295,6 +308,7 @@ async function runUserGateDialogInner(orchestrator: Orchestrator, ctx: any, summ
       "Review in Plannotator",
       "Review on my own",
       "Continue implementation",
+      "Stop task",
     ]);
     finalizeReviewCycle(task);
     if (choice === "Approve implementation") {
@@ -304,6 +318,7 @@ async function runUserGateDialogInner(orchestrator: Orchestrator, ctx: any, summ
     if (choice === autoLabel) return enterReviewCycle(orchestrator, ctx, "auto");
     if (choice === deepLabel) return enterReviewCycle(orchestrator, ctx, "auto-deep");
     if (choice === "Review in Plannotator") return enterReviewCycle(orchestrator, ctx, "plannotator");
+    if (choice === "Stop task") return stopTask(orchestrator);
     setStep(orchestrator, "llm_work");
     return continueMessage;
   }
