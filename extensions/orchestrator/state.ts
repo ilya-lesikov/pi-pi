@@ -102,6 +102,12 @@ export function listTasks(cwd: string, type?: TaskType): TaskInfo[] {
     }
   }
 
+  results.sort((a, b) => {
+    const aTime = a.state.startedAt ? new Date(a.state.startedAt).getTime() : 0;
+    const bTime = b.state.startedAt ? new Date(b.state.startedAt).getTime() : 0;
+    return bTime - aTime;
+  });
+
   return results;
 }
 
