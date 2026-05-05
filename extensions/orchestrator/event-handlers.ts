@@ -529,6 +529,12 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     }
     if (!orchestrator.active || orchestrator.active.state.phase === "done") return;
 
+    const step = orchestrator.active.state.step;
+    if (step === "await_planners" || step === "await_reviewers") {
+      ctx.abort();
+      return;
+    }
+
     orchestrator.nudgeHalted = false;
     orchestrator.updateStatus(ctx);
 
