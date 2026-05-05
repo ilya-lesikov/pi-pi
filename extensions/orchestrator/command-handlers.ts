@@ -199,7 +199,12 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
       try {
         release = await lockTask(task.dir, orchestrator.config.timeouts);
       } catch (err: any) {
-        ctx.ui.notify(`Failed to lock task: ${err.message}`, "error");
+        const staleSeconds = Math.round(orchestrator.config.timeouts.lockStale / 1000);
+        ctx.ui.notify(
+          `Cannot resume: task is locked by another pi session (or a session that crashed less than ${staleSeconds}s ago). ` +
+          `Wait ${staleSeconds}s for the lock to expire, or kill the other session first.`,
+          "error",
+        );
         return;
       }
 

@@ -93,7 +93,7 @@ const DEFAULT_CONFIG: PiPiConfig = {
     afterImplement: 300000,
     agentSpawn: 30000,
     agentReadyPing: 5000,
-    lockStale: 600000,
+    lockStale: 60000,
     lockUpdate: 30000,
   },
   autoCommit: true,
