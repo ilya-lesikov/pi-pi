@@ -11,11 +11,27 @@ function findCbmBin(): string | null {
   }
 }
 
-let CBM_BIN: string | null = null;
+const CBM_BIN_KEY = Symbol.for("pi-pi:cbm-bin");
+
+function getCbmBin(): string | null {
+  if ((globalThis as any)[CBM_BIN_KEY] !== undefined) return (globalThis as any)[CBM_BIN_KEY];
+  const bin = findCbmBin();
+  (globalThis as any)[CBM_BIN_KEY] = bin;
+  return bin;
+}
 
 function isCbmAvailable(): boolean {
-  if (CBM_BIN === null) CBM_BIN = findCbmBin();
-  return CBM_BIN !== null;
+  return getCbmBin() !== null;
+}
+
+const CBM_DAEMON_KEY = Symbol.for("pi-pi:cbm-daemon");
+
+function getGlobalDaemon(): CbmDaemon | null {
+  return (globalThis as any)[CBM_DAEMON_KEY] ?? null;
+}
+
+function setGlobalDaemon(daemon: CbmDaemon): void {
+  (globalThis as any)[CBM_DAEMON_KEY] = daemon;
 }
 
 class CbmDaemon {
@@ -30,7 +46,7 @@ class CbmDaemon {
   start(): void {
     if (this.proc) return;
 
-    this.proc = spawn(CBM_BIN!, [], { stdio: ["pipe", "pipe", "ignore"] });
+    this.proc = spawn(getCbmBin()!, [], { stdio: ["pipe", "pipe", "ignore"] });
     this.proc.unref();
     (this.proc.stdout as any)?.unref?.();
     (this.proc.stdin as any)?.unref?.();
@@ -164,8 +180,12 @@ function fail(text: string) {
 export function registerCbmTools(pi: ExtensionAPI, cwd: string): boolean {
   if (!isCbmAvailable()) return false;
 
-  const daemon = new CbmDaemon();
-  daemon.start();
+  let daemon = getGlobalDaemon();
+  if (!daemon) {
+    daemon = new CbmDaemon();
+    daemon.start();
+    setGlobalDaemon(daemon);
+  }
 
   pi.registerTool({
     name: "cbm_search",

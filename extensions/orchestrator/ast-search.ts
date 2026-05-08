@@ -4,12 +4,18 @@ import { resolve } from "path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 
+const SG_AVAILABLE_KEY = Symbol.for("pi-pi:sg-available");
+
 function isSgAvailable(): boolean {
+  const cached = (globalThis as any)[SG_AVAILABLE_KEY];
+  if (cached !== undefined) return cached;
   try {
     const { execFileSync } = require("child_process");
     execFileSync("sg", ["--version"], { encoding: "utf-8", stdio: "pipe" });
+    (globalThis as any)[SG_AVAILABLE_KEY] = true;
     return true;
   } catch {
+    (globalThis as any)[SG_AVAILABLE_KEY] = false;
     return false;
   }
 }

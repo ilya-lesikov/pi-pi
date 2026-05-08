@@ -24,7 +24,7 @@ export function registerAgentDefinitions(
       name,
       description: agent.frontmatter.description,
       builtinToolNames: toolNames,
-      extensions: false,
+      extensions: true,
       skills: false,
       model: agent.frontmatter.model,
       thinking: agent.frontmatter.thinking,
