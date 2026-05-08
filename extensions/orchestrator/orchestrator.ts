@@ -45,6 +45,8 @@ export class Orchestrator {
   cwd = "";
   spawnedAgentIds = new Set<string>();
   agentDescriptions = new Map<string, string>();
+  agentSpawnTimes = new Map<string, number>();
+  staleAgentTimer: ReturnType<typeof setInterval> | null = null;
   phaseCompactionPending = false;
   phaseCompactionResolve: (() => void) | null = null;
   taskDoneCompactionPending = false;
@@ -305,6 +307,7 @@ export class Orchestrator {
   resetTaskScopedState(): void {
     this.spawnedAgentIds.clear();
     this.agentDescriptions.clear();
+    this.agentSpawnTimes.clear();
     this.pendingSubagentSpawns = 0;
     this.errorRetryCount = 0;
     this.commitReminderSent = false;
@@ -324,6 +327,10 @@ export class Orchestrator {
     if (this.pendingRetryTimer) {
       clearTimeout(this.pendingRetryTimer);
       this.pendingRetryTimer = null;
+    }
+    if (this.staleAgentTimer) {
+      clearInterval(this.staleAgentTimer);
+      this.staleAgentTimer = null;
     }
   }
 

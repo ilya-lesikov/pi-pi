@@ -398,13 +398,49 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
 export function registerEventHandlers(orchestrator: Orchestrator): void {
   const pi = orchestrator.pi;
 
+  function startStaleAgentWatchdog(): void {
+    if (orchestrator.staleAgentTimer) return;
+    orchestrator.staleAgentTimer = setInterval(() => {
+      if (!orchestrator.active || orchestrator.agentSpawnTimes.size === 0) {
+        clearInterval(orchestrator.staleAgentTimer!);
+        orchestrator.staleAgentTimer = null;
+        return;
+      }
+      const now = Date.now();
+      const staleMs = orchestrator.config.timeouts.agentStale;
+      for (const [id, spawnTime] of orchestrator.agentSpawnTimes) {
+        if (now - spawnTime > staleMs) {
+          const desc = orchestrator.agentDescriptions.get(id) || id;
+          pi.events.emit("subagents:rpc:stop", { requestId: crypto.randomUUID(), agentId: id });
+          orchestrator.spawnedAgentIds.delete(id);
+          orchestrator.agentSpawnTimes.delete(id);
+          orchestrator.agentDescriptions.delete(id);
+          pi.sendMessage(
+            {
+              customType: "pp-agent-stale",
+              content: `Aborted stale agent "${desc}" — no completion after ${Math.round(staleMs / 1000)}s.`,
+              display: true,
+            },
+            { deliverAs: "steer" },
+          );
+        }
+      }
+      if (orchestrator.agentSpawnTimes.size === 0) {
+        clearInterval(orchestrator.staleAgentTimer!);
+        orchestrator.staleAgentTimer = null;
+      }
+    }, 30000);
+  }
+
   pi.events.on("subagents:created", (data: any) => {
     if (!orchestrator.active || !data?.id) return;
     orchestrator.spawnedAgentIds.add(data.id);
+    orchestrator.agentSpawnTimes.set(data.id, Date.now());
     if (orchestrator.pendingSubagentSpawns > 0) orchestrator.pendingSubagentSpawns--;
     if (data.description) {
       orchestrator.agentDescriptions.set(data.id, data.description);
     }
+    startStaleAgentWatchdog();
   });
 
   function checkPlannerCompletion(): void {
@@ -447,6 +483,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (!orchestrator.active || !data?.id) return;
     orchestrator.spawnedAgentIds.delete(data.id);
     orchestrator.agentDescriptions.delete(data.id);
+    orchestrator.agentSpawnTimes.delete(data.id);
 
     const desc = data.description || data.type || data.id;
     const duration = data.durationMs ? `${(data.durationMs / 1000).toFixed(1)}s` : "";
@@ -469,6 +506,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   pi.events.on("subagents:failed", (data: any) => {
     if (!orchestrator.active || !data?.id) return;
     orchestrator.spawnedAgentIds.delete(data.id);
+    orchestrator.agentSpawnTimes.delete(data.id);
     const desc = orchestrator.agentDescriptions.get(data.id) || data.type || data.id;
     orchestrator.agentDescriptions.delete(data.id);
 
