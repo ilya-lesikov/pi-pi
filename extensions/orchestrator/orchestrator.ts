@@ -63,6 +63,11 @@ export class Orchestrator {
   activeTaskToken = 0;
   userGatePending = false;
   reviewTransitionToken = -1;
+  lastCtx: any = null;
+  failedPlannerVariants: string[] = [];
+  failedReviewerVariants: string[] = [];
+  plannerFailureDialogPending = false;
+  reviewerFailureDialogPending = false;
   plannotatorReject: ((reason: Error) => void) | null = null;
   plannotatorUnsub: (() => void) | null = null;
   transitionToNextPhase: (ctx: any) => Promise<{ ok: boolean; error?: string }> = async () => ({ ok: false, error: "not initialized" });
@@ -280,7 +285,9 @@ export class Orchestrator {
 
     if (this.active.state.phase === "plan") {
       this.pendingSubagentSpawns = Object.values(this.config.planners).filter((v) => v.enabled).length;
+      this.failedPlannerVariants = [];
       spawnPlanners(this.pi, this.cwd, this.active.dir, this.active.taskId, this.config).then((result) => {
+        this.failedPlannerVariants = result.failedVariants;
         if (result.spawned === 0) this.pendingSubagentSpawns = 0;
         for (const id of result.agentIds ?? []) {
           this.spawnedAgentIds.delete(id);
@@ -319,6 +326,10 @@ export class Orchestrator {
     this.phaseStartTime = 0;
     this.userGatePending = false;
     this.reviewTransitionToken = -1;
+    this.failedPlannerVariants = [];
+    this.failedReviewerVariants = [];
+    this.plannerFailureDialogPending = false;
+    this.reviewerFailureDialogPending = false;
     this.phaseTaskIds.clear();
     if (this.awaitPollTimer) {
       clearInterval(this.awaitPollTimer);

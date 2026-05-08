@@ -88,7 +88,7 @@ export async function spawnCodeReviewers(
   taskId: string,
   config: PiPiConfig,
   round: number,
-): Promise<{ spawned: number; agentIds: string[] }> {
+): Promise<{ spawned: number; agentIds: string[]; failedVariants: string[] }> {
   const urPath = join(taskDir, "USER_REQUEST.md");
   const resPath = join(taskDir, "RESEARCH.md");
   if (!existsSync(urPath) || !existsSync(resPath)) {
@@ -96,7 +96,7 @@ export async function spawnCodeReviewers(
       { customType: "pp-code-reviews-error", content: "Cannot start code review: USER_REQUEST.md or RESEARCH.md is missing.", display: true },
       { deliverAs: "steer" },
     );
-    return { spawned: 0, agentIds: [] };
+    return { spawned: 0, agentIds: [], failedVariants: [] };
   }
 
   const userRequest = readFileSync(urPath, "utf-8");
@@ -107,7 +107,7 @@ export async function spawnCodeReviewers(
       { customType: "pp-code-reviews-error", content: "Cannot start code review: no synthesized plan found.", display: true },
       { deliverAs: "steer" },
     );
-    return { spawned: 0, agentIds: [] };
+    return { spawned: 0, agentIds: [], failedVariants: [] };
   }
 
   const reviewsDir = join(taskDir, "code-reviews");
@@ -118,6 +118,7 @@ export async function spawnCodeReviewers(
   const timestamp = Math.floor(Date.now() / 1000);
   const enabledVariants = Object.entries(config.codeReviewers).filter(([, v]) => v.enabled);
   const agentIds: string[] = [];
+  const failedVariants: string[] = [];
   const results: Promise<void>[] = [];
 
   for (const [variant] of enabledVariants) {
@@ -135,6 +136,7 @@ export async function spawnCodeReviewers(
           agentIds.push(id);
           await waitForCompletion(pi, id);
         } catch (err: any) {
+          failedVariants.push(variant);
           pi.sendMessage(
             {
               customType: "pp-code-reviewer-error",
@@ -182,5 +184,5 @@ export async function spawnCodeReviewers(
     );
   }
 
-  return { spawned: enabledVariants.length, agentIds };
+  return { spawned: enabledVariants.length, agentIds, failedVariants };
 }

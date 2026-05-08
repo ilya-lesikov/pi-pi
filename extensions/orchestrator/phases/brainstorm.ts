@@ -150,10 +150,10 @@ export async function spawnBrainstormReviewers(
   taskId: string,
   config: PiPiConfig,
   round: number,
-): Promise<{ spawned: number; files: string[]; agentIds: string[] }> {
+): Promise<{ spawned: number; files: string[]; agentIds: string[]; failedVariants: string[] }> {
   const urPath = join(taskDir, "USER_REQUEST.md");
   const resPath = join(taskDir, "RESEARCH.md");
-  if (!existsSync(urPath) || !existsSync(resPath)) return { spawned: 0, files: [], agentIds: [] };
+  if (!existsSync(urPath) || !existsSync(resPath)) return { spawned: 0, files: [], agentIds: [], failedVariants: [] };
 
   const userRequest = readFileSync(urPath, "utf-8");
   const research = readFileSync(resPath, "utf-8");
@@ -167,6 +167,7 @@ export async function spawnBrainstormReviewers(
   const enabledVariants = Object.entries(config.brainstormReviewers).filter(([, v]) => v.enabled);
   const reviewFiles: string[] = [];
   const agentIds: string[] = [];
+  const failedVariants: string[] = [];
   const results: Promise<void>[] = [];
 
   for (const [variant] of enabledVariants) {
@@ -185,6 +186,7 @@ export async function spawnBrainstormReviewers(
           agentIds.push(id);
           await waitForCompletion(pi, id);
         } catch (err: any) {
+          failedVariants.push(variant);
           pi.sendMessage(
             {
               customType: "pp-brainstorm-reviewer-error",
@@ -232,5 +234,5 @@ export async function spawnBrainstormReviewers(
     );
   }
 
-  return { spawned: enabledVariants.length, files: reviewFiles, agentIds };
+  return { spawned: enabledVariants.length, files: reviewFiles, agentIds, failedVariants };
 }

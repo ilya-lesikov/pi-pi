@@ -49,10 +49,10 @@ export async function spawnPlanners(
   taskDir: string,
   taskId: string,
   config: PiPiConfig,
-): Promise<{ spawned: number; agentIds: string[] }> {
+): Promise<{ spawned: number; agentIds: string[]; failedVariants: string[] }> {
   const urPath = join(taskDir, "USER_REQUEST.md");
   const resPath = join(taskDir, "RESEARCH.md");
-  if (!existsSync(urPath) || !existsSync(resPath)) return { spawned: 0, agentIds: [] };
+  if (!existsSync(urPath) || !existsSync(resPath)) return { spawned: 0, agentIds: [], failedVariants: [] };
 
   const userRequest = readFileSync(urPath, "utf-8");
   const research = readFileSync(resPath, "utf-8");
@@ -65,6 +65,7 @@ export async function spawnPlanners(
   const timestamp = Math.floor(Date.now() / 1000);
   const enabledVariants = Object.entries(config.planners).filter(([, v]) => v.enabled);
   const agentIds: string[] = [];
+  const failedVariants: string[] = [];
   const results: Promise<void>[] = [];
 
   for (const [variant] of enabledVariants) {
@@ -112,6 +113,7 @@ export async function spawnPlanners(
             }
           }
         } catch (err: any) {
+          failedVariants.push(variant);
           pi.sendMessage(
             {
               customType: "pp-planner-error",
@@ -156,7 +158,7 @@ export async function spawnPlanners(
     );
   }
 
-  return { spawned: enabledVariants.length, agentIds };
+  return { spawned: enabledVariants.length, agentIds, failedVariants };
 }
 
 export async function spawnPlanReviewers(
@@ -165,15 +167,15 @@ export async function spawnPlanReviewers(
   taskDir: string,
   taskId: string,
   config: PiPiConfig,
-): Promise<{ spawned: number; files: string[]; agentIds: string[] }> {
+): Promise<{ spawned: number; files: string[]; agentIds: string[]; failedVariants: string[] }> {
   const urPath = join(taskDir, "USER_REQUEST.md");
   const resPath = join(taskDir, "RESEARCH.md");
-  if (!existsSync(urPath) || !existsSync(resPath)) return { spawned: 0, files: [], agentIds: [] };
+  if (!existsSync(urPath) || !existsSync(resPath)) return { spawned: 0, files: [], agentIds: [], failedVariants: [] };
 
   const userRequest = readFileSync(urPath, "utf-8");
   const research = readFileSync(resPath, "utf-8");
   const synthesizedPlan = getLatestSynthesizedPlan(taskDir);
-  if (!synthesizedPlan) return { spawned: 0, files: [], agentIds: [] };
+  if (!synthesizedPlan) return { spawned: 0, files: [], agentIds: [], failedVariants: [] };
 
   const planReviewsDir = join(taskDir, "plan-reviews");
   if (!existsSync(planReviewsDir)) {
@@ -184,6 +186,7 @@ export async function spawnPlanReviewers(
   const enabledVariants = Object.entries(config.planReviewers).filter(([, v]) => v.enabled);
   const reviewFiles: string[] = [];
   const agentIds: string[] = [];
+  const failedVariants: string[] = [];
 
   const results: Promise<void>[] = [];
   for (const [variant] of enabledVariants) {
@@ -203,6 +206,7 @@ export async function spawnPlanReviewers(
           agentIds.push(id);
           await waitForCompletion(pi, id);
         } catch (err: any) {
+          failedVariants.push(variant);
           pi.sendMessage(
             {
               customType: "pp-plan-reviewer-error",
@@ -247,5 +251,5 @@ export async function spawnPlanReviewers(
     );
   }
 
-  return { spawned: enabledVariants.length, files: reviewFiles, agentIds };
+  return { spawned: enabledVariants.length, files: reviewFiles, agentIds, failedVariants };
 }

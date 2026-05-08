@@ -159,6 +159,7 @@ async function enterReviewCycle(orchestrator: Orchestrator, ctx: any, kind: "aut
     ? () => spawnPlanReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, config)
     : () => spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, config, pass);
   spawnFn().then((result) => {
+    orchestrator.failedReviewerVariants = result.failedVariants;
     if (result.spawned === 0) orchestrator.pendingSubagentSpawns = 0;
     for (const id of result.agentIds ?? []) {
       orchestrator.spawnedAgentIds.delete(id);
@@ -456,6 +457,69 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     const hasPlanFiles = existsSync(plansDir) &&
       readdirSync(plansDir).some((f) => f.endsWith(".md") && !f.includes("synthesized") && !f.includes("review_"));
 
+    const failedPlannerVariants = [...orchestrator.failedPlannerVariants];
+    if (
+      failedPlannerVariants.length > 0 &&
+      !orchestrator.plannerFailureDialogPending &&
+      orchestrator.lastCtx
+    ) {
+      orchestrator.plannerFailureDialogPending = true;
+      void (async () => {
+        try {
+          const variantsText = failedPlannerVariants.join(", ");
+          const question = hasPlanFiles
+            ? `Some planners failed: ${variantsText}. Choose how to proceed.`
+            : `All planner outputs failed: ${variantsText}. Choose how to proceed.`;
+          const options = hasPlanFiles
+            ? ["Retry failed planners", "Work with available planner outputs", "Stop task"]
+            : ["Retry failed planners", "Stop task"];
+          const choice = await selectOption(orchestrator.lastCtx, question, options);
+
+          if (choice === "Retry failed planners") {
+            const failedSet = new Set(failedPlannerVariants);
+            const planners: typeof orchestrator.config.planners = {};
+            for (const [name, cfg] of Object.entries(orchestrator.config.planners)) {
+              if (failedSet.has(name)) planners[name] = cfg;
+            }
+            const retryCount = Object.keys(planners).length;
+            if (retryCount > 0) {
+              const retryConfig = { ...orchestrator.config, planners };
+              orchestrator.failedPlannerVariants = [];
+              orchestrator.pendingSubagentSpawns = retryCount;
+              spawnPlanners(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, retryConfig).then((result) => {
+                orchestrator.failedPlannerVariants = result.failedVariants;
+                if (result.spawned === 0) orchestrator.pendingSubagentSpawns = 0;
+                for (const id of result.agentIds ?? []) {
+                  orchestrator.spawnedAgentIds.delete(id);
+                }
+                orchestrator.pendingSubagentSpawns = 0;
+                checkPlannerCompletion();
+              }).catch((err) => {
+                orchestrator.pendingSubagentSpawns = 0;
+                console.error(`[pi-pi] retry spawnPlanners failed: ${err.message}`);
+                checkPlannerCompletion();
+              });
+              pi.sendUserMessage(`[PI-PI] Retrying failed planners: ${variantsText}.`, { deliverAs: "followUp" });
+              return;
+            }
+          }
+
+          if (choice === "Stop task") {
+            pi.sendUserMessage(`[PI-PI] ${stopTask(orchestrator)}`, { deliverAs: "followUp" });
+            return;
+          }
+
+          if (hasPlanFiles) {
+            orchestrator.failedPlannerVariants = [];
+          }
+        } finally {
+          orchestrator.plannerFailureDialogPending = false;
+          checkPlannerCompletion();
+        }
+      })();
+      return;
+    }
+
     if (!hasPlanFiles) {
       pi.sendMessage(
         {
@@ -470,12 +534,112 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       return;
     }
 
+    orchestrator.failedPlannerVariants = [];
     orchestrator.active.state.step = "synthesize";
     saveTask(orchestrator.active.dir, orchestrator.active.state);
     pi.sendUserMessage("[PI-PI] All planners completed. Read their outputs and synthesize the plan.", { deliverAs: "followUp" });
   }
 
   function checkReviewCycleCompletion(): void {
+    if (
+      !orchestrator.active?.state.reviewCycle ||
+      orchestrator.active.state.reviewCycle.step !== "await_reviewers" ||
+      orchestrator.spawnedAgentIds.size > 0 ||
+      orchestrator.pendingSubagentSpawns > 0
+    ) return;
+
+    const failedReviewerVariants = [...orchestrator.failedReviewerVariants];
+    if (
+      failedReviewerVariants.length > 0 &&
+      !orchestrator.reviewerFailureDialogPending &&
+      orchestrator.lastCtx
+    ) {
+      orchestrator.reviewerFailureDialogPending = true;
+      void (async () => {
+        try {
+          const variantsText = failedReviewerVariants.join(", ");
+          const choice = await selectOption(
+            orchestrator.lastCtx,
+            `Some reviewers failed: ${variantsText}. Choose how to proceed.`,
+            ["Retry failed reviewers", "Work with available reviewer outputs", "Continue without review", "Stop task"],
+          );
+
+          if (choice === "Retry failed reviewers") {
+            const cycle = orchestrator.active?.state.reviewCycle;
+            if (cycle) {
+              const pass = cycle.pass;
+              const reviewConfig = cycle.kind === "auto-deep" ? deepReviewConfig(orchestrator.config) : orchestrator.config;
+              const phase = orchestrator.active!.state.phase;
+              const sourceReviewers = phase === "brainstorm"
+                ? reviewConfig.brainstormReviewers
+                : phase === "plan"
+                ? reviewConfig.planReviewers
+                : reviewConfig.codeReviewers;
+              const failedSet = new Set(failedReviewerVariants);
+              const scopedReviewers: typeof sourceReviewers = {};
+              for (const [name, cfg] of Object.entries(sourceReviewers)) {
+                if (failedSet.has(name)) scopedReviewers[name] = cfg;
+              }
+              const retryCount = Object.keys(scopedReviewers).length;
+              if (retryCount > 0) {
+                const retryConfig = phase === "brainstorm"
+                  ? { ...reviewConfig, brainstormReviewers: scopedReviewers }
+                  : phase === "plan"
+                  ? { ...reviewConfig, planReviewers: scopedReviewers }
+                  : { ...reviewConfig, codeReviewers: scopedReviewers };
+                const spawnFn = phase === "brainstorm"
+                  ? () => spawnBrainstormReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, retryConfig, pass)
+                  : phase === "plan"
+                  ? () => spawnPlanReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, retryConfig)
+                  : () => spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, retryConfig, pass);
+                orchestrator.failedReviewerVariants = [];
+                orchestrator.pendingSubagentSpawns = retryCount;
+                cycle.step = "await_reviewers";
+                orchestrator.active!.state.step = "await_reviewers";
+                saveTask(orchestrator.active!.dir, orchestrator.active!.state);
+                spawnFn().then((result) => {
+                  orchestrator.failedReviewerVariants = result.failedVariants;
+                  if (result.spawned === 0) orchestrator.pendingSubagentSpawns = 0;
+                  for (const id of result.agentIds ?? []) {
+                    orchestrator.spawnedAgentIds.delete(id);
+                  }
+                  orchestrator.pendingSubagentSpawns = 0;
+                  checkReviewCycleCompletion();
+                }).catch((err) => {
+                  orchestrator.pendingSubagentSpawns = 0;
+                  console.error(`[pi-pi] retry spawn reviewers failed (${phase}): ${err.message}`);
+                  checkReviewCycleCompletion();
+                });
+                pi.sendUserMessage(`[PI-PI] Retrying failed reviewers: ${variantsText}.`, { deliverAs: "followUp" });
+                return;
+              }
+            }
+          }
+
+          if (choice === "Stop task") {
+            pi.sendUserMessage(`[PI-PI] ${stopTask(orchestrator)}`, { deliverAs: "followUp" });
+            return;
+          }
+
+          if (choice === "Continue without review") {
+            if (!orchestrator.active?.state.reviewCycle) return;
+            orchestrator.failedReviewerVariants = [];
+            orchestrator.active.state.reviewCycle = null;
+            orchestrator.active.state.step = "user_gate";
+            saveTask(orchestrator.active.dir, orchestrator.active.state);
+            pi.sendUserMessage("[PI-PI] Review cycle skipped. Use /pp:next to choose the next action.", { deliverAs: "followUp" });
+            return;
+          }
+
+          orchestrator.failedReviewerVariants = [];
+        } finally {
+          orchestrator.reviewerFailureDialogPending = false;
+          checkReviewCycleCompletion();
+        }
+      })();
+      return;
+    }
+
     tryCompleteReviewCycle(orchestrator);
   }
 
@@ -526,7 +690,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
         customType: "pp-subagent-error",
         content: isApiError
           ? `**${desc}** failed (model/API error): ${data.error || "unknown error"}. All subagents aborted. Do NOT retry — the model is likely unavailable. Report the error to the user and ask how to proceed.`
-          : `**${desc}** failed: ${data.error || "unknown error"}`,
+          : `**${desc}** failed: ${data.error || "unknown error"}. Do NOT retry — continue with available information.`,
         display: true,
       },
       { deliverAs: "steer" },
@@ -545,6 +709,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   });
 
   pi.on("session_start", async (_event, ctx) => {
+    orchestrator.lastCtx = ctx;
     orchestrator.cwd = ctx.cwd;
 
     const duplicates = orchestrator.checkForConflictingExtensions();
@@ -581,6 +746,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
+    orchestrator.lastCtx = ctx;
     if (orchestrator.taskDoneCompactionPending) {
       ctx.abort();
       return;

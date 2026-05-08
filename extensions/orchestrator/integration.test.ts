@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Orchestrator } from "./orchestrator.js";
 import { registerCommandHandlers } from "./command-handlers.js";
 import { registerEventHandlers, runUserGateDialog } from "./event-handlers.js";
-import { loadTask } from "./state.js";
+import { loadTask, saveTask } from "./state.js";
 
 vi.mock("./cbm.js", () => ({ registerCbmTools: vi.fn() }));
 vi.mock("./exa.js", () => ({ registerExaTools: vi.fn() }));
@@ -14,6 +14,8 @@ vi.mock("./agents/registry.js", () => ({
   registerAgentDefinitions: vi.fn(),
   unregisterAgentDefinitions: vi.fn(),
   setExtensionOnlyMode: vi.fn(),
+  spawnViaRpc: vi.fn(async (_pi: any, _type: string) => ({ id: `mock-${Math.random().toString(36).slice(2)}` })),
+  waitForCompletion: vi.fn(async () => undefined),
 }));
 
 vi.mock("./config.js", async (importOriginal) => {
@@ -692,6 +694,70 @@ describe("planner completion tracking", () => {
     emitSubagentFailed(pi, "planner-1", "model error");
 
     expect(orchestrator.active!.state.step).toBe("synthesize");
+  });
+
+  it("shows planner failure dialog and can proceed with available outputs", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "Test planner dialog");
+    const taskDir = orchestrator.active!.dir;
+
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+
+    ctx.ui.select.mockResolvedValueOnce("Approve brainstorm");
+    const ppPhaseComplete = getTool(pi, "pp_phase_complete");
+    await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
+    await new Promise((r) => setTimeout(r, 10));
+
+    const plansDir = join(taskDir, "plans");
+    mkdirSync(plansDir, { recursive: true });
+    writeFileSync(
+      join(plansDir, `${Math.floor(Date.now() / 1000)}_test.md`),
+      makeValidPlan(["- [ ] P1. Planner draft item — Done when: planner output exists"]),
+      "utf-8",
+    );
+
+    orchestrator.pendingSubagentSpawns = 0;
+    orchestrator.failedPlannerVariants = ["test"];
+    orchestrator.lastCtx = ctx;
+    ctx.ui.custom.mockResolvedValueOnce({ kind: "selection", selections: ["Work with available planner outputs"] });
+
+    emitSubagentCompleted(pi, "planner-1", "Planner (test)");
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(orchestrator.active!.state.step).toBe("synthesize");
+    expect(orchestrator.failedPlannerVariants).toEqual([]);
+  });
+});
+
+describe("reviewer failure handling", () => {
+  it("shows reviewer failure dialog and can skip review", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "Test reviewer dialog");
+    const taskDir = orchestrator.active!.dir;
+
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "await_reviewers";
+    orchestrator.active!.state.reviewCycle = { kind: "auto", step: "await_reviewers", pass: 1 };
+    saveTask(taskDir, orchestrator.active!.state);
+
+    orchestrator.pendingSubagentSpawns = 0;
+    orchestrator.failedReviewerVariants = ["test"];
+    orchestrator.lastCtx = ctx;
+    ctx.ui.custom.mockResolvedValueOnce({ kind: "selection", selections: ["Continue without review"] });
+
+    emitSubagentCompleted(pi, "reviewer-1", "Code reviewer (test)");
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(orchestrator.active!.state.reviewCycle).toBeNull();
+    expect(orchestrator.active!.state.step).toBe("user_gate");
+    expect(orchestrator.failedReviewerVariants).toEqual([]);
   });
 });
 

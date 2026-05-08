@@ -252,7 +252,9 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
             for (const [name, cfg] of missingVariants) missingConfig[name] = cfg;
             const partialConfig = { ...orchestrator.config, planners: missingConfig };
             orchestrator.pendingSubagentSpawns = missingVariants.length;
+            orchestrator.failedPlannerVariants = [];
             spawnPlanners(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, partialConfig).then((result) => {
+              orchestrator.failedPlannerVariants = result.failedVariants;
               if (result.spawned === 0) orchestrator.pendingSubagentSpawns = 0;
               for (const id of result.agentIds ?? []) {
                 orchestrator.spawnedAgentIds.delete(id);
@@ -302,7 +304,9 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
               : phase === "plan"
               ? () => spawnPlanReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, reviewConfig)
               : () => spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, reviewConfig, cycle.pass);
+            orchestrator.failedReviewerVariants = [];
             spawnFn().then((result) => {
+              orchestrator.failedReviewerVariants = result.failedVariants;
               if (result.spawned === 0) orchestrator.pendingSubagentSpawns = 0;
               for (const id of result.agentIds ?? []) {
                 orchestrator.spawnedAgentIds.delete(id);
@@ -422,7 +426,9 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
 
     if (next === "plan") {
       orchestrator.pendingSubagentSpawns = Object.values(orchestrator.config.planners).filter((v) => v.enabled).length;
+      orchestrator.failedPlannerVariants = [];
       spawnPlanners(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, orchestrator.config).then((result) => {
+        orchestrator.failedPlannerVariants = result.failedVariants;
         if (result.spawned === 0) orchestrator.pendingSubagentSpawns = 0;
         for (const id of result.agentIds ?? []) {
           orchestrator.spawnedAgentIds.delete(id);
