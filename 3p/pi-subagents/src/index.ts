@@ -48,6 +48,24 @@ function textResult(msg: string, details?: AgentDetails) {
   return { content: [{ type: "text" as const, text: msg }], details: details as any };
 }
 
+function appendParentFlowTrace(cwd: string | undefined, event: string, detail: Record<string, unknown>) {
+  if (!cwd) return;
+  try {
+    mkdirSync(join(cwd, ".pp"), { recursive: true });
+    const line = JSON.stringify({ timestamp: new Date().toISOString(), event, ...detail }) + "\n";
+    require("node:fs").appendFileSync(join(cwd, ".pp", "subagent-parent-flow-trace.jsonl"), line, "utf-8");
+  } catch {}
+}
+
+function appendSubagentDebugTrace(cwd: string | undefined, event: string, detail: Record<string, unknown>) {
+  if (!cwd) return;
+  try {
+    mkdirSync(join(cwd, ".pp"), { recursive: true });
+    const line = JSON.stringify({ timestamp: new Date().toISOString(), event, ...detail }) + "\n";
+    require("node:fs").appendFileSync(join(cwd, ".pp", "subagent-interactive-trace.jsonl"), line, "utf-8");
+  } catch {}
+}
+
 /** Safe token formatting — wraps session.getSessionStats() in try-catch. */
 function safeFormatTokens(session: { getSessionStats(): { tokens: { total: number } } } | undefined): string {
   if (!session) return "";
@@ -282,15 +300,25 @@ export default function (pi: ExtensionAPI) {
   function emitIndividualNudge(record: AgentRecord) {
     if (record.resultConsumed) return;  // re-check at send time
 
+    const hasRunningAfterCompletion = manager.hasRunning();
+    const shouldTriggerTurn = !hasRunningAfterCompletion;
+    appendParentFlowTrace(currentCtx?.cwd, "emit_individual_nudge", {
+      id: record.id,
+      status: record.status,
+      hasSession: Boolean(record.session),
+      hasRunningAfterCompletion,
+      shouldTriggerTurn,
+    });
     const notification = formatTaskNotification(record, 500);
-    const footer = record.outputFile ? `\nFull transcript available at: ${record.outputFile}` : '';
+    const footer = record.outputFile ? `
+Full transcript available at: ${record.outputFile}` : '';
 
     pi.sendMessage<NotificationDetails>({
       customType: "subagent-notification",
       content: notification + footer,
       display: true,
       details: buildNotificationDetails(record, 500, agentActivity.get(record.id)),
-    }, { deliverAs: "followUp", triggerTurn: true });
+    }, { deliverAs: "followUp", triggerTurn: shouldTriggerTurn });
   }
 
   function sendIndividualNudge(record: AgentRecord) {
@@ -322,12 +350,25 @@ export default function (pi: ExtensionAPI) {
           details.others = rest.map(r => buildNotificationDetails(r, 300, agentActivity.get(r.id)));
         }
 
+        const hasRunningAfterCompletion = manager.hasRunning();
+        const shouldTriggerTurn = !partial && !hasRunningAfterCompletion;
+        appendParentFlowTrace(currentCtx?.cwd, "emit_group_nudge", {
+          ids: unconsumed.map(r => r.id),
+          partial,
+          count: unconsumed.length,
+          hasRunningAfterCompletion,
+          shouldTriggerTurn,
+        });
         pi.sendMessage<NotificationDetails>({
           customType: "subagent-notification",
-          content: `Background agent group completed: ${label}\n\n${notifications}\n\nUse get_subagent_result for full output.`,
+          content: `Background agent group completed: ${label}
+
+${notifications}
+
+Use get_subagent_result for full output.`,
           display: true,
           details,
-        }, { deliverAs: "followUp", triggerTurn: true });
+        }, { deliverAs: "followUp", triggerTurn: shouldTriggerTurn });
       });
       widget.update();
     },
@@ -368,21 +409,36 @@ export default function (pi: ExtensionAPI) {
   const manager = new AgentManager((record) => {
     firstProgressSeen.delete(record.id);
     firstTurnSeen.delete(record.id);
-    // Emit lifecycle event based on terminal status
-    const isError = record.status === "error" || record.status === "stopped" || record.status === "aborted";
-    const eventData = buildEventData(record);
-    if (isError) {
-      pi.events.emit("subagents:failed", eventData);
-    } else {
-      pi.events.emit("subagents:completed", eventData);
+
+    let eventData: ReturnType<typeof buildEventData> | undefined;
+    try {
+      eventData = buildEventData(record);
+    } catch {}
+
+    if (eventData) {
+      const isError = record.status === "error" || record.status === "stopped" || record.status === "aborted";
+      try {
+        if (isError) {
+          pi.events.emit("subagents:failed", eventData);
+        } else {
+          pi.events.emit("subagents:completed", eventData);
+        }
+        appendSubagentDebugTrace(currentCtx?.cwd, "on_complete_emit_ok", { id: record.id, status: record.status });
+      } catch (error) {
+        appendSubagentDebugTrace(currentCtx?.cwd, "on_complete_emit_failed", { id: record.id, status: record.status, error: error instanceof Error ? error.message : String(error) });
+      }
     }
 
-    // Persist final record for cross-extension history reconstruction
-    pi.appendEntry("subagents:record", {
-      id: record.id, type: record.type, description: record.description,
-      status: record.status, result: record.result, error: record.error,
-      startedAt: record.startedAt, completedAt: record.completedAt,
-    });
+    try {
+      pi.appendEntry("subagents:record", {
+        id: record.id, type: record.type, description: record.description,
+        status: record.status, result: record.result, error: record.error,
+        startedAt: record.startedAt, completedAt: record.completedAt,
+      });
+      appendSubagentDebugTrace(currentCtx?.cwd, "on_complete_append_ok", { id: record.id, status: record.status });
+    } catch (error) {
+      appendSubagentDebugTrace(currentCtx?.cwd, "on_complete_append_failed", { id: record.id, status: record.status, error: error instanceof Error ? error.message : String(error) });
+    }
 
     // Skip notification if result was already consumed via get_subagent_result
     if (record.resultConsumed) {
@@ -408,11 +464,13 @@ export default function (pi: ExtensionAPI) {
     widget.update();
   }, undefined, (record) => {
     // Emit started event when agent transitions to running (including from queue)
-    pi.events.emit("subagents:started", {
-      id: record.id,
-      type: record.type,
-      description: record.description,
-    });
+    try {
+      pi.events.emit("subagents:started", {
+        id: record.id,
+        type: record.type,
+        description: record.description,
+      });
+    } catch {}
   });
 
   // Expose manager via Symbol.for() global registry for cross-package access.
@@ -443,7 +501,10 @@ export default function (pi: ExtensionAPI) {
     managedSession = data?.managed === true;
   });
 
-  pi.on("session_switch", () => { if (!managedSession) manager.clearCompleted(); });
+  pi.on("session_switch", (event: any) => {
+    appendParentFlowTrace(currentCtx?.cwd, "session_switch", { reason: event?.reason ?? null, managedSession, hasRunning: manager.hasRunning(), agentIds: manager.listAgents().map((agent) => ({ id: agent.id, status: agent.status })) });
+    if (!managedSession) manager.clearCompleted();
+  });
 
   const { unsubPing: unsubPingRpc, unsubSpawn: unsubSpawnRpc, unsubStop: unsubStopRpc } = registerRpcHandlers({
     events: pi.events,
@@ -485,20 +546,12 @@ export default function (pi: ExtensionAPI) {
   // Broadcast readiness so extensions loaded after us can discover us
   pi.events.emit("subagents:ready", {});
 
-  // On shutdown, abort all agents immediately and clean up.
-  // If the session is going down, there's nothing left to consume agent results.
+  // Interactive session transitions can emit session_shutdown while background
+  // agents are still alive. Keep the subagent manager alive across shutdown so
+  // background sessions can finish and still be surfaced in the next parent session.
   pi.on("session_shutdown", async () => {
-    unsubSpawnRpc();
-    unsubStopRpc();
-    unsubPingRpc();
-    currentCtx = undefined;
-    delete (globalThis as any)[MANAGER_KEY];
-    manager.abortAll();
-    firstProgressSeen.clear();
-    firstTurnSeen.clear();
-    for (const timer of pendingNudges.values()) clearTimeout(timer);
-    pendingNudges.clear();
-    manager.dispose();
+    appendParentFlowTrace(currentCtx?.cwd, "session_shutdown", { hasRunning: manager.hasRunning(), agentIds: manager.listAgents().map((agent) => ({ id: agent.id, status: agent.status })) });
+    return;
   });
 
   // Live widget: show running agents above editor
