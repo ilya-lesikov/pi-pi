@@ -162,222 +162,213 @@ export async function runAgent(
 
   // Resolve working directory: worktree override > parent cwd
   const effectiveCwd = options.cwd ?? ctx.cwd;
-
-  const env = await detectEnv(options.pi, effectiveCwd);
-
-  // Get parent system prompt for append-mode agents
-  const parentSystemPrompt = ctx.getSystemPrompt();
-
-  // Build prompt extras (memory, skill preloading)
-  const extras: PromptExtras = {};
-
-  // Resolve extensions/skills: isolated overrides to false
-  const extensions = options.isolated ? false : config.extensions;
-  const skills = options.isolated ? false : config.skills;
-
-  // Skill preloading: when skills is string[], preload their content into prompt
-  if (Array.isArray(skills)) {
-    const loaded = preloadSkills(skills, effectiveCwd);
-    if (loaded.length > 0) {
-      extras.skillBlocks = loaded;
-    }
-  }
-
-  let tools = getToolsForType(type, effectiveCwd);
-
-  // Persistent memory: detect write capability and branch accordingly.
-  // Account for disallowedTools — a tool in the base set but on the denylist is not truly available.
-  if (agentConfig?.memory) {
-    const existingNames = new Set(tools.map(t => t.name));
-    const denied = agentConfig.disallowedTools ? new Set(agentConfig.disallowedTools) : undefined;
-    const effectivelyHas = (name: string) => existingNames.has(name) && !denied?.has(name);
-    const hasWriteTools = effectivelyHas("write") || effectivelyHas("edit");
-
-    if (hasWriteTools) {
-      // Read-write memory: add any missing memory tools (read/write/edit)
-      const memTools = getMemoryTools(effectiveCwd, existingNames);
-      if (memTools.length > 0) tools = [...tools, ...memTools];
-      extras.memoryBlock = buildMemoryBlock(agentConfig.name, agentConfig.memory, effectiveCwd);
-    } else {
-      // Read-only memory: only add read tool, use read-only prompt
-      if (!existingNames.has("read")) {
-        const readTools = getReadOnlyMemoryTools(effectiveCwd, existingNames);
-        if (readTools.length > 0) tools = [...tools, ...readTools];
-      }
-      extras.memoryBlock = buildReadOnlyMemoryBlock(agentConfig.name, agentConfig.memory, effectiveCwd);
-    }
-  }
-
-  // Build system prompt from agent config
-  let systemPrompt: string;
-  if (agentConfig) {
-    systemPrompt = buildAgentPrompt(agentConfig, effectiveCwd, env, parentSystemPrompt, extras);
-  } else {
-    // Unknown type fallback: general-purpose (defensive — unreachable in practice
-    // since index.ts resolves unknown types to "general-purpose" before calling runAgent)
-    systemPrompt = buildAgentPrompt({
-      name: type,
-      description: "General-purpose agent",
-      systemPrompt: "",
-      promptMode: "append",
-      extensions: true,
-      skills: true,
-      inheritContext: false,
-      runInBackground: false,
-      isolated: false,
-    }, effectiveCwd, env, parentSystemPrompt, extras);
-  }
-
-  // When skills is string[], we've already preloaded them into the prompt.
-  // Still pass noSkills: true since we don't need the skill loader to load them again.
-  const noSkills = skills === false || Array.isArray(skills);
-
-  // Load extensions/skills: true or string[] → load; false → don't
-  const loader = new DefaultResourceLoader({
-    cwd: effectiveCwd,
-    noExtensions: extensions === false,
-    noSkills,
-    noPromptTemplates: true,
-    noThemes: true,
-    systemPromptOverride: () => systemPrompt,
-  });
-  await loader.reload();
-
-  // Resolve model: explicit option > config.model > parent model
-  const model = options.model ?? resolveDefaultModel(
-    ctx.model, ctx.modelRegistry, agentConfig?.model,
-  );
-
-  // Resolve thinking level: explicit option > agent config > undefined (inherit)
-  const thinkingLevel = options.thinkingLevel ?? agentConfig?.thinking;
-
-  const sessionOpts: Record<string, unknown> = {
-    cwd: effectiveCwd,
-    sessionManager: SessionManager.inMemory(effectiveCwd),
-    settingsManager: SettingsManager.create(),
-    modelRegistry: ctx.modelRegistry,
-    model,
-    tools,
-    resourceLoader: loader,
-  };
-  if (thinkingLevel) {
-    sessionOpts.thinkingLevel = thinkingLevel;
-  }
-
-  // createAgentSession's type signature may not include thinkingLevel yet
-  const { session } = await createAgentSession(sessionOpts as Parameters<typeof createAgentSession>[0]);
-
-  // Build disallowed tools set from agent config
-  const disallowedSet = agentConfig?.disallowedTools
-    ? new Set(agentConfig.disallowedTools)
-    : undefined;
-
-  // Filter active tools: remove our own tools to prevent nesting,
-  // apply extension allowlist if specified, and apply disallowedTools denylist
-  if (extensions !== false) {
-    const builtinToolNames = new Set(tools.map(t => t.name));
-    const activeTools = session.getActiveToolNames().filter((t) => {
-      if (EXCLUDED_TOOL_NAMES.includes(t)) return false;
-      if (disallowedSet?.has(t)) return false;
-      if (builtinToolNames.has(t)) return true;
-      if (Array.isArray(extensions)) {
-        return extensions.some(ext => t.startsWith(ext) || t.includes(ext));
-      }
-      return true;
-    });
-    session.setActiveToolsByName(activeTools);
-  } else if (disallowedSet) {
-    // Even with extensions disabled, apply denylist to built-in tools
-    const activeTools = session.getActiveToolNames().filter(t => !disallowedSet.has(t));
-    session.setActiveToolsByName(activeTools);
-  }
-
-  // Bind extensions so that session_start fires and extensions can initialize
-  // (e.g. loading credentials, setting up state). Placed after tool filtering
-  // so extension-provided skills/prompts from extendResourcesFromExtensions()
-  // respect the active tool set. All ExtensionBindings fields are optional.
-  await session.bindExtensions({
-    onError: (err) => {
-      options.onToolActivity?.({
-        type: "end",
-        toolName: `extension-error:${err.extensionPath}`,
-      });
-    },
-  });
-
-  options.onSessionCreated?.(session);
-
-  // Track turns for graceful max_turns enforcement
-  let turnCount = 0;
-  const maxTurns = normalizeMaxTurns(options.maxTurns ?? agentConfig?.maxTurns ?? defaultMaxTurns);
-  let softLimitReached = false;
-  let aborted = false;
-  let lastTurnError: string | undefined;
-
-  let currentMessageText = "";
-  const unsubTurns = session.subscribe((event: AgentSessionEvent) => {
-    if (event.type === "turn_end") {
-      turnCount++;
-      const msg = (event as any).message;
-      if (msg?.stopReason === "error") {
-        lastTurnError = msg.errorMessage || "Model API error";
-      }
-      options.onTurnEnd?.(turnCount);
-      if (maxTurns != null) {
-        if (!softLimitReached && turnCount >= maxTurns) {
-          softLimitReached = true;
-          session.steer("You have reached your turn limit. Wrap up immediately — provide your final answer now.");
-        } else if (softLimitReached && turnCount >= maxTurns + graceTurns) {
-          aborted = true;
-          session.abort();
-        }
-      }
-    }
-    if (event.type === "message_start") {
-      currentMessageText = "";
-    }
-    if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-      currentMessageText += event.assistantMessageEvent.delta;
-      options.onTextDelta?.(event.assistantMessageEvent.delta, currentMessageText);
-    }
-    if (event.type === "tool_execution_start") {
-      options.onToolActivity?.({ type: "start", toolName: event.toolName });
-    }
-    if (event.type === "tool_execution_end") {
-      options.onToolActivity?.({ type: "end", toolName: event.toolName });
-    }
-  });
-
-  const collector = collectResponseText(session);
-  const cleanupAbort = forwardAbortSignal(session, options.signal);
-
-  // Build the effective prompt: optionally prepend parent context
-  let effectivePrompt = prompt;
-  if (options.inheritContext) {
-    const parentContext = buildParentContext(ctx);
-    if (parentContext) {
-      effectivePrompt = parentContext + prompt;
-    }
-  }
+  const subagentSessionKey = Symbol.for("pi-pi:subagent-session");
+  const previousSubagentSession = (globalThis as any)[subagentSessionKey];
+  (globalThis as any)[subagentSessionKey] = true;
 
   try {
-    await session.prompt(effectivePrompt);
+    const env = await detectEnv(options.pi, effectiveCwd);
+
+    // Get parent system prompt for append-mode agents
+    const parentSystemPrompt = ctx.getSystemPrompt();
+
+    // Build prompt extras (memory, skill preloading)
+    const extras: PromptExtras = {};
+
+    // Resolve extensions/skills: isolated overrides to false
+    const extensions = options.isolated ? false : config.extensions;
+    const skills = options.isolated ? false : config.skills;
+
+    // Skill preloading: when skills is string[], preload their content into prompt
+    if (Array.isArray(skills)) {
+      const loaded = preloadSkills(skills, effectiveCwd);
+      if (loaded.length > 0) {
+        extras.skillBlocks = loaded;
+      }
+    }
+
+    let tools = getToolsForType(type, effectiveCwd);
+
+    // Persistent memory: detect write capability and branch accordingly.
+    // Account for disallowedTools — a tool in the base set but on the denylist is not truly available.
+    if (agentConfig?.memory) {
+      const existingNames = new Set(tools.map(t => t.name));
+      const denied = agentConfig.disallowedTools ? new Set(agentConfig.disallowedTools) : undefined;
+      const effectivelyHas = (name: string) => existingNames.has(name) && !denied?.has(name);
+      const hasWriteTools = effectivelyHas("write") || effectivelyHas("edit");
+
+      if (hasWriteTools) {
+        const memTools = getMemoryTools(effectiveCwd, existingNames);
+        if (memTools.length > 0) tools = [...tools, ...memTools];
+        extras.memoryBlock = buildMemoryBlock(agentConfig.name, agentConfig.memory, effectiveCwd);
+      } else {
+        if (!existingNames.has("read")) {
+          const readTools = getReadOnlyMemoryTools(effectiveCwd, existingNames);
+          if (readTools.length > 0) tools = [...tools, ...readTools];
+        }
+        extras.memoryBlock = buildReadOnlyMemoryBlock(agentConfig.name, agentConfig.memory, effectiveCwd);
+      }
+    }
+
+    // Build system prompt from agent config
+    let systemPrompt: string;
+    if (agentConfig) {
+      systemPrompt = buildAgentPrompt(agentConfig, effectiveCwd, env, parentSystemPrompt, extras);
+    } else {
+      systemPrompt = buildAgentPrompt({
+        name: type,
+        description: "General-purpose agent",
+        systemPrompt: "",
+        promptMode: "append",
+        extensions: true,
+        skills: true,
+        inheritContext: false,
+        runInBackground: false,
+        isolated: false,
+      }, effectiveCwd, env, parentSystemPrompt, extras);
+    }
+
+    const noSkills = skills === false || Array.isArray(skills);
+
+    const loader = new DefaultResourceLoader({
+      cwd: effectiveCwd,
+      noExtensions: extensions === false,
+      noSkills,
+      noPromptTemplates: true,
+      noThemes: true,
+      systemPromptOverride: () => systemPrompt,
+    });
+    await loader.reload();
+
+    const model = options.model ?? resolveDefaultModel(
+      ctx.model, ctx.modelRegistry, agentConfig?.model,
+    );
+
+    const thinkingLevel = options.thinkingLevel ?? agentConfig?.thinking;
+
+    const sessionOpts: Record<string, unknown> = {
+      cwd: effectiveCwd,
+      sessionManager: SessionManager.inMemory(effectiveCwd),
+      settingsManager: SettingsManager.create(),
+      modelRegistry: ctx.modelRegistry,
+      model,
+      tools,
+      resourceLoader: loader,
+    };
+    if (thinkingLevel) {
+      sessionOpts.thinkingLevel = thinkingLevel;
+    }
+
+    const { session } = await createAgentSession(sessionOpts as Parameters<typeof createAgentSession>[0]);
+
+    const disallowedSet = agentConfig?.disallowedTools
+      ? new Set(agentConfig.disallowedTools)
+      : undefined;
+
+    if (extensions !== false) {
+      const builtinToolNames = new Set(tools.map(t => t.name));
+      const activeTools = session.getActiveToolNames().filter((t) => {
+        if (EXCLUDED_TOOL_NAMES.includes(t)) return false;
+        if (disallowedSet?.has(t)) return false;
+        if (builtinToolNames.has(t)) return true;
+        if (Array.isArray(extensions)) {
+          return extensions.some(ext => t.startsWith(ext) || t.includes(ext));
+        }
+        return true;
+      });
+      session.setActiveToolsByName(activeTools);
+    } else if (disallowedSet) {
+      const activeTools = session.getActiveToolNames().filter(t => !disallowedSet.has(t));
+      session.setActiveToolsByName(activeTools);
+    }
+
+    await session.bindExtensions({
+      onError: (err) => {
+        options.onToolActivity?.({
+          type: "end",
+          toolName: `extension-error:${err.extensionPath}`,
+        });
+      },
+    });
+
+    options.onSessionCreated?.(session);
+
+    let turnCount = 0;
+    const maxTurns = normalizeMaxTurns(options.maxTurns ?? agentConfig?.maxTurns ?? defaultMaxTurns);
+    let softLimitReached = false;
+    let aborted = false;
+    let lastTurnError: string | undefined;
+
+    let currentMessageText = "";
+    const unsubTurns = session.subscribe((event: AgentSessionEvent) => {
+      if (event.type === "turn_end") {
+        turnCount++;
+        const msg = (event as any).message;
+        if (msg?.stopReason === "error") {
+          lastTurnError = msg.errorMessage || "Model API error";
+        }
+        options.onTurnEnd?.(turnCount);
+        if (maxTurns != null) {
+          if (!softLimitReached && turnCount >= maxTurns) {
+            softLimitReached = true;
+            session.steer("You have reached your turn limit. Wrap up immediately — provide your final answer now.");
+          } else if (softLimitReached && turnCount >= maxTurns + graceTurns) {
+            aborted = true;
+            session.abort();
+          }
+        }
+      }
+      if (event.type === "message_start") {
+        currentMessageText = "";
+      }
+      if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
+        currentMessageText += event.assistantMessageEvent.delta;
+        options.onTextDelta?.(event.assistantMessageEvent.delta, currentMessageText);
+      }
+      if (event.type === "tool_execution_start") {
+        options.onToolActivity?.({ type: "start", toolName: event.toolName });
+      }
+      if (event.type === "tool_execution_end") {
+        options.onToolActivity?.({ type: "end", toolName: event.toolName });
+      }
+    });
+
+    const collector = collectResponseText(session);
+    const cleanupAbort = forwardAbortSignal(session, options.signal);
+
+    let effectivePrompt = prompt;
+    if (options.inheritContext) {
+      const parentContext = buildParentContext(ctx);
+      if (parentContext) {
+        effectivePrompt = parentContext + prompt;
+      }
+    }
+
+    try {
+      await session.prompt(effectivePrompt);
+    } finally {
+      unsubTurns();
+      collector.unsubscribe();
+      cleanupAbort();
+    }
+
+    if (lastTurnError && turnCount <= 1) {
+      throw new Error(lastTurnError);
+    }
+
+    const responseText = collector.getText().trim() || getLastAssistantText(session);
+    if (lastTurnError) {
+      const errorSuffix = `\n\n[Agent error on final turn: ${lastTurnError}]`;
+      return { responseText: (responseText || "No output.") + errorSuffix, session, aborted, steered: softLimitReached };
+    }
+    return { responseText, session, aborted, steered: softLimitReached };
   } finally {
-    unsubTurns();
-    collector.unsubscribe();
-    cleanupAbort();
+    if (previousSubagentSession === undefined) {
+      delete (globalThis as any)[subagentSessionKey];
+    } else {
+      (globalThis as any)[subagentSessionKey] = previousSubagentSession;
+    }
   }
-
-  if (lastTurnError && turnCount <= 1) {
-    throw new Error(lastTurnError);
-  }
-
-  const responseText = collector.getText().trim() || getLastAssistantText(session);
-  if (lastTurnError) {
-    const errorSuffix = `\n\n[Agent error on final turn: ${lastTurnError}]`;
-    return { responseText: (responseText || "No output.") + errorSuffix, session, aborted, steered: softLimitReached };
-  }
-  return { responseText, session, aborted, steered: softLimitReached };
 }
 
 /**

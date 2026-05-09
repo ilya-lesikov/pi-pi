@@ -128,4 +128,25 @@ describe("agent-runner final output capture", () => {
 
     expect(result).toBe("RESUMED");
   });
+
+  it("marks the process as subagent session during startup and restores it after completion", async () => {
+    const key = Symbol.for("pi-pi:subagent-session");
+    delete (globalThis as any)[key];
+
+    let observedDuringPrompt: unknown;
+    const { session } = createSession("LOCKED");
+    session.prompt = vi.fn(async () => {
+      observedDuringPrompt = (globalThis as any)[key];
+      session.messages.push({
+        role: "assistant",
+        content: [{ type: "text", text: "LOCKED" }],
+      });
+    });
+    createAgentSession.mockResolvedValue({ session });
+
+    await runAgent(ctx, "Explore", "Say LOCKED", { pi });
+
+    expect(observedDuringPrompt).toBe(true);
+    expect((globalThis as any)[key]).toBeUndefined();
+  });
 });

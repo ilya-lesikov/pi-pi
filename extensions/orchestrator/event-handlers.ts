@@ -17,6 +17,7 @@ import { WORKING_PRINCIPLES, COMMUNICATION } from "./agents/tool-routing.js";
 import { registerCbmTools } from "./cbm.js";
 import { registerExaTools } from "./exa.js";
 import { registerAstSearchTool } from "./ast-search.js";
+import { SUBAGENT_SESSION_KEY } from "./index.js";
 import { setExtensionOnlyMode, unregisterAgentDefinitions } from "./agents/registry.js";
 import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
 import { spawnCodeReviewers } from "./phases/review.js";
@@ -712,6 +713,10 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     orchestrator.lastCtx = ctx;
     orchestrator.cwd = ctx.cwd;
 
+    if ((globalThis as any)[SUBAGENT_SESSION_KEY]) {
+      return;
+    }
+
     const duplicates = orchestrator.checkForConflictingExtensions();
     if (duplicates.length > 0) {
       const msg = `pi-pi bundles its own versions of pi-subagents, pi-tasks, and pi-ask-user. ` +
@@ -989,6 +994,10 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       return;
     }
     orchestrator.errorRetryCount = 0;
+
+    if ((globalThis as any)[SUBAGENT_SESSION_KEY]) {
+      return;
+    }
 
     if (orchestrator.active.state.step === "await_planners" || orchestrator.active.state.step === "await_reviewers") {
       if (!orchestrator.awaitPollTimer) {
