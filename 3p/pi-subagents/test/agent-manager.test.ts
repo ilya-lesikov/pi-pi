@@ -200,3 +200,32 @@ describe("AgentManager — Bug 3 clearCompleted", () => {
     expect(manager.getRecord(id)).toBeUndefined();
   });
 });
+
+
+describe("AgentWidget linger behavior", () => {
+  it("keeps completed agents visible for an extra turn", async () => {
+    const { AgentWidget } = await import("../src/ui/agent-widget.js");
+    const manager = new AgentManager();
+    const agentActivity = new Map();
+    const widget = new AgentWidget(manager, agentActivity);
+    const setStatus = vi.fn();
+    const setWidget = vi.fn();
+    widget.setUICtx({ setStatus, setWidget } as any);
+
+    resolvedRun();
+    const id = manager.spawn(mockPi, mockCtx, "general-purpose", "test", {
+      description: "test",
+      isBackground: true,
+    });
+    await manager.getRecord(id)!.promise;
+    widget.markFinished(id);
+
+    expect((widget).shouldShowFinished(id, "completed")).toBe(true);
+    widget.onTurnStart();
+    expect((widget).shouldShowFinished(id, "completed")).toBe(true);
+    widget.onTurnStart();
+    expect((widget).shouldShowFinished(id, "completed")).toBe(false);
+
+    manager.dispose();
+  });
+});
