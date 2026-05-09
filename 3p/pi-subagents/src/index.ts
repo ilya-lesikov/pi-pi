@@ -427,6 +427,9 @@ export default function (pi: ExtensionAPI) {
   // Capture ctx from session_start for RPC spawn handler
   pi.on("session_start", async (_event, ctx) => {
     currentCtx = ctx;
+    if ((globalThis as any)[Symbol.for("pi-pi:subagent-session")]) {
+      pi.appendEntry("subagent-session", { active: true });
+    }
     manager.clearCompleted();           // preserve existing behavior
   });
 
@@ -441,6 +444,7 @@ export default function (pi: ExtensionAPI) {
     events: pi.events,
     pi,
     getCtx: () => currentCtx,
+    isSubagentSession: (ctx: unknown) => Boolean((ctx as any)?.sessionManager?.getEntries?.().some?.((entry: any) => entry?.type === "custom" && entry?.customType === "subagent-session")),
     manager,
   });
 

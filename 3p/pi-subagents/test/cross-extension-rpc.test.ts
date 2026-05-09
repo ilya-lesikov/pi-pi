@@ -21,12 +21,14 @@ describe("cross-extension RPC", () => {
   let manager: SpawnCapable;
   let ctx: object | undefined;
   let deps: RpcDeps;
+  let isSubagent = false;
 
   beforeEach(() => {
     events = createEventBus();
     manager = { spawn: vi.fn().mockReturnValue("agent-42"), abort: vi.fn().mockReturnValue(true) };
     ctx = { session: true };
-    deps = { events, pi: { events }, getCtx: () => ctx, manager };
+    isSubagent = false;
+    deps = { events, pi: { events }, getCtx: () => ctx, isSubagentSession: () => isSubagent, manager };
   });
 
   // --- ping ---
@@ -110,6 +112,23 @@ describe("cross-extension RPC", () => {
 
       await vi.waitFor(() => expect(reply).toHaveBeenCalled());
       expect(reply).toHaveBeenCalledWith({ success: false, error: "No active session" });
+      expect(manager.spawn).not.toHaveBeenCalled();
+    });
+
+    it("rejects spawn when the active context is a subagent session", async () => {
+      isSubagent = true;
+      registerRpcHandlers(deps);
+      const reply = vi.fn();
+      events.on("subagents:rpc:spawn:reply:req-s-sub", reply);
+      events.emit("subagents:rpc:spawn", {
+        requestId: "req-s-sub", type: "Explore", prompt: "x",
+      });
+
+      await vi.waitFor(() => expect(reply).toHaveBeenCalled());
+      expect(reply).toHaveBeenCalledWith({
+        success: false,
+        error: "Cannot spawn subagents from a subagent session context",
+      });
       expect(manager.spawn).not.toHaveBeenCalled();
     });
 

@@ -40,6 +40,7 @@ export interface RpcDeps {
   events: EventBus;
   pi: unknown;                    // passed through to manager.spawn
   getCtx: () => unknown | undefined;  // returns current ExtensionContext
+  isSubagentSession?: (ctx: unknown) => boolean;
   manager: SpawnCapable;
 }
 
@@ -82,7 +83,7 @@ function handleRpc<P extends { requestId: string }>(
  * Returns unsub functions for cleanup.
  */
 export function registerRpcHandlers(deps: RpcDeps): RpcHandle {
-  const { events, pi, getCtx, manager } = deps;
+  const { events, pi, getCtx, isSubagentSession, manager } = deps;
 
   const unsubPing = handleRpc(events, "subagents:rpc:ping", () => {
     return { version: PROTOCOL_VERSION };
@@ -93,6 +94,13 @@ export function registerRpcHandlers(deps: RpcDeps): RpcHandle {
     const ctx = getCtx();
     if (!ctx) {
       emitReply(events, "subagents:rpc:spawn", params.requestId, { success: false, error: "No active session" });
+      return;
+    }
+    if (isSubagentSession?.(ctx)) {
+      emitReply(events, "subagents:rpc:spawn", params.requestId, {
+        success: false,
+        error: "Cannot spawn subagents from a subagent session context",
+      });
       return;
     }
 
