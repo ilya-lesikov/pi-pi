@@ -152,21 +152,6 @@ function forwardAbortSignal(session: AgentSession, signal?: AbortSignal): () => 
   return () => signal.removeEventListener("abort", onAbort);
 }
 
-let bindExtensionsLock = Promise.resolve();
-
-async function runWithBindExtensionsLock<T>(task: () => Promise<T>): Promise<T> {
-  const previous = bindExtensionsLock;
-  let release!: () => void;
-  bindExtensionsLock = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  await previous;
-  try {
-    return await task();
-  } finally {
-    release();
-  }
-}
 
 function appendSubagentTrace(cwd: string, event: string, detail: Record<string, unknown>): void {
   const path = `${cwd}/.pp/subagent-bind-trace.jsonl`;
@@ -192,7 +177,13 @@ export async function runAgent(
   const effectiveCwd = options.cwd ?? ctx.cwd;
   const subagentSessionKey = Symbol.for("pi-pi:subagent-session");
   const previousSubagentSession = (globalThis as any)[subagentSessionKey];
-  (globalThis as any)[subagentSessionKey] = true;
+  const previousDepth = typeof previousSubagentSession === "object" && previousSubagentSession !== null
+    ? ((previousSubagentSession as { depth?: number }).depth ?? 0)
+    : previousSubagentSession
+      ? 1
+      : 0;
+  const subagentSessionState = { depth: previousDepth + 1 };
+  (globalThis as any)[subagentSessionKey] = subagentSessionState;
 
   try {
     const env = await detectEnv(options.pi, effectiveCwd);
@@ -287,7 +278,22 @@ export async function runAgent(
       sessionOpts.thinkingLevel = thinkingLevel;
     }
 
-    const { session } = await createAgentSession(sessionOpts as Parameters<typeof createAgentSession>[0]);
+    const traceDetail = { type, cwd: effectiveCwd, tracePrompt: prompt.slice(0, 120) };
+    let createdSession: Awaited<ReturnType<typeof createAgentSession>> | undefined;
+    try {
+      createdSession = await createAgentSession(sessionOpts as Parameters<typeof createAgentSession>[0]);
+      appendSubagentTrace(effectiveCwd, "create_session_done", {
+        ...traceDetail,
+        sessionId: createdSession.session.getId?.() ?? null,
+      });
+    } catch (error) {
+      appendSubagentTrace(effectiveCwd, "create_session_failed", {
+        ...traceDetail,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+    const { session } = createdSession;
 
     const disallowedSet = agentConfig?.disallowedTools
       ? new Set(agentConfig.disallowedTools)
@@ -310,7 +316,7 @@ export async function runAgent(
       session.setActiveToolsByName(activeTools);
     }
 
-    const traceDetail = { type, cwd: effectiveCwd, tracePrompt: prompt.slice(0, 120) };
+    appendSubagentTrace(effectiveCwd, "create_session_start", traceDetail);
     appendSubagentTrace(effectiveCwd, "bind_extensions_wait", traceDetail);
     appendSubagentTrace(effectiveCwd, "bind_extensions_start", traceDetail);
     await session.bindExtensions({
@@ -325,6 +331,15 @@ export async function runAgent(
 
     options.onSessionCreated?.(session);
     appendSubagentTrace(effectiveCwd, "session_created", { ...traceDetail, sessionId: session.getId?.() ?? null });
+    try {
+      const originalDispose = session.dispose?.bind(session);
+      if (originalDispose) {
+        session.dispose = (() => {
+          appendSubagentTrace(effectiveCwd, "session_dispose_called", { ...traceDetail, sessionId: session.getId?.() ?? null });
+          return originalDispose();
+        }) as typeof session.dispose;
+      }
+    } catch {}
 
     let turnCount = 0;
     const maxTurns = normalizeMaxTurns(options.maxTurns ?? agentConfig?.maxTurns ?? defaultMaxTurns);
@@ -334,6 +349,9 @@ export async function runAgent(
 
     let currentMessageText = "";
     const unsubTurns = session.subscribe((event: AgentSessionEvent) => {
+      if (event.type === "session_shutdown") {
+        appendSubagentTrace(effectiveCwd, "session_event_shutdown", traceDetail);
+      }
       if (event.type === "agent_start") {
         appendSubagentTrace(effectiveCwd, "agent_start", traceDetail);
       }
@@ -410,10 +428,18 @@ export async function runAgent(
     }
     return { responseText, session, aborted, steered: softLimitReached };
   } finally {
-    if (previousSubagentSession === undefined) {
-      delete (globalThis as any)[subagentSessionKey];
+    const currentDepth = typeof (globalThis as any)[subagentSessionKey] === "object" && (globalThis as any)[subagentSessionKey] !== null
+      ? ((((globalThis as any)[subagentSessionKey]) as { depth?: number }).depth ?? subagentSessionState.depth)
+      : subagentSessionState.depth;
+    const nextDepth = Math.max(0, currentDepth - 1);
+    if (nextDepth === 0) {
+      if (previousSubagentSession === undefined) {
+        delete (globalThis as any)[subagentSessionKey];
+      } else {
+        (globalThis as any)[subagentSessionKey] = previousSubagentSession;
+      }
     } else {
-      (globalThis as any)[subagentSessionKey] = previousSubagentSession;
+      (globalThis as any)[subagentSessionKey] = { depth: nextDepth };
     }
   }
 }
