@@ -29,6 +29,13 @@ export interface SpawnCapable {
   abort(id: string): boolean;
 }
 
+export interface SpawnRequest {
+  requestId: string;
+  type: string;
+  prompt: string;
+  options?: any;
+}
+
 export interface RpcDeps {
   events: EventBus;
   pi: unknown;                    // passed through to manager.spawn
@@ -40,6 +47,10 @@ export interface RpcHandle {
   unsubPing: () => void;
   unsubSpawn: () => void;
   unsubStop: () => void;
+}
+
+function emitReply(events: EventBus, channel: string, requestId: string, reply: RpcReply<unknown>): void {
+  events.emit(`${channel}:reply:${requestId}`, reply);
 }
 
 /**
@@ -77,13 +88,26 @@ export function registerRpcHandlers(deps: RpcDeps): RpcHandle {
     return { version: PROTOCOL_VERSION };
   });
 
-  const unsubSpawn = handleRpc<{ requestId: string; type: string; prompt: string; options?: any }>(
-    events, "subagents:rpc:spawn", ({ type, prompt, options }) => {
-      const ctx = getCtx();
-      if (!ctx) throw new Error("No active session");
-      return { id: manager.spawn(pi, ctx, type, prompt, options ?? {}) };
-    },
-  );
+  const unsubSpawn = events.on("subagents:rpc:spawn", (raw: unknown) => {
+    const params = raw as SpawnRequest;
+    const ctx = getCtx();
+    if (!ctx) {
+      emitReply(events, "subagents:rpc:spawn", params.requestId, { success: false, error: "No active session" });
+      return;
+    }
+
+    queueMicrotask(() => {
+      try {
+        const id = manager.spawn(pi, ctx, params.type, params.prompt, params.options ?? {});
+        emitReply(events, "subagents:rpc:spawn", params.requestId, { success: true, data: { id } });
+      } catch (err: any) {
+        emitReply(events, "subagents:rpc:spawn", params.requestId, {
+          success: false,
+          error: err?.message ?? String(err),
+        });
+      }
+    });
+  });
 
   const unsubStop = handleRpc<{ requestId: string; agentId: string }>(
     events, "subagents:rpc:stop", ({ agentId }) => {

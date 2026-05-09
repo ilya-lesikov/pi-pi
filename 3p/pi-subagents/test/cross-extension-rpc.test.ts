@@ -232,5 +232,32 @@ describe("cross-extension RPC", () => {
       expect(reply1).toHaveBeenCalledWith({ success: true, data: { id: "agent-1" } });
       expect(reply2).toHaveBeenCalledWith({ success: true, data: { id: "agent-2" } });
     });
+
+    it("defers spawn work until after the event handler returns", async () => {
+      const steps: string[] = [];
+      (manager.spawn as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        steps.push("spawn");
+        return "agent-1";
+      });
+      registerRpcHandlers(deps);
+
+      const reply = vi.fn(() => {
+        steps.push("reply");
+      });
+      events.on("subagents:rpc:spawn:reply:req-micro", reply);
+
+      steps.push("before-emit");
+      events.emit("subagents:rpc:spawn", {
+        requestId: "req-micro",
+        type: "Explore",
+        prompt: "first",
+      });
+      steps.push("after-emit");
+
+      expect(steps).toEqual(["before-emit", "after-emit"]);
+
+      await vi.waitFor(() => expect(reply).toHaveBeenCalled());
+      expect(steps).toEqual(["before-emit", "after-emit", "spawn", "reply"]);
+    });
   });
 });
