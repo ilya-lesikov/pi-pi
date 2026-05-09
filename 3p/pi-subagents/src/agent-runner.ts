@@ -310,21 +310,21 @@ export async function runAgent(
       session.setActiveToolsByName(activeTools);
     }
 
-    appendSubagentTrace(effectiveCwd, "bind_extensions_wait", { type, cwd: effectiveCwd });
-    await runWithBindExtensionsLock(async () => {
-      appendSubagentTrace(effectiveCwd, "bind_extensions_start", { type, cwd: effectiveCwd });
-      await session.bindExtensions({
-        onError: (err) => {
-          options.onToolActivity?.({
-            type: "end",
-            toolName: `extension-error:${err.extensionPath}`,
-          });
-        },
-      });
-      appendSubagentTrace(effectiveCwd, "bind_extensions_done", { type, cwd: effectiveCwd });
+    const traceDetail = { type, cwd: effectiveCwd, tracePrompt: prompt.slice(0, 120) };
+    appendSubagentTrace(effectiveCwd, "bind_extensions_wait", traceDetail);
+    appendSubagentTrace(effectiveCwd, "bind_extensions_start", traceDetail);
+    await session.bindExtensions({
+      onError: (err) => {
+        options.onToolActivity?.({
+          type: "end",
+          toolName: `extension-error:${err.extensionPath}`,
+        });
+      },
     });
+    appendSubagentTrace(effectiveCwd, "bind_extensions_done", traceDetail);
 
     options.onSessionCreated?.(session);
+    appendSubagentTrace(effectiveCwd, "session_created", { ...traceDetail, sessionId: session.getId?.() ?? null });
 
     let turnCount = 0;
     const maxTurns = normalizeMaxTurns(options.maxTurns ?? agentConfig?.maxTurns ?? defaultMaxTurns);
@@ -334,6 +334,18 @@ export async function runAgent(
 
     let currentMessageText = "";
     const unsubTurns = session.subscribe((event: AgentSessionEvent) => {
+      if (event.type === "agent_start") {
+        appendSubagentTrace(effectiveCwd, "agent_start", traceDetail);
+      }
+      if (event.type === "turn_start") {
+        appendSubagentTrace(effectiveCwd, "turn_start", traceDetail);
+      }
+      if (event.type === "message_start") {
+        appendSubagentTrace(effectiveCwd, "message_start", traceDetail);
+      }
+      if (event.type === "tool_execution_start") {
+        appendSubagentTrace(effectiveCwd, "tool_execution_start", { ...traceDetail, toolName: event.toolName });
+      }
       if (event.type === "turn_end") {
         turnCount++;
         const msg = (event as any).message;
@@ -378,7 +390,9 @@ export async function runAgent(
     }
 
     try {
+      appendSubagentTrace(effectiveCwd, "prompt_start", traceDetail);
       await session.prompt(effectivePrompt);
+      appendSubagentTrace(effectiveCwd, "prompt_done", traceDetail);
     } finally {
       unsubTurns();
       collector.unsubscribe();
