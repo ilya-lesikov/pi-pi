@@ -4,7 +4,7 @@ import { validateUserRequest, validateResearch } from "./validate-artifacts.js";
 import { Type } from "@sinclair/typebox";
 import { loadConfig } from "./config.js";
 import { runAfterEdit, autoCommit } from "./commands.js";
-import { taskName, getActiveTask, saveTask } from "./state.js";
+import { taskName, getActiveTask, saveTask, appendTaskLog } from "./state.js";
 import {
   loadContextFiles,
   getPhaseArtifacts,
@@ -435,7 +435,24 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       `created_to_first_tool_ms=${firstToolDeltaMs ?? "na"}`,
       `created_to_first_turn_ms=${firstTurnDeltaMs ?? "na"}`,
     ].join(" ");
-    console.error(`[pi-pi][subagent-lifecycle] ${summary}`);
+    const logPath = appendTaskLog(orchestrator.active.dir, "subagent-lifecycle.jsonl", {
+      timestamp: new Date(now).toISOString(),
+      id: data.id,
+      event,
+      description: desc,
+      type: data.type ?? lifecycle.type ?? null,
+      phase: lifecycle.phase ?? null,
+      step: lifecycle.step ?? null,
+      running,
+      pending,
+      ageMs,
+      createdToStartedMs: startedDeltaMs ?? null,
+      createdToFirstToolMs: firstToolDeltaMs ?? null,
+      createdToFirstTurnMs: firstTurnDeltaMs ?? null,
+      toolName: data.toolName ?? null,
+      turnCount: data.turnCount ?? null,
+    });
+    console.error(`[pi-pi][subagent-lifecycle] ${summary} log=${logPath}`);
   }
 
   function startStaleAgentWatchdog(): void {
@@ -482,6 +499,17 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       orchestrator.agentDescriptions.set(data.id, data.description);
     }
     trackSubagentEvent(data, "created");
+    if (orchestrator.active) {
+      const logPath = join(orchestrator.active.dir, "subagent-lifecycle.jsonl");
+      pi.sendMessage(
+        {
+          customType: "pp-subagent-lifecycle-log",
+          content: `Subagent lifecycle log: ${logPath}`,
+          display: false,
+        },
+        { deliverAs: "steer" },
+      );
+    }
     startStaleAgentWatchdog();
   });
 

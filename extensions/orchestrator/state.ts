@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "fs";
+import { appendFileSync, readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "fs";
 import { join, basename, resolve } from "path";
 import lockfile from "proper-lockfile";
 import type { TimeoutConfig } from "./config.js";
@@ -208,4 +208,11 @@ export function taskAge(state: TaskState): string {
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours}h`;
   return `${Math.floor(hours / 24)}d`;
+}
+
+export function appendTaskLog(taskDir: string, fileName: string, entry: Record<string, unknown>): string {
+  mkdirSync(taskDir, { recursive: true });
+  const filePath = join(taskDir, fileName);
+  appendFileSync(filePath, JSON.stringify(entry) + "\n", "utf-8");
+  return filePath;
 }

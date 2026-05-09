@@ -543,6 +543,8 @@ describe("subagent instrumentation", () => {
     emitSubagentCreated(pi, "explore-1", "Explore agent");
     expect(orchestrator.agentLifecycle.get("explore-1")?.createdAt).toBeTypeOf("number");
     expect(orchestrator.agentLifecycle.get("explore-1")?.phase).toBe("brainstorm");
+    const lifecycleLogPath = join(orchestrator.active!.dir, "subagent-lifecycle.jsonl");
+    expect(existsSync(lifecycleLogPath)).toBe(true);
 
     emitSubagentStarted(pi, "explore-1", "Explore agent");
     expect(orchestrator.agentLifecycle.get("explore-1")?.startedAt).toBeTypeOf("number");
