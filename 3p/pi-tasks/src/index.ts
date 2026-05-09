@@ -52,6 +52,7 @@ The task tools haven't been used recently. If you're working on tasks that would
 </system-reminder>`;
 
 export default function (pi: ExtensionAPI) {
+  const subagentSessionKey = Symbol.for("pi-pi:subagent-session");
   // Initialize store and config
   const cfg = loadTasksConfig();
   const piTasks = process.env.PI_TASKS;
@@ -291,6 +292,7 @@ export default function (pi: ExtensionAPI) {
   let reminderInjectedThisCycle = false;
 
   pi.on("turn_start", async (_event, ctx) => {
+    if ((globalThis as any)[subagentSessionKey]) return;
     currentTurn++;
     latestCtx = ctx;
     widget.setUICtx(ctx.ui as UICtx);
@@ -301,6 +303,7 @@ export default function (pi: ExtensionAPI) {
   // ── Token usage tracking ──
   // Feed per-turn token counts from assistant messages into the widget.
   pi.on("turn_end", async (event) => {
+    if ((globalThis as any)[subagentSessionKey]) return;
     const msg = event.message as any;
     if (msg?.role === "assistant" && msg.usage) {
       widget.addTokenUsage(msg.usage.input ?? 0, msg.usage.output ?? 0);
@@ -311,6 +314,7 @@ export default function (pi: ExtensionAPI) {
   // Appends a <system-reminder> nudge to non-task tool results when tasks exist
   // but task tools haven't been used recently (mimics Claude Code's behavior).
   pi.on("tool_result", async (event) => {
+    if ((globalThis as any)[subagentSessionKey]) return {};
     // Task tool usage resets the reminder timer
     if (TASK_TOOL_NAMES.has(event.toolName)) {
       lastTaskToolUseTurn = currentTurn;
@@ -337,6 +341,7 @@ export default function (pi: ExtensionAPI) {
   // Grab UI context early — before_agent_start fires before any tool calls,
   // so persisted tasks show up immediately on session start.
   pi.on("before_agent_start", async (_event, ctx) => {
+    if ((globalThis as any)[subagentSessionKey]) return;
     latestCtx = ctx;
     widget.setUICtx(ctx.ui as UICtx);
     upgradeStoreIfNeeded(ctx);
@@ -351,6 +356,7 @@ export default function (pi: ExtensionAPI) {
   // On /new: reset all session-scoped state so the store switches to the new session file.
   // On resume: reload persisted tasks from the existing session file.
   pi.on("session_switch" as any, async (event: any, ctx: ExtensionContext) => {
+    if ((globalThis as any)[subagentSessionKey]) return;
     latestCtx = ctx;
     widget.setUICtx(ctx.ui as UICtx);
 
@@ -379,6 +385,7 @@ export default function (pi: ExtensionAPI) {
 
   // Keep latestCtx fresh on every tool execution as well.
   pi.on("tool_execution_start", async (_event, ctx) => {
+    if ((globalThis as any)[subagentSessionKey]) return;
     latestCtx = ctx;
     widget.setUICtx(ctx.ui as UICtx);
     upgradeStoreIfNeeded(ctx);

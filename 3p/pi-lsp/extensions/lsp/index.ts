@@ -17,6 +17,7 @@ import { registerLspTool, type ServerManager } from './tools';
 import type { ResolvedServerConfig } from './types';
 
 export default function lspExtension(pi: ExtensionAPI) {
+  const subagentSessionKey = Symbol.for('pi-pi:subagent-session');
   let rootPath = '';
   let config: LoadedConfig | null = null;
   const clients = new Map<string, LspClient>();
@@ -109,6 +110,9 @@ export default function lspExtension(pi: ExtensionAPI) {
   // ── Session lifecycle ─────────────────────────────────────────────────
 
   pi.on('session_start', async (_event, ctx) => {
+    if ((globalThis as any)[subagentSessionKey]) {
+      return;
+    }
     rootPath = ctx.cwd;
 
     const scaffolded = await scaffoldGlobalConfig(rootPath);
@@ -124,11 +128,17 @@ export default function lspExtension(pi: ExtensionAPI) {
   });
 
   pi.on('session_shutdown', async () => {
+    if ((globalThis as any)[subagentSessionKey]) {
+      return;
+    }
     await shutdownAll();
     config = null;
   });
 
   pi.on('tool_execution_end', async (event, ctx) => {
+    if ((globalThis as any)[subagentSessionKey]) {
+      return;
+    }
     if (event.toolName !== 'lsp') return;
     refreshStatus(ctx.ui, config);
   });

@@ -104,6 +104,7 @@ function getPlanReviewAvailabilityWarning(options: { hasUI: boolean; hasPlanHtml
 }
 
 export default function plannotator(pi: ExtensionAPI): void {
+	const subagentSessionKey = Symbol.for("pi-pi:subagent-session");
 	let phase: Phase = "idle";
 	void registerPlannotatorEventListeners(pi);
 	let planFilePath = "PLAN.md";
@@ -701,6 +702,7 @@ export default function plannotator(pi: ExtensionAPI): void {
 
 	// Gate writes during planning
 	pi.on("tool_call", async (event, ctx) => {
+		if ((globalThis as any)[subagentSessionKey]) return;
 		if (phase !== "planning") return;
 
 		if (event.toolName === "write") {
@@ -728,6 +730,7 @@ export default function plannotator(pi: ExtensionAPI): void {
 
 	// Inject phase-specific context
 	pi.on("before_agent_start", async (_event, ctx) => {
+		if ((globalThis as any)[subagentSessionKey]) return;
 		const profile = getPhaseProfile();
 		if (phase === "executing") {
 			// Re-read from disk each turn to stay current
@@ -869,6 +872,7 @@ Execute each step in order. After completing a step, include [DONE:n] in your re
 
 	// Filter stale context when idle
 	pi.on("context", async (event) => {
+		if ((globalThis as any)[subagentSessionKey]) return;
 		if (phase !== "idle") return;
 
 		return {
@@ -895,6 +899,7 @@ Execute each step in order. After completing a step, include [DONE:n] in your re
 
 	// Track execution progress
 	pi.on("turn_end", async (event, ctx) => {
+		if ((globalThis as any)[subagentSessionKey]) return;
 		if (phase !== "executing" || checklistItems.length === 0) return;
 		if (!isAssistantMessage(event.message as AssistantMessageLike)) return;
 
@@ -908,6 +913,7 @@ Execute each step in order. After completing a step, include [DONE:n] in your re
 
 	// Detect execution completion
 	pi.on("agent_end", async (_event, ctx) => {
+		if ((globalThis as any)[subagentSessionKey]) return;
 		if (phase !== "executing" || checklistItems.length === 0) return;
 
 		if (checklistItems.every((t) => t.completed)) {
@@ -936,6 +942,9 @@ Execute each step in order. After completing a step, include [DONE:n] in your re
 
 	// Restore state on session start/resume
 	pi.on("session_start", async (_event, ctx) => {
+		if ((globalThis as any)[subagentSessionKey]) {
+			return;
+		}
 		// Resolve plan file path from flag
 		const flagPlanFile = pi.getFlag("plan-file") as string;
 		if (flagPlanFile) {
