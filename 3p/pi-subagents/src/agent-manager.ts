@@ -6,7 +6,9 @@
  * Foreground agents bypass the queue (they block the parent anyway).
  */
 
+import { appendFileSync, mkdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { join } from "node:path";
 import type { Model } from "@mariozechner/pi-ai";
 import type { AgentSession, ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { resumeAgent, runAgent, type ToolActivity } from "./agent-runner.js";
@@ -25,6 +27,18 @@ interface SpawnArgs {
   type: SubagentType;
   prompt: string;
   options: SpawnOptions;
+}
+
+function appendManagerTrace(cwd: string, event: string, detail: Record<string, unknown>): void {
+  try {
+    const ppDir = join(cwd, ".pp");
+    mkdirSync(ppDir, { recursive: true });
+    appendFileSync(join(ppDir, "subagent-manager-trace.jsonl"), JSON.stringify({
+      timestamp: new Date().toISOString(),
+      event,
+      ...detail,
+    }) + "\n", "utf-8");
+  } catch {}
 }
 
 interface SpawnOptions {
@@ -105,11 +119,13 @@ export class AgentManager {
     const args: SpawnArgs = { pi, ctx, type, prompt, options };
 
     if (options.isBackground && this.runningBackground >= this.maxConcurrent) {
+      appendManagerTrace(ctx.cwd, "queued", { id, type, description: options.description, runningBackground: this.runningBackground, maxConcurrent: this.maxConcurrent });
       // Queue it — will be started when a running agent completes
       this.queue.push({ id, args });
       return id;
     }
 
+    appendManagerTrace(ctx.cwd, "start_immediate", { id, type, description: options.description, runningBackground: this.runningBackground, maxConcurrent: this.maxConcurrent });
     this.startAgent(id, record, args);
     return id;
   }
@@ -119,6 +135,7 @@ export class AgentManager {
     record.status = "running";
     record.startedAt = Date.now();
     if (options.isBackground) this.runningBackground++;
+    appendManagerTrace(ctx.cwd, "start_agent", { id, type, description: options.description, runningBackground: this.runningBackground, isolation: options.isolation ?? null });
     this.onStart?.(record);
 
     // Worktree isolation: create a temporary git worktree if requested
@@ -137,6 +154,7 @@ export class AgentManager {
     // Prepend worktree warning to prompt if isolation failed
     const effectivePrompt = worktreeWarning ? worktreeWarning + "\n\n" + prompt : prompt;
 
+    appendManagerTrace(ctx.cwd, "run_agent_call", { id, type, description: options.description, effectiveCwd: worktreeCwd ?? ctx.cwd, promptPreview: effectivePrompt.slice(0, 120) });
     const promise = runAgent(ctx, type, effectivePrompt, {
       pi,
       model: options.model,
@@ -165,6 +183,7 @@ export class AgentManager {
       },
     })
       .then(({ responseText, session, aborted, steered }) => {
+        appendManagerTrace(ctx.cwd, "run_agent_resolved", { id, type, description: options.description, aborted, steered, sessionId: (session as any)?.getId?.() ?? null });
         // Don't overwrite status if externally stopped via abort()
         if (record.status !== "stopped") {
           record.status = aborted ? "aborted" : steered ? "steered" : "completed";
@@ -197,6 +216,7 @@ export class AgentManager {
         return responseText;
       })
       .catch((err) => {
+        appendManagerTrace(ctx.cwd, "run_agent_rejected", { id, type, description: options.description, error: err instanceof Error ? err.message : String(err) });
         // Don't overwrite status if externally stopped via abort()
         if (record.status !== "stopped") {
           record.status = "error";
@@ -233,6 +253,7 @@ export class AgentManager {
   private drainQueue() {
     while (this.queue.length > 0 && this.runningBackground < this.maxConcurrent) {
       const next = this.queue.shift()!;
+      appendManagerTrace(next.args.ctx.cwd, "drain_queue", { id: next.id, type: next.args.type, description: next.args.options.description, runningBackground: this.runningBackground, remainingQueued: this.queue.length });
       const record = this.agents.get(next.id);
       if (!record || record.status !== "queued") continue;
       this.startAgent(next.id, record, next.args);
