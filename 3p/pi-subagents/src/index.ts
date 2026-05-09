@@ -905,6 +905,13 @@ Guidelines:
           ...bgCallbacks,
         });
 
+        pi.events.emit("subagents:created", {
+          id,
+          type: subagentType,
+          description: params.description,
+          isBackground: true,
+        });
+
         // Set output file + join mode synchronously after spawn, before the
         // event loop yields — onSessionCreated is async so this is safe.
         const joinMode = resolveJoinMode(defaultJoinMode, true);
@@ -930,14 +937,6 @@ Guidelines:
         agentActivity.set(id, bgState);
         widget.ensureTimer();
         widget.update();
-
-        // Emit created event
-        pi.events.emit("subagents:created", {
-          id,
-          type: subagentType,
-          description: params.description,
-          isBackground: true,
-        });
 
         const isQueued = record?.status === "queued";
         return textResult(

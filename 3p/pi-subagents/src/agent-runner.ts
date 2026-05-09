@@ -2,6 +2,7 @@
  * agent-runner.ts — Core execution engine: creates sessions, runs agents, collects results.
  */
 
+import { appendFileSync } from "node:fs";
 import type { Model } from "@mariozechner/pi-ai";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import {
@@ -151,6 +152,33 @@ function forwardAbortSignal(session: AgentSession, signal?: AbortSignal): () => 
   return () => signal.removeEventListener("abort", onAbort);
 }
 
+let bindExtensionsLock = Promise.resolve();
+
+async function runWithBindExtensionsLock<T>(task: () => Promise<T>): Promise<T> {
+  const previous = bindExtensionsLock;
+  let release!: () => void;
+  bindExtensionsLock = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await previous;
+  try {
+    return await task();
+  } finally {
+    release();
+  }
+}
+
+function appendSubagentTrace(cwd: string, event: string, detail: Record<string, unknown>): void {
+  const path = `${cwd}/.pp/subagent-bind-trace.jsonl`;
+  try {
+    appendFileSync(path, JSON.stringify({
+      timestamp: new Date().toISOString(),
+      event,
+      ...detail,
+    }) + "\n", "utf-8");
+  } catch {}
+}
+
 export async function runAgent(
   ctx: ExtensionContext,
   type: SubagentType,
@@ -282,13 +310,18 @@ export async function runAgent(
       session.setActiveToolsByName(activeTools);
     }
 
-    await session.bindExtensions({
-      onError: (err) => {
-        options.onToolActivity?.({
-          type: "end",
-          toolName: `extension-error:${err.extensionPath}`,
-        });
-      },
+    appendSubagentTrace(effectiveCwd, "bind_extensions_wait", { type, cwd: effectiveCwd });
+    await runWithBindExtensionsLock(async () => {
+      appendSubagentTrace(effectiveCwd, "bind_extensions_start", { type, cwd: effectiveCwd });
+      await session.bindExtensions({
+        onError: (err) => {
+          options.onToolActivity?.({
+            type: "end",
+            toolName: `extension-error:${err.extensionPath}`,
+          });
+        },
+      });
+      appendSubagentTrace(effectiveCwd, "bind_extensions_done", { type, cwd: effectiveCwd });
     });
 
     options.onSessionCreated?.(session);
