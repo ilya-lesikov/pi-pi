@@ -46,6 +46,17 @@ export class Orchestrator {
   spawnedAgentIds = new Set<string>();
   agentDescriptions = new Map<string, string>();
   agentSpawnTimes = new Map<string, number>();
+  agentLifecycle = new Map<string, {
+    createdAt?: number;
+    startedAt?: number;
+    firstToolAt?: number;
+    firstTurnAt?: number;
+    lastEventAt?: number;
+    type?: string;
+    description?: string;
+    phase?: string;
+    step?: string;
+  }>();
   staleAgentTimer: ReturnType<typeof setInterval> | null = null;
   phaseCompactionPending = false;
   phaseCompactionResolve: (() => void) | null = null;
@@ -315,6 +326,7 @@ export class Orchestrator {
     this.spawnedAgentIds.clear();
     this.agentDescriptions.clear();
     this.agentSpawnTimes.clear();
+    this.agentLifecycle.clear();
     this.pendingSubagentSpawns = 0;
     this.errorRetryCount = 0;
     this.commitReminderSent = false;

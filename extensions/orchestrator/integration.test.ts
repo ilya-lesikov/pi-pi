@@ -219,6 +219,18 @@ function emitSubagentCreated(pi: ReturnType<typeof makePi>, id: string, descript
   pi.events.emit("subagents:created", { id, description });
 }
 
+function emitSubagentStarted(pi: ReturnType<typeof makePi>, id: string, description: string) {
+  pi.events.emit("subagents:started", { id, description });
+}
+
+function emitSubagentFirstTool(pi: ReturnType<typeof makePi>, id: string, description: string, toolName = "read") {
+  pi.events.emit("subagents:first_tool", { id, description, toolName });
+}
+
+function emitSubagentFirstTurn(pi: ReturnType<typeof makePi>, id: string, description: string, turnCount = 1) {
+  pi.events.emit("subagents:first_turn", { id, description, turnCount });
+}
+
 function emitSubagentCompleted(pi: ReturnType<typeof makePi>, id: string, description: string) {
   pi.events.emit("subagents:completed", { id, description, result: "done" });
 }
@@ -517,6 +529,32 @@ describe("review cycle lifecycle", () => {
 
     expect(result.content[0].text).toContain("No code reviewers enabled");
     expect(orchestrator.active!.state.reviewCycle).toBeNull();
+  });
+});
+
+describe("subagent instrumentation", () => {
+  it("tracks created started and first progress milestones for spawned agents", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "Trace agents");
+
+    emitSubagentCreated(pi, "explore-1", "Explore agent");
+    expect(orchestrator.agentLifecycle.get("explore-1")?.createdAt).toBeTypeOf("number");
+    expect(orchestrator.agentLifecycle.get("explore-1")?.phase).toBe("brainstorm");
+
+    emitSubagentStarted(pi, "explore-1", "Explore agent");
+    expect(orchestrator.agentLifecycle.get("explore-1")?.startedAt).toBeTypeOf("number");
+
+    emitSubagentFirstTool(pi, "explore-1", "Explore agent", "grep");
+    expect(orchestrator.agentLifecycle.get("explore-1")?.firstToolAt).toBeTypeOf("number");
+
+    emitSubagentFirstTurn(pi, "explore-1", "Explore agent", 1);
+    expect(orchestrator.agentLifecycle.get("explore-1")?.firstTurnAt).toBeTypeOf("number");
+
+    emitSubagentCompleted(pi, "explore-1", "Explore agent");
+    expect(orchestrator.agentLifecycle.has("explore-1")).toBe(false);
   });
 });
 

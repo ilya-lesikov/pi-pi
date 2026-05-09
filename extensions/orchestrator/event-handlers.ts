@@ -400,6 +400,44 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
 export function registerEventHandlers(orchestrator: Orchestrator): void {
   const pi = orchestrator.pi;
 
+  function trackSubagentEvent(data: any, event: "created" | "started" | "first_tool" | "first_turn" | "completed" | "failed"): void {
+    if (!orchestrator.active || !data?.id) return;
+    const now = Date.now();
+    const lifecycle = orchestrator.agentLifecycle.get(data.id) ?? {};
+    if (data.type && lifecycle.type == null) lifecycle.type = data.type;
+    if (data.description && lifecycle.description == null) lifecycle.description = data.description;
+    lifecycle.phase = orchestrator.active.state.phase;
+    lifecycle.step = orchestrator.active.state.step;
+    lifecycle.lastEventAt = now;
+    if (event === "created" && lifecycle.createdAt == null) lifecycle.createdAt = now;
+    if (event === "started" && lifecycle.startedAt == null) lifecycle.startedAt = now;
+    if (event === "first_tool" && lifecycle.firstToolAt == null) lifecycle.firstToolAt = now;
+    if (event === "first_turn" && lifecycle.firstTurnAt == null) lifecycle.firstTurnAt = now;
+    orchestrator.agentLifecycle.set(data.id, lifecycle);
+
+    const ageMs = lifecycle.createdAt == null ? 0 : now - lifecycle.createdAt;
+    const startedDeltaMs = lifecycle.startedAt == null || lifecycle.createdAt == null ? undefined : lifecycle.startedAt - lifecycle.createdAt;
+    const firstToolDeltaMs = lifecycle.firstToolAt == null || lifecycle.createdAt == null ? undefined : lifecycle.firstToolAt - lifecycle.createdAt;
+    const firstTurnDeltaMs = lifecycle.firstTurnAt == null || lifecycle.createdAt == null ? undefined : lifecycle.firstTurnAt - lifecycle.createdAt;
+    const pending = orchestrator.pendingSubagentSpawns;
+    const running = orchestrator.spawnedAgentIds.size;
+    const desc = data.description || lifecycle.description || data.type || lifecycle.type || data.id;
+    const summary = [
+      `id=${data.id}`,
+      `event=${event}`,
+      `desc=${JSON.stringify(desc)}`,
+      `phase=${lifecycle.phase ?? "unknown"}`,
+      `step=${lifecycle.step ?? "unknown"}`,
+      `running=${running}`,
+      `pending=${pending}`,
+      `age_ms=${ageMs}`,
+      `created_to_started_ms=${startedDeltaMs ?? "na"}`,
+      `created_to_first_tool_ms=${firstToolDeltaMs ?? "na"}`,
+      `created_to_first_turn_ms=${firstTurnDeltaMs ?? "na"}`,
+    ].join(" ");
+    console.error(`[pi-pi][subagent-lifecycle] ${summary}`);
+  }
+
   function startStaleAgentWatchdog(): void {
     if (orchestrator.staleAgentTimer) return;
     orchestrator.staleAgentTimer = setInterval(() => {
@@ -417,6 +455,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
           orchestrator.spawnedAgentIds.delete(id);
           orchestrator.agentSpawnTimes.delete(id);
           orchestrator.agentDescriptions.delete(id);
+          orchestrator.agentLifecycle.delete(id);
           pi.sendMessage(
             {
               customType: "pp-agent-stale",
@@ -442,7 +481,23 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (data.description) {
       orchestrator.agentDescriptions.set(data.id, data.description);
     }
+    trackSubagentEvent(data, "created");
     startStaleAgentWatchdog();
+  });
+
+  pi.events.on("subagents:started", (data: any) => {
+    if (!orchestrator.active || !data?.id) return;
+    trackSubagentEvent(data, "started");
+  });
+
+  pi.events.on("subagents:first_tool", (data: any) => {
+    if (!orchestrator.active || !data?.id) return;
+    trackSubagentEvent(data, "first_tool");
+  });
+
+  pi.events.on("subagents:first_turn", (data: any) => {
+    if (!orchestrator.active || !data?.id) return;
+    trackSubagentEvent(data, "first_turn");
   });
 
   function checkPlannerCompletion(): void {
@@ -646,9 +701,11 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
 
   pi.events.on("subagents:completed", (data: any) => {
     if (!orchestrator.active || !data?.id) return;
+    trackSubagentEvent(data, "completed");
     orchestrator.spawnedAgentIds.delete(data.id);
     orchestrator.agentDescriptions.delete(data.id);
     orchestrator.agentSpawnTimes.delete(data.id);
+    orchestrator.agentLifecycle.delete(data.id);
 
     const desc = data.description || data.type || data.id;
     const duration = data.durationMs ? `${(data.durationMs / 1000).toFixed(1)}s` : "";
@@ -670,10 +727,12 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
 
   pi.events.on("subagents:failed", (data: any) => {
     if (!orchestrator.active || !data?.id) return;
+    trackSubagentEvent(data, "failed");
     orchestrator.spawnedAgentIds.delete(data.id);
     orchestrator.agentSpawnTimes.delete(data.id);
     const desc = orchestrator.agentDescriptions.get(data.id) || data.type || data.id;
     orchestrator.agentDescriptions.delete(data.id);
+    orchestrator.agentLifecycle.delete(data.id);
 
     if (data.status === "stopped" || data.status === "aborted") {
       checkPlannerCompletion();

@@ -362,7 +362,12 @@ export default function (pi: ExtensionAPI) {
   }
 
   // Background completion: route through group join or send individual nudge
+  const firstProgressSeen = new Set<string>();
+  const firstTurnSeen = new Set<string>();
+
   const manager = new AgentManager((record) => {
+    firstProgressSeen.delete(record.id);
+    firstTurnSeen.delete(record.id);
     // Emit lifecycle event based on terminal status
     const isError = record.status === "error" || record.status === "stopped" || record.status === "aborted";
     const eventData = buildEventData(record);
@@ -489,6 +494,8 @@ export default function (pi: ExtensionAPI) {
     currentCtx = undefined;
     delete (globalThis as any)[MANAGER_KEY];
     manager.abortAll();
+    firstProgressSeen.clear();
+    firstTurnSeen.clear();
     for (const timer of pendingNudges.values()) clearTimeout(timer);
     pendingNudges.clear();
     manager.dispose();
@@ -840,13 +847,46 @@ Guidelines:
       if (runInBackground) {
         const { state: bgState, callbacks: bgCallbacks } = createActivityTracker(effectiveMaxTurns);
 
+        let id: string;
+        const emitFirstTool = (toolName: string) => {
+          if (firstProgressSeen.has(id)) return;
+          firstProgressSeen.add(id);
+          pi.events.emit("subagents:first_tool", {
+            id,
+            type: subagentType,
+            description: params.description,
+            toolName,
+          });
+        };
+        const emitFirstTurn = (turnCount: number) => {
+          if (firstTurnSeen.has(id)) return;
+          firstTurnSeen.add(id);
+          pi.events.emit("subagents:first_turn", {
+            id,
+            type: subagentType,
+            description: params.description,
+            turnCount,
+          });
+        };
+        const originalBgToolActivity = bgCallbacks.onToolActivity;
+        bgCallbacks.onToolActivity = (activity) => {
+          originalBgToolActivity(activity);
+          if (activity.type === "start") emitFirstTool(activity.toolName);
+        };
+        const originalBgTurnEnd = bgCallbacks.onTurnEnd;
+        bgCallbacks.onTurnEnd = (turnCount) => {
+          originalBgTurnEnd(turnCount);
+          emitFirstTurn(turnCount);
+        };
+
         // Wrap onSessionCreated to wire output file streaming.
         // The callback lazily reads record.outputFile (set right after spawn)
         // rather than closing over a value that doesn't exist yet.
-        let id: string;
         const origBgOnSession = bgCallbacks.onSessionCreated;
         bgCallbacks.onSessionCreated = (session: any) => {
           origBgOnSession(session);
+          firstProgressSeen.delete(id);
+          firstTurnSeen.delete(id);
           const rec = manager.getRecord(id);
           if (rec?.outputFile) {
             rec.outputCleanup = streamToOutputFile(session, rec.outputFile, id, ctx.cwd);
