@@ -232,7 +232,6 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
       pi.setSessionName(orchestrator.active.description.slice(0, 50));
       orchestrator.lastCtx = ctx;
       orchestrator.updateStatus(ctx);
-      orchestrator.createPhaseTasks();
 
       orchestrator.injectContextAndArtifacts(orchestrator.active.dir, orchestrator.active.state.phase);
 
@@ -421,7 +420,6 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
     }
 
     orchestrator.updateStatus(ctx);
-    orchestrator.updatePhaseTasks();
 
     if (next === "plan") {
       orchestrator.active.state.step = "await_planners";

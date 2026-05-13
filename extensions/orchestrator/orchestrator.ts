@@ -126,10 +126,66 @@ export class Orchestrator {
     return true;
   }
 
-  updateStatus(_ctx: ExtensionContext): void {
+  updateStatus(ctx: ExtensionContext): void {
+    if (!this.active || this.active.state.phase === "done") {
+      ctx.ui.setStatus("pp-phase", undefined);
+      return;
+    }
+
+    const type = this.active.type;
+    const phase = this.active.state.phase;
+    const step = this.active.state.step;
+    const reviewCycle = this.active.state.reviewCycle;
+
+    if (type === "debug" || type === "brainstorm") {
+      const elapsed = this.phaseStartTime > 0 ? this.formatElapsed(this.phaseStartTime) : "";
+      const suffix = elapsed ? ` (${elapsed})` : "";
+      ctx.ui.setStatus("pp-phase", `pp: ${type}${suffix}`);
+      return;
+    }
+
+    const pipeline = phasePipeline(type).filter((p) => p !== "done");
+    const currentIdx = pipeline.indexOf(phase as (typeof pipeline)[number]);
+
+    const parts: string[] = [];
+    for (let i = 0; i < pipeline.length; i++) {
+      const p = pipeline[i];
+      if (i < currentIdx) {
+        parts.push(`✔ ${p}`);
+      } else if (p === phase) {
+        let detail = "";
+        if (step === "await_planners") detail = "planners";
+        else if (step === "await_reviewers") detail = "reviewers";
+        else if (step === "synthesize") detail = "synthesize";
+        else if (step === "apply_feedback") detail = "feedback";
+        else if (step === "user_gate") detail = "review";
+
+        if (reviewCycle) {
+          const kind = reviewCycle.kind === "plannotator" ? "plannotator" : reviewCycle.kind === "auto-deep" ? "deep review" : "review";
+          detail = `${kind} #${reviewCycle.pass}`;
+        }
+
+        const elapsed = this.phaseStartTime > 0 ? this.formatElapsed(this.phaseStartTime) : "";
+        const sub = [detail, elapsed].filter(Boolean).join(", ");
+        parts.push(sub ? `${p} (${sub})` : p);
+      } else {
+        parts.push(p);
+      }
+    }
+
+    ctx.ui.setStatus("pp-phase", `pp: ${parts.join(" → ")}`);
   }
 
-  private phaseTaskIds = new Map<string, string>();
+  private formatElapsed(startTime: number): string {
+    const sec = Math.floor((Date.now() - startTime) / 1000);
+    if (sec < 60) return `${sec}s`;
+    const min = Math.floor(sec / 60);
+    const remSec = sec % 60;
+    if (min < 60) return remSec > 0 ? `${min}m ${remSec}s` : `${min}m`;
+    const hr = Math.floor(min / 60);
+    const remMin = min % 60;
+    return remMin > 0 ? `${hr}h ${remMin}m` : `${hr}h`;
+  }
 
   getPlanStartState(taskDir: string): { step: string; shouldSpawnPlanners: boolean } {
     const plansDir = join(taskDir, "plans");
@@ -143,46 +199,6 @@ export class Orchestrator {
     }
 
     return { step: "await_planners", shouldSpawnPlanners: true };
-  }
-
-  createPhaseTasks(): void {
-    if (!this.active || this.active.type !== "implement") return;
-    const store = (globalThis as any)[Symbol.for("pi-tasks:store")];
-    if (!store) return;
-
-    this.phaseTaskIds.clear();
-    const phases = phasePipeline(this.active.type).filter((p) => p !== "done");
-    const currentPhase = this.active.state.phase;
-    const currentIdx = phases.indexOf(currentPhase as typeof phases[number]);
-
-    for (let i = 0; i < phases.length; i++) {
-      const p = phases[i];
-      const status = i < currentIdx ? "completed" : p === currentPhase ? "in_progress" : "pending";
-      const task = store.create(p, `Orchestration phase: ${p}`);
-      this.phaseTaskIds.set(p, task.id);
-      if (status !== "pending") {
-        store.update(task.id, { status });
-      }
-    }
-    store.refreshWidget?.(this.lastCtx?.ui);
-  }
-
-  updatePhaseTasks(): void {
-    if (!this.active || this.active.type !== "implement") return;
-    const store = (globalThis as any)[Symbol.for("pi-tasks:store")];
-    if (!store || this.phaseTaskIds.size === 0) return;
-
-    const currentPhase = this.active.state.phase;
-    const phases = phasePipeline(this.active.type).filter((p) => p !== "done");
-    const currentIdx = phases.indexOf(currentPhase as typeof phases[number]);
-
-    for (let i = 0; i < phases.length; i++) {
-      const taskId = this.phaseTaskIds.get(phases[i]);
-      if (!taskId) continue;
-      const status = i < currentIdx ? "completed" : phases[i] === currentPhase ? "in_progress" : "pending";
-      store.update(taskId, { status });
-    }
-    store.refreshWidget?.(this.lastCtx?.ui);
   }
 
   getPhasePrompt(_ctx: ExtensionContext): string {
@@ -302,7 +318,6 @@ export class Orchestrator {
     this.updateStatus(ctx);
 
     this.injectContextAndArtifacts(this.active.dir, this.active.state.phase);
-    this.createPhaseTasks();
 
     this.phaseStartTime = Date.now();
     const isGenericDescription = ["implement", "debug", "brainstorm"].includes(this.active.description);
@@ -364,16 +379,6 @@ export class Orchestrator {
     this.failedReviewerVariants = [];
     this.plannerFailureDialogPending = false;
     this.reviewerFailureDialogPending = false;
-    const store = (globalThis as any)[Symbol.for("pi-tasks:store")];
-    if (store?.delete) {
-      for (const taskId of this.phaseTaskIds.values()) {
-        try {
-          store.delete(taskId);
-        } catch {}
-      }
-      store.refreshWidget?.(this.lastCtx?.ui);
-    }
-    this.phaseTaskIds.clear();
     if (this.awaitPollTimer) {
       clearInterval(this.awaitPollTimer);
       this.awaitPollTimer = null;
