@@ -107,6 +107,12 @@ export function registerRpcHandlers(deps: RpcDeps): RpcHandle {
     queueMicrotask(() => {
       try {
         const id = manager.spawn(pi, ctx, params.type, params.prompt, params.options ?? {});
+        events.emit("subagents:created", {
+          id,
+          type: params.type,
+          description: params.options?.description ?? params.type,
+          isBackground: params.options?.run_in_background ?? true,
+        });
         emitReply(events, "subagents:rpc:spawn", params.requestId, { success: true, data: { id } });
       } catch (err: any) {
         emitReply(events, "subagents:rpc:spawn", params.requestId, {
