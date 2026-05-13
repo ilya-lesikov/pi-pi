@@ -830,6 +830,17 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     }
   });
 
+  pi.on("input", async (event, ctx) => {
+    if (!orchestrator.active) return;
+    if (event.source !== "interactive") return;
+
+    const step = orchestrator.active.state.step;
+    if (step === "await_planners" || step === "await_reviewers") {
+      ctx.ui.notify("Waiting for subagents to finish. Your input will be available after they complete.", "warning");
+      return { action: "handled" as const };
+    }
+  });
+
   pi.on("before_agent_start", async (event, ctx) => {
     orchestrator.lastCtx = ctx;
     if (orchestrator.taskDoneCompactionPending) {
