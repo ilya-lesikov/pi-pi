@@ -450,6 +450,13 @@ export class AgentWidget {
       this.lastStatusText = newStatusText;
     }
 
+    if (hasActive) {
+      this.ensureTimer();
+    } else if (this.widgetInterval) {
+      clearInterval(this.widgetInterval);
+      this.widgetInterval = undefined;
+    }
+
     this.widgetFrame++;
 
     // Register widget callback once; subsequent updates use requestRender()
