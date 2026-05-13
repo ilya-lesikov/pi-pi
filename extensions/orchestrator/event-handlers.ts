@@ -497,6 +497,8 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     }
     trackSubagentEvent(data, "created");
     startStaleAgentWatchdog();
+    const mgr = (globalThis as any)[Symbol.for("pi-subagents:manager")];
+    mgr?.refreshWidget?.(orchestrator.lastCtx?.ui);
   });
 
   pi.events.on("subagents:started", (data: any) => {

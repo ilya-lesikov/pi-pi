@@ -468,6 +468,10 @@ Use get_subagent_result for full output.`,
     spawn: (piRef: any, ctx: any, type: string, prompt: string, options: any) =>
       manager.spawn(piRef, ctx, type, prompt, options),
     getRecord: (id: string) => manager.getRecord(id),
+    refreshWidget: (uiCtx?: any) => {
+      if (uiCtx) widget.setUICtx(uiCtx as UICtx);
+      widget.update();
+    },
   };
 
   // --- Cross-extension RPC via pi.events ---
