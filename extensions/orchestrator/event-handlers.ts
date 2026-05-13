@@ -143,7 +143,7 @@ async function enterReviewCycle(orchestrator: Orchestrator, ctx: any, kind: "aut
       orchestrator.active.reviewPass = orchestrator.active.state.reviewPass;
       orchestrator.active.state.step = "user_gate";
       saveTask(orchestrator.active.dir, orchestrator.active.state);
-      return "Plannotator approved. Returned to user gate.";
+      return runUserGateDialogInner(orchestrator, ctx, "Plannotator approved the plan. Choose next action.");
     }
 
     orchestrator.active.state.step = orchestrator.active.state.phase === "plan" ? "synthesize" : "llm_work";
