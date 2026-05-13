@@ -90,22 +90,7 @@ export async function spawnPlanners(
               pi.sendMessage(
                 {
                   customType: "pp-planner-error",
-                  content: [
-                    `Planner variant "${variant}" produced invalid plan structure:`,
-                    ...validation.errors.map((error) => `- ${error}`),
-                    "",
-                    "Expected structure:",
-                    "# Plan",
-                    "",
-                    "## Scope",
-                    "<2-4 lines summarizing what changes and what doesn't>",
-                    "",
-                    "## Checklist",
-                    "- [ ] <Outcome> — Done when: <observable condition>",
-                    "",
-                    "## Blockers",
-                    "<Unresolved issues. Omit section if none.>",
-                  ].join("\n"),
+                  content: `Planner "${variant}" produced invalid plan (errors were shown to the agent but it did not fix them): ${validation.errors.join("; ")}`,
                   display: true,
                 },
                 { deliverAs: "steer" },
