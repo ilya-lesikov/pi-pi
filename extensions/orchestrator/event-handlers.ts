@@ -253,7 +253,7 @@ async function runUserGateDialogInner(orchestrator: Orchestrator, ctx: any, summ
     const choice = await selectOption(ctx, summary, options);
     if (choice === "Start implementation") {
       const fromArg = `${task.type}/${basename(task.dir)}`;
-      pi.sendUserMessage(`/pp:implement --from ${fromArg}`);
+      pi.sendUserMessage(`/pp:implement --from ${fromArg}`, { deliverAs: "followUp" });
       return "Starting implementation from brainstorm artifacts.";
     }
     if (choice === "Finish brainstorming") {
@@ -268,7 +268,7 @@ async function runUserGateDialogInner(orchestrator: Orchestrator, ctx: any, summ
     const choice = await selectOption(ctx, summary, ["Implement a fix", "Continue debugging", "Finish debugging"]);
     if (choice === "Implement a fix") {
       const fromArg = `${task.type}/${basename(task.dir)}`;
-      pi.sendUserMessage(`/pp:implement --from ${fromArg}`);
+      pi.sendUserMessage(`/pp:implement --from ${fromArg}`, { deliverAs: "followUp" });
       return "Starting implementation from debug artifacts.";
     }
     if (choice === "Finish debugging") {

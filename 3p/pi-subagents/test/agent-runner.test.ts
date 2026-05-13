@@ -146,7 +146,7 @@ describe("agent-runner final output capture", () => {
 
     await runAgent(ctx, "Explore", "Say LOCKED", { pi });
 
-    expect(observedDuringPrompt).toBe(true);
+    expect(observedDuringPrompt).toEqual({ depth: 1 });
     expect((globalThis as any)[key]).toBeUndefined();
   });
 });

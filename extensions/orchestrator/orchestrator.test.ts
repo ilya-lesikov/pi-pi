@@ -242,6 +242,24 @@ describe("Orchestrator.cleanupActive", () => {
     expect(release).toHaveBeenCalledTimes(1);
     expect(orchestrator.active).toBeNull();
   });
+  it("removes phase tasks from task store during cleanup", async () => {
+    const release = vi.fn().mockResolvedValue(undefined);
+    const del = vi.fn();
+    (globalThis as any)[Symbol.for("pi-tasks:store")] = { delete: del };
+    const orchestrator = new Orchestrator(makePi());
+    orchestrator.active = makeActiveTask(release);
+    (orchestrator as any).phaseTaskIds.set("brainstorm", "task-1");
+    (orchestrator as any).phaseTaskIds.set("plan", "task-2");
+
+    await orchestrator.cleanupActive();
+
+    expect(del).toHaveBeenCalledTimes(2);
+    expect(del).toHaveBeenCalledWith("task-1");
+    expect(del).toHaveBeenCalledWith("task-2");
+    expect((orchestrator as any).phaseTaskIds.size).toBe(0);
+    delete (globalThis as any)[Symbol.for("pi-tasks:store")];
+  });
+
 
   it("does nothing when active task is null", async () => {
     const orchestrator = new Orchestrator(makePi());

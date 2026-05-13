@@ -649,6 +649,7 @@ describe("standalone brainstorm", () => {
 
     expect(pi.sendUserMessage).toHaveBeenCalledWith(
       expect.stringContaining("/pp:implement --from"),
+      { deliverAs: "followUp" },
     );
   });
 });
@@ -675,6 +676,7 @@ describe("debug flow", () => {
 
     expect(pi.sendUserMessage).toHaveBeenCalledWith(
       expect.stringContaining("/pp:implement --from"),
+      { deliverAs: "followUp" },
     );
   });
 });

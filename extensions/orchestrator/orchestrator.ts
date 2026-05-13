@@ -342,6 +342,14 @@ export class Orchestrator {
     this.failedReviewerVariants = [];
     this.plannerFailureDialogPending = false;
     this.reviewerFailureDialogPending = false;
+    const store = (globalThis as any)[Symbol.for("pi-tasks:store")];
+    if (store?.delete) {
+      for (const taskId of this.phaseTaskIds.values()) {
+        try {
+          store.delete(taskId);
+        } catch {}
+      }
+    }
     this.phaseTaskIds.clear();
     if (this.awaitPollTimer) {
       clearInterval(this.awaitPollTimer);

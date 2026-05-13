@@ -262,9 +262,15 @@ export default function (pi: ExtensionAPI) {
     }
   );
 
+  let currentProjectCwd = process.cwd?.() ?? undefined;
+
   /** Reload agents from .pi/agents/*.md and merge with defaults (called on init and each Agent invocation). */
+  const getProjectCwd = () => currentProjectCwd;
+
   const reloadCustomAgents = () => {
-    const userAgents = loadCustomAgents(process.cwd());
+    const cwd = getProjectCwd();
+    if (!cwd) return;
+    const userAgents = loadCustomAgents(cwd);
     registerAgents(userAgents);
   };
 
@@ -490,6 +496,7 @@ Use get_subagent_result for full output.`,
   // Capture ctx from session_start for RPC spawn handler
   pi.on("session_start", async (_event, ctx) => {
     currentCtx = ctx;
+    currentProjectCwd = ctx.cwd ?? currentProjectCwd;
     if ((globalThis as any)[Symbol.for("pi-pi:subagent-session")]) {
       pi.appendEntry("subagent-session", { active: true });
     }
@@ -972,8 +979,11 @@ Guidelines:
         if (record && joinMode) {
           record.joinMode = joinMode;
           record.toolCallId = toolCallId;
-          record.outputFile = createOutputFilePath(ctx.cwd, id, ctx.sessionManager.getSessionId());
-          writeInitialEntry(record.outputFile, id, params.prompt, ctx.cwd);
+          const sessionId = ctx.sessionManager.getSessionId?.();
+          if (ctx.cwd && sessionId) {
+            record.outputFile = createOutputFilePath(ctx.cwd, id, sessionId);
+            writeInitialEntry(record.outputFile, id, params.prompt, ctx.cwd);
+          }
         }
 
         if (joinMode == null || joinMode === 'async') {
@@ -1214,13 +1224,19 @@ Guidelines:
 
   // ---- /agents interactive menu ----
 
-  const projectAgentsDir = () => join(process.cwd(), ".pi", "agents");
+  const projectAgentsDir = () => {
+    const cwd = getProjectCwd();
+    return cwd ? join(cwd, ".pi", "agents") : undefined;
+  };
   const personalAgentsDir = () => join(homedir(), ".pi", "agent", "agents");
 
   /** Find the file path of a custom agent by name (project first, then global). */
   function findAgentFile(name: string): { path: string; location: "project" | "personal" } | undefined {
-    const projectPath = join(projectAgentsDir(), `${name}.md`);
-    if (existsSync(projectPath)) return { path: projectPath, location: "project" };
+    const projectDir = projectAgentsDir();
+    if (projectDir) {
+      const projectPath = join(projectDir, `${name}.md`);
+      if (existsSync(projectPath)) return { path: projectPath, location: "project" };
+    }
     const personalPath = join(personalAgentsDir(), `${name}.md`);
     if (existsSync(personalPath)) return { path: personalPath, location: "personal" };
     return undefined;

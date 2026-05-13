@@ -251,6 +251,7 @@ export async function runAgent(
 
     const loader = new DefaultResourceLoader({
       cwd: effectiveCwd,
+      agentDir: `${effectiveCwd}/.pi/agents`,
       noExtensions: extensions === false,
       noSkills,
       noPromptTemplates: true,
@@ -268,10 +269,11 @@ export async function runAgent(
     const sessionOpts: Record<string, unknown> = {
       cwd: effectiveCwd,
       sessionManager: SessionManager.inMemory(effectiveCwd),
-      settingsManager: SettingsManager.create(),
+      settingsManager: SettingsManager.create(effectiveCwd, `${effectiveCwd}/.pi/agents`),
       modelRegistry: ctx.modelRegistry,
       model,
-      tools,
+      tools: tools.map((tool) => tool.name),
+      customTools: tools,
       resourceLoader: loader,
     };
     if (thinkingLevel) {
