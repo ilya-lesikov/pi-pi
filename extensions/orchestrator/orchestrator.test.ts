@@ -139,15 +139,15 @@ describe("deepReviewConfig", () => {
 
     expect(upgraded.codeReviewers.low.thinking).toBe("medium");
     expect(upgraded.codeReviewers.medium.thinking).toBe("high");
-    expect(upgraded.codeReviewers.high.thinking).toBe("high");
+    expect(upgraded.codeReviewers.high.thinking).toBe("xhigh");
     expect(upgraded.codeReviewers.other.thinking).toBe("high");
     expect(upgraded.brainstormReviewers.low.thinking).toBe("medium");
     expect(upgraded.brainstormReviewers.medium.thinking).toBe("high");
-    expect(upgraded.brainstormReviewers.high.thinking).toBe("high");
+    expect(upgraded.brainstormReviewers.high.thinking).toBe("xhigh");
     expect(upgraded.brainstormReviewers.other.thinking).toBe("high");
     expect(upgraded.planReviewers.low.thinking).toBe("medium");
     expect(upgraded.planReviewers.medium.thinking).toBe("high");
-    expect(upgraded.planReviewers.high.thinking).toBe("high");
+    expect(upgraded.planReviewers.high.thinking).toBe("xhigh");
     expect(upgraded.planReviewers.other.thinking).toBe("high");
   });
 });

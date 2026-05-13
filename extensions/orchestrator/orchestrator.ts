@@ -491,7 +491,7 @@ export class Orchestrator {
 }
 
 export function deepReviewConfig(config: PiPiConfig): PiPiConfig {
-  const THINKING_UPGRADE: Record<string, string> = { low: "medium", medium: "high", high: "high" };
+  const THINKING_UPGRADE: Record<string, string> = { low: "medium", medium: "high", high: "xhigh" };
   const upgrade = (reviewers: Record<string, VariantConfig>) => {
     const upgraded: Record<string, VariantConfig> = {};
     for (const [name, variant] of Object.entries(reviewers)) {
