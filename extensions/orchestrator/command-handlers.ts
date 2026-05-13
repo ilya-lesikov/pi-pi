@@ -42,10 +42,10 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
       let skipBrainstorm = false;
       let description = (args ?? "").trim();
 
-      const fromMatch = description.match(/--from\s+(\S+)/);
+      const fromMatch = description.match(/--from(?:=|\s+)(\S+)/);
       if (fromMatch) {
         const fromPath = fromMatch[1];
-        description = description.replace(/--from\s+\S+/, "").trim();
+        description = description.replace(/--from(?:=|\s+)\S+/, "").trim();
 
         const validation = validateFromPath(orchestrator.cwd, fromPath);
         if (!validation.ok) {
@@ -54,7 +54,7 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
         }
         fromTaskDir = validation.dir;
 
-        if (fromPath.startsWith("debug/")) {
+        if (fromPath.startsWith("debug/") || fromPath.startsWith("brainstorm/")) {
           skipBrainstorm = true;
         }
       }
@@ -230,6 +230,7 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
 
       orchestrator.registerAgents();
       pi.setSessionName(orchestrator.active.description.slice(0, 50));
+      orchestrator.lastCtx = ctx;
       orchestrator.updateStatus(ctx);
       orchestrator.createPhaseTasks();
 
@@ -422,6 +423,11 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
     orchestrator.updateStatus(ctx);
     orchestrator.updatePhaseTasks();
 
+    if (next === "plan") {
+      orchestrator.active.state.step = "await_planners";
+      saveTask(orchestrator.active.dir, orchestrator.active.state);
+    }
+
     orchestrator.compactAndTransition(ctx, orchestrator.active.dir, orchestrator.active.state.phase);
 
     if (next === "plan") {
@@ -438,8 +444,6 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
         orchestrator.pendingSubagentSpawns = 0;
         console.error(`[pi-pi] spawnPlanners failed: ${err.message}`);
       });
-      orchestrator.active.state.step = "await_planners";
-      saveTask(orchestrator.active.dir, orchestrator.active.state);
     }
 
     return { ok: true };

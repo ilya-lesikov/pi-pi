@@ -306,15 +306,7 @@ export default function (pi: ExtensionAPI) {
   function emitIndividualNudge(record: AgentRecord) {
     if (record.resultConsumed) return;  // re-check at send time
 
-    const hasRunningAfterCompletion = manager.hasRunning();
-    const shouldTriggerTurn = !hasRunningAfterCompletion;
-    appendParentFlowTrace(currentCtx?.cwd, "emit_individual_nudge", {
-      id: record.id,
-      status: record.status,
-      hasSession: Boolean(record.session),
-      hasRunningAfterCompletion,
-      shouldTriggerTurn,
-    });
+    const shouldTriggerTurn = !manager.hasRunning();
     const notification = formatTaskNotification(record, 500);
     const footer = record.outputFile ? `
 Full transcript available at: ${record.outputFile}` : '';
@@ -356,15 +348,7 @@ Full transcript available at: ${record.outputFile}` : '';
           details.others = rest.map(r => buildNotificationDetails(r, 300, agentActivity.get(r.id)));
         }
 
-        const hasRunningAfterCompletion = manager.hasRunning();
-        const shouldTriggerTurn = !partial && !hasRunningAfterCompletion;
-        appendParentFlowTrace(currentCtx?.cwd, "emit_group_nudge", {
-          ids: unconsumed.map(r => r.id),
-          partial,
-          count: unconsumed.length,
-          hasRunningAfterCompletion,
-          shouldTriggerTurn,
-        });
+        const shouldTriggerTurn = !partial && !manager.hasRunning();
         pi.sendMessage<NotificationDetails>({
           customType: "subagent-notification",
           content: `Background agent group completed: ${label}
@@ -429,9 +413,7 @@ Use get_subagent_result for full output.`,
         } else {
           pi.events.emit("subagents:completed", eventData);
         }
-        appendSubagentDebugTrace(currentCtx?.cwd, "on_complete_emit_ok", { id: record.id, status: record.status });
       } catch (error) {
-        appendSubagentDebugTrace(currentCtx?.cwd, "on_complete_emit_failed", { id: record.id, status: record.status, error: error instanceof Error ? error.message : String(error) });
       }
     }
 
@@ -441,9 +423,7 @@ Use get_subagent_result for full output.`,
         status: record.status, result: record.result, error: record.error,
         startedAt: record.startedAt, completedAt: record.completedAt,
       });
-      appendSubagentDebugTrace(currentCtx?.cwd, "on_complete_append_ok", { id: record.id, status: record.status });
     } catch (error) {
-      appendSubagentDebugTrace(currentCtx?.cwd, "on_complete_append_failed", { id: record.id, status: record.status, error: error instanceof Error ? error.message : String(error) });
     }
 
     // Skip notification if result was already consumed via get_subagent_result
@@ -509,7 +489,6 @@ Use get_subagent_result for full output.`,
   });
 
   pi.on("session_switch", (event: any) => {
-    appendParentFlowTrace(currentCtx?.cwd, "session_switch", { reason: event?.reason ?? null, managedSession, hasRunning: manager.hasRunning(), agentIds: manager.listAgents().map((agent) => ({ id: agent.id, status: agent.status })) });
     if (!managedSession) manager.clearCompleted();
   });
 
@@ -557,7 +536,6 @@ Use get_subagent_result for full output.`,
   // agents are still alive. Keep the subagent manager alive across shutdown so
   // background sessions can finish and still be surfaced in the next parent session.
   pi.on("session_shutdown", async () => {
-    appendParentFlowTrace(currentCtx?.cwd, "session_shutdown", { hasRunning: manager.hasRunning(), agentIds: manager.listAgents().map((agent) => ({ id: agent.id, status: agent.status })) });
     return;
   });
 
@@ -614,8 +592,16 @@ Use get_subagent_result for full output.`,
 
   // Grab UI context from first tool execution + clear lingering widget on new turn
   pi.on("tool_execution_start", async (_event, ctx) => {
+    const hadUiCtx = Boolean((widget as any).uiCtx);
     widget.setUICtx(ctx.ui as UICtx);
+    if (!hadUiCtx) widget.update();
     widget.onTurnStart();
+  });
+
+  pi.on("before_agent_start", async (_event, ctx) => {
+    const hadUiCtx = Boolean((widget as any).uiCtx);
+    widget.setUICtx(ctx.ui as UICtx);
+    if (!hadUiCtx) widget.update();
   });
 
   /** Build the full type list text dynamically from the unified registry. */

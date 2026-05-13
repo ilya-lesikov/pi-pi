@@ -2,7 +2,6 @@
  * agent-runner.ts — Core execution engine: creates sessions, runs agents, collects results.
  */
 
-import { appendFileSync } from "node:fs";
 import type { Model } from "@mariozechner/pi-ai";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import {
@@ -153,17 +152,6 @@ function forwardAbortSignal(session: AgentSession, signal?: AbortSignal): () => 
 }
 
 
-function appendSubagentTrace(cwd: string, event: string, detail: Record<string, unknown>): void {
-  const path = `${cwd}/.pp/subagent-bind-trace.jsonl`;
-  try {
-    appendFileSync(path, JSON.stringify({
-      timestamp: new Date().toISOString(),
-      event,
-      ...detail,
-    }) + "\n", "utf-8");
-  } catch {}
-}
-
 export async function runAgent(
   ctx: ExtensionContext,
   type: SubagentType,
@@ -280,19 +268,10 @@ export async function runAgent(
       sessionOpts.thinkingLevel = thinkingLevel;
     }
 
-    const traceDetail = { type, cwd: effectiveCwd, tracePrompt: prompt.slice(0, 120) };
     let createdSession: Awaited<ReturnType<typeof createAgentSession>> | undefined;
     try {
       createdSession = await createAgentSession(sessionOpts as Parameters<typeof createAgentSession>[0]);
-      appendSubagentTrace(effectiveCwd, "create_session_done", {
-        ...traceDetail,
-        sessionId: createdSession.session.getId?.() ?? null,
-      });
     } catch (error) {
-      appendSubagentTrace(effectiveCwd, "create_session_failed", {
-        ...traceDetail,
-        error: error instanceof Error ? error.message : String(error),
-      });
       throw error;
     }
     const { session } = createdSession;
@@ -318,9 +297,6 @@ export async function runAgent(
       session.setActiveToolsByName(activeTools);
     }
 
-    appendSubagentTrace(effectiveCwd, "create_session_start", traceDetail);
-    appendSubagentTrace(effectiveCwd, "bind_extensions_wait", traceDetail);
-    appendSubagentTrace(effectiveCwd, "bind_extensions_start", traceDetail);
     await session.bindExtensions({
       onError: (err) => {
         options.onToolActivity?.({
@@ -329,15 +305,12 @@ export async function runAgent(
         });
       },
     });
-    appendSubagentTrace(effectiveCwd, "bind_extensions_done", traceDetail);
 
     options.onSessionCreated?.(session);
-    appendSubagentTrace(effectiveCwd, "session_created", { ...traceDetail, sessionId: session.getId?.() ?? null });
     try {
       const originalDispose = session.dispose?.bind(session);
       if (originalDispose) {
         session.dispose = (() => {
-          appendSubagentTrace(effectiveCwd, "session_dispose_called", { ...traceDetail, sessionId: session.getId?.() ?? null });
           return originalDispose();
         }) as typeof session.dispose;
       }
@@ -352,19 +325,14 @@ export async function runAgent(
     let currentMessageText = "";
     const unsubTurns = session.subscribe((event: AgentSessionEvent) => {
       if (event.type === "session_shutdown") {
-        appendSubagentTrace(effectiveCwd, "session_event_shutdown", traceDetail);
       }
       if (event.type === "agent_start") {
-        appendSubagentTrace(effectiveCwd, "agent_start", traceDetail);
       }
       if (event.type === "turn_start") {
-        appendSubagentTrace(effectiveCwd, "turn_start", traceDetail);
       }
       if (event.type === "message_start") {
-        appendSubagentTrace(effectiveCwd, "message_start", traceDetail);
       }
       if (event.type === "tool_execution_start") {
-        appendSubagentTrace(effectiveCwd, "tool_execution_start", { ...traceDetail, toolName: event.toolName });
       }
       if (event.type === "turn_end") {
         turnCount++;
@@ -410,9 +378,7 @@ export async function runAgent(
     }
 
     try {
-      appendSubagentTrace(effectiveCwd, "prompt_start", traceDetail);
       await session.prompt(effectivePrompt);
-      appendSubagentTrace(effectiveCwd, "prompt_done", traceDetail);
     } finally {
       unsubTurns();
       collector.unsubscribe();

@@ -44,6 +44,21 @@ function setStep(orchestrator: Orchestrator, step: string): void {
   saveTask(orchestrator.active.dir, orchestrator.active.state);
 }
 
+async function startImplementationFromActiveTask(orchestrator: Orchestrator, ctx: any): Promise<string> {
+  const task = orchestrator.active;
+  if (!task) return "No active task.";
+
+  const sourceType = task.type;
+  const sourceDir = task.dir;
+  const sourceDescription = task.description;
+
+  await orchestrator.startTask(ctx, "implement", sourceDescription, sourceDir, true);
+
+  return sourceType === "debug"
+    ? "Starting implementation from debug artifacts."
+    : "Starting implementation from brainstorm artifacts.";
+}
+
 function tryCompleteReviewCycle(orchestrator: Orchestrator): void {
   if (
     !orchestrator.active?.state.reviewCycle ||
@@ -252,9 +267,7 @@ async function runUserGateDialogInner(orchestrator: Orchestrator, ctx: any, summ
     if (canStartImpl) options.unshift("Start implementation");
     const choice = await selectOption(ctx, summary, options);
     if (choice === "Start implementation") {
-      const fromArg = `${task.type}/${basename(task.dir)}`;
-      pi.sendUserMessage(`/pp:implement --from ${fromArg}`, { deliverAs: "followUp" });
-      return "Starting implementation from brainstorm artifacts.";
+      return startImplementationFromActiveTask(orchestrator, ctx);
     }
     if (choice === "Finish brainstorming") {
       const result = await orchestrator.transitionToNextPhase(ctx);
@@ -267,9 +280,7 @@ async function runUserGateDialogInner(orchestrator: Orchestrator, ctx: any, summ
   if (phase === "debug") {
     const choice = await selectOption(ctx, summary, ["Implement a fix", "Continue debugging", "Finish debugging"]);
     if (choice === "Implement a fix") {
-      const fromArg = `${task.type}/${basename(task.dir)}`;
-      pi.sendUserMessage(`/pp:implement --from ${fromArg}`, { deliverAs: "followUp" });
-      return "Starting implementation from debug artifacts.";
+      return startImplementationFromActiveTask(orchestrator, ctx);
     }
     if (choice === "Finish debugging") {
       const result = await orchestrator.transitionToNextPhase(ctx);
@@ -422,20 +433,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     const pending = orchestrator.pendingSubagentSpawns;
     const running = orchestrator.spawnedAgentIds.size;
     const desc = data.description || lifecycle.description || data.type || lifecycle.type || data.id;
-    const summary = [
-      `id=${data.id}`,
-      `event=${event}`,
-      `desc=${JSON.stringify(desc)}`,
-      `phase=${lifecycle.phase ?? "unknown"}`,
-      `step=${lifecycle.step ?? "unknown"}`,
-      `running=${running}`,
-      `pending=${pending}`,
-      `age_ms=${ageMs}`,
-      `created_to_started_ms=${startedDeltaMs ?? "na"}`,
-      `created_to_first_tool_ms=${firstToolDeltaMs ?? "na"}`,
-      `created_to_first_turn_ms=${firstTurnDeltaMs ?? "na"}`,
-    ].join(" ");
-    const logPath = appendTaskLog(orchestrator.active.dir, "subagent-lifecycle.jsonl", {
+    appendTaskLog(orchestrator.active.dir, "subagent-lifecycle.jsonl", {
       timestamp: new Date(now).toISOString(),
       id: data.id,
       event,
@@ -452,7 +450,6 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       toolName: data.toolName ?? null,
       turnCount: data.turnCount ?? null,
     });
-    console.error(`[pi-pi][subagent-lifecycle] ${summary} log=${logPath}`);
   }
 
   function startStaleAgentWatchdog(): void {
@@ -499,17 +496,6 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       orchestrator.agentDescriptions.set(data.id, data.description);
     }
     trackSubagentEvent(data, "created");
-    if (orchestrator.active) {
-      const logPath = join(orchestrator.active.dir, "subagent-lifecycle.jsonl");
-      pi.sendMessage(
-        {
-          customType: "pp-subagent-lifecycle-log",
-          content: `Subagent lifecycle log: ${logPath}`,
-          display: false,
-        },
-        { deliverAs: "steer" },
-      );
-    }
     startStaleAgentWatchdog();
   });
 

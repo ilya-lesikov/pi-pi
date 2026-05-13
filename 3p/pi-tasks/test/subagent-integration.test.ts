@@ -288,6 +288,38 @@ describe("TaskExecute", () => {
   });
 });
 
+describe("store upgrade preserves pre-upgrade tasks", () => {
+  let mock: ReturnType<typeof mockPi>;
+
+  beforeEach(() => {
+    delete process.env.PI_TASKS;
+    mock = mockPi();
+    initExtension(mock.pi as any);
+  });
+
+  afterEach(() => {
+    delete process.env.PI_TASKS;
+  });
+
+  it("keeps tasks created before session upgrade visible after upgrade", async () => {
+    const store = (globalThis as any)[Symbol.for("pi-tasks:store")];
+    const created = store.create("plan", "Orchestration phase: plan");
+    store.update(created.id, { status: "in_progress" });
+
+    const sessionCtx = {
+      ...mockCtx(),
+      sessionManager: { getSessionId: () => "session-123" },
+    };
+
+    await mock.fireLifecycle("before_agent_start", {}, sessionCtx);
+
+    const tasks = store.list();
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].subject).toBe("plan");
+    expect(tasks[0].status).toBe("in_progress");
+  });
+});
+
 describe("TaskExecute via ready broadcast", () => {
   it("detects subagents when ready fires after tasks init", async () => {
     // Init tasks WITHOUT the mock — subagents not available yet

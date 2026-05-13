@@ -79,12 +79,18 @@ export default function (pi: ExtensionAPI) {
   const widget = new TaskWidget(store);
 
   const STORE_KEY = Symbol.for("pi-tasks:store");
-  (globalThis as any)[STORE_KEY] = {
+  const storeApi = {
     create: (subject: string, description: string, activeForm?: string) => store.create(subject, description, activeForm),
     update: (id: string, fields: Record<string, any>) => store.update(id, fields),
     list: () => store.list(),
     get: (id: string) => store.get(id),
+    delete: (id: string) => store.update(id, { status: "deleted" }),
+    refreshWidget: (uiCtx?: any) => {
+      if (uiCtx) widget.setUICtx(uiCtx as UICtx);
+      widget.update();
+    },
   };
+  (globalThis as any)[STORE_KEY] = storeApi;
 
   // ── Subagent integration state ──
   /** Latest ExtensionContext — refreshed on every tool execution so cascade always has a valid one. */
@@ -262,7 +268,20 @@ export default function (pi: ExtensionAPI) {
     if (taskScope === "session" && !piTasks) {
       const sessionId = ctx.sessionManager.getSessionId();
       const path = resolveStorePath(sessionId);
+      const previousTasks = store.list();
       store = new TaskStore(path);
+      if (previousTasks.length > 0 && store.list().length === 0) {
+        for (const task of previousTasks) {
+          const created = store.create(task.subject, task.description, task.activeForm, task.metadata);
+          store.update(created.id, {
+            status: task.status,
+            owner: task.owner,
+            metadata: task.metadata,
+            addBlocks: task.blocks,
+            addBlockedBy: task.blockedBy,
+          });
+        }
+      }
       widget.setStore(store);
     }
     storeUpgraded = true;
@@ -343,9 +362,11 @@ export default function (pi: ExtensionAPI) {
   pi.on("before_agent_start", async (_event, ctx) => {
     if ((globalThis as any)[subagentSessionKey]) return;
     latestCtx = ctx;
+    const hadUiCtx = Boolean((widget as any).uiCtx);
     widget.setUICtx(ctx.ui as UICtx);
     upgradeStoreIfNeeded(ctx);
     showPersistedTasks();
+    if (!hadUiCtx) widget.update();
     if (pendingWarning) {
       ctx.ui.notify(pendingWarning, "warning");
       pendingWarning = undefined;

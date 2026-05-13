@@ -1,4 +1,4 @@
-import { existsSync, copyFileSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "fs";
+import { existsSync, copyFileSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from "fs";
 import { join, basename, relative } from "path";
 import type { ExtensionAPI, ExtensionContext, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
 import { loadConfig, type PiPiConfig, type VariantConfig } from "./config.js";
@@ -12,7 +12,7 @@ import {
   type Phase,
 } from "./state.js";
 import { phasePipeline } from "./phases/machine.js";
-import { loadContextFiles, getPhaseArtifacts } from "./context.js";
+import { loadContextFiles, getPhaseArtifacts, getLatestSynthesizedPlan } from "./context.js";
 import { brainstormSystemPrompt } from "./phases/brainstorm.js";
 import { planningSystemPrompt, spawnPlanners } from "./phases/planning.js";
 import { implementationSystemPrompt } from "./phases/implementation.js";
@@ -131,6 +131,20 @@ export class Orchestrator {
 
   private phaseTaskIds = new Map<string, string>();
 
+  getPlanStartState(taskDir: string): { step: string; shouldSpawnPlanners: boolean } {
+    const plansDir = join(taskDir, "plans");
+    const enabledPlannerCount = Object.values(this.config.planners).filter((v) => v.enabled).length;
+    const plannerOutputs = existsSync(plansDir)
+      ? readdirSync(plansDir).filter((f) => f.endsWith(".md") && !f.includes("synthesized") && !f.includes("review_"))
+      : [];
+
+    if (enabledPlannerCount === 0 || plannerOutputs.length >= enabledPlannerCount || getLatestSynthesizedPlan(taskDir)) {
+      return { step: "synthesize", shouldSpawnPlanners: false };
+    }
+
+    return { step: "await_planners", shouldSpawnPlanners: true };
+  }
+
   createPhaseTasks(): void {
     if (!this.active || this.active.type !== "implement") return;
     const store = (globalThis as any)[Symbol.for("pi-tasks:store")];
@@ -150,6 +164,7 @@ export class Orchestrator {
         store.update(task.id, { status });
       }
     }
+    store.refreshWidget?.(this.lastCtx?.ui);
   }
 
   updatePhaseTasks(): void {
@@ -167,6 +182,7 @@ export class Orchestrator {
       const status = i < currentIdx ? "completed" : phases[i] === currentPhase ? "in_progress" : "pending";
       store.update(taskId, { status });
     }
+    store.refreshWidget?.(this.lastCtx?.ui);
   }
 
   getPhasePrompt(_ctx: ExtensionContext): string {
@@ -242,6 +258,7 @@ export class Orchestrator {
       state.from = relative(join(this.cwd, ".pp", "state"), fromTaskDir);
       if (skipBrainstorm && type === "implement") {
         state.phase = "plan";
+        state.step = this.getPlanStartState(dir).step;
       }
       saveTask(dir, state);
     }
@@ -281,6 +298,7 @@ export class Orchestrator {
 
     this.registerAgents();
     this.pi.setSessionName(this.active.description.slice(0, 50));
+    this.lastCtx = ctx;
     this.updateStatus(ctx);
 
     this.injectContextAndArtifacts(this.active.dir, this.active.state.phase);
@@ -288,13 +306,17 @@ export class Orchestrator {
 
     this.phaseStartTime = Date.now();
     const isGenericDescription = ["implement", "debug", "brainstorm"].includes(this.active.description);
-    if (isGenericDescription) {
+    const hasInheritedTaskContext = Boolean(fromTaskDir && type === "implement");
+    const isWaitingForPlanners = this.active.state.phase === "plan" && this.active.state.step === "await_planners";
+    if (isGenericDescription && !hasInheritedTaskContext) {
       ctx.ui.notify("Task created. Describe what you'd like to do.", "info");
+    } else if (isWaitingForPlanners) {
+      ctx.ui.notify("Entered plan phase. Waiting for planners to complete before synthesis.", "info");
     } else {
       this.pi.sendUserMessage(`[PI-PI] Entered ${this.active.state.phase} phase. Begin working.`);
     }
 
-    if (this.active.state.phase === "plan") {
+    if (this.active.state.phase === "plan" && this.active.state.step === "await_planners") {
       this.pendingSubagentSpawns = Object.values(this.config.planners).filter((v) => v.enabled).length;
       this.failedPlannerVariants = [];
       spawnPlanners(this.pi, this.cwd, this.active.dir, this.active.taskId, this.config).then((result) => {
@@ -349,6 +371,7 @@ export class Orchestrator {
           store.delete(taskId);
         } catch {}
       }
+      store.refreshWidget?.(this.lastCtx?.ui);
     }
     this.phaseTaskIds.clear();
     if (this.awaitPollTimer) {
@@ -426,7 +449,11 @@ export class Orchestrator {
         }
         this.phaseStartTime = Date.now();
         this.injectContextAndArtifacts(taskDir, phase);
-        this.pi.sendUserMessage(`[PI-PI] Entered ${phase} phase. Begin working.`);
+        if (this.active?.state.phase === "plan" && this.active.state.step === "await_planners") {
+          ctx.ui.notify("Entered plan phase. Waiting for planners to complete before synthesis.", "info");
+        } else {
+          this.pi.sendUserMessage(`[PI-PI] Entered ${phase} phase. Begin working.`);
+        }
       },
       onError: (err) => {
         console.error(`[pi-pi] Phase compaction failed: ${err.message}`);
@@ -437,7 +464,11 @@ export class Orchestrator {
         }
         this.phaseStartTime = Date.now();
         this.injectContextAndArtifacts(taskDir, phase);
-        this.pi.sendUserMessage(`[PI-PI] Entered ${phase} phase. Begin working.`);
+        if (this.active?.state.phase === "plan" && this.active.state.step === "await_planners") {
+          ctx.ui.notify("Entered plan phase. Waiting for planners to complete before synthesis.", "info");
+        } else {
+          this.pi.sendUserMessage(`[PI-PI] Entered ${phase} phase. Begin working.`);
+        }
       },
     });
   }

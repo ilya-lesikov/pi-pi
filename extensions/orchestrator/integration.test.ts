@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Orchestrator } from "./orchestrator.js";
 import { registerCommandHandlers } from "./command-handlers.js";
 import { registerEventHandlers, runUserGateDialog } from "./event-handlers.js";
-import { loadTask, saveTask } from "./state.js";
+import { createTask, loadTask, saveTask } from "./state.js";
 
 vi.mock("./cbm.js", () => ({ registerCbmTools: vi.fn() }));
 vi.mock("./exa.js", () => ({ registerExaTools: vi.fn() }));
@@ -647,10 +647,9 @@ describe("standalone brainstorm", () => {
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-1", { summary: "Conclusions ready" }, undefined, undefined, ctx);
 
-    expect(pi.sendUserMessage).toHaveBeenCalledWith(
-      expect.stringContaining("/pp:implement --from"),
-      { deliverAs: "followUp" },
-    );
+    expect(orchestrator.active!.type).toBe("implement");
+    expect(orchestrator.active!.state.phase).toBe("plan");
+    expect(orchestrator.active!.state.step).toBe("await_planners");
   });
 });
 
@@ -674,10 +673,9 @@ describe("debug flow", () => {
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-1", { summary: "Diagnosis complete" }, undefined, undefined, ctx);
 
-    expect(pi.sendUserMessage).toHaveBeenCalledWith(
-      expect.stringContaining("/pp:implement --from"),
-      { deliverAs: "followUp" },
-    );
+    expect(orchestrator.active!.type).toBe("implement");
+    expect(orchestrator.active!.state.phase).toBe("plan");
+    expect(orchestrator.active!.state.step).toBe("await_planners");
   });
 });
 
@@ -736,6 +734,38 @@ describe("planner completion tracking", () => {
     emitSubagentFailed(pi, "planner-1", "model error");
 
     expect(orchestrator.active!.state.step).toBe("synthesize");
+  });
+
+  it("plan transition sets await_planners before compaction callback runs", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const compactCallbacks: Array<() => void> = [];
+    const ctx = makeCtx({
+      compact: vi.fn((opts?: any) => {
+        if (opts?.onComplete) compactCallbacks.push(opts.onComplete);
+      }),
+    });
+
+    await orchestrator.startTask(ctx as any, "implement", "Test task");
+    const taskDir = orchestrator.active!.dir;
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+
+    ctx.ui.select.mockResolvedValueOnce("Approve brainstorm");
+    const ppPhaseComplete = getTool(pi, "pp_phase_complete");
+    await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
+
+    expect(orchestrator.active!.state.phase).toBe("plan");
+    expect(orchestrator.active!.state.step).toBe("await_planners");
+    expect(compactCallbacks).toHaveLength(1);
+
+    compactCallbacks[0]!();
+
+    expect(ctx.ui.notify).toHaveBeenCalledWith("Entered plan phase. Waiting for planners to complete before synthesis.", "info");
+    const planBeginMessages = pi.sendUserMessage.mock.calls.filter(
+      (c: any[]) => c[0] === "[PI-PI] Entered plan phase. Begin working.",
+    );
+    expect(planBeginMessages).toHaveLength(0);
   });
 
   it("shows planner failure dialog and can proceed with available outputs", async () => {
@@ -1084,7 +1114,100 @@ describe("edge cases and regressions", () => {
     await orchestrator.startTask(ctx as any, "implement", "Fix it", debugDir, true);
 
     expect(orchestrator.active!.state.phase).toBe("plan");
+    expect(orchestrator.active!.state.step).toBe("await_planners");
     expect(existsSync(join(orchestrator.active!.dir, "USER_REQUEST.md"))).toBe(true);
     expect(existsSync(join(orchestrator.active!.dir, "RESEARCH.md"))).toBe(true);
+  });
+
+  it("implement --from debug with generic description skips blank-task prompt", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "debug", "Find bug");
+    const debugDir = orchestrator.active!.dir;
+    writeFileSync(join(debugDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(debugDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+
+    await orchestrator.startTask(ctx as any, "implement", "implement", debugDir, true);
+
+    expect(ctx.ui.notify).not.toHaveBeenCalledWith("Task created. Describe what you'd like to do.", "info");
+    expect(ctx.ui.notify).toHaveBeenCalledWith("Entered plan phase. Waiting for planners to complete before synthesis.", "info");
+    expect(orchestrator.active!.state.step).toBe("await_planners");
+  });
+
+  it("implement --from brainstorm also skips brainstorm and enters plan deterministically", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "brainstorm", "Explore ideas");
+    const brainstormDir = orchestrator.active!.dir;
+    writeFileSync(join(brainstormDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(brainstormDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+
+    const ppImplement = getCommand(pi, "pp:implement");
+    await ppImplement(`--from brainstorm/${brainstormDir.split("/").pop()}`, ctx);
+
+    expect(orchestrator.active!.state.phase).toBe("plan");
+    expect(orchestrator.active!.state.step).toBe("await_planners");
+    expect(ctx.ui.notify).not.toHaveBeenCalledWith("Task created. Describe what you'd like to do.", "info");
+    expect(ctx.ui.notify).toHaveBeenCalledWith("Entered plan phase. Waiting for planners to complete before synthesis.", "info");
+    expect(existsSync(join(orchestrator.active!.dir, "USER_REQUEST.md"))).toBe(true);
+    expect(existsSync(join(orchestrator.active!.dir, "RESEARCH.md"))).toBe(true);
+  });
+
+  it("pp:implement parses --from=debug syntax and skips brainstorm", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "debug", "Find bug");
+    const debugDir = orchestrator.active!.dir;
+    writeFileSync(join(debugDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(debugDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+
+    const ppImplement = getCommand(pi, "pp:implement");
+    await ppImplement(`--from=debug/${debugDir.split("/").pop()}`, ctx);
+
+    expect(orchestrator.active!.type).toBe("implement");
+    expect(orchestrator.active!.state.phase).toBe("plan");
+    expect(orchestrator.active!.state.step).toBe("await_planners");
+    expect(orchestrator.active!.state.from).toBe(`debug/${debugDir.split("/").pop()}`);
+    expect(orchestrator.active!.state.description).toBe("implement");
+    expect(ctx.ui.notify).toHaveBeenCalledWith("Entered plan phase. Waiting for planners to complete before synthesis.", "info");
+  });
+
+  it("pp:implement parses --from=brainstorm syntax and skips brainstorm", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "brainstorm", "Explore ideas");
+    const brainstormDir = orchestrator.active!.dir;
+    writeFileSync(join(brainstormDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(brainstormDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+
+    const ppImplement = getCommand(pi, "pp:implement");
+    await ppImplement(`--from=brainstorm/${brainstormDir.split("/").pop()}`, ctx);
+
+    expect(orchestrator.active!.type).toBe("implement");
+    expect(orchestrator.active!.state.phase).toBe("plan");
+    expect(orchestrator.active!.state.step).toBe("await_planners");
+    expect(orchestrator.active!.state.from).toBe(`brainstorm/${brainstormDir.split("/").pop()}`);
+    expect(orchestrator.active!.state.description).toBe("implement");
+    expect(ctx.ui.notify).toHaveBeenCalledWith("Entered plan phase. Waiting for planners to complete before synthesis.", "info");
+  });
+
+  it("normalizes legacy planning phase state to plan on load", async () => {
+    const cwd = makeTempDir();
+    const taskDir = createTask(cwd, "implement", "Legacy task");
+    const legacyState = loadTask(taskDir);
+    legacyState.phase = "planning" as any;
+    saveTask(taskDir, legacyState);
+
+    const normalized = loadTask(taskDir);
+
+    expect(normalized.phase).toBe("plan");
   });
 });
