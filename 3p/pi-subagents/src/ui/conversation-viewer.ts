@@ -167,6 +167,7 @@ export class ConversationViewer implements Component {
     const th = this.theme;
     const messages = this.session.messages;
     const lines: string[] = [];
+    const detab = (s: string) => s.replace(/\t/g, "    ");
 
     if (messages.length === 0) {
       lines.push(th.fg("dim", "(waiting for first message...)"));
@@ -182,7 +183,7 @@ export class ConversationViewer implements Component {
         if (!text.trim()) continue;
         if (needsSeparator) lines.push(th.fg("dim", "───"));
         lines.push(th.fg("accent", "[User]"));
-        for (const line of wrapTextWithAnsi(text.trim(), width)) {
+        for (const line of wrapTextWithAnsi(detab(text.trim()), width)) {
           lines.push(line);
         }
       } else if (msg.role === "assistant") {
@@ -197,7 +198,7 @@ export class ConversationViewer implements Component {
         if (needsSeparator) lines.push(th.fg("dim", "───"));
         lines.push(th.bold("[Assistant]"));
         if (textParts.length > 0) {
-          for (const line of wrapTextWithAnsi(textParts.join("\n").trim(), width)) {
+          for (const line of wrapTextWithAnsi(detab(textParts.join("\n").trim()), width)) {
             lines.push(line);
           }
         }
@@ -210,18 +211,18 @@ export class ConversationViewer implements Component {
         if (!truncated.trim()) continue;
         if (needsSeparator) lines.push(th.fg("dim", "───"));
         lines.push(th.fg("dim", "[Result]"));
-        for (const line of wrapTextWithAnsi(truncated.trim(), width)) {
+        for (const line of wrapTextWithAnsi(detab(truncated.trim()), width)) {
           lines.push(th.fg("dim", line));
         }
       } else if ((msg as any).role === "bashExecution") {
         const bash = msg as any;
         if (needsSeparator) lines.push(th.fg("dim", "───"));
-        lines.push(truncateToWidth(th.fg("muted", `  $ ${bash.command}`), width));
+        lines.push(truncateToWidth(th.fg("muted", `  $ ${detab(bash.command)}`), width));
         if (bash.output?.trim()) {
           const out = bash.output.length > 500
             ? bash.output.slice(0, 500) + "... (truncated)"
             : bash.output;
-          for (const line of wrapTextWithAnsi(out.trim(), width)) {
+          for (const line of wrapTextWithAnsi(detab(out.trim()), width)) {
             lines.push(th.fg("dim", line));
           }
         }
