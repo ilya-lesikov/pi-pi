@@ -34,15 +34,27 @@ function getFirstHeading(content: string): { level: number; line: number; text: 
   return null;
 }
 
-function parseH2Sections(content: string): Array<{ name: string; line: number; start: number; end: number }> {
+function normalizeH2Name(raw: string, allowedNames: readonly string[]): string {
+  const trimmed = raw.replace(/:$/, "");
+  for (const name of allowedNames) {
+    if (trimmed === name || trimmed.startsWith(name + ":") || trimmed.startsWith(name + " ")) {
+      return name;
+    }
+  }
+  return raw;
+}
+
+function parseH2Sections(content: string, allowedNames?: readonly string[]): Array<{ name: string; line: number; start: number; end: number }> {
   const lines = splitLines(content);
   const sections: Array<{ name: string; line: number; start: number; end: number }> = [];
 
   for (let i = 0; i < lines.length; i += 1) {
     const match = lines[i]?.match(/^\s*##\s+(.+?)\s*$/);
     if (match) {
+      const rawName = match[1];
+      const name = allowedNames ? normalizeH2Name(rawName, allowedNames) : rawName;
       sections.push({
-        name: match[1],
+        name,
         line: i + 1,
         start: i + 1,
         end: lines.length,
@@ -103,7 +115,7 @@ export function validateUserRequest(content: string): ValidationResult {
     );
   }
 
-  const sections = parseH2Sections(content);
+  const sections = parseH2Sections(content, USER_REQUEST_ALLOWED_SECTIONS);
   const sectionMap = new Map(sections.map((s) => [s.name, s]));
 
   for (const section of sections) {
@@ -147,7 +159,7 @@ export function validateUserRequest(content: string): ValidationResult {
 export function validateResearch(content: string): ValidationResult {
   const errors: string[] = [];
   const expectedSections = formatSectionList(RESEARCH_REQUIRED_SECTIONS, ["Open Questions"]);
-  const sections = parseH2Sections(content);
+  const sections = parseH2Sections(content, RESEARCH_ALLOWED_SECTIONS);
   const sectionMap = new Map(sections.map((s) => [s.name, s]));
 
   for (const section of sections) {
@@ -184,7 +196,7 @@ export function validatePlan(content: string): ValidationResult {
     );
   }
 
-  const sections = parseH2Sections(content);
+  const sections = parseH2Sections(content, PLAN_ALLOWED_SECTIONS);
   const sectionMap = new Map(sections.map((s) => [s.name, s]));
 
   for (const section of sections) {

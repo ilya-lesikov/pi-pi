@@ -56,6 +56,20 @@ Ship minimal fix.
     expect(result.ok).toBe(true);
   });
 
+  it("accepts section names with trailing colon or inline text", () => {
+    const content = `# Plan
+
+## Scope: Handle panics gracefully
+Ship minimal fix.
+
+## Checklist:
+- [ ] Implement fix — Done when: tests pass
+`;
+
+    const result = validatePlan(content);
+    expect(result.ok).toBe(true);
+  });
+
   it("rejects placeholder scope", () => {
     const content = `# Plan
 
