@@ -788,6 +788,11 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     orchestrator.lastCtx = ctx;
     orchestrator.cwd = ctx.cwd;
 
+    const subagentsMgr = (globalThis as any)[Symbol.for("pi-subagents:manager")];
+    subagentsMgr?.refreshWidget?.(ctx.ui);
+    const taskStore = (globalThis as any)[Symbol.for("pi-tasks:store")];
+    taskStore?.refreshWidget?.(ctx.ui);
+
     if ((globalThis as any)[SUBAGENT_SESSION_KEY]) {
       return;
     }

@@ -64,6 +64,8 @@ export function spawnViaRpc(
     const unsub = pi.events.on(replyEvent, (reply: any) => {
       unsub();
       if (reply.success) {
+        const mgr = (globalThis as any)[Symbol.for("pi-subagents:manager")];
+        mgr?.refreshWidget?.();
         resolve({ id: reply.data?.id ?? requestId });
       } else {
         reject(new Error(reply.error || "spawn failed"));
