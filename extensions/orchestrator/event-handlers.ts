@@ -263,29 +263,38 @@ async function runUserGateDialogInner(orchestrator: Orchestrator, ctx: any, summ
 
   if (phase === "brainstorm" && task.type === "brainstorm") {
     const canStartImpl = existsSync(join(task.dir, "USER_REQUEST.md")) && existsSync(join(task.dir, "RESEARCH.md"));
-    const options = ["Continue brainstorming", "Finish brainstorming"];
-    if (canStartImpl) options.unshift("Start implementation");
+    const options: string[] = [];
+    if (canStartImpl) options.push("Start implementation");
+    options.push(autoLabel, deepLabel, "Continue brainstorming", "Finish brainstorming", "Stop task");
     const choice = await selectOption(ctx, summary, options);
+    finalizeReviewCycle(task);
     if (choice === "Start implementation") {
       return startImplementationFromActiveTask(orchestrator, ctx);
     }
+    if (choice === autoLabel) return enterReviewCycle(orchestrator, ctx, "auto");
+    if (choice === deepLabel) return enterReviewCycle(orchestrator, ctx, "auto-deep");
     if (choice === "Finish brainstorming") {
       const result = await orchestrator.transitionToNextPhase(ctx);
       return result.ok ? "Brainstorm finished." : `Transition blocked: ${result.error}`;
     }
+    if (choice === "Stop task") return stopTask(orchestrator);
     setStep(orchestrator, "llm_work");
     return continueMessage;
   }
 
   if (phase === "debug") {
-    const choice = await selectOption(ctx, summary, ["Implement a fix", "Continue debugging", "Finish debugging"]);
+    const choice = await selectOption(ctx, summary, ["Implement a fix", autoLabel, deepLabel, "Continue debugging", "Finish debugging", "Stop task"]);
+    finalizeReviewCycle(task);
     if (choice === "Implement a fix") {
       return startImplementationFromActiveTask(orchestrator, ctx);
     }
+    if (choice === autoLabel) return enterReviewCycle(orchestrator, ctx, "auto");
+    if (choice === deepLabel) return enterReviewCycle(orchestrator, ctx, "auto-deep");
     if (choice === "Finish debugging") {
       const result = await orchestrator.transitionToNextPhase(ctx);
       return result.ok ? "Debugging finished." : `Transition blocked: ${result.error}`;
     }
+    if (choice === "Stop task") return stopTask(orchestrator);
     setStep(orchestrator, "llm_work");
     return continueMessage;
   }
