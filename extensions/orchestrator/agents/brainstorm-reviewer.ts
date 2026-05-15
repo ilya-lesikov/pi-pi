@@ -4,7 +4,7 @@ import { TOOL_ROUTING, ALL_CBM_TOOLS, EXA_TOOLS, WORKING_PRINCIPLES_READONLY, CO
 export function createBrainstormReviewerAgent(
   variant: string,
   config: PiPiConfig,
-  taskArtifacts: { userRequest: string; research: string },
+  taskArtifacts: { userRequest: string; research: string; artifacts?: { name: string; content: string }[] },
   outputPath: string,
 ) {
   const variantConfig = config.brainstormReviewers[variant];
@@ -63,6 +63,12 @@ export function createBrainstormReviewerAgent(
       "",
       "=== RESEARCH ===",
       taskArtifacts.research,
+      ...(taskArtifacts.artifacts && taskArtifacts.artifacts.length > 0
+        ? [
+            "",
+            ...taskArtifacts.artifacts.flatMap((a) => [`=== ${a.name} ===`, a.content, ""]),
+          ]
+        : []),
       "",
       "The artifacts above are already in your context. Do NOT re-read them from disk.",
     ].join("\n"),

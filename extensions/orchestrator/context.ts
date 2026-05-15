@@ -143,6 +143,13 @@ export function getPhaseArtifacts(taskDir: string, phase: Phase): { name: string
   tryAdd("USER_REQUEST.md", join(taskDir, "USER_REQUEST.md"));
   tryAdd("RESEARCH.md", join(taskDir, "RESEARCH.md"));
 
+  const artifactsDir = join(taskDir, "artifacts");
+  if (existsSync(artifactsDir)) {
+    for (const file of readdirSync(artifactsDir).filter((f) => f.endsWith(".md")).sort()) {
+      tryAdd(`artifacts/${file}`, join(artifactsDir, file));
+    }
+  }
+
   if (phase === "plan" || phase === "implement") {
     const plansDir = join(taskDir, "plans");
     if (existsSync(plansDir)) {

@@ -269,8 +269,16 @@ export class Orchestrator {
     if (fromTaskDir) {
       const srcUr = join(fromTaskDir, "USER_REQUEST.md");
       const srcRes = join(fromTaskDir, "RESEARCH.md");
+      const srcArtifacts = join(fromTaskDir, "artifacts");
       if (existsSync(srcUr)) copyFileSync(srcUr, join(dir, "USER_REQUEST.md"));
       if (existsSync(srcRes)) copyFileSync(srcRes, join(dir, "RESEARCH.md"));
+      if (existsSync(srcArtifacts)) {
+        const destArtifacts = join(dir, "artifacts");
+        mkdirSync(destArtifacts, { recursive: true });
+        for (const f of readdirSync(srcArtifacts).filter((f) => f.endsWith(".md"))) {
+          copyFileSync(join(srcArtifacts, f), join(destArtifacts, f));
+        }
+      }
       state.from = relative(join(this.cwd, ".pp", "state"), fromTaskDir);
       if (skipBrainstorm && type === "implement") {
         state.phase = "plan";

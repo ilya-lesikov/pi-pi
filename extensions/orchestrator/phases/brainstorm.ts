@@ -54,7 +54,13 @@ export function brainstormSystemPrompt(taskType: TaskType, taskDescription: stri
       "",
       "These files are validated programmatically. Missing sections or unexpected sections will be rejected.",
       "",
-      "When both files are complete, call pp_phase_complete with a brief summary.",
+      "# Optional: focused analysis artifacts",
+      `You may also write additional analysis files to ${taskDir}/artifacts/<name>.md`,
+      "for deep dives on specific topics (e.g. architecture analysis, API comparison, risk assessment).",
+      "Each artifact must start with # <Title>. Content is freeform. These are reviewed alongside USER_REQUEST.md and RESEARCH.md.",
+      "Do NOT duplicate content already in RESEARCH.md — artifacts are for supplementary deep dives.",
+      "",
+      "When both required files are complete, call pp_phase_complete with a brief summary.",
     ].join("\n");
   }
 
@@ -86,6 +92,13 @@ export function brainstormSystemPrompt(taskType: TaskType, taskDescription: stri
       `- ${taskDir}/RESEARCH.md — MUST use structure: ## Affected Code, ## Architecture Context, ## Constraints & Edge Cases, ## Open Questions (optional)`,
       "These files are validated. Missing or unexpected sections will be rejected.",
       "Do NOT create these files preemptively. Only write them when there's substance to capture.",
+      "",
+      "# Optional: focused analysis artifacts",
+      `You may also write additional analysis files to ${taskDir}/artifacts/<name>.md`,
+      "for deep dives on specific topics (e.g. architecture analysis, API comparison, risk assessment).",
+      "Each artifact must start with # <Title>. Content is freeform. These are reviewed alongside USER_REQUEST.md and RESEARCH.md.",
+      "Do NOT duplicate content already in RESEARCH.md — artifacts are for supplementary deep dives.",
+      "",
       "Do NOT modify any files except .md files in the task directory.",
     ].join("\n");
   }
@@ -138,6 +151,12 @@ export function brainstormSystemPrompt(taskType: TaskType, taskDescription: stri
     "",
     "These files are validated programmatically. Missing sections or unexpected sections will be rejected.",
     "",
+    "# Optional: focused analysis artifacts",
+    `You may also write additional analysis files to ${taskDir}/artifacts/<name>.md`,
+    "for deep dives on specific topics (e.g. architecture analysis, API comparison, risk assessment).",
+    "Each artifact must start with # <Title>. Content is freeform. These are reviewed alongside USER_REQUEST.md and RESEARCH.md.",
+    "Do NOT duplicate content already in RESEARCH.md — artifacts are for supplementary deep dives.",
+    "",
     "Do NOT modify any files except .md files in the task directory.",
     "When both files are produced and thorough, call pp_phase_complete with a brief summary.",
   ].join("\n");
@@ -158,6 +177,14 @@ export async function spawnBrainstormReviewers(
   const userRequest = readFileSync(urPath, "utf-8");
   const research = readFileSync(resPath, "utf-8");
 
+  const artifactsDir = join(taskDir, "artifacts");
+  const artifacts: { name: string; content: string }[] = [];
+  if (existsSync(artifactsDir)) {
+    for (const f of readdirSync(artifactsDir).filter((f) => f.endsWith(".md")).sort()) {
+      artifacts.push({ name: `artifacts/${f}`, content: readFileSync(join(artifactsDir, f), "utf-8") });
+    }
+  }
+
   const reviewsDir = join(taskDir, "brainstorm-reviews");
   if (!existsSync(reviewsDir)) {
     mkdirSync(reviewsDir, { recursive: true });
@@ -173,7 +200,7 @@ export async function spawnBrainstormReviewers(
   for (const [variant] of enabledVariants) {
     const outputPath = join(reviewsDir, `${timestamp}_${variant}_round-${round}.md`);
     reviewFiles.push(outputPath);
-    const agent = createBrainstormReviewerAgent(variant, config, { userRequest, research }, outputPath);
+    const agent = createBrainstormReviewerAgent(variant, config, { userRequest, research, artifacts: artifacts.length > 0 ? artifacts : undefined }, outputPath);
 
     registerAgentDefinitions(pi, [{ type: "brainstorm_reviewer", variant, ...agent }]);
 

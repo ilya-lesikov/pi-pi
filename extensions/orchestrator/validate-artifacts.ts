@@ -255,3 +255,18 @@ export function validatePlan(content: string): ValidationResult {
 
   return errors.length > 0 ? { ok: false, errors } : { ok: true };
 }
+
+export function validateArtifact(content: string): ValidationResult {
+  const errors: string[] = [];
+  const firstHeading = getFirstHeading(content);
+
+  if (!firstHeading) {
+    errors.push("Missing required heading: # <Title>. Artifact must start with a top-level heading.");
+  } else if (firstHeading.level !== 1) {
+    errors.push(
+      `First heading is '${"#".repeat(firstHeading.level)} ${firstHeading.text}' on line ${firstHeading.line}. Expected a top-level heading: # <Title>`,
+    );
+  }
+
+  return errors.length > 0 ? { ok: false, errors } : { ok: true };
+}
