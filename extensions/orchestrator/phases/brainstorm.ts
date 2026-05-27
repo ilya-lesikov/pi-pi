@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, mkdirSync, readdirSync } from "fs";
+import { readFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs";
 import { join } from "path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { PiPiConfig } from "../config.js";
@@ -18,6 +18,7 @@ export function brainstormSystemPrompt(taskType: TaskType, taskDescription: stri
     "- Do NOT modify project source code (no write or edit tools on project files)",
     "- Do NOT create or modify any files outside the task directory",
     "- Do NOT implement fixes — only diagnose and recommend",
+    "- If the user asks you to implement a fix or start coding — call pp_phase_complete instead. It will offer \"Implement a fix\" as an option. Do NOT implement directly in this session.",
     "",
     "# Your job:",
     "1. Clarify the problem with the user if needed",
@@ -84,6 +85,7 @@ export function brainstormSystemPrompt(taskType: TaskType, taskDescription: stri
       "# When to finish:",
       "Do NOT call pp_phase_complete on your own. The user will tell you when they're done,",
       "or use /pp:next to advance. Keep the conversation going until then.",
+      "If the user asks you to implement, write code, or start building — tell them to use /pp:next which will offer \"Start implementation\" as an option. Do NOT implement directly in this session.",
       "",
       "# Optional artifacts (only when the conversation naturally produces them):",
       "If the discussion leads to a clear action plan or the user asks you to capture conclusions,",
@@ -114,6 +116,7 @@ export function brainstormSystemPrompt(taskType: TaskType, taskDescription: stri
     "- Do NOT modify project source code (no write or edit tools on project files)",
     "- Do NOT create or modify any files outside the task directory",
     "- Do NOT start implementing — only research and document",
+    "- If the user asks you to implement or start coding — tell them to use /pp:next which will offer phase advancement. Do NOT implement directly in this session.",
     "",
     "# Steps:",
     "1. Clarify requirements with the user if anything is ambiguous",
@@ -209,6 +212,11 @@ export async function spawnBrainstormReviewers(
         try {
           const { id } = await spawnViaRpc(pi, `brainstorm_reviewer_${variant}`, "Begin brainstorm artifact review.", {
             description: `Brainstorm reviewer (${variant})`,
+            validateCompletion: () => {
+              if (!existsSync(outputPath) || statSync(outputPath).size === 0) {
+                return `You finished without writing your review file. Write your review to: ${outputPath}`;
+              }
+            },
           });
           agentIds.push(id);
           await waitForCompletion(pi, id);
