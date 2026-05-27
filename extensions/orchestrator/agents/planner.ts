@@ -43,9 +43,10 @@ export function createPlannerAgent(
       'You can spawn subagents: Agent(subagent_type="Explore", ...) for codebase, Agent(subagent_type="Librarian", ...) for external docs.',
       "",
       // --- dynamic suffix ---
-      "You MUST write your plan to this exact file:",
+      "# MANDATORY: Write your plan to this exact file using the write tool:",
       `  ${outputPath}`,
       "",
+      "Your task is NOT complete until this file exists. Do NOT finish without writing it.",
       "You MUST NOT write to any other file. Only write .md files inside .pp/state/.",
       "",
       "=== USER REQUEST ===",

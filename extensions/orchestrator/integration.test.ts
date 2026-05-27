@@ -525,9 +525,10 @@ describe("review cycle lifecycle", () => {
     await new Promise((r) => setTimeout(r, 10));
 
     ctx.ui.select.mockResolvedValueOnce("Review");
+    ctx.ui.select.mockResolvedValueOnce("Continue implementation");
     const result = await ppPhaseComplete.execute("call-3", { summary: "implemented" }, undefined, undefined, ctx);
 
-    expect(result.content[0].text).toContain("No code reviewers enabled");
+    expect(result.content[0].text).toContain("continue");
     expect(orchestrator.active!.state.reviewCycle).toBeNull();
   });
 });

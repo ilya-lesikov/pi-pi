@@ -45,6 +45,8 @@ interface SpawnOptions {
   onSessionCreated?: (session: AgentSession) => void;
   /** Called at the end of each agentic turn with the cumulative count. */
   onTurnEnd?: (turnCount: number) => void;
+  validateCompletion?: () => string | undefined;
+  maxValidationRetries?: number;
 }
 
 export class AgentManager {
@@ -152,6 +154,8 @@ export class AgentManager {
       },
       onTurnEnd: options.onTurnEnd,
       onTextDelta: options.onTextDelta,
+      validateCompletion: options.validateCompletion,
+      maxValidationRetries: options.maxValidationRetries,
       onSessionCreated: (session) => {
         record.session = session;
         // Flush any steers that arrived before the session was ready

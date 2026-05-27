@@ -101,6 +101,14 @@ export interface RunOptions {
   onSessionCreated?: (session: AgentSession) => void;
   /** Called at the end of each agentic turn with the cumulative count. */
   onTurnEnd?: (turnCount: number) => void;
+  /**
+   * Called after the agent finishes (session.prompt() returns) but before
+   * the run is considered complete. Return a non-empty string to re-prompt
+   * the agent with that message. Return undefined/empty to accept completion.
+   * Called up to maxValidationRetries times (default: 2).
+   */
+  validateCompletion?: () => string | undefined;
+  maxValidationRetries?: number;
 }
 
 export interface RunResult {
@@ -379,6 +387,16 @@ export async function runAgent(
 
     try {
       await session.prompt(effectivePrompt);
+
+      if (options.validateCompletion && !aborted) {
+        const maxRetries = options.maxValidationRetries ?? 2;
+        for (let attempt = 0; attempt < maxRetries; attempt++) {
+          const error = options.validateCompletion();
+          if (!error) break;
+          await session.prompt(error);
+          if (aborted) break;
+        }
+      }
     } finally {
       unsubTurns();
       collector.unsubscribe();

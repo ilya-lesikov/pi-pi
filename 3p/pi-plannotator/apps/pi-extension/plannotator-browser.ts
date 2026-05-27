@@ -338,6 +338,13 @@ export async function openCodeReview(
 		gitCtx = await getGitContext(cwd);
 		const defaultBranch = options.defaultBranch ?? gitCtx.defaultBranch;
 		diffType = options.diffType ?? resolveDefaultDiffType(loadConfig());
+		if (typeof diffType === "string" && diffType.startsWith("range:")) {
+			const range = diffType.slice("range:".length);
+			const hasOption = gitCtx.diffOptions.some((o) => o.id === diffType);
+			if (!hasOption) {
+				gitCtx.diffOptions.push({ id: diffType, label: `Commits ${range}` });
+			}
+		}
 		const result = await runGitDiff(diffType, defaultBranch, cwd);
 		rawPatch = result.patch;
 		gitRef = result.label;

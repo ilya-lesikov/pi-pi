@@ -217,7 +217,7 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
         state: task.state,
         release,
         taskId: orchestrator.taskIdFromDir(task.dir),
-        modifiedFiles: new Set(),
+        modifiedFiles: new Set(task.state.modifiedFiles ?? []),
         reviewPass: task.state.reviewPass,
         description: task.state.description,
       };
@@ -298,27 +298,55 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
               { deliverAs: "steer" },
             );
           } else {
-            orchestrator.pendingSubagentSpawns = reviewerCount;
-            const spawnFn = phase === "brainstorm"
-              ? () => spawnBrainstormReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, reviewConfig, cycle.pass)
-              : phase === "plan"
-              ? () => spawnPlanReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, reviewConfig)
-              : () => spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, reviewConfig, cycle.pass);
-            orchestrator.failedReviewerVariants = [];
-            spawnFn().then((result) => {
-              orchestrator.failedReviewerVariants = result.failedVariants;
-              if (result.spawned === 0) orchestrator.pendingSubagentSpawns = 0;
-              for (const id of result.agentIds ?? []) {
-                orchestrator.spawnedAgentIds.delete(id);
-              }
-              orchestrator.pendingSubagentSpawns = 0;
-            }).catch((err: any) => {
-              orchestrator.pendingSubagentSpawns = 0;
-              console.error(`[pi-pi] spawn reviewers failed: ${err.message}`);
-            });
-            cycle.step = "await_reviewers";
-            orchestrator.active.state.step = "await_reviewers";
-            saveTask(orchestrator.active.dir, orchestrator.active.state);
+            const completedVariants = new Set(
+              outputs.map((o) => o.name.replace(/^\d+_/, "").replace(/_round-\d+\.md$/, "").replace(/\.md$/, "")),
+            );
+            const enabledVariants = Object.entries(reviewers).filter(([, v]) => v.enabled);
+            const missingVariants = enabledVariants.filter(([name]) => !completedVariants.has(name));
+
+            if (missingVariants.length === 0) {
+              cycle.step = "apply_feedback";
+              orchestrator.active.state.step = "apply_feedback";
+              saveTask(orchestrator.active.dir, orchestrator.active.state);
+              const rendered = outputs.map((o) => `=== ${o.name} ===\n${o.content}`).join("\n\n");
+              pi.sendMessage(
+                {
+                  customType: "pp-review-ready",
+                  content: `[PI-PI] Reviewer outputs are ready.\n\n${rendered}`,
+                  display: false,
+                },
+                { deliverAs: "steer" },
+              );
+            } else {
+              const missingReviewerConfig: Record<string, any> = {};
+              for (const [name, cfg] of missingVariants) missingReviewerConfig[name] = cfg;
+              const partialConfig = phase === "brainstorm"
+                ? { ...reviewConfig, brainstormReviewers: missingReviewerConfig }
+                : phase === "plan"
+                ? { ...reviewConfig, planReviewers: missingReviewerConfig }
+                : { ...reviewConfig, codeReviewers: missingReviewerConfig };
+              orchestrator.pendingSubagentSpawns = missingVariants.length;
+              const spawnFn = phase === "brainstorm"
+                ? () => spawnBrainstormReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, partialConfig, cycle.pass)
+                : phase === "plan"
+                ? () => spawnPlanReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, partialConfig)
+                : () => spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, partialConfig, cycle.pass);
+              orchestrator.failedReviewerVariants = [];
+              spawnFn().then((result) => {
+                orchestrator.failedReviewerVariants = result.failedVariants;
+                if (result.spawned === 0) orchestrator.pendingSubagentSpawns = 0;
+                for (const id of result.agentIds ?? []) {
+                  orchestrator.spawnedAgentIds.delete(id);
+                }
+                orchestrator.pendingSubagentSpawns = 0;
+              }).catch((err: any) => {
+                orchestrator.pendingSubagentSpawns = 0;
+                console.error(`[pi-pi] spawn reviewers failed: ${err.message}`);
+              });
+              cycle.step = "await_reviewers";
+              orchestrator.active.state.step = "await_reviewers";
+              saveTask(orchestrator.active.dir, orchestrator.active.state);
+            }
           }
         } else if (cycle.step === "apply_feedback") {
           const outputs = loadPhaseReviewOutputs(orchestrator.active.dir, phase, cycle.pass);
@@ -393,6 +421,12 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
     }
 
     orchestrator.active.state.phase = next;
+    if (next !== "done") {
+      orchestrator.active.state.reviewCycle = null;
+      orchestrator.active.state.reviewPass = 0;
+      orchestrator.active.state.reviewPassByKind = {};
+      orchestrator.active.reviewPass = 0;
+    }
     if (next === "plan") {
       orchestrator.active.state.step = "spawn_planners";
     } else if (next === "implement") {
@@ -456,8 +490,16 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
         ctx.ui.notify("No active task.", "error");
         return;
       }
-      const text = await runUserGateDialog(orchestrator, ctx, "Choose next action");
-      ctx.ui.notify(text, "info");
+      orchestrator.abortAllSubagents();
+      ctx.abort();
+      await ctx.waitForIdle();
+      ctx.ui.setWorkingMessage?.("Waiting for user input…");
+      try {
+        const text = await runUserGateDialog(orchestrator, ctx, "Choose next action");
+        pi.sendUserMessage(`[PI-PI] ${text}`);
+      } finally {
+        ctx.ui.setWorkingMessage?.();
+      }
     },
   });
 
@@ -485,12 +527,15 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
       }
 
       ctx.ui.notify("Plan review opened in browser. Waiting for result...", "info");
+      ctx.ui.setWorkingMessage?.("Waiting for Plannotator plan review…");
       let result: { approved: boolean; feedback?: string };
       try {
         result = await waitForPlannotatorResult(orchestrator, requestId);
       } catch {
         ctx.ui.notify("Plan review cancelled.", "info");
         return;
+      } finally {
+        ctx.ui.setWorkingMessage?.();
       }
 
       if (result.approved) {
@@ -509,38 +554,14 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
   });
 
   pi.registerCommand("pp:review-code", {
-    description: "Open code changes in Plannotator for visual review (blocks until review completes)",
+    description: "Tell the agent to open Plannotator code reviews for modified repos",
     handler: async (_args, ctx) => {
-      const { opened, requestId } = await openPlannotator(pi, "code-review", {
-        cwd: orchestrator.cwd,
-        diffType: "branch",
-      });
-      if (!opened) {
-        ctx.ui.notify("Plannotator not responding — is the extension installed?", "error");
-        return;
-      }
-
-      ctx.ui.notify("Code review opened in browser. Waiting for result...", "info");
-      let result: { approved: boolean; feedback?: string };
-      try {
-        result = await waitForPlannotatorResult(orchestrator, requestId);
-      } catch {
-        ctx.ui.notify("Code review cancelled.", "info");
-        return;
-      }
-
-      if (result.approved) {
-        pi.sendMessage(
-          { customType: "pp-plannotator-result", content: "[Plannotator] Code review APPROVED.", display: false },
-          { deliverAs: "steer" },
-        );
-      } else {
-        const feedback = result.feedback ? `\n\nFeedback:\n${result.feedback}` : "";
-        pi.sendMessage(
-          { customType: "pp-plannotator-result", content: `[Plannotator] Code review DENIED.${feedback}`, display: false },
-          { deliverAs: "steer" },
-        );
-      }
+      pi.sendUserMessage(
+        "[PI-PI] User requested Plannotator code review. " +
+        "Call pp_specify_reviews with the list of repositories and commit ranges to review. " +
+        "Include all repos where you made changes.",
+      );
+      ctx.ui.notify("Instructed agent to open Plannotator reviews.", "info");
     },
   });
 }

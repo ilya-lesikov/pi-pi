@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, mkdirSync, readdirSync } from "fs";
+import { readFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs";
 import { join } from "path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { PiPiConfig } from "../config.js";
@@ -79,6 +79,16 @@ export async function spawnPlanners(
         try {
           const { id } = await spawnViaRpc(pi, `planner_${variant}`, "Begin planning.", {
             description: `Planner (${variant})`,
+            validateCompletion: () => {
+              if (!existsSync(outputPath) || statSync(outputPath).size === 0) {
+                return `You finished without writing your plan file. Write your plan to: ${outputPath}`;
+              }
+              const content = readFileSync(outputPath, "utf-8");
+              const validation = validatePlan(content);
+              if (!validation.ok) {
+                return `Plan validation failed:\n${validation.errors.join("\n")}\n\nFix the plan at ${outputPath}`;
+              }
+            },
           });
           agentIds.push(id);
           await waitForCompletion(pi, id);
@@ -187,6 +197,11 @@ export async function spawnPlanReviewers(
         try {
           const { id } = await spawnViaRpc(pi, `plan_reviewer_${variant}`, "Begin plan review.", {
             description: `Plan reviewer (${variant})`,
+            validateCompletion: () => {
+              if (!existsSync(outputPath) || statSync(outputPath).size === 0) {
+                return `You finished without writing your review file. Write your review to: ${outputPath}`;
+              }
+            },
           });
           agentIds.push(id);
           await waitForCompletion(pi, id);

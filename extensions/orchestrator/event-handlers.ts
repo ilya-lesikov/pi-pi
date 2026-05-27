@@ -25,6 +25,37 @@ import { spawnBrainstormReviewers } from "./phases/brainstorm.js";
 import { openPlannotator, waitForPlannotatorResult, cancelPendingPlannotatorWait } from "./plannotator.js";
 import { Orchestrator, deepReviewConfig, type ActiveTask } from "./orchestrator.js";
 import { askUser } from "../../3p/pi-ask-user/index.js";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+
+export async function detectDefaultBranch(pi: ExtensionAPI, cwd: string, config?: { diffBaseBranch?: string }): Promise<string> {
+  if (config?.diffBaseBranch) return config.diffBaseBranch;
+  try {
+    const result = await pi.exec("git", ["symbolic-ref", "refs/remotes/origin/HEAD"], { cwd, timeout: 5000 });
+    if (result.code === 0 && result.stdout.trim()) {
+      return "origin/" + result.stdout.trim().replace("refs/remotes/origin/", "");
+    }
+  } catch {}
+  try {
+    const result = await pi.exec("git", ["show-ref", "--verify", "refs/remotes/origin/main"], { cwd, timeout: 5000 });
+    if (result.code === 0) return "origin/main";
+  } catch {}
+  try {
+    const result = await pi.exec("git", ["show-ref", "--verify", "refs/remotes/origin/master"], { cwd, timeout: 5000 });
+    if (result.code === 0) return "origin/master";
+  } catch {}
+  return "main";
+}
+
+export async function detectRepoCwd(pi: ExtensionAPI, modifiedFiles: Set<string>, fallbackCwd: string): Promise<string> {
+  if (modifiedFiles.size === 0) return fallbackCwd;
+  const firstFile = [...modifiedFiles][0];
+  const dir = resolve(firstFile, "..");
+  try {
+    const result = await pi.exec("git", ["rev-parse", "--show-toplevel"], { cwd: dir, timeout: 5000 });
+    if (result.code === 0 && result.stdout.trim()) return result.stdout.trim();
+  } catch {}
+  return fallbackCwd;
+}
 
 async function selectOption(ctx: any, question: string, options: string[]): Promise<string | undefined> {
   const result = await askUser(ctx, {
@@ -106,50 +137,54 @@ async function enterReviewCycle(orchestrator: Orchestrator, ctx: any, kind: "aut
     if (phase === "brainstorm") {
       orchestrator.active.state.reviewCycle = null;
       saveTask(orchestrator.active.dir, orchestrator.active.state);
-      return "Plannotator review is only available for plan and implement phases.";
+      return runUserGateDialogInner(orchestrator, ctx, "Plannotator is only available for plan and implement phases. Choose another option.");
     }
-    const isPlan = phase === "plan";
-    let payload: Record<string, unknown>;
-    if (isPlan) {
+    if (phase === "plan") {
       const planContent = getLatestSynthesizedPlan(orchestrator.active.dir);
       if (!planContent) {
         orchestrator.active.state.reviewCycle = null;
         saveTask(orchestrator.active.dir, orchestrator.active.state);
-        return "No synthesized plan found. Write the plan first, then try again.";
+        return runUserGateDialogInner(orchestrator, ctx, "No synthesized plan found. Choose another option.");
       }
-      payload = { planContent, planFilePath: join(orchestrator.active.dir, "plans") };
-    } else {
-      payload = { cwd: orchestrator.cwd, diffType: "branch" };
+      const payload = { planContent, planFilePath: join(orchestrator.active.dir, "plans") };
+
+      const { opened, requestId } = await openPlannotator(pi, "plan-review", payload);
+      if (!opened) {
+        orchestrator.active.state.reviewCycle = null;
+        saveTask(orchestrator.active.dir, orchestrator.active.state);
+        return runUserGateDialogInner(orchestrator, ctx, "Plannotator is not available. Choose another option.");
+      }
+
+      let result: { approved: boolean; feedback?: string };
+      ctx.ui?.setWorkingMessage?.("Waiting for Plannotator plan review…");
+      try {
+        result = await waitForPlannotatorResult(orchestrator, requestId);
+      } catch {
+        orchestrator.active.state.reviewCycle = null;
+        saveTask(orchestrator.active.dir, orchestrator.active.state);
+        return runUserGateDialogInner(orchestrator, ctx, "Plannotator review cancelled. Choose another option.");
+      } finally {
+        ctx.ui?.setWorkingMessage?.();
+      }
+      orchestrator.active.state.reviewCycle = null;
+      if (result.approved) {
+        orchestrator.active.state.reviewPass += 1;
+        orchestrator.active.reviewPass = orchestrator.active.state.reviewPass;
+        orchestrator.active.state.step = "user_gate";
+        saveTask(orchestrator.active.dir, orchestrator.active.state);
+        return runUserGateDialogInner(orchestrator, ctx, "Plannotator approved the plan. Choose next action.");
+      }
+
+      orchestrator.active.state.step = "synthesize";
+      saveTask(orchestrator.active.dir, orchestrator.active.state);
+      const feedback = result.feedback ? `\n\nFeedback:\n${result.feedback}` : "";
+      return `Plannotator requested changes.${feedback}\n\nUser wants to continue. Run /pp:next when ready to advance.`;
     }
 
-    const { opened, requestId } = await openPlannotator(pi, isPlan ? "plan-review" : "code-review", payload);
-    if (!opened) {
-      orchestrator.active.state.reviewCycle = null;
-      saveTask(orchestrator.active.dir, orchestrator.active.state);
-      return "Plannotator is not available. Try another review mode.";
-    }
-
-    let result: { approved: boolean; feedback?: string };
-    try {
-      result = await waitForPlannotatorResult(orchestrator, requestId);
-    } catch {
-      orchestrator.active.state.reviewCycle = null;
-      saveTask(orchestrator.active.dir, orchestrator.active.state);
-      return "Plannotator review cancelled.";
-    }
     orchestrator.active.state.reviewCycle = null;
-    if (result.approved) {
-      orchestrator.active.state.reviewPass += 1;
-      orchestrator.active.reviewPass = orchestrator.active.state.reviewPass;
-      orchestrator.active.state.step = "user_gate";
-      saveTask(orchestrator.active.dir, orchestrator.active.state);
-      return runUserGateDialogInner(orchestrator, ctx, "Plannotator approved the plan. Choose next action.");
-    }
-
-    orchestrator.active.state.step = orchestrator.active.state.phase === "plan" ? "synthesize" : "llm_work";
+    orchestrator.active.state.step = "llm_work";
     saveTask(orchestrator.active.dir, orchestrator.active.state);
-    const feedback = result.feedback ? `\n\nFeedback:\n${result.feedback}` : "";
-    return `Plannotator requested changes.${feedback}\n\nUser wants to continue. Run /pp:next when ready to advance.`;
+    return "User wants a Plannotator code review. Call pp_specify_reviews with the list of repositories and commit ranges to review. Include all repos where you made changes.";
   }
 
   const phase = orchestrator.active.state.phase;
@@ -164,7 +199,7 @@ async function enterReviewCycle(orchestrator: Orchestrator, ctx: any, kind: "aut
     orchestrator.active.state.reviewCycle = null;
     saveTask(orchestrator.active.dir, orchestrator.active.state);
     const label = phase === "brainstorm" ? "brainstorm" : phase === "plan" ? "plan" : "code";
-    return `No ${label} reviewers enabled. Choose another review mode or review manually.`;
+    return runUserGateDialogInner(orchestrator, ctx, `No ${label} reviewers enabled. Choose another option.`);
   }
 
   orchestrator.reviewTransitionToken = -1;
@@ -351,6 +386,77 @@ async function runUserGateDialogInner(orchestrator: Orchestrator, ctx: any, summ
 function registerOrchestratorTools(orchestrator: Orchestrator): void {
   registerPhaseCompleteTool(orchestrator);
   registerCommitTool(orchestrator);
+  registerSpecifyReviewsTool(orchestrator);
+}
+
+function openCodeReviewDirect(
+  pi: ExtensionAPI,
+  payload: Record<string, unknown>,
+): Promise<{ approved: boolean; feedback?: string } | { error: string }> {
+  return new Promise((resolve) => {
+    pi.events.emit("plannotator:request", {
+      requestId: crypto.randomUUID(),
+      action: "code-review",
+      payload,
+      respond: (response: any) => {
+        if (response.status === "handled") {
+          resolve({ approved: !!response.result?.approved, feedback: response.result?.feedback });
+        } else {
+          resolve({ error: response.error || "Plannotator not available" });
+        }
+      },
+    });
+  });
+}
+
+function registerSpecifyReviewsTool(orchestrator: Orchestrator): void {
+  const pi = orchestrator.pi;
+
+  pi.registerTool({
+    name: "pp_specify_reviews",
+    label: "pi-pi",
+    description:
+      "Specify which repositories and commit ranges to open in Plannotator for code review. " +
+      "Called when the user requests a Plannotator code review. " +
+      "Plannotator will open sequentially for each entry. Results are returned after all reviews complete.",
+    parameters: Type.Object({
+      reviews: Type.Array(Type.Object({
+        cwd: Type.String({ description: "Absolute path to the git repository" }),
+        range: Type.String({ description: "Git commit range, e.g. 'origin/main..HEAD', 'abc123..def456', 'HEAD~3..HEAD'" }),
+      })),
+    }),
+    async execute(_toolCallId, params: any, _signal, _onUpdate, ctx) {
+      if (!params.reviews || params.reviews.length === 0) {
+        return { content: [{ type: "text" as const, text: "No reviews specified." }], isError: true as const, details: {} };
+      }
+
+      const results: string[] = [];
+      for (const review of params.reviews) {
+        ctx.ui?.setWorkingMessage?.(`Waiting for Plannotator review: ${review.range}…`);
+        const result = await openCodeReviewDirect(pi, {
+          cwd: review.cwd,
+          diffType: `range:${review.range}`,
+        });
+        if ("error" in result) {
+          results.push(`${review.cwd} (${review.range}): ${result.error}`);
+        } else {
+          const status = result.approved ? "APPROVED" : "NEEDS_CHANGES";
+          const feedback = result.feedback ? `\nFeedback: ${result.feedback}` : "";
+          results.push(`${review.cwd} (${review.range}): ${status}${feedback}`);
+        }
+      }
+      ctx.ui?.setWorkingMessage?.();
+
+      const summary = results.join("\n\n");
+      ctx.ui?.setWorkingMessage?.("Waiting for user input…");
+      try {
+        const gateResult = await runUserGateDialog(orchestrator, ctx, `Plannotator review complete.\n\n${summary}`);
+        return { content: [{ type: "text" as const, text: gateResult }], details: {} };
+      } finally {
+        ctx.ui?.setWorkingMessage?.();
+      }
+    },
+  });
 }
 
 function loadPhaseReviewOutputs(taskDir: string, phase: string, pass: number): { name: string; content: string }[] {
@@ -387,6 +493,8 @@ function registerCommitTool(orchestrator: Orchestrator): void {
       const result = autoCommit(files, params.message, orchestrator.cwd);
       if (result.ok) {
         orchestrator.active.modifiedFiles.clear();
+        orchestrator.active.state.modifiedFiles = [];
+        saveTask(orchestrator.active.dir, orchestrator.active.state);
         orchestrator.commitReminderSent = false;
         return { content: [{ type: "text" as const, text: `Committed ${files.length} file(s): ${result.commitHash ?? "ok"}` }], details: {} };
       }
@@ -411,8 +519,13 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
       if (!orchestrator.active) {
         return { content: [{ type: "text" as const, text: "No active task." }], isError: true as const, details: {} };
       }
-      const text = await runUserGateDialog(orchestrator, ctx, params.summary);
-      return { content: [{ type: "text" as const, text }], details: {} };
+      ctx.ui.setWorkingMessage?.("Waiting for user approval…");
+      try {
+        const text = await runUserGateDialog(orchestrator, ctx, params.summary);
+        return { content: [{ type: "text" as const, text }], details: {} };
+      } finally {
+        ctx.ui.setWorkingMessage?.();
+      }
     },
   });
 }
@@ -469,10 +582,14 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
         orchestrator.staleAgentTimer = null;
         return;
       }
+      const mgr = (globalThis as any)[Symbol.for("pi-subagents:manager")];
       const now = Date.now();
       const staleMs = orchestrator.config.timeouts.agentStale;
       for (const [id, spawnTime] of orchestrator.agentSpawnTimes) {
-        if (now - spawnTime > staleMs) {
+        const record = mgr?.getRecord?.(id);
+        if (record?.status === "running" || record?.status === "queued") continue;
+        const lastActivity = orchestrator.agentLifecycle.get(id)?.lastEventAt ?? spawnTime;
+        if (now - lastActivity > staleMs) {
           const desc = orchestrator.agentDescriptions.get(id) || id;
           pi.events.emit("subagents:rpc:stop", { requestId: crypto.randomUUID(), agentId: id });
           orchestrator.spawnedAgentIds.delete(id);
@@ -979,6 +1096,17 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       if (orchestrator.active.state.phase !== "implement") return;
 
       orchestrator.active.modifiedFiles.add(filePath);
+      orchestrator.active.state.modifiedFiles = [...orchestrator.active.modifiedFiles];
+      if (!orchestrator.active.state.repoCwd) {
+        const dir = resolve(filePath, "..");
+        try {
+          const result = await pi.exec("git", ["rev-parse", "--show-toplevel"], { cwd: dir, timeout: 5000 });
+          if (result.code === 0 && result.stdout.trim()) {
+            orchestrator.active.state.repoCwd = result.stdout.trim();
+          }
+        } catch {}
+      }
+      try { saveTask(orchestrator.active.dir, orchestrator.active.state); } catch {}
 
       const afterEditResults = runAfterEdit(filePath, orchestrator.config, orchestrator.cwd);
       const failures = afterEditResults.filter((r) => !r.ok);

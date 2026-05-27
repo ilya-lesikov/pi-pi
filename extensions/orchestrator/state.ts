@@ -16,6 +16,8 @@ export interface TaskState {
   reviewCycle: { kind: string; step: string; pass: number } | null;
   reviewPass: number;
   reviewPassByKind?: Record<string, number>;
+  modifiedFiles?: string[];
+  repoCwd?: string;
   from: string | null;
   description: string;
   startedAt: string;

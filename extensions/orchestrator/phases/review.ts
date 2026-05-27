@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, mkdirSync, readdirSync } from "fs";
+import { readFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs";
 import { join } from "path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { PiPiConfig } from "../config.js";
@@ -132,6 +132,11 @@ export async function spawnCodeReviewers(
         try {
           const { id } = await spawnViaRpc(pi, `code_reviewer_${variant}`, "Begin code review.", {
             description: `Code reviewer (${variant})`,
+            validateCompletion: () => {
+              if (!existsSync(outputPath) || statSync(outputPath).size === 0) {
+                return `You finished without writing your review file. Write your review to: ${outputPath}`;
+              }
+            },
           });
           agentIds.push(id);
           await waitForCompletion(pi, id);

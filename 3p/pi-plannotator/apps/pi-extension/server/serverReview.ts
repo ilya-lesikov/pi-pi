@@ -184,7 +184,7 @@ export async function startReviewServer(options: {
 				display: getDisplayRepo(prMeta),
 				branch: `${getMRLabel(prMeta)} ${getMRNumberLabel(prMeta)}`,
 			}
-		: getRepoInfo();
+		: getRepoInfo(options.gitContext?.cwd);
 	const editorAnnotations = createEditorAnnotationHandler();
 	const externalAnnotations = createExternalAnnotationHandler("review");
 

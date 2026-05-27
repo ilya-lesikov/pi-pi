@@ -14,6 +14,7 @@ export type DiffType =
   | "last-commit"
   | "branch"
   | "merge-base"
+  | `range:${string}`
   | `worktree:${string}`
   | "p4-default"
   | `p4-changelist:${string}`;
@@ -149,8 +150,8 @@ export async function getGitContext(
     { id: "last-commit", label: "Last commit" },
   ];
 
+  diffOptions.push({ id: "branch", label: `vs ${defaultBranch}` });
   if (currentBranch !== defaultBranch) {
-    diffOptions.push({ id: "branch", label: `vs ${defaultBranch}` });
     diffOptions.push({ id: "merge-base", label: `Current PR Diff` });
   }
 
@@ -409,9 +410,26 @@ export async function runGitDiff(
         break;
       }
 
-      default:
+      default: {
+        if (effectiveDiffType.startsWith("range:")) {
+          const range = effectiveDiffType.slice("range:".length);
+          const rangeArgs = [
+            "diff",
+            "--no-ext-diff",
+            range,
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+          ];
+          const rangeDiff = assertGitSuccess(
+            await runtime.runGit(rangeArgs, { cwd }),
+            rangeArgs,
+          );
+          patch = rangeDiff.stdout;
+          label = `Commits ${range}`;
+          break;
+        }
         return { patch: "", label: "Unknown diff type" };
-    }
+      }
   } catch (error) {
     const raw = error instanceof Error ? error.message : String(error);
     // Git dumps its entire --help output on some failures; keep only the
@@ -506,8 +524,19 @@ export async function getFileContentsForDiff(
         newContent: await gitShow("HEAD", filePath),
       };
     }
-    default:
+    default: {
+      if (effectiveDiffType.startsWith("range:")) {
+        const range = effectiveDiffType.slice("range:".length);
+        const parts = range.includes("...") ? range.split("...") : range.split("..");
+        const from = parts[0] || "HEAD~1";
+        const to = parts[1] || "HEAD";
+        return {
+          oldContent: await gitShow(from, oldFilePath),
+          newContent: await gitShow(to, filePath),
+        };
+      }
       return { oldContent: null, newContent: null };
+    }
   }
 }
 

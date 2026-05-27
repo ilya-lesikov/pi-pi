@@ -54,7 +54,13 @@ export function spawnViaRpc(
   pi: ExtensionAPI,
   agentType: string,
   prompt: string,
-  options: { description: string; maxTurns?: number; spawnTimeout?: number },
+  options: {
+    description: string;
+    maxTurns?: number;
+    spawnTimeout?: number;
+    validateCompletion?: () => string | undefined;
+    maxValidationRetries?: number;
+  },
 ): Promise<{ id: string }> {
   const timeout = options.spawnTimeout ?? 30000;
   return new Promise((resolve, reject) => {
@@ -80,6 +86,8 @@ export function spawnViaRpc(
         description: options.description,
         run_in_background: true,
         maxTurns: options.maxTurns,
+        validateCompletion: options.validateCompletion,
+        maxValidationRetries: options.maxValidationRetries,
       },
     });
 
@@ -93,12 +101,10 @@ export function spawnViaRpc(
 export function waitForCompletion(
   pi: ExtensionAPI,
   agentId: string,
-  completionTimeout?: number,
 ): Promise<{ result: string; status: string }> {
-  const timeout = completionTimeout ?? 600000;
   return new Promise((resolve, reject) => {
     const cleanup = () => {
-      clearTimeout(timer);
+      clearInterval(checkTimer);
       unsubCompleted();
       unsubFailed();
     };
@@ -117,11 +123,14 @@ export function waitForCompletion(
       }
     });
 
-    const timer = setTimeout(() => {
-      unsubCompleted();
-      unsubFailed();
-      reject(new Error(`agent ${agentId} timed out after ${timeout}ms`));
-    }, timeout);
+    const checkTimer = setInterval(() => {
+      const mgr = (globalThis as any)[Symbol.for("pi-subagents:manager")];
+      const record = mgr?.getRecord?.(agentId);
+      if (!record) {
+        cleanup();
+        reject(new Error(`agent ${agentId} not found in manager`));
+      }
+    }, 30000);
   });
 }
 

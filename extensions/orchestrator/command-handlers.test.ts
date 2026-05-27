@@ -125,7 +125,7 @@ describe("pp:next user gate", () => {
     await ppNext!.handler(undefined, ctx);
 
     expect(runUserGateDialog).toHaveBeenCalledOnce();
-    expect(ctx.ui.notify).toHaveBeenCalledWith("User wants to continue. Run /pp:next when ready to advance.", "info");
+    expect(pi.sendUserMessage).toHaveBeenCalledWith("[PI-PI] User wants to continue. Run /pp:next when ready to advance.");
   });
 
   it("returns error when no active task", async () => {

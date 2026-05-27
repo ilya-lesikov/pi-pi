@@ -20,7 +20,7 @@ export function openPlannotator(
     });
     setTimeout(() => {
       if (!handled) resolve({ opened: false, requestId });
-    }, 5000);
+    }, 30000);
   });
 }
 

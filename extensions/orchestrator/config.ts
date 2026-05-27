@@ -52,6 +52,7 @@ export interface PiPiConfig {
   };
   timeouts: TimeoutConfig;
   autoCommit: boolean;
+  diffBaseBranch?: string;
 }
 
 const DEFAULT_CONFIG: PiPiConfig = {
