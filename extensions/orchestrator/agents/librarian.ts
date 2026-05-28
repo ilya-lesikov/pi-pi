@@ -8,7 +8,7 @@ export function createLibrarianAgent(config: PiPiConfig) {
       tools: "read, bash, grep, find, exa_search, exa_fetch",
       model: config.agents.librarian.model,
       thinking: config.agents.librarian.thinking,
-      max_turns: config.agents.librarian.maxTurns ?? 70,
+      max_turns: config.agents.librarian.maxTurns ?? 120,
       prompt_mode: "replace",
     },
     prompt: [

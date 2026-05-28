@@ -18,7 +18,7 @@ export function createPlanReviewerAgent(
       tools: `read, grep, find, bash, write, lsp, ast_search, ${ALL_CBM_TOOLS}, ${EXA_TOOLS}`,
       model: variantConfig.model,
       thinking: variantConfig.thinking,
-      max_turns: variantConfig.maxTurns ?? 70,
+      max_turns: variantConfig.maxTurns ?? 120,
       prompt_mode: "replace",
     },
     prompt: [

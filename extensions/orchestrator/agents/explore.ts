@@ -8,7 +8,7 @@ export function createExploreAgent(config: PiPiConfig) {
       tools: `read, bash, grep, find, ls, lsp, ast_search, ${ALL_CBM_TOOLS}, ${EXA_TOOLS}`,
       model: config.agents.explore.model,
       thinking: config.agents.explore.thinking,
-      max_turns: config.agents.explore.maxTurns ?? 100,
+      max_turns: config.agents.explore.maxTurns ?? 170,
       prompt_mode: "replace",
     },
     prompt: [
