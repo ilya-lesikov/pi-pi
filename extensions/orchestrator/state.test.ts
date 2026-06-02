@@ -296,7 +296,7 @@ describe("getActiveTask", () => {
 
     const result = getActiveTask(cwd);
 
-    expect(checkSpy).toHaveBeenCalledWith(join(taskDir, "state.json"), { stale: 600000 });
+    expect(checkSpy).toHaveBeenCalledWith(join(taskDir, "state.json"), expect.objectContaining({ stale: 600000 }));
     expect(result?.dir).toBe(taskDir);
   });
 
@@ -338,6 +338,6 @@ describe("getActiveTask", () => {
 
     getActiveTask(cwd, 1234);
 
-    expect(checkSpy).toHaveBeenCalledWith(join(taskDir, "state.json"), { stale: 1234 });
+    expect(checkSpy).toHaveBeenCalledWith(join(taskDir, "state.json"), expect.objectContaining({ stale: 1234 }));
   });
 });

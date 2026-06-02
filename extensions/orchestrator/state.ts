@@ -1,6 +1,16 @@
 import { appendFileSync, readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "fs";
 import { join, basename, resolve } from "path";
 import lockfile from "proper-lockfile";
+
+function getLockfileFs(): typeof import("fs") | undefined {
+  try {
+    const fs = require("fs");
+    fs.statSync(process.cwd());
+    return fs;
+  } catch {
+    return undefined;
+  }
+}
 import type { TimeoutConfig } from "./config.js";
 
 export type TaskType = "implement" | "debug" | "brainstorm";
@@ -123,7 +133,9 @@ export async function lockTask(taskDir: string, timeouts: TimeoutConfig): Promis
   if (!existsSync(sp)) {
     throw new Error(`Task state file not found: ${sp}`);
   }
+  const lockFs = getLockfileFs();
   const release = await lockfile.lock(sp, {
+    ...(lockFs && { fs: lockFs }),
     stale: timeouts.lockStale,
     update: timeouts.lockUpdate,
     retries: { retries: 3, minTimeout: 200, maxTimeout: 1000 },
@@ -142,7 +154,8 @@ export function getActiveTask(cwd: string, lockStale?: number): TaskInfo | null 
   const unlocked: TaskInfo[] = [];
   for (const task of tasks) {
     try {
-      if (!lockfile.checkSync(taskStatePath(task.dir), { stale })) {
+      const checkFs = getLockfileFs();
+      if (!lockfile.checkSync(taskStatePath(task.dir), { ...(checkFs && { fs: checkFs }), stale })) {
         unlocked.push(task);
       }
     } catch {
