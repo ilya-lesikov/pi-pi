@@ -75,6 +75,8 @@ function setStep(orchestrator: Orchestrator, step: string): void {
   saveTask(orchestrator.active.dir, orchestrator.active.state);
 }
 
+const SILENT_RESULT = "\0__pp_silent__";
+
 async function startImplementationFromActiveTask(orchestrator: Orchestrator, ctx: any): Promise<string> {
   const task = orchestrator.active;
   if (!task) return "No active task.";
@@ -84,6 +86,10 @@ async function startImplementationFromActiveTask(orchestrator: Orchestrator, ctx
   const sourceDescription = task.description;
 
   await orchestrator.startTask(ctx, "implement", sourceDescription, sourceDir, true);
+
+  if (orchestrator.active?.state.step === "await_planners") {
+    return SILENT_RESULT;
+  }
 
   return sourceType === "debug"
     ? "Starting implementation from debug artifacts."
@@ -236,6 +242,8 @@ function stopTask(orchestrator: Orchestrator): string {
   saveTask(orchestrator.active.dir, orchestrator.active.state);
   const desc = orchestrator.active.description;
   orchestrator.cleanupActive();
+  const taskStore = (globalThis as any)[Symbol.for("pi-tasks:store")];
+  taskStore?.clearAll?.();
   return `Task "${desc}" stopped.`;
 }
 
@@ -522,6 +530,9 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
       ctx.ui.setWorkingMessage?.("Waiting for user approval…");
       try {
         const text = await runUserGateDialog(orchestrator, ctx, params.summary);
+        if (!text || text.startsWith("\0")) {
+          return { content: [{ type: "text" as const, text: "Subagents are running. Wait for them to complete before proceeding." }], details: {} };
+        }
         return { content: [{ type: "text" as const, text }], details: {} };
       } finally {
         ctx.ui.setWorkingMessage?.();

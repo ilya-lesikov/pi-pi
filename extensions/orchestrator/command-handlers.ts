@@ -106,6 +106,10 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
       unregisterAgentDefinitions(pi);
       await orchestrator.cleanupActive();
 
+      const taskStore = (globalThis as any)[Symbol.for("pi-tasks:store")];
+      taskStore?.clearAll?.();
+      taskStore?.refreshWidget?.(ctx.ui);
+
       orchestrator.updateStatus(ctx);
       ctx.compact();
 
@@ -496,6 +500,7 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
       ctx.ui.setWorkingMessage?.("Waiting for user input…");
       try {
         const text = await runUserGateDialog(orchestrator, ctx, "Choose next action");
+        if (!text || text.startsWith("\0")) return;
         pi.sendUserMessage(`[PI-PI] ${text}`);
       } finally {
         ctx.ui.setWorkingMessage?.();
