@@ -439,6 +439,7 @@ function registerSpecifyReviewsTool(orchestrator: Orchestrator): void {
       }
 
       const results: string[] = [];
+      let hasNeedsChanges = false;
       for (const review of params.reviews) {
         ctx.ui?.setWorkingMessage?.(`Waiting for Plannotator review: ${review.range}…`);
         const result = await openCodeReviewDirect(pi, {
@@ -449,6 +450,7 @@ function registerSpecifyReviewsTool(orchestrator: Orchestrator): void {
           results.push(`${review.cwd} (${review.range}): ${result.error}`);
         } else {
           const status = result.approved ? "APPROVED" : "NEEDS_CHANGES";
+          if (!result.approved) hasNeedsChanges = true;
           const feedback = result.feedback ? `\nFeedback: ${result.feedback}` : "";
           results.push(`${review.cwd} (${review.range}): ${status}${feedback}`);
         }
@@ -456,6 +458,18 @@ function registerSpecifyReviewsTool(orchestrator: Orchestrator): void {
       ctx.ui?.setWorkingMessage?.();
 
       const summary = results.join("\n\n");
+
+      if (hasNeedsChanges) {
+        if (orchestrator.active) {
+          orchestrator.active.state.step = "llm_work";
+          saveTask(orchestrator.active.dir, orchestrator.active.state);
+        }
+        return {
+          content: [{ type: "text" as const, text: `Plannotator review complete.\n\n${summary}\n\nFix the issues noted above, then call pp_phase_complete when done.` }],
+          details: {},
+        };
+      }
+
       ctx.ui?.setWorkingMessage?.("Waiting for user input…");
       try {
         const gateResult = await runUserGateDialog(orchestrator, ctx, `Plannotator review complete.\n\n${summary}`);
