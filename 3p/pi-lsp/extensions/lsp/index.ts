@@ -18,6 +18,7 @@ import type { ResolvedServerConfig } from './types';
 
 export default function lspExtension(pi: ExtensionAPI) {
   const subagentSessionKey = Symbol.for('pi-pi:subagent-session');
+  const lspApiKey = Symbol.for('pi-lsp:api');
   let rootPath = '';
   let config: LoadedConfig | null = null;
   const clients = new Map<string, LspClient>();
@@ -188,4 +189,43 @@ export default function lspExtension(pi: ExtensionAPI) {
       ctx.ui.notify('LSP servers stopped. Will reinitialize on next tool use.', 'info');
     },
   });
+
+  (globalThis as any)[lspApiKey] = {
+    status: async (ctx: any) => {
+      rootPath = ctx.cwd;
+      const cfg = await loadConfig(ctx.cwd);
+      config = cfg;
+      refreshStatus(ctx.ui, cfg);
+      const lines: string[] = ['LSP Status:'];
+
+      if (cfg.globalDisabled) {
+        lines.push('  All servers disabled via config.');
+      } else if (cfg.servers.length === 0) {
+        lines.push('  No servers configured.');
+        lines.push('  Add servers to ~/.pi/agent/extensions/lsp/config.json or .pi/lsp.json');
+      } else {
+        for (const server of cfg.servers) {
+          const client = clients.get(server.name);
+          const status = client?.isInitialized ? 'running' : 'available (lazy start)';
+          const exts = server.extensions.join(', ');
+          lines.push(`  ${server.name}: ${status} — handles ${exts}`);
+        }
+      }
+
+      if (cfg.errors.length > 0) {
+        lines.push('', 'Config errors:');
+        for (const err of cfg.errors) lines.push(`  - ${err}`);
+      }
+
+      ctx.ui.notify(lines.join('\n'), 'info');
+    },
+    restart: async (ctx: any) => {
+      await shutdownAll();
+      config = null;
+      rootPath = ctx.cwd;
+      config = await loadConfig(ctx.cwd);
+      refreshStatus(ctx.ui, config);
+      ctx.ui.notify('LSP servers stopped. Will reinitialize on next tool use.', 'info');
+    },
+  };
 }

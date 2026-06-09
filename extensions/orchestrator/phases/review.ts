@@ -64,7 +64,7 @@ export function reviewSystemPrompt(taskDir: string, pass: number, manualReview =
     "# FORBIDDEN — do NOT do any of these:",
     "- Do NOT write your own code review from scratch. You are a SYNTHESIZER, not a reviewer.",
     "- Do NOT create the code-reviews/ directory yourself — the extension manages it.",
-    "- Do NOT call plannotator_submit_plan — code review is handled by the user via /pp:review-code.",
+    "- Do NOT call plannotator_submit_plan — code review is handled by the user via /pp menu.",
     "",
     "# Your job (in this order):",
     `1. Read ALL reviewer outputs from ${reviewsDir}/`,

@@ -1804,4 +1804,8 @@ ${systemPrompt}
     description: "Manage agents",
     handler: async (_args, ctx) => { await showAgentsMenu(ctx); },
   });
+
+  (globalThis as any)[Symbol.for("pi-subagents:menu")] = {
+    showMenu: async (ctx: ExtensionCommandContext) => showAgentsMenu(ctx),
+  };
 }

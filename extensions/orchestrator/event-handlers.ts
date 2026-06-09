@@ -57,7 +57,7 @@ export async function detectRepoCwd(pi: ExtensionAPI, modifiedFiles: Set<string>
   return fallbackCwd;
 }
 
-async function selectOption(ctx: any, question: string, options: string[]): Promise<string | undefined> {
+export async function selectOption(ctx: any, question: string, options: string[]): Promise<string | undefined> {
   const result = await askUser(ctx, {
     question,
     options,
@@ -110,7 +110,7 @@ function tryCompleteReviewCycle(orchestrator: Orchestrator): void {
   pi.sendUserMessage("[PI-PI] Review cycle is ready for apply_feedback. Read reviewer outputs and proceed.", { deliverAs: "followUp" });
 }
 
-async function enterReviewCycle(orchestrator: Orchestrator, ctx: any, kind: "auto" | "auto-deep" | "plannotator") {
+export async function enterReviewCycle(orchestrator: Orchestrator, ctx: any, kind: "auto" | "auto-deep" | "plannotator") {
   if (!orchestrator.active) return "No active task.";
   const pi = orchestrator.pi;
   const pass = orchestrator.active.state.reviewPass + 1;
@@ -122,14 +122,14 @@ async function enterReviewCycle(orchestrator: Orchestrator, ctx: any, kind: "aut
     if (phase === "brainstorm") {
       orchestrator.active.state.reviewCycle = null;
       saveTask(orchestrator.active.dir, orchestrator.active.state);
-      return runUserGateDialogInner(orchestrator, ctx, "Plannotator is only available for plan and implement phases. Choose another option.");
+      return "Plannotator is only available for plan and implement phases. Choose another option.";
     }
     if (phase === "plan") {
       const planContent = getLatestSynthesizedPlan(orchestrator.active.dir);
       if (!planContent) {
         orchestrator.active.state.reviewCycle = null;
         saveTask(orchestrator.active.dir, orchestrator.active.state);
-        return runUserGateDialogInner(orchestrator, ctx, "No synthesized plan found. Choose another option.");
+        return "No synthesized plan found. Choose another option.";
       }
       const payload = { planContent, planFilePath: join(orchestrator.active.dir, "plans") };
 
@@ -137,7 +137,7 @@ async function enterReviewCycle(orchestrator: Orchestrator, ctx: any, kind: "aut
       if (!opened) {
         orchestrator.active.state.reviewCycle = null;
         saveTask(orchestrator.active.dir, orchestrator.active.state);
-        return runUserGateDialogInner(orchestrator, ctx, "Plannotator is not available. Choose another option.");
+        return "Plannotator is not available. Choose another option.";
       }
 
       let result: { approved: boolean; feedback?: string };
@@ -147,7 +147,7 @@ async function enterReviewCycle(orchestrator: Orchestrator, ctx: any, kind: "aut
       } catch {
         orchestrator.active.state.reviewCycle = null;
         saveTask(orchestrator.active.dir, orchestrator.active.state);
-        return runUserGateDialogInner(orchestrator, ctx, "Plannotator review cancelled. Choose another option.");
+        return "Plannotator review cancelled. Choose another option.";
       } finally {
         ctx.ui?.setWorkingMessage?.();
       }
@@ -157,13 +157,13 @@ async function enterReviewCycle(orchestrator: Orchestrator, ctx: any, kind: "aut
         orchestrator.active.reviewPass = orchestrator.active.state.reviewPass;
         orchestrator.active.state.step = "user_gate";
         saveTask(orchestrator.active.dir, orchestrator.active.state);
-        return runUserGateDialogInner(orchestrator, ctx, "Plannotator approved the plan. Choose next action.");
+        return "Plannotator approved the plan. Choose next action.";
       }
 
       orchestrator.active.state.step = "synthesize";
       saveTask(orchestrator.active.dir, orchestrator.active.state);
       const feedback = result.feedback ? `\n\nFeedback:\n${result.feedback}` : "";
-      return `Plannotator requested changes.${feedback}\n\nUser wants to continue. Run /pp:next when ready to advance.`;
+      return `Plannotator requested changes.${feedback}\n\nUser wants to continue. Run /pp when ready to advance.`;
     }
 
     orchestrator.active.state.reviewCycle = null;
@@ -184,7 +184,7 @@ async function enterReviewCycle(orchestrator: Orchestrator, ctx: any, kind: "aut
     orchestrator.active.state.reviewCycle = null;
     saveTask(orchestrator.active.dir, orchestrator.active.state);
     const label = phase === "brainstorm" ? "brainstorm" : phase === "plan" ? "plan" : "code";
-    return runUserGateDialogInner(orchestrator, ctx, `No ${label} reviewers enabled. Choose another option.`);
+    return `No ${label} reviewers enabled. Choose another option.`;
   }
 
   orchestrator.reviewTransitionToken = -1;
@@ -214,7 +214,7 @@ async function enterReviewCycle(orchestrator: Orchestrator, ctx: any, kind: "aut
   return `Started review cycle pass ${pass} (${kind}). Awaiting reviewers.`;
 }
 
-function stopTask(orchestrator: Orchestrator): string {
+export function stopTask(orchestrator: Orchestrator): string {
   if (!orchestrator.active) return "No active task.";
   orchestrator.abortAllSubagents();
   orchestrator.active.state.phase = "done";
@@ -226,7 +226,7 @@ function stopTask(orchestrator: Orchestrator): string {
   return `Task "${desc}" stopped.`;
 }
 
-function finalizeReviewCycle(task: ActiveTask): void {
+export function finalizeReviewCycle(task: ActiveTask): void {
   if (!task.state.reviewCycle) return;
   const kind = task.state.reviewCycle.kind;
   task.state.reviewPass = task.state.reviewCycle.pass;
@@ -267,7 +267,7 @@ async function runUserGateDialogInner(orchestrator: Orchestrator, ctx: any, summ
     const autoLabel = autoCount > 0 ? `Review (pass ${autoCount + 1})` : "Review";
     const deepLabel = deepCount > 0 ? `Deep review (pass ${deepCount + 1})` : "Deep review";
 
-  const continueMessage = "User wants to continue. Run /pp:next when ready to advance.";
+  const continueMessage = "User wants to continue. Run /pp when ready to advance.";
 
   if (phase === "brainstorm" && task.type === "implement") {
     const choice = await selectOption(ctx, summary, ["Approve brainstorm", autoLabel, deepLabel, "Continue brainstorming", "Stop task"]);
@@ -512,7 +512,8 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
       }
       ctx.ui.setWorkingMessage?.("Waiting for user approval…");
       try {
-        const text = await runUserGateDialog(orchestrator, ctx, params.summary);
+        const { showActiveTaskMenu } = await import("./pp-menu.js");
+        const text = await showActiveTaskMenu(orchestrator, ctx, params.summary, "tool");
         if (!text || text.startsWith("\0")) {
           return { content: [{ type: "text" as const, text: "Subagents are running. Wait for them to complete before proceeding." }], details: {} };
         }
@@ -534,7 +535,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (data.type && lifecycle.type == null) lifecycle.type = data.type;
     if (data.description && lifecycle.description == null) lifecycle.description = data.description;
     lifecycle.phase = orchestrator.active.state.phase;
-    lifecycle.step = orchestrator.active.state.step;
+    lifecycle.step = orchestrator.active.state.step ?? undefined;
     lifecycle.lastEventAt = now;
     if (event === "created" && lifecycle.createdAt == null) lifecycle.createdAt = now;
     if (event === "started" && lifecycle.startedAt == null) lifecycle.startedAt = now;
@@ -819,7 +820,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
             orchestrator.active.state.reviewCycle = null;
             orchestrator.active.state.step = "user_gate";
             saveTask(orchestrator.active.dir, orchestrator.active.state);
-            pi.sendUserMessage("[PI-PI] Review cycle skipped. Use /pp:next to choose the next action.", { deliverAs: "followUp" });
+            pi.sendUserMessage("[PI-PI] Review cycle skipped. Use /pp to choose the next action.", { deliverAs: "followUp" });
             return;
           }
 
@@ -944,7 +945,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     const found = getActiveTask(orchestrator.cwd, orchestrator.config.timeouts.lockStale);
     if (found) {
       ctx.ui.notify(
-        `Paused task: "${taskName(found.dir)}" (${found.type}, phase: ${found.state.phase}). Run /pp:resume to continue.`,
+          `Paused task: "${taskName(found.dir)}" (${found.type}, phase: ${found.state.phase}). Run /pp and choose Resume to continue.`,
         "info",
       );
     }
