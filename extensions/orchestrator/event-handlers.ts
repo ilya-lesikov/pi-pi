@@ -510,6 +510,14 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
       if (!orchestrator.active) {
         return { content: [{ type: "text" as const, text: "No active task." }], isError: true as const, details: {} };
       }
+      const step = orchestrator.active.state.step;
+      if (step === "await_planners" || step === "await_reviewers") {
+        return { content: [{ type: "text" as const, text: "Subagents are still running. Wait for them to complete before calling pp_phase_complete." }], isError: true as const, details: {} };
+      }
+      if (orchestrator.spawnedAgentIds.size > 0 || orchestrator.pendingSubagentSpawns > 0) {
+        const count = orchestrator.spawnedAgentIds.size + orchestrator.pendingSubagentSpawns;
+        return { content: [{ type: "text" as const, text: `${count} subagent(s) still running. Wait for them to complete before calling pp_phase_complete.` }], isError: true as const, details: {} };
+      }
       ctx.ui.setWorkingMessage?.("Waiting for user approval…");
       try {
         const { showActiveTaskMenu } = await import("./pp-menu.js");
