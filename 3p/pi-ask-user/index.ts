@@ -1497,15 +1497,7 @@ export default function(pi: ExtensionAPI) {
                      done,
                   );
                },
-                {
-                   overlay: true,
-                   overlayOptions: {
-                      anchor: "bottom-center",
-                      width: ASK_OVERLAY_WIDTH,
-                      minWidth: ASK_OVERLAY_MIN_WIDTH,
-                      maxHeight: "85%",
-                   },
-                },
+                {},
             );
 
             if (customResult !== undefined) {
