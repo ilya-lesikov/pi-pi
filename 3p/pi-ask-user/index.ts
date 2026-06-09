@@ -667,7 +667,7 @@ class WrappedSingleSelectList implements Component {
             if (selected.description?.trim()) {
                md += `${selected.description}\n`;
             } else {
-               md += "*No additional details provided for this option.*\n";
+               md += "";
             }
             md += `\n---\n\nPress \`Enter\` to select this option.\n`;
             if (this.searchQuery) {
