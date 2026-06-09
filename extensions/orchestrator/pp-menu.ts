@@ -359,7 +359,11 @@ async function showSubagentsMenu(ctx: any): Promise<void> {
 
 async function showLspMenu(ctx: any): Promise<typeof BACK> {
   while (true) {
-    const choice = await selectOption(ctx, "LSP", ["Status", "Restart", "Back"]);
+    const choice = await selectOption(ctx, "LSP", [
+      { title: "Status", description: "Show detected language servers and their state" },
+      { title: "Restart", description: "Stop all servers. They reinitialize on next use" },
+      { title: "Back", description: "Return to the previous menu" },
+    ]);
     if (!choice || choice === "Back") return BACK;
 
     const api = (globalThis as any)[Symbol.for("pi-lsp:api")] as {
@@ -463,7 +467,7 @@ async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise
         "Current status",
       );
     }
-    options.push("Back");
+    options.push({ title: "Back", description: "Return to the previous menu" });
 
     const choice = await selectOption(ctx, "Flant AI Infrastructure", options);
     if (!choice || choice === "Back") return BACK;
@@ -518,7 +522,10 @@ async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise
 
 async function showSettingsMenu(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
   while (true) {
-    const choice = await selectOption(ctx, "Settings", ["Flant AI Infrastructure", "Back"]);
+    const choice = await selectOption(ctx, "Settings", [
+      { title: "Flant AI Infrastructure", description: "Configure corporate AI model provider" },
+      { title: "Back", description: "Return to the previous menu" },
+    ]);
     if (!choice || choice === "Back") return BACK;
     await showFlantInfraMenu(orchestrator, ctx);
   }
@@ -558,7 +565,7 @@ async function showResumeMenu(
       title: resumeOptionTitle(t),
       description: resumeOptionDescription(t),
     }));
-    options.push("Back");
+    options.push({ title: "Back", description: "Return to the previous menu" });
 
     const choice = await selectOption(ctx, "Resume", options);
     if (!choice || choice === "Back") return BACK;
@@ -592,7 +599,7 @@ async function showFromMenu(orchestrator: Orchestrator, ctx: any): Promise<typeo
       title: fromOptionTitle(t),
       description: fromOptionDescription(t, orchestrator.cwd),
     }));
-    options.push("Back");
+    options.push({ title: "Back", description: "Return to the previous menu" });
 
     const choice = await selectOption(ctx, "From", options);
     if (!choice || choice === "Back") return BACK;
@@ -610,7 +617,12 @@ async function showFromMenu(orchestrator: Orchestrator, ctx: any): Promise<typeo
 
 async function showImplementMenu(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK | "started"> {
   while (true) {
-    const choice = await selectOption(ctx, "Implement", ["New", "From", "Resume", "Back"]);
+    const choice = await selectOption(ctx, "Implement", [
+      { title: "New", description: "Start a new implementation from scratch" },
+      { title: "From", description: "Continue from a completed brainstorm or debug task" },
+      { title: "Resume", description: "Resume a paused implementation" },
+      { title: "Back", description: "Return to the previous menu" },
+    ]);
     if (!choice || choice === "Back") return BACK;
 
     if (choice === "New") {
@@ -638,7 +650,11 @@ async function showTaskTypeMenu(
   inputPrompt: string,
 ): Promise<typeof BACK | "started"> {
   while (true) {
-    const choice = await selectOption(ctx, type.charAt(0).toUpperCase() + type.slice(1), ["New", "Resume", "Back"]);
+    const choice = await selectOption(ctx, type.charAt(0).toUpperCase() + type.slice(1), [
+      { title: "New", description: "Start a new session" },
+      { title: "Resume", description: "Resume a paused session" },
+      { title: "Back", description: "Return to the previous menu" },
+    ]);
     if (!choice || choice === "Back") return BACK;
 
     if (choice === "New") {
@@ -660,10 +676,10 @@ async function showNoActiveMenu(orchestrator: Orchestrator, ctx: any): Promise<s
       { title: "Brainstorm", description: "Explore and brainstorm. Then (optionally) plan and implement" },
       { title: "Implement", description: "Brainstorm, plan and implement" },
       { title: "Resume", description: "Resume a previously unfinished task" },
-      "Subagents",
-      "LSP",
-      "Settings",
-      "Close",
+      { title: "Subagents", description: "Manage running agents" },
+      { title: "LSP", description: "Language server status and controls" },
+      { title: "Settings", description: "Configure pi-pi extension" },
+      { title: "Close", description: "Close this menu" },
     ]);
     if (!choice || choice === "Close") return undefined;
 
@@ -709,8 +725,8 @@ function getReviewLabels(orchestrator: Orchestrator): { autoLabel: string; deepL
   const byKind = orchestrator.active?.state.reviewPassByKind ?? {};
   const autoCount = byKind["auto"] ?? 0;
   const deepCount = byKind["auto-deep"] ?? 0;
-  const autoLabel = autoCount > 0 ? `Review (pass ${autoCount + 1})` : "Review";
-  const deepLabel = deepCount > 0 ? `Deep review (pass ${deepCount + 1})` : "Deep review";
+  const autoLabel = autoCount > 0 ? `Auto review (pass ${autoCount + 1})` : "Auto review";
+  const deepLabel = deepCount > 0 ? `Auto deep review (pass ${deepCount + 1})` : "Auto deep review";
   return { autoLabel, deepLabel };
 }
 
@@ -751,44 +767,29 @@ export async function showActiveTaskMenu(
 
     const waiting = step === "await_planners" || step === "await_reviewers";
     const { autoLabel, deepLabel } = getReviewLabels(orchestrator);
+    const hasPlannotator = phase === "plan" || phase === "implement";
+    const canFinishPhase = (phase === "brainstorm" && task.type === "brainstorm") || phase === "debug";
 
-    const endLabel = phase === "implement" ? "Finish task" : "Abort task";
+    const opt = (title: string, description: string): OptionInput => ({ title, description });
 
-    const options = waiting
-      ? [endLabel, "Status", "Subagents", "LSP"]
-      : phase === "brainstorm" && task.type === "implement"
-      ? ["Approve brainstorm", autoLabel, deepLabel, "Continue brainstorming", endLabel, "Status", "Subagents", "LSP"]
-      : phase === "brainstorm" && task.type === "brainstorm"
-      ? ["Approve brainstorm", autoLabel, deepLabel, "Continue brainstorming", "Finish brainstorming", endLabel, "Status", "Subagents", "LSP"]
-      : phase === "debug"
-      ? ["Approve debug", autoLabel, deepLabel, "Continue debugging", "Finish debugging", endLabel, "Status", "Subagents", "LSP"]
-      : phase === "plan"
-      ? [
-        "Approve plan",
-        autoLabel,
-        deepLabel,
-        "Review in Plannotator",
-        "Review on my own",
-        "Continue planning",
-        endLabel,
-        "Status",
-        "Subagents",
-        "LSP",
-      ]
-      : phase === "implement"
-      ? [
-        "Approve implementation",
-        autoLabel,
-        deepLabel,
-        "Review in Plannotator",
-        "Review on my own",
-        "Continue implementation",
-        endLabel,
-        "Status",
-        "Subagents",
-        "LSP",
-      ]
-      : [endLabel, "Status", "Subagents", "LSP"];
+    const options: OptionInput[] = [];
+    if (!waiting) {
+      options.push(opt("Approve", "Advance to the next phase"));
+      options.push(opt(autoLabel, "Run automated review with configured reviewers"));
+      options.push(opt(deepLabel, "Run automated review with higher thinking level"));
+      if (hasPlannotator) {
+        options.push(opt("Review in Plannotator", "Open visual review in browser"));
+        options.push(opt("Review on my own", "Review manually, then continue"));
+      }
+      options.push(opt("Back to prompt", "Return to the prompt and keep working"));
+      if (canFinishPhase) {
+        options.push(opt("Finish", "Complete this phase and end the task"));
+      }
+    }
+    options.push(opt("Abort", "Stop the task without completing"));
+    options.push(opt("Status", "Show current task phase, step, and timing"));
+    options.push(opt("Subagents", "Manage running agents"));
+    options.push(opt("LSP", "Language server status and controls"));
 
     const choice = await selectOption(ctx, summary, options);
     if (!choice) return mode === "tool" ? "No action selected." : "";
@@ -805,19 +806,19 @@ export async function showActiveTaskMenu(
       await showLspMenu(ctx);
       continue;
     }
-    if (choice === "Finish task" || choice === "Abort task") {
+    if (choice === "Abort" || choice === "Finish") {
       const text = await finishTask(orchestrator, ctx);
       return mode === "tool" ? text : "";
     }
 
     finalizeReviewCycle(task);
 
-    if (choice === "Approve brainstorm" || choice === "Approve debug" || choice === "Approve plan" || choice === "Approve implementation") {
+    if (choice === "Approve") {
       const result = await orchestrator.transitionToNextPhase(ctx);
       if (!result.ok) return `Transition blocked: ${result.error}`;
       if (orchestrator.phaseCompactionPending || orchestrator.taskDoneCompactionPending) return "";
-      const step = orchestrator.active?.state.step;
-      if (step === "await_planners" || step === "await_reviewers") return "";
+      const curStep = orchestrator.active?.state.step;
+      if (curStep === "await_planners" || curStep === "await_reviewers") return "";
       return "";
     }
 
@@ -829,8 +830,8 @@ export async function showActiveTaskMenu(
         continue;
       }
       const text = await enterReviewCycle(orchestrator, ctx, kind);
-      const step = orchestrator.active?.state.step;
-      if (step === "await_reviewers") return "";
+      const curStep = orchestrator.active?.state.step;
+      if (curStep === "await_reviewers") return "";
       const handled = handleReviewResult(ctx, text);
       if (handled.continueLoop) continue;
       return handled.text ?? text;
@@ -845,19 +846,13 @@ export async function showActiveTaskMenu(
       return continueMessage;
     }
 
-    if (choice === "Continue brainstorming" || choice === "Continue debugging" || choice === "Continue implementation") {
-      setStep(orchestrator, "llm_work");
+    if (choice === "Back to prompt") {
+      if (phase === "plan") {
+        setStep(orchestrator, "synthesize");
+      } else {
+        setStep(orchestrator, "llm_work");
+      }
       return continueMessage;
-    }
-
-    if (choice === "Continue planning") {
-      setStep(orchestrator, "synthesize");
-      return continueMessage;
-    }
-
-    if (choice === "Finish brainstorming" || choice === "Finish debugging") {
-      const text = await finishTask(orchestrator, ctx);
-      return mode === "tool" ? text : "";
     }
   }
 }
