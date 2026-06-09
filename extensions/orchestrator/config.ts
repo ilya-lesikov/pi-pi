@@ -211,10 +211,6 @@ export function loadConfig(cwd: string, globalConfigPath = GLOBAL_CONFIG_PATH): 
   const globalConfig = loadJsonFile(globalConfigPath);
   const projectConfig = loadJsonFile(projectConfigPath);
 
-  if (!projectConfig && !globalConfig) {
-    writeFileSync(projectConfigPath, JSON.stringify(DEFAULT_CONFIG, null, 2) + "\n", "utf-8");
-  }
-
   let merged = { ...DEFAULT_CONFIG } as Record<string, any>;
 
   const { getFlantGeneratedConfig } = REQUIRE("./flant-infra.js") as {
