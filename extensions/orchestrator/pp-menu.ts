@@ -651,47 +651,25 @@ export async function showActiveTaskMenu(
 
     finalizeReviewCycle(task);
 
-    if (choice === "Approve brainstorm") {
+    if (choice === "Approve brainstorm" || choice === "Approve debug" || choice === "Approve plan" || choice === "Approve implementation") {
       const result = await orchestrator.transitionToNextPhase(ctx);
-      return result.ok ? "Brainstorm approved. Transitioned to plan." : `Transition blocked: ${result.error}`;
-    }
-    if (choice === "Approve debug") {
-      const result = await orchestrator.transitionToNextPhase(ctx);
-      return result.ok ? "Debug approved. Transitioned to plan." : `Transition blocked: ${result.error}`;
-    }
-    if (choice === "Approve plan") {
-      const result = await orchestrator.transitionToNextPhase(ctx);
-      return result.ok ? "Plan approved. Transitioned to implement." : `Transition blocked: ${result.error}`;
-    }
-    if (choice === "Approve implementation") {
-      const result = await orchestrator.transitionToNextPhase(ctx);
-      return result.ok ? "Implementation approved. Task completed." : `Transition blocked: ${result.error}`;
+      if (!result.ok) return `Transition blocked: ${result.error}`;
+      const step = orchestrator.active?.state.step;
+      if (step === "await_planners" || step === "await_reviewers") return "";
+      if (choice === "Approve implementation") return "Implementation approved. Task completed.";
+      return "";
     }
 
-    if (choice === autoLabel) {
-      if (!hasEnabledReviewers(orchestrator, "auto")) {
-        ctx.ui.notify(`No ${phase === "brainstorm" ? "brainstorm" : phase === "plan" ? "plan" : "code"} reviewers enabled.`, "info");
+    if (choice === autoLabel || choice === deepLabel || choice === "Review in Plannotator") {
+      const kind = choice === autoLabel ? "auto" as const : choice === deepLabel ? "auto-deep" as const : "plannotator" as const;
+      if (kind !== "plannotator" && !hasEnabledReviewers(orchestrator, kind)) {
+        const label = phase === "brainstorm" ? "brainstorm" : phase === "plan" ? "plan" : "code";
+        ctx.ui.notify(`No ${label} reviewers enabled.`, "info");
         continue;
       }
-      const text = await enterReviewCycle(orchestrator, ctx, "auto");
-      const handled = handleReviewResult(ctx, text);
-      if (handled.continueLoop) continue;
-      return handled.text ?? text;
-    }
-
-    if (choice === deepLabel) {
-      if (!hasEnabledReviewers(orchestrator, "auto-deep")) {
-        ctx.ui.notify(`No ${phase === "brainstorm" ? "brainstorm" : phase === "plan" ? "plan" : "code"} reviewers enabled.`, "info");
-        continue;
-      }
-      const text = await enterReviewCycle(orchestrator, ctx, "auto-deep");
-      const handled = handleReviewResult(ctx, text);
-      if (handled.continueLoop) continue;
-      return handled.text ?? text;
-    }
-
-    if (choice === "Review in Plannotator") {
-      const text = await enterReviewCycle(orchestrator, ctx, "plannotator");
+      const text = await enterReviewCycle(orchestrator, ctx, kind);
+      const step = orchestrator.active?.state.step;
+      if (step === "await_reviewers") return "";
       const handled = handleReviewResult(ctx, text);
       if (handled.continueLoop) continue;
       return handled.text ?? text;
