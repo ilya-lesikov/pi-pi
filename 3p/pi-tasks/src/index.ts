@@ -85,6 +85,7 @@ export default function (pi: ExtensionAPI) {
     list: () => store.list(),
     get: (id: string) => store.get(id),
     delete: (id: string) => store.update(id, { status: "deleted" }),
+    clearAll: () => { store.clearAll(); widget.update(); },
     refreshWidget: (uiCtx?: any) => {
       if (uiCtx) widget.setUICtx(uiCtx as UICtx);
       widget.update();
