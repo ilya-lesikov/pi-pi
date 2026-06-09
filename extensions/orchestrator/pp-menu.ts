@@ -815,9 +815,9 @@ export async function showActiveTaskMenu(
     if (choice === "Approve brainstorm" || choice === "Approve debug" || choice === "Approve plan" || choice === "Approve implementation") {
       const result = await orchestrator.transitionToNextPhase(ctx);
       if (!result.ok) return `Transition blocked: ${result.error}`;
+      if (orchestrator.phaseCompactionPending || orchestrator.taskDoneCompactionPending) return "";
       const step = orchestrator.active?.state.step;
       if (step === "await_planners" || step === "await_reviewers") return "";
-      if (choice === "Approve implementation") return "Implementation approved. Task completed.";
       return "";
     }
 

@@ -7,7 +7,7 @@
   ],
   "license": "Apache-2.0",
   "scripts": {
-    "postinstall": "bash 3p/pi-plannotator/apps/pi-extension/vendor.sh",
+    "postinstall": "bash scripts/postinstall.sh",
     "test": "vitest run --exclude '3p/**'",
     "test:watch": "vitest --exclude '3p/**'"
   },
