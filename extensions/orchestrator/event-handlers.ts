@@ -1216,6 +1216,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     const phase = orchestrator.active.state.phase;
 
     const msg = event.message as any;
+    if (msg?.stopReason === "aborted") return;
     if (msg?.stopReason === "error") {
       const errorMsg = msg.errorMessage || "unknown error";
       console.error(`[pi-pi] Turn ended with error: ${errorMsg}`);
