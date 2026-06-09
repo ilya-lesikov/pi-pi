@@ -1330,7 +1330,22 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     const hasToolResults = event.toolResults && event.toolResults.length > 0;
     const turnWasEmpty = !hasText && !hasToolCalls && !hasToolResults;
 
-    if (!turnWasEmpty) return;
+    if (!turnWasEmpty) {
+      if (hasText && !hasToolCalls) {
+        const step = orchestrator.active.state.step;
+        if (step !== "await_planners" && step !== "await_reviewers") {
+          pi.sendMessage(
+            {
+              customType: "pp-phase-complete-reminder",
+              content: `[PI-PI] You stopped without calling pp_phase_complete. If you are done with the ${phase} phase, call pp_phase_complete now. If not, continue working.`,
+              display: false,
+            },
+            { deliverAs: "followUp" },
+          );
+        }
+      }
+      return;
+    }
     if (orchestrator.nudgeHalted) return;
     if (orchestrator.spawnedAgentIds.size > 0 || orchestrator.pendingSubagentSpawns > 0) return;
 
