@@ -752,14 +752,16 @@ export async function showActiveTaskMenu(
     const waiting = step === "await_planners" || step === "await_reviewers";
     const { autoLabel, deepLabel } = getReviewLabels(orchestrator);
 
+    const endLabel = phase === "implement" ? "Finish task" : "Abort task";
+
     const options = waiting
-      ? ["Status", "Subagents", "LSP", "Finish"]
+      ? [endLabel, "Status", "Subagents", "LSP"]
       : phase === "brainstorm" && task.type === "implement"
-      ? ["Approve brainstorm", autoLabel, deepLabel, "Continue brainstorming", "Status", "Subagents", "LSP", "Finish"]
+      ? ["Approve brainstorm", autoLabel, deepLabel, "Continue brainstorming", endLabel, "Status", "Subagents", "LSP"]
       : phase === "brainstorm" && task.type === "brainstorm"
-      ? ["Approve brainstorm", autoLabel, deepLabel, "Continue brainstorming", "Finish brainstorming", "Status", "Subagents", "LSP", "Finish"]
+      ? ["Approve brainstorm", autoLabel, deepLabel, "Continue brainstorming", "Finish brainstorming", endLabel, "Status", "Subagents", "LSP"]
       : phase === "debug"
-      ? ["Approve debug", autoLabel, deepLabel, "Continue debugging", "Finish debugging", "Status", "Subagents", "LSP", "Finish"]
+      ? ["Approve debug", autoLabel, deepLabel, "Continue debugging", "Finish debugging", endLabel, "Status", "Subagents", "LSP"]
       : phase === "plan"
       ? [
         "Approve plan",
@@ -768,10 +770,10 @@ export async function showActiveTaskMenu(
         "Review in Plannotator",
         "Review on my own",
         "Continue planning",
+        endLabel,
         "Status",
         "Subagents",
         "LSP",
-        "Finish",
       ]
       : phase === "implement"
       ? [
@@ -781,12 +783,12 @@ export async function showActiveTaskMenu(
         "Review in Plannotator",
         "Review on my own",
         "Continue implementation",
+        endLabel,
         "Status",
         "Subagents",
         "LSP",
-        "Finish",
       ]
-      : ["Status", "Subagents", "LSP", "Finish"];
+      : [endLabel, "Status", "Subagents", "LSP"];
 
     const choice = await selectOption(ctx, summary, options);
     if (!choice) return mode === "tool" ? "No action selected." : "";
@@ -803,7 +805,7 @@ export async function showActiveTaskMenu(
       await showLspMenu(ctx);
       continue;
     }
-    if (choice === "Finish") {
+    if (choice === "Finish task" || choice === "Abort task") {
       const text = await finishTask(orchestrator, ctx);
       return mode === "tool" ? text : "";
     }
