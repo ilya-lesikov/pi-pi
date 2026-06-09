@@ -287,14 +287,14 @@ export function registerFlantProviders(
   pi.registerProvider("pp-flant-anthropic", {
     api: "anthropic-messages",
     baseUrl: "https://llm-api.flant.ru",
-    apiKey: "FLANT_API_KEY",
+    apiKey: "$FLANT_API_KEY",
     models: anthropicModels.map((m) => buildProviderModelConfig(m, metadata)),
   });
 
   pi.registerProvider("pp-flant-openai", {
     api: "openai-completions",
     baseUrl: "https://llm-api.flant.ru/v1",
-    apiKey: "FLANT_API_KEY",
+    apiKey: "$FLANT_API_KEY",
     models: openaiModels.map((m) => buildProviderModelConfig(m, metadata)),
   });
 }
