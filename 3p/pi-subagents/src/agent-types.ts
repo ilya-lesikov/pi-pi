@@ -5,7 +5,7 @@
  * User agents override defaults with the same name. Disabled agents are kept but excluded from spawning.
  */
 
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import {
   createBashTool,
   createEditTool,
@@ -14,7 +14,7 @@ import {
   createLsTool,
   createReadTool,
   createWriteTool,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import { DEFAULT_AGENTS } from "./default-agents.js";
 import type { AgentConfig } from "./types.js";
 

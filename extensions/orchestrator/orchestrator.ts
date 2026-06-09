@@ -1,6 +1,6 @@
 import { existsSync, copyFileSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from "fs";
 import { join, basename, relative } from "path";
-import type { ExtensionAPI, ExtensionContext, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { loadConfig, type PiPiConfig, type VariantConfig } from "./config.js";
 import {
   createTask,

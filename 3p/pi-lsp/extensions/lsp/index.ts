@@ -9,7 +9,7 @@
  * Any LSP server can be added via config.
  */
 
-import type { ExtensionAPI } from '@mariozechner/pi-coding-agent';
+import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 
 import { LspClient } from './client';
 import { loadConfig, scaffoldGlobalConfig, serversForExtension, type LoadedConfig } from './config';

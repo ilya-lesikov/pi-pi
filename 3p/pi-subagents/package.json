@@ -20,9 +20,9 @@
     "autonomous"
   ],
   "dependencies": {
-    "@mariozechner/pi-ai": "^0.62.0",
-    "@mariozechner/pi-coding-agent": "^0.62.0",
-    "@mariozechner/pi-tui": "^0.62.0",
+    "@earendil-works/pi-ai": "^0.75.5",
+    "@earendil-works/pi-coding-agent": "^0.75.5",
+    "@earendil-works/pi-tui": "^0.75.5",
     "@sinclair/typebox": "latest"
   },
   "scripts": {

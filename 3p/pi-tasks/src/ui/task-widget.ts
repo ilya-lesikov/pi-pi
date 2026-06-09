@@ -8,7 +8,7 @@
  *   ✳/✽ actively executing task (star spinner with activeForm text)
  */
 
-import { truncateToWidth } from "@mariozechner/pi-tui";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { TaskStore } from "../task-store.js";
 
 // ---- Types ----

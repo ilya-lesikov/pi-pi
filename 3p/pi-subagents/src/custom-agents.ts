@@ -5,7 +5,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import { parseFrontmatter } from "@mariozechner/pi-coding-agent";
+import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { BUILTIN_TOOL_NAMES } from "./agent-types.js";
 import type { AgentConfig, MemoryScope, ThinkingLevel } from "./types.js";
 

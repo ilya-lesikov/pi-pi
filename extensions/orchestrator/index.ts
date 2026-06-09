@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "fs";
 import { resolve } from "path";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Orchestrator } from "./orchestrator.js";
 import { registerCommandHandlers } from "./command-handlers.js";
 import { registerEventHandlers } from "./event-handlers.js";

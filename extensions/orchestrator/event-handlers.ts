@@ -25,7 +25,7 @@ import { spawnBrainstormReviewers } from "./phases/brainstorm.js";
 import { openPlannotator, waitForPlannotatorResult, cancelPendingPlannotatorWait } from "./plannotator.js";
 import { Orchestrator, deepReviewConfig, type ActiveTask } from "./orchestrator.js";
 import { askUser } from "../../3p/pi-ask-user/index.js";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export async function detectDefaultBranch(pi: ExtensionAPI, cwd: string, config?: { diffBaseBranch?: string }): Promise<string> {
   if (config?.diffBaseBranch) return config.diffBaseBranch;

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
 import { registerLspTool } from '../extensions/lsp/tools';
-import type { ToolDefinition } from '@mariozechner/pi-coding-agent';
+import type { ToolDefinition } from '@earendil-works/pi-coding-agent';
 
 function captureTool() {
   let tool: ToolDefinition<any, any> | null = null;

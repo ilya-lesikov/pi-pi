@@ -4,9 +4,9 @@
  * 11 operations routed to the right server by file extension.
  */
 
-import type { ExtensionAPI } from '@mariozechner/pi-coding-agent';
+import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { Type } from '@sinclair/typebox';
-import { StringEnum } from '@mariozechner/pi-ai';
+import { StringEnum } from '@earendil-works/pi-ai';
 
 import type { LspClient } from './client';
 import {

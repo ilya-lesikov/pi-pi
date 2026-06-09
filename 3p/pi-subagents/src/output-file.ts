@@ -8,7 +8,7 @@
 import { appendFileSync, chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentSession, AgentSessionEvent } from "@mariozechner/pi-coding-agent";
+import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
 /** Create the output file path, ensuring the directory exists.
  *  Mirrors Claude Code's layout: /tmp/{prefix}-{uid}/{encoded-cwd}/{sessionId}/tasks/{agentId}.output */

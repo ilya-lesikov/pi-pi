@@ -6,8 +6,8 @@
  * own settings panel style.
  */
 
-import { getSettingsListTheme } from "@mariozechner/pi-coding-agent";
-import { Container, type SettingItem, SettingsList, Spacer, Text } from "@mariozechner/pi-tui";
+import { getSettingsListTheme } from "@earendil-works/pi-coding-agent";
+import { Container, type SettingItem, SettingsList, Spacer, Text } from "@earendil-works/pi-tui";
 import { saveTasksConfig, type TasksConfig } from "../tasks-config.js";
 
 // ── Types ───────────────────────────────────────────────────────────────────

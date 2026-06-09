@@ -1,7 +1,7 @@
 import { execFile } from "child_process";
 import { existsSync } from "fs";
 import { resolve } from "path";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 
 const SG_AVAILABLE_KEY = Symbol.for("pi-pi:sg-available");

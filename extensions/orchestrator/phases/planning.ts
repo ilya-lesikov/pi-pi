@@ -1,6 +1,6 @@
 import { readFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs";
 import { join } from "path";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { PiPiConfig } from "../config.js";
 import { registerAgentDefinitions, spawnViaRpc, waitForCompletion } from "../agents/registry.js";
 import { createPlannerAgent } from "../agents/planner.js";

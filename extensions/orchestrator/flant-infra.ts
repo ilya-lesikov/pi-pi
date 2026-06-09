@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionAPI, ProviderModelConfig } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 import type { PiPiConfig } from "./config.js";
 
 export interface OpenRouterModelData {
