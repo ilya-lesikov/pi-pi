@@ -75,27 +75,6 @@ function setStep(orchestrator: Orchestrator, step: string): void {
   saveTask(orchestrator.active.dir, orchestrator.active.state);
 }
 
-const SILENT_RESULT = "\0__pp_silent__";
-
-async function startImplementationFromActiveTask(orchestrator: Orchestrator, ctx: any): Promise<string> {
-  const task = orchestrator.active;
-  if (!task) return "No active task.";
-
-  const sourceType = task.type;
-  const sourceDir = task.dir;
-  const sourceDescription = task.description;
-
-  await orchestrator.startTask(ctx, "implement", sourceDescription, sourceDir, true);
-
-  if (orchestrator.active?.state.step === "await_planners") {
-    return SILENT_RESULT;
-  }
-
-  return sourceType === "debug"
-    ? "Starting implementation from debug artifacts."
-    : "Starting implementation from brainstorm artifacts.";
-}
-
 function tryCompleteReviewCycle(orchestrator: Orchestrator): void {
   if (
     !orchestrator.active?.state.reviewCycle ||
@@ -305,39 +284,29 @@ async function runUserGateDialogInner(orchestrator: Orchestrator, ctx: any, summ
   }
 
   if (phase === "brainstorm" && task.type === "brainstorm") {
-    const canStartImpl = existsSync(join(task.dir, "USER_REQUEST.md")) && existsSync(join(task.dir, "RESEARCH.md"));
-    const options: string[] = [];
-    if (canStartImpl) options.push("Start implementation");
-    options.push(autoLabel, deepLabel, "Continue brainstorming", "Finish brainstorming", "Stop task");
-    const choice = await selectOption(ctx, summary, options);
+    const choice = await selectOption(ctx, summary, ["Approve brainstorm", autoLabel, deepLabel, "Continue brainstorming", "Finish brainstorming", "Stop task"]);
     finalizeReviewCycle(task);
-    if (choice === "Start implementation") {
-      return startImplementationFromActiveTask(orchestrator, ctx);
+    if (choice === "Approve brainstorm") {
+      const result = await orchestrator.transitionToNextPhase(ctx);
+      return result.ok ? "Brainstorm approved. Transitioned to plan." : `Transition blocked: ${result.error}`;
     }
     if (choice === autoLabel) return enterReviewCycle(orchestrator, ctx, "auto");
     if (choice === deepLabel) return enterReviewCycle(orchestrator, ctx, "auto-deep");
-    if (choice === "Finish brainstorming") {
-      const result = await orchestrator.transitionToNextPhase(ctx);
-      return result.ok ? "Brainstorm finished." : `Transition blocked: ${result.error}`;
-    }
-    if (choice === "Stop task") return stopTask(orchestrator);
+    if (choice === "Finish brainstorming" || choice === "Stop task") return stopTask(orchestrator);
     setStep(orchestrator, "llm_work");
     return continueMessage;
   }
 
   if (phase === "debug") {
-    const choice = await selectOption(ctx, summary, ["Implement a fix", autoLabel, deepLabel, "Continue debugging", "Finish debugging", "Stop task"]);
+    const choice = await selectOption(ctx, summary, ["Approve debug", autoLabel, deepLabel, "Continue debugging", "Finish debugging", "Stop task"]);
     finalizeReviewCycle(task);
-    if (choice === "Implement a fix") {
-      return startImplementationFromActiveTask(orchestrator, ctx);
+    if (choice === "Approve debug") {
+      const result = await orchestrator.transitionToNextPhase(ctx);
+      return result.ok ? "Debug approved. Transitioned to plan." : `Transition blocked: ${result.error}`;
     }
     if (choice === autoLabel) return enterReviewCycle(orchestrator, ctx, "auto");
     if (choice === deepLabel) return enterReviewCycle(orchestrator, ctx, "auto-deep");
-    if (choice === "Finish debugging") {
-      const result = await orchestrator.transitionToNextPhase(ctx);
-      return result.ok ? "Debugging finished." : `Transition blocked: ${result.error}`;
-    }
-    if (choice === "Stop task") return stopTask(orchestrator);
+    if (choice === "Finish debugging" || choice === "Stop task") return stopTask(orchestrator);
     setStep(orchestrator, "llm_work");
     return continueMessage;
   }

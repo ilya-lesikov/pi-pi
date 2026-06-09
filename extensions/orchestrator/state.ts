@@ -16,8 +16,8 @@ import type { TimeoutConfig } from "./config.js";
 export type TaskType = "implement" | "debug" | "brainstorm";
 
 export type ImplementPhase = "brainstorm" | "plan" | "implement" | "done";
-export type DebugPhase = "debug" | "done";
-export type BrainstormPhase = "brainstorm" | "done";
+export type DebugPhase = "debug" | "plan" | "implement" | "done";
+export type BrainstormPhase = "brainstorm" | "plan" | "implement" | "done";
 export type Phase = ImplementPhase | DebugPhase | BrainstormPhase;
 
 export interface TaskState {
