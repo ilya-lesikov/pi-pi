@@ -133,7 +133,7 @@ export async function enterReviewCycle(orchestrator: Orchestrator, ctx: any, kin
       }
       const payload = { planContent, planFilePath: join(orchestrator.active.dir, "plans") };
 
-      const { opened, requestId } = await openPlannotator(pi, "plan-review", payload);
+      const { opened, reviewId } = await openPlannotator(pi, "plan-review", payload);
       if (!opened) {
         orchestrator.active.state.reviewCycle = null;
         saveTask(orchestrator.active.dir, orchestrator.active.state);
@@ -143,7 +143,7 @@ export async function enterReviewCycle(orchestrator: Orchestrator, ctx: any, kin
       let result: { approved: boolean; feedback?: string };
       ctx.ui?.setWorkingMessage?.("Waiting for Plannotator plan review…");
       try {
-        result = await waitForPlannotatorResult(orchestrator, requestId);
+        result = await waitForPlannotatorResult(orchestrator, reviewId);
       } catch {
         orchestrator.active.state.reviewCycle = null;
         saveTask(orchestrator.active.dir, orchestrator.active.state);

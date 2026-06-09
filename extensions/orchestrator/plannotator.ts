@@ -5,7 +5,7 @@ export function openPlannotator(
   pi: ExtensionAPI,
   action: string,
   payload: Record<string, unknown>,
-): Promise<{ opened: boolean; requestId: string }> {
+): Promise<{ opened: boolean; reviewId: string | null }> {
   const requestId = crypto.randomUUID();
   return new Promise((resolve) => {
     let handled = false;
@@ -15,11 +15,12 @@ export function openPlannotator(
       payload,
       respond: (response: any) => {
         handled = true;
-        resolve({ opened: response.status === "handled", requestId });
+        const reviewId = response?.result?.reviewId ?? null;
+        resolve({ opened: response.status === "handled", reviewId });
       },
     });
     setTimeout(() => {
-      if (!handled) resolve({ opened: false, requestId });
+      if (!handled) resolve({ opened: false, reviewId: null });
     }, 30000);
   });
 }
@@ -37,14 +38,14 @@ export function cancelPendingPlannotatorWait(orchestrator: Orchestrator): void {
 
 export function waitForPlannotatorResult(
   orchestrator: Orchestrator,
-  requestId: string,
+  reviewId: string | null,
 ): Promise<{ approved: boolean; feedback?: string }> {
   cancelPendingPlannotatorWait(orchestrator);
   const pi = orchestrator.pi;
   return new Promise((resolve, reject) => {
     orchestrator.plannotatorReject = reject;
     const unsub = pi.events.on("plannotator:review-result", (data: any) => {
-      if (data?.requestId && data.requestId !== requestId) return;
+      if (reviewId && data?.reviewId && data.reviewId !== reviewId) return;
       unsub();
       orchestrator.plannotatorUnsub = null;
       orchestrator.plannotatorReject = null;

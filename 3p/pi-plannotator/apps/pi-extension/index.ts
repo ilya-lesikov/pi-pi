@@ -211,6 +211,7 @@ function sendUserMessageWithCurrentSessionFallback(
 export default function plannotator(pi: ExtensionAPI): void {
 	const subagentSessionKey = Symbol.for("pi-pi:subagent-session");
 	const isSubagentSession = () => Boolean((globalThis as any)[subagentSessionKey]);
+	if (isSubagentSession()) return;
 	const currentPiSession = registerCurrentPiSession(pi);
 	let phase: Phase = "idle";
 	void registerPlannotatorEventListeners(pi);

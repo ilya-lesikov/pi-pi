@@ -7,6 +7,7 @@
   ],
   "license": "Apache-2.0",
   "scripts": {
+    "postinstall": "bash 3p/pi-plannotator/apps/pi-extension/vendor.sh",
     "test": "vitest run --exclude '3p/**'",
     "test:watch": "vitest --exclude '3p/**'"
   },
@@ -21,8 +22,13 @@
     ]
   },
   "dependencies": {
+    "@joplin/turndown-plugin-gfm": "^1.0.64",
+    "@pierre/diffs": "^1.2.0",
+    "effect": "^3.0.0",
     "minimatch": "^10.0.0",
-    "proper-lockfile": "^4.1.2"
+    "proper-lockfile": "^4.1.2",
+    "turndown": "^7.2.0",
+    "typebox": "^1.0.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
