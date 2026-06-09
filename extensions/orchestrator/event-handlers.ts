@@ -937,6 +937,14 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     }
 
     try {
+      const { setPI, initFlantOnStartup } = await import("./flant-infra.js");
+      setPI(pi);
+      await initFlantOnStartup(pi);
+    } catch (err: any) {
+      console.error(`[pi-pi] Flant infra init failed: ${err.message}`);
+    }
+
+    try {
       orchestrator.config = loadConfig(orchestrator.cwd);
     } catch (err: any) {
       console.error(`[pi-pi] Failed to load config on session start: ${err.message}`);

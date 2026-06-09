@@ -2,7 +2,7 @@ import { existsSync, readdirSync } from "fs";
 import { join, relative } from "path";
 import { askUser } from "../../3p/pi-ask-user/index.js";
 import { unregisterAgentDefinitions } from "./agents/registry.js";
-import { loadConfig } from "./config.js";
+import { loadConfig, type PiPiConfig } from "./config.js";
 import {
   loadBrainstormReviewOutputs,
   loadCodeReviewOutputs,
@@ -24,6 +24,15 @@ import {
   type TaskInfo,
   type TaskType,
 } from "./state.js";
+import {
+  clearFlantGeneratedConfig,
+  getFlantGeneratedConfig,
+  loadFlantSettings,
+  saveFlantSettings,
+  unregisterFlantProviders,
+  updateFlantInfra,
+  type FlantSettings,
+} from "./flant-infra.js";
 
 type MenuMode = "command" | "tool";
 
@@ -372,6 +381,149 @@ async function showLspMenu(ctx: any): Promise<typeof BACK> {
   }
 }
 
+function countFlantProviders(settings: FlantSettings): { anthropic: number; openai: number } {
+  const models = settings.cachedFlantModels ?? [];
+  const anthropic = models.filter((m) => m.startsWith("claude-")).length;
+  return { anthropic, openai: Math.max(0, models.length - anthropic) };
+}
+
+function collectRoleAssignments(config: Partial<PiPiConfig> | null): string[] {
+  if (!config) return [];
+  const out: string[] = [];
+  const add = (key: string, value: string | undefined) => {
+    if (typeof value === "string" && value.length > 0) out.push(`${key} = ${value}`);
+  };
+
+  add("mainModel.implement", config.mainModel?.implement?.model);
+  add("mainModel.debug", config.mainModel?.debug?.model);
+  add("mainModel.brainstorm", config.mainModel?.brainstorm?.model);
+
+  for (const [name, variant] of Object.entries(config.planners ?? {})) {
+    if (variant.enabled) add(`planners.${name}`, variant.model);
+  }
+  for (const [name, variant] of Object.entries(config.planReviewers ?? {})) {
+    if (variant.enabled) add(`planReviewers.${name}`, variant.model);
+  }
+  for (const [name, variant] of Object.entries(config.codeReviewers ?? {})) {
+    if (variant.enabled) add(`codeReviewers.${name}`, variant.model);
+  }
+  for (const [name, variant] of Object.entries(config.brainstormReviewers ?? {})) {
+    if (variant.enabled) add(`brainstormReviewers.${name}`, variant.model);
+  }
+
+  add("agents.explore", config.agents?.explore?.model);
+  add("agents.librarian", config.agents?.librarian?.model);
+  add("agents.task", config.agents?.task?.model);
+  return out;
+}
+
+function flantStatusText(settings: FlantSettings): string {
+  const providers = countFlantProviders(settings);
+  const assignments = collectRoleAssignments(getFlantGeneratedConfig());
+  const lines = [
+    `Enabled: ${settings.enabled ? "yes" : "no"}`,
+    `Auto-update: ${settings.autoUpdate ? "yes" : "no"}`,
+    `Last updated: ${settings.lastUpdated ?? "never"}`,
+    `Providers: pp-flant-anthropic (${providers.anthropic} models), pp-flant-openai (${providers.openai} models)`,
+  ];
+  if (assignments.length === 0) {
+    lines.push("Role assignments: none");
+  } else {
+    lines.push("Role assignments:");
+    for (const assignment of assignments) {
+      lines.push(`- ${assignment}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+function describeUpdateResult(result: { ok: boolean; error?: string; models?: string[] }): { text: string; kind: "info" | "warning" | "error" } {
+  if (!result.ok) {
+    return { text: `Flant update failed: ${result.error ?? "unknown error"}`, kind: "error" };
+  }
+  const models = result.models ?? [];
+  const anthropic = models.filter((m) => m.startsWith("claude-")).length;
+  const openai = Math.max(0, models.length - anthropic);
+  return {
+    text: `Flant update completed: ${models.length} models (pp-flant-anthropic: ${anthropic}, pp-flant-openai: ${openai}).`,
+    kind: "info",
+  };
+}
+
+async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
+  while (true) {
+    const settings = loadFlantSettings();
+    const enableLabel = `Enable: ${settings.enabled ? "ON" : "OFF"}`;
+    const options: OptionInput[] = [enableLabel];
+    if (settings.enabled) {
+      options.push(
+        `Auto-update on startup: ${settings.autoUpdate ? "ON" : "OFF"}`,
+        `Cache period: ${settings.cacheTTLDays} ${settings.cacheTTLDays === 1 ? "day" : "days"}`,
+        "Update now",
+        "Current status",
+      );
+    }
+    options.push("Back");
+
+    const choice = await selectOption(ctx, "Flant AI Infrastructure", options);
+    if (!choice || choice === "Back") return BACK;
+
+    if (choice === enableLabel) {
+      if (settings.enabled) {
+        const next = { ...settings, enabled: false };
+        saveFlantSettings(next);
+        unregisterFlantProviders(orchestrator.pi);
+        clearFlantGeneratedConfig();
+        ctx.ui.notify("Flant AI Infrastructure disabled.", "info");
+      } else {
+        if (!process.env.FLANT_API_KEY) {
+          ctx.ui.notify("Set FLANT_API_KEY environment variable first.", "warning");
+          continue;
+        }
+        const next = { ...settings, enabled: true };
+        saveFlantSettings(next);
+        const result = await updateFlantInfra(orchestrator.pi);
+        const message = describeUpdateResult(result);
+        ctx.ui.notify(message.text, message.kind);
+      }
+      continue;
+    }
+
+    if (choice.startsWith("Auto-update on startup:")) {
+      saveFlantSettings({ ...settings, autoUpdate: !settings.autoUpdate });
+      ctx.ui.notify(`Auto-update on startup: ${!settings.autoUpdate ? "ON" : "OFF"}`, "info");
+      continue;
+    }
+
+    if (choice.startsWith("Cache period:")) {
+      const selected = await selectOption(ctx, "Cache period", ["1 day", "3 days", "7 days", "14 days", "30 days", "Back"]);
+      if (!selected || selected === "Back") continue;
+      const days = Number(selected.split(" ")[0]);
+      if (!Number.isFinite(days) || days <= 0) continue;
+      saveFlantSettings({ ...settings, cacheTTLDays: days });
+      ctx.ui.notify(`Cache period set to ${days} ${days === 1 ? "day" : "days"}.`, "info");
+      continue;
+    }
+
+    if (choice === "Update now") {
+      const result = await updateFlantInfra(orchestrator.pi);
+      const message = describeUpdateResult(result);
+      ctx.ui.notify(message.text, message.kind);
+      continue;
+    }
+
+    ctx.ui.notify(flantStatusText(settings), "info");
+  }
+}
+
+async function showSettingsMenu(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
+  while (true) {
+    const choice = await selectOption(ctx, "Settings", ["Flant AI Infrastructure", "Back"]);
+    if (!choice || choice === "Back") return BACK;
+    await showFlantInfraMenu(orchestrator, ctx);
+  }
+}
+
 async function promptDescription(ctx: any, prompt: string, fallback: string): Promise<string | undefined> {
   const value = await ctx.ui.input(prompt);
   if (value === undefined || value === null) return undefined;
@@ -510,8 +662,10 @@ async function showNoActiveMenu(orchestrator: Orchestrator, ctx: any): Promise<s
       { title: "Resume", description: "Resume a previously unfinished task" },
       "Subagents",
       "LSP",
+      "Settings",
+      "Close",
     ]);
-    if (!choice) return undefined;
+    if (!choice || choice === "Close") return undefined;
 
     if (choice === "Debug") {
       const result = await showTaskTypeMenu(orchestrator, ctx, "debug", "Describe the task");
@@ -542,7 +696,12 @@ async function showNoActiveMenu(orchestrator: Orchestrator, ctx: any): Promise<s
       continue;
     }
 
-    await showLspMenu(ctx);
+    if (choice === "LSP") {
+      await showLspMenu(ctx);
+      continue;
+    }
+
+    await showSettingsMenu(orchestrator, ctx);
   }
 }
 
