@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
-import { createRequire } from "module";
+
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 export interface ModelConfig {
@@ -198,8 +198,6 @@ function loadJsonFile(path: string): Record<string, any> | null {
 }
 
 export const GLOBAL_CONFIG_PATH = join(getAgentDir(), "extensions", "pp", "config.json");
-const REQUIRE = createRequire(import.meta.url);
-
 export function loadConfig(cwd: string, globalConfigPath = GLOBAL_CONFIG_PATH): PiPiConfig {
   const ppDir = join(cwd, ".pp");
   const projectConfigPath = join(ppDir, "config.json");
@@ -213,10 +211,8 @@ export function loadConfig(cwd: string, globalConfigPath = GLOBAL_CONFIG_PATH): 
 
   let merged = { ...DEFAULT_CONFIG } as Record<string, any>;
 
-  const { getFlantGeneratedConfig } = REQUIRE("./flant-infra.js") as {
-    getFlantGeneratedConfig?: () => Partial<PiPiConfig> | null;
-  };
-  const flantConfig = getFlantGeneratedConfig?.();
+  const getFlantConfig = (globalThis as any)[Symbol.for("pi-pi:flant-config")] as (() => Partial<PiPiConfig> | null) | undefined;
+  const flantConfig = getFlantConfig?.();
   if (flantConfig) {
     merged = deepMerge(merged, flantConfig as Record<string, any>);
   }

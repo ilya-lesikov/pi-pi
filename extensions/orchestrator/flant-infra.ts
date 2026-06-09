@@ -399,6 +399,8 @@ export function getFlantGeneratedConfig(): Partial<PiPiConfig> | null {
   return generatedFlantConfig;
 }
 
+(globalThis as any)[Symbol.for("pi-pi:flant-config")] = getFlantGeneratedConfig;
+
 export async function updateFlantInfra(
   pi: ExtensionAPI,
 ): Promise<{ ok: boolean; error?: string; models?: string[] }> {
