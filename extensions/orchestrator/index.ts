@@ -8,6 +8,7 @@ import { registerCbmTools } from "./cbm.js";
 import { registerExaTools } from "./exa.js";
 import { registerAstSearchTool } from "./ast-search.js";
 import { validatePlan, validateArtifact } from "./validate-artifacts.js";
+import { initFlantSync } from "./flant-infra.js";
 
 const ORCHESTRATOR_KEY = Symbol.for("pi-pi:orchestrator-initialized");
 export const SUBAGENT_SESSION_KEY = Symbol.for("pi-pi:subagent-session");
@@ -19,6 +20,8 @@ export default function (pi: ExtensionAPI) {
     return;
   }
   (globalThis as any)[ORCHESTRATOR_KEY] = true;
+
+  initFlantSync(pi);
 
   const orchestrator = new Orchestrator(pi);
   registerEventHandlers(orchestrator);

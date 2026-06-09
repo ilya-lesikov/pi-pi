@@ -459,6 +459,19 @@ export async function updateFlantInfra(
   }
 }
 
+export function initFlantSync(pi: ExtensionAPI): void {
+  setPI(pi);
+  const settings = loadFlantSettings();
+  if (!settings.enabled) {
+    generatedFlantConfig = null;
+    return;
+  }
+  if (settings.cachedFlantModels && settings.cachedOpenRouterData) {
+    registerFlantProviders(pi, settings.cachedFlantModels, settings.cachedOpenRouterData);
+    generatedFlantConfig = generateFlantConfig(settings.cachedFlantModels);
+  }
+}
+
 export async function initFlantOnStartup(pi: ExtensionAPI): Promise<void> {
   setPI(pi);
   const settings = loadFlantSettings();
