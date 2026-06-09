@@ -522,8 +522,11 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
       try {
         const { showActiveTaskMenu } = await import("./pp-menu.js");
         const text = await showActiveTaskMenu(orchestrator, ctx, params.summary, "tool");
-        if (!text || text.startsWith("\0")) {
-          return { content: [{ type: "text" as const, text: "Subagents are running. Wait for them to complete before proceeding." }], details: {} };
+        if (orchestrator.phaseCompactionPending || orchestrator.taskDoneCompactionPending) {
+          return { content: [{ type: "text" as const, text: "Phase transition in progress." }], details: {} };
+        }
+        if (!text) {
+          return { content: [{ type: "text" as const, text: "No action selected." }], details: {} };
         }
         return { content: [{ type: "text" as const, text }], details: {} };
       } finally {
@@ -980,7 +983,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
 
   pi.on("before_agent_start", async (event, ctx) => {
     orchestrator.lastCtx = ctx;
-    if (orchestrator.taskDoneCompactionPending) {
+    if (orchestrator.taskDoneCompactionPending || orchestrator.phaseCompactionPending) {
       ctx.abort();
       return;
     }
