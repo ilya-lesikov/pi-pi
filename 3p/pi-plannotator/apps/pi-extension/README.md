@@ -1,6 +1,6 @@
 # Plannotator for Pi
 
-Plannotator integration for the [Pi coding agent](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent). Adds file-based plan mode with a visual browser UI for reviewing, annotating, and approving agent plans.
+Plannotator integration for the [Pi coding agent](https://github.com/earendil-works/pi). Adds file-based plan mode with a visual browser UI for reviewing, annotating, and approving agent plans.
 
 ## Install
 
@@ -190,9 +190,7 @@ During execution, the agent marks completed steps with `[DONE:n]` markers. Progr
 
 | Command | Description |
 |---------|-------------|
-| `/plannotator [path]` | Toggle plan mode. Accepts optional file path or prompts interactively |
-| `/plannotator-set-file <path>` | Change the plan file path mid-session |
-| `/plannotator-status` | Show current phase, plan file, and progress |
+| `/plannotator` | Toggle plan mode. The agent writes a markdown plan file anywhere in the working directory and submits its path |
 | `/plannotator-review` | Open code review UI for current changes |
 | `/plannotator-annotate <file>` | Open markdown file in annotation UI |
 | `/plannotator-last` | Annotate the last assistant message |
@@ -202,7 +200,6 @@ During execution, the agent marks completed steps with `[DONE:n]` markers. Progr
 | Flag | Description |
 |------|-------------|
 | `--plan` | Start in plan mode |
-| `--plan-file <path>` | Custom plan file path (default: `PLAN.md`) |
 
 ## Keyboard shortcuts
 
@@ -228,4 +225,4 @@ State persists across session restarts via Pi's `appendEntry` API.
 
 ## Requirements
 
-- [Pi](https://github.com/mariozechner/pi) >= 0.53.0
+- [Pi](https://github.com/earendil-works/pi) >= 0.74.0

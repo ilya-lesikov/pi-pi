@@ -5,13 +5,26 @@
  * Pre-binds a Bun-based runtime so consumers get a clean API.
  */
 
+import type {
+  PRRef,
+  PRMetadata,
+  PRContext,
+  PRRuntime,
+  PRReviewFileComment,
+  PRStackTree,
+  PRListItem,
+} from "@plannotator/shared/pr-types";
 import {
-  type PRRef,
-  type PRMetadata,
-  type PRContext,
-  type PRRuntime,
-  type PRReviewFileComment,
   parsePRUrl as parsePRUrlCore,
+  prRefFromMetadata,
+  getPlatformLabel,
+  getMRLabel,
+  getMRNumberLabel,
+  getDisplayRepo,
+  getCliName,
+  getCliInstallUrl,
+} from "@plannotator/shared/pr-types";
+import {
   checkAuth as checkAuthCore,
   getUser as getUserCore,
   fetchPR as fetchPRCore,
@@ -20,18 +33,13 @@ import {
   submitPRReview as submitPRReviewCore,
   fetchPRViewedFiles as fetchPRViewedFilesCore,
   markPRFilesViewed as markPRFilesViewedCore,
-  prRefFromMetadata,
-  getPlatformLabel,
-  getMRLabel,
-  getMRNumberLabel,
-  getDisplayRepo,
-  getCliName,
-  getCliInstallUrl,
+  fetchPRStack as fetchPRStackCore,
+  fetchPRList as fetchPRListCore,
 } from "@plannotator/shared/pr-provider";
 
-export type { PRRef, PRMetadata, PRContext, PRReviewFileComment } from "@plannotator/shared/pr-provider";
-export { prRefFromMetadata, getPlatformLabel, getMRLabel, getMRNumberLabel, getDisplayRepo, getCliName, getCliInstallUrl } from "@plannotator/shared/pr-provider";
-export type { GithubPRMetadata } from "@plannotator/shared/pr-provider";
+export type { PRRef, PRMetadata, PRContext, PRReviewFileComment, PRStackTree, PRListItem } from "@plannotator/shared/pr-types";
+export { prRefFromMetadata, isSameProject, getPlatformLabel, getMRLabel, getMRNumberLabel, getDisplayRepo, getCliName, getCliInstallUrl } from "@plannotator/shared/pr-types";
+export type { GithubPRMetadata } from "@plannotator/shared/pr-types";
 
 const runtime: PRRuntime = {
   async runCommand(cmd, args) {
@@ -122,4 +130,17 @@ export function markPRFilesViewed(
   viewed: boolean,
 ): Promise<void> {
   return markPRFilesViewedCore(runtime, ref, prNodeId, filePaths, viewed);
+}
+
+export function fetchPRStack(
+  ref: PRRef,
+  metadata: PRMetadata,
+): Promise<PRStackTree | null> {
+  return fetchPRStackCore(runtime, ref, metadata);
+}
+
+export function fetchPRList(
+  ref: PRRef,
+): Promise<PRListItem[]> {
+  return fetchPRListCore(runtime, ref);
 }

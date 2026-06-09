@@ -9,12 +9,11 @@ import { sanitizeTag } from "../generated/project.js";
 import { parseRemoteUrl, getDirName } from "../generated/repo.js";
 
 /** Run a git command and return stdout (empty string on error). */
-function git(cmd: string, cwd?: string): string {
+function git(cmd: string): string {
 	try {
 		return execSync(`git ${cmd}`, {
 			encoding: "utf-8",
 			stdio: ["pipe", "pipe", "pipe"],
-			cwd,
 		}).trim();
 	} catch {
 		return "";
@@ -40,24 +39,23 @@ export function detectProjectName(): string {
 	}
 }
 
-export function getRepoInfo(cwd?: string): { display: string; branch?: string } | null {
-	const branch = git("rev-parse --abbrev-ref HEAD", cwd);
+export function getRepoInfo(): { display: string; branch?: string } | null {
+	const branch = git("rev-parse --abbrev-ref HEAD");
 	const safeBranch = branch && branch !== "HEAD" ? branch : undefined;
 
-	const originUrl = git("remote get-url origin", cwd);
+	const originUrl = git("remote get-url origin");
 	const orgRepo = parseRemoteUrl(originUrl);
 	if (orgRepo) {
 		return { display: orgRepo, branch: safeBranch };
 	}
 
-	const topLevel = git("rev-parse --show-toplevel", cwd);
+	const topLevel = git("rev-parse --show-toplevel");
 	const repoName = getDirName(topLevel);
 	if (repoName) {
 		return { display: repoName, branch: safeBranch };
 	}
 
-	const fallbackCwd = cwd ?? process.cwd();
-	const cwdName = getDirName(fallbackCwd);
+	const cwdName = getDirName(process.cwd());
 	if (cwdName) {
 		return { display: cwdName };
 	}

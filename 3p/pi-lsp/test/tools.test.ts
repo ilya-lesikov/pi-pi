@@ -3,6 +3,16 @@ import { describe, expect, test } from 'bun:test';
 import { registerLspTool } from '../extensions/lsp/tools';
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent';
 
+function emptyManager(overrides?: Record<string, any>) {
+  return {
+    clientsForFile: () => [],
+    clientForFileWithCapability: () => null,
+    anyClient: () => null,
+    getRootPath: () => '/repo',
+    ...overrides,
+  };
+}
+
 function captureTool() {
   let tool: ToolDefinition<any, any> | null = null;
   const fakePi = {
@@ -20,14 +30,22 @@ function captureTool() {
 }
 
 describe('unified lsp tool dispatch', () => {
+  test('all promptGuidelines mention lsp tool by name', () => {
+    const { register } = captureTool();
+    const tool = register(emptyManager());
+
+    const guidelines = (tool as any).promptGuidelines as string[] | undefined;
+    expect(guidelines).toBeTruthy();
+    expect(guidelines!.length).toBeGreaterThan(0);
+
+    for (const guideline of guidelines!) {
+      expect(guideline.toLowerCase()).toContain('lsp');
+    }
+  });
+
   test('validates required params by operation', async () => {
     const { register } = captureTool();
-    const tool = register({
-      clientsForFile: () => [],
-      clientForFileWithCapability: () => null,
-      anyClient: () => null,
-      getRootPath: () => '/repo',
-    });
+    const tool = register(emptyManager());
 
     await expect(
       tool.execute('1', { operation: 'hover' }, undefined as any, undefined, {} as any),
@@ -40,35 +58,34 @@ describe('unified lsp tool dispatch', () => {
 
   test('aggregates diagnostics from all matching clients', async () => {
     const { register } = captureTool();
-    const tool = register({
-      clientsForFile: () => [
-        {
-          config: { name: 'ts' },
-          getDiagnostics: async () => [
-            {
-              range: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } },
-              severity: 1,
-              source: 'ts',
-              message: 'Type error',
-            },
-          ],
-        },
-        {
-          config: { name: 'eslint' },
-          getDiagnostics: async () => [
-            {
-              range: { start: { line: 1, character: 0 }, end: { line: 1, character: 3 } },
-              severity: 2,
-              source: 'eslint',
-              message: 'Lint warning',
-            },
-          ],
-        },
-      ],
-      clientForFileWithCapability: () => null,
-      anyClient: () => null,
-      getRootPath: () => '/repo',
-    });
+    const tool = register(
+      emptyManager({
+        clientsForFile: () => [
+          {
+            config: { name: 'ts' },
+            getDiagnostics: async () => [
+              {
+                range: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } },
+                severity: 1,
+                source: 'ts',
+                message: 'Type error',
+              },
+            ],
+          },
+          {
+            config: { name: 'eslint' },
+            getDiagnostics: async () => [
+              {
+                range: { start: { line: 1, character: 0 }, end: { line: 1, character: 3 } },
+                severity: 2,
+                source: 'eslint',
+                message: 'Lint warning',
+              },
+            ],
+          },
+        ],
+      }),
+    );
 
     const result = await tool.execute(
       '1',
@@ -91,17 +108,16 @@ describe('unified lsp tool dispatch', () => {
   test('routes hover to first capable server and converts positions to zero-indexed', async () => {
     const calls: any[] = [];
     const { register } = captureTool();
-    const tool = register({
-      clientsForFile: () => [],
-      clientForFileWithCapability: () => ({
-        hover: async (filePath: string, pos: { line: number; character: number }) => {
-          calls.push({ filePath, pos });
-          return { contents: { kind: 'markdown', value: 'mock hover' } };
-        },
+    const tool = register(
+      emptyManager({
+        clientForFileWithCapability: () => ({
+          hover: async (filePath: string, pos: { line: number; character: number }) => {
+            calls.push({ filePath, pos });
+            return { contents: { kind: 'markdown', value: 'mock hover' } };
+          },
+        }),
       }),
-      anyClient: () => null,
-      getRootPath: () => '/repo',
-    });
+    );
 
     const result = await tool.execute(
       '1',
@@ -119,24 +135,23 @@ describe('unified lsp tool dispatch', () => {
 
   test('routes workspaceSymbol through anyClient', async () => {
     const { register } = captureTool();
-    const tool = register({
-      clientsForFile: () => [],
-      clientForFileWithCapability: () => null,
-      anyClient: () => ({
-        workspaceSymbol: async (query: string) => [
-          {
-            name: `${query}Service`,
-            kind: 5,
-            location: {
-              uri: 'file:///repo/src/service.ts',
-              range: { start: { line: 9, character: 0 }, end: { line: 9, character: 5 } },
+    const tool = register(
+      emptyManager({
+        anyClient: () => ({
+          workspaceSymbol: async (query: string) => [
+            {
+              name: `${query}Service`,
+              kind: 5,
+              location: {
+                uri: 'file:///repo/src/service.ts',
+                range: { start: { line: 9, character: 0 }, end: { line: 9, character: 5 } },
+              },
+              containerName: 'services',
             },
-            containerName: 'services',
-          },
-        ],
+          ],
+        }),
       }),
-      getRootPath: () => '/repo',
-    });
+    );
 
     const result = await tool.execute(
       '1',
@@ -154,12 +169,7 @@ describe('unified lsp tool dispatch', () => {
 
   test('errors when no capable server is found', async () => {
     const { register } = captureTool();
-    const tool = register({
-      clientsForFile: () => [],
-      clientForFileWithCapability: () => null,
-      anyClient: () => null,
-      getRootPath: () => '/repo',
-    });
+    const tool = register(emptyManager());
 
     await expect(
       tool.execute(
@@ -175,29 +185,28 @@ describe('unified lsp tool dispatch', () => {
   test('codeActions filters diagnostics to the requested line', async () => {
     const { register } = captureTool();
     const seenContexts: any[] = [];
-    const tool = register({
-      clientsForFile: () => [],
-      clientForFileWithCapability: () => ({
-        getDiagnostics: async () => [
-          {
-            range: { start: { line: 2, character: 0 }, end: { line: 2, character: 10 } },
-            severity: 1,
-            message: 'line 3 issue',
+    const tool = register(
+      emptyManager({
+        clientForFileWithCapability: () => ({
+          getDiagnostics: async () => [
+            {
+              range: { start: { line: 2, character: 0 }, end: { line: 2, character: 10 } },
+              severity: 1,
+              message: 'line 3 issue',
+            },
+            {
+              range: { start: { line: 5, character: 0 }, end: { line: 5, character: 10 } },
+              severity: 1,
+              message: 'line 6 issue',
+            },
+          ],
+          codeActions: async (_filePath: string, range: any, context: any) => {
+            seenContexts.push({ range, context });
+            return [{ title: 'Fix it', kind: 'quickfix' }];
           },
-          {
-            range: { start: { line: 5, character: 0 }, end: { line: 5, character: 10 } },
-            severity: 1,
-            message: 'line 6 issue',
-          },
-        ],
-        codeActions: async (_filePath: string, range: any, context: any) => {
-          seenContexts.push({ range, context });
-          return [{ title: 'Fix it', kind: 'quickfix' }];
-        },
+        }),
       }),
-      anyClient: () => null,
-      getRootPath: () => '/repo',
-    });
+    );
 
     const result = await tool.execute(
       '1',

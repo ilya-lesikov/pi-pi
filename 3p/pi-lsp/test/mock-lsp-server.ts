@@ -243,20 +243,27 @@ function handleRequest(req: JsonRpcRequest) {
   }
 }
 
-function handleNotification(msg: JsonRpcNotification) {
-  if (msg.method === 'textDocument/didOpen' || msg.method === 'textDocument/didChange') {
-    const textDocument =
-      msg.method === 'textDocument/didOpen' ? msg.params?.textDocument : msg.params?.textDocument;
-    const text =
-      msg.method === 'textDocument/didOpen'
-        ? (msg.params?.textDocument?.text ?? '')
-        : (msg.params?.contentChanges?.[0]?.text ?? '');
-    lastUri = textDocument?.uri ?? lastUri;
-    sendDiagnostics(lastUri, text);
-  }
+function handleDocSync(uri: string, text: string) {
+  lastUri = uri;
+  sendDiagnostics(lastUri, text);
+}
 
-  if (msg.method === 'exit') {
-    process.exit(0);
+function handleNotification(msg: JsonRpcNotification) {
+  switch (msg.method) {
+    case 'textDocument/didOpen':
+      handleDocSync(msg.params?.textDocument?.uri ?? lastUri, msg.params?.textDocument?.text ?? '');
+      break;
+    case 'textDocument/didChange':
+      handleDocSync(
+        msg.params?.textDocument?.uri ?? lastUri,
+        msg.params?.contentChanges?.[0]?.text ?? '',
+      );
+      break;
+    case 'textDocument/didSave':
+      handleDocSync(msg.params?.textDocument?.uri ?? lastUri, msg.params?.text ?? '');
+      break;
+    case 'exit':
+      process.exit(0);
   }
 }
 

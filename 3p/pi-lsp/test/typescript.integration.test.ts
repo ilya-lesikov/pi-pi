@@ -6,6 +6,19 @@ import { fileURLToPath } from 'node:url';
 
 import { LspClient } from '../extensions/lsp/client';
 
+/** Resolve a package bin using Node/Bun module resolution (handles hoisting). */
+function resolveBin(pkg: string): string | null {
+  try {
+    const pkgJsonPath = fileURLToPath(import.meta.resolve(`${pkg}/package.json`));
+    const pkgJson = require(pkgJsonPath);
+    const bin = typeof pkgJson.bin === 'string' ? pkgJson.bin : pkgJson.bin?.[pkg];
+    if (!bin) return null;
+    return resolve(dirname(pkgJsonPath), bin);
+  } catch {
+    return null;
+  }
+}
+
 const cleanup: string[] = [];
 
 async function makeFixtureWorkspace() {
@@ -80,8 +93,11 @@ afterEach(async () => {
 describe('real TypeScript integration', () => {
   test('typescript-language-server resolves diagnostics and navigation in a fixture workspace', async () => {
     const workspace = await makeFixtureWorkspace();
-    const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-    const tsServerBin = join(packageRoot, 'node_modules', '.bin', 'typescript-language-server');
+    const tsServerBin = resolveBin('typescript-language-server');
+    if (!tsServerBin) {
+      console.log('Skipping: typescript-language-server not found');
+      return;
+    }
 
     const client = new LspClient(
       {

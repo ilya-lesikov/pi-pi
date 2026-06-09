@@ -6,24 +6,24 @@
  */
 
 import { join } from "node:path";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { appendFile, mkdir, unlink, writeFile, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import type { DiffType } from "./vcs";
-import type { PRMetadata } from "./pr";
 import { toRelativePath } from "./path-utils";
+import { getPlannotatorDataDir } from "@plannotator/shared/data-dir";
 
 // ---------------------------------------------------------------------------
 // Debug log — only active when PLANNOTATOR_DEBUG is set
 // ---------------------------------------------------------------------------
 
+const DATA_DIR = getPlannotatorDataDir();
 const DEBUG_ENABLED = !!process.env.PLANNOTATOR_DEBUG;
-const DEBUG_LOG_PATH = join(homedir(), ".plannotator", "codex-review-debug.log");
+const DEBUG_LOG_PATH = join(DATA_DIR, "codex-review-debug.log");
 
 async function debugLog(label: string, data?: unknown): Promise<void> {
   if (!DEBUG_ENABLED) return;
   try {
-    await mkdir(join(homedir(), ".plannotator"), { recursive: true });
+    await mkdir(DATA_DIR, { recursive: true });
     const timestamp = new Date().toISOString();
     const line = data !== undefined
       ? `[${timestamp}] ${label}: ${typeof data === "string" ? data : JSON.stringify(data, null, 2)}\n`
@@ -80,7 +80,7 @@ const CODEX_REVIEW_SCHEMA = JSON.stringify({
   additionalProperties: false,
 });
 
-const SCHEMA_DIR = join(homedir(), ".plannotator");
+const SCHEMA_DIR = DATA_DIR;
 const SCHEMA_FILE = join(SCHEMA_DIR, "codex-review-schema.json");
 let schemaMaterialized = false;
 
@@ -157,66 +157,6 @@ Ignore non-blocking issues such as style, formatting, typos, documentation, and 
 
 FORMATTING GUIDELINES:
 The finding description should be one paragraph.`;
-
-// ---------------------------------------------------------------------------
-// User message builder
-// ---------------------------------------------------------------------------
-
-/** Build the dynamic user message based on review context. */
-export function buildCodexReviewUserMessage(
-  patch: string,
-  diffType: DiffType,
-  options?: { defaultBranch?: string; hasLocalAccess?: boolean },
-  prMetadata?: PRMetadata,
-): string {
-  // PR/MR mode — pass the link, with local context if --local
-  if (prMetadata) {
-    if (options?.hasLocalAccess) {
-      return [
-        prMetadata.url,
-        "",
-        "You are in a local worktree checked out at the PR head. The code is available locally.",
-        `To see the PR changes, diff against the remote base branch: git diff origin/${prMetadata.baseBranch}...HEAD`,
-        "Do NOT diff against the local `main` branch — it may be stale. Always use origin/.",
-      ].join("\n");
-    }
-    return prMetadata.url;
-  }
-
-  // Local mode — Codex has full file/git access
-  const effectiveDiffType = diffType.startsWith("worktree:")
-    ? diffType.split(":").pop() || "uncommitted"
-    : diffType;
-
-  switch (effectiveDiffType) {
-    case "uncommitted":
-      return "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.";
-
-    case "staged":
-      return "Review the currently staged code changes (`git diff --staged`) and provide prioritized findings.";
-
-    case "unstaged":
-      return "Review the unstaged code changes (tracked modifications and untracked files) and provide prioritized findings.";
-
-    case "last-commit":
-      return "Review the code changes introduced in the last commit (`git diff HEAD~1..HEAD`) and provide prioritized findings.";
-
-    case "branch": {
-      const base = options?.defaultBranch || "main";
-      return `Review the code changes against the base branch '${base}'. Run \`git diff ${base}..HEAD\` to inspect the changes. Provide prioritized, actionable findings.`;
-    }
-
-    default:
-      // p4 or unknown — fall back to generic with inlined diff
-      return [
-        "Review the following code changes and provide prioritized findings.",
-        "",
-        "```diff",
-        patch,
-        "```",
-      ].join("\n");
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Command builder
@@ -353,6 +293,7 @@ export function transformReviewFindings(
   source: string,
   cwd?: string,
   author?: string,
+  pathTransform?: (path: string) => string,
 ): ReviewAnnotationInput[] {
   const annotations = findings
     .filter((f) =>
@@ -362,7 +303,9 @@ export function transformReviewFindings(
     )
     .map((f) => ({
       source,
-      filePath: toRelativePath(f.code_location.absolute_file_path, cwd),
+      filePath: pathTransform
+        ? pathTransform(toRelativePath(f.code_location.absolute_file_path, cwd))
+        : toRelativePath(f.code_location.absolute_file_path, cwd),
       lineStart: f.code_location.line_range.start,
       lineEnd: f.code_location.line_range.end,
       type: "comment",

@@ -9,8 +9,14 @@
  * Add new settings here. Cookie-only settings omit serverKey.
  */
 
+import type { DiffLineBgIntensity } from '@plannotator/shared/config';
 import { storage } from '../utils/storage';
 import { generateIdentity } from '../utils/generateIdentity';
+
+const DIFF_LINE_BG_INTENSITY_VALUES = ['subtle', 'normal', 'strong'] as const;
+function isDiffLineBgIntensity(v: unknown): v is DiffLineBgIntensity {
+  return typeof v === 'string' && (DIFF_LINE_BG_INTENSITY_VALUES as readonly string[]).includes(v);
+}
 
 export interface SettingDef<T> {
   defaultValue: T | (() => T);
@@ -33,19 +39,33 @@ export const SETTINGS = {
     toServer: (v: string) => ({ displayName: v }),
   },
 
+  gridEnabled: {
+    // Default ON: plans open in the classic grid / floating-card look. The UI 2.0
+    // flat look is offered as an opt-in via the look-and-feel chooser dialog.
+    defaultValue: true as boolean,
+    fromCookie: () => {
+      const v = storage.getItem('plannotator-grid-enabled');
+      return v === 'true' ? true : v === 'false' ? false : undefined;
+    },
+    toCookie: (v: boolean) => storage.setItem('plannotator-grid-enabled', String(v)),
+    serverKey: undefined, fromServer: undefined, toServer: undefined,
+  },
+
   // --- Diff display options (namespaced under diffOptions in config.json) ---
 
   defaultDiffType: {
-    defaultValue: 'unstaged' as 'uncommitted' | 'unstaged' | 'staged',
+    defaultValue: 'unstaged' as 'uncommitted' | 'unstaged' | 'staged' | 'merge-base' | 'all',
     fromCookie: () => {
       const v = storage.getItem('plannotator-default-diff-type');
-      return v === 'uncommitted' || v === 'unstaged' || v === 'staged' ? v : undefined;
+      if (v === 'branch') return 'merge-base' as const;
+      return v === 'uncommitted' || v === 'unstaged' || v === 'staged' || v === 'merge-base' || v === 'all' ? v : undefined;
     },
     toCookie: (v: string) => storage.setItem('plannotator-default-diff-type', v),
     serverKey: 'diffOptions',
     fromServer: (sc: Record<string, unknown>) => {
       const v = (sc.diffOptions as Record<string, unknown> | undefined)?.defaultDiffType;
-      return v === 'uncommitted' || v === 'unstaged' || v === 'staged' ? v : undefined;
+      if (v === 'branch') return 'merge-base' as const;
+      return v === 'uncommitted' || v === 'unstaged' || v === 'staged' || v === 'merge-base' || v === 'all' ? v : undefined;
     },
     toServer: (v: string) => ({ diffOptions: { defaultDiffType: v } }),
   },
@@ -152,6 +172,36 @@ export const SETTINGS = {
     toServer: (v: string) => ({ diffOptions: { fontFamily: v } }),
   },
 
+  diffHideWhitespace: {
+    defaultValue: false as boolean,
+    fromCookie: () => {
+      const v = storage.getItem('plannotator-diff-hide-whitespace');
+      return v === 'true' ? true : v === 'false' ? false : undefined;
+    },
+    toCookie: (v: boolean) => storage.setItem('plannotator-diff-hide-whitespace', String(v)),
+    serverKey: 'diffOptions',
+    fromServer: (sc: Record<string, unknown>) => {
+      const v = (sc.diffOptions as Record<string, unknown> | undefined)?.hideWhitespace;
+      return typeof v === 'boolean' ? v : undefined;
+    },
+    toServer: (v: boolean) => ({ diffOptions: { hideWhitespace: v } }),
+  },
+
+  diffExpandUnchanged: {
+    defaultValue: false as boolean,
+    fromCookie: () => {
+      const v = storage.getItem('plannotator-diff-expand-unchanged');
+      return v === 'true' ? true : v === 'false' ? false : undefined;
+    },
+    toCookie: (v: boolean) => storage.setItem('plannotator-diff-expand-unchanged', String(v)),
+    serverKey: 'diffOptions',
+    fromServer: (sc: Record<string, unknown>) => {
+      const v = (sc.diffOptions as Record<string, unknown> | undefined)?.expandUnchanged;
+      return typeof v === 'boolean' ? v : undefined;
+    },
+    toServer: (v: boolean) => ({ diffOptions: { expandUnchanged: v } }),
+  },
+
   diffFontSize: {
     defaultValue: '' as string, // empty = theme default
     fromCookie: () => storage.getItem('plannotator-diff-font-size') || undefined,
@@ -162,6 +212,36 @@ export const SETTINGS = {
       return typeof v === 'string' ? v : undefined;
     },
     toServer: (v: string) => ({ diffOptions: { fontSize: v } }),
+  },
+  diffTabSize: {
+    defaultValue: 2 as number,
+    fromCookie: () => {
+      const v = storage.getItem('plannotator-diff-tab-size');
+      const n = v ? parseInt(v, 10) : NaN;
+      return Number.isFinite(n) && n >= 1 && n <= 8 ? n : undefined;
+    },
+    toCookie: (v: number) => storage.setItem('plannotator-diff-tab-size', String(v)),
+    serverKey: 'diffOptions',
+    fromServer: (sc: Record<string, unknown>) => {
+      const v = (sc.diffOptions as Record<string, unknown> | undefined)?.tabSize;
+      return typeof v === 'number' && v >= 1 && v <= 8 ? v : undefined;
+    },
+    toServer: (v: number) => ({ diffOptions: { tabSize: v } }),
+  },
+  diffLineBgIntensity: {
+    defaultValue: 'subtle' as DiffLineBgIntensity,
+    fromCookie: () => {
+      const v = storage.getItem('plannotator-diff-line-bg-intensity');
+      return isDiffLineBgIntensity(v) ? v : undefined;
+    },
+    toCookie: (v: DiffLineBgIntensity) =>
+      storage.setItem('plannotator-diff-line-bg-intensity', v),
+    serverKey: 'diffOptions',
+    fromServer: (sc: Record<string, unknown>) => {
+      const v = (sc.diffOptions as Record<string, unknown> | undefined)?.lineBgIntensity;
+      return isDiffLineBgIntensity(v) ? v : undefined;
+    },
+    toServer: (v: DiffLineBgIntensity) => ({ diffOptions: { lineBgIntensity: v } }),
   },
   conventionalComments: {
     defaultValue: false as boolean,

@@ -4,9 +4,13 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 import {
+  getDefaultBranch,
   getFileContentsForDiff,
   getGitContext,
+  listRecentCommits,
+  parseWorktreeDiffType,
   runGitDiff,
+  type DiffType,
   type ReviewGitRuntime,
 } from "./review-core";
 
@@ -159,7 +163,11 @@ describe("review-core", () => {
 
     expect(result.patch).toBe("");
     expect(result.label).toBe("Error: branch");
-    expect(result.error).toContain("git diff --no-ext-diff master..HEAD");
+    // Error is derived from the argv — assert the meaningful parts rather
+    // than the exact string so harmless argv reorders (e.g. --end-of-options)
+    // don't break it.
+    expect(result.error).toContain("git diff");
+    expect(result.error).toContain("master..HEAD");
   });
 
   test("git context lists worktrees and file content lookup returns old/new content", async () => {
@@ -198,5 +206,81 @@ describe("review-core", () => {
     );
     expect(newFileContents.oldContent).toBeNull();
     expect(newFileContents.newContent).toBe("brand new\n");
+  });
+
+  test("getDefaultBranch falls back to local when origin/HEAD points at an unfetched ref", () => {
+    // Simulates a narrow / partial clone where origin/HEAD is configured but
+    // the target ref was never fetched. Before the verify step, the server
+    // would return "origin/phantom" and every branch/merge-base diff would
+    // fail with "unknown revision". With the verify step we fall back to
+    // local main.
+    const repoDir = initRepo();
+
+    // Manually set origin/HEAD → origin/phantom without ever fetching it.
+    git(repoDir, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/phantom"]);
+
+    const runtime = makeRuntime(repoDir);
+    return getDefaultBranch(runtime).then((result) => {
+      expect(result).toBe("main");
+    });
+  });
+
+  test("listRecentCommits returns HEAD ancestry with shortSha and subject", async () => {
+    const repoDir = initRepo();
+    writeFileSync(join(repoDir, "tracked.txt"), "second\n", "utf-8");
+    git(repoDir, ["add", "tracked.txt"]);
+    git(repoDir, ["commit", "-m", "second commit"]);
+    writeFileSync(join(repoDir, "tracked.txt"), "third\n", "utf-8");
+    git(repoDir, ["add", "tracked.txt"]);
+    git(repoDir, ["commit", "-m", "third commit"]);
+
+    const runtime = makeRuntime(repoDir);
+    const commits = await listRecentCommits(runtime, repoDir, 10);
+
+    expect(commits.length).toBe(3);
+    expect(commits[0].subject).toBe("third commit");
+    expect(commits[1].subject).toBe("second commit");
+    expect(commits[2].subject).toBe("initial");
+    for (const c of commits) {
+      expect(c.sha).toMatch(/^[0-9a-f]{40}$/);
+      expect(c.shortSha.length).toBeGreaterThanOrEqual(7);
+      expect(c.sha.startsWith(c.shortSha)).toBe(true);
+      expect(c.author).toBe("Review Core");
+      expect(c.relativeDate.length).toBeGreaterThan(0);
+    }
+  });
+
+  test("getGitContext includes recentCommits for the picker", async () => {
+    const repoDir = initRepo();
+    writeFileSync(join(repoDir, "tracked.txt"), "second\n", "utf-8");
+    git(repoDir, ["add", "tracked.txt"]);
+    git(repoDir, ["commit", "-m", "second commit"]);
+
+    const runtime = makeRuntime(repoDir);
+    const context = await getGitContext(runtime, repoDir);
+
+    expect(context.recentCommits).toBeDefined();
+    expect(context.recentCommits!.length).toBe(2);
+    expect(context.recentCommits![0].subject).toBe("second commit");
+  });
+
+  test("parseWorktreeDiffType recognises every DiffType suffix, including merge-base", () => {
+    // Regression guard: every local diff type must round-trip through the
+    // worktree-prefixed form. Missing `merge-base` here previously routed
+    // "worktree:/path:merge-base" to { path: "/path:merge-base", subType: "uncommitted" }
+    // which pointed git at a non-existent cwd and silently collapsed the diff mode.
+    const subTypes = [
+      "uncommitted",
+      "staged",
+      "unstaged",
+      "last-commit",
+      "branch",
+      "merge-base",
+    ] as const;
+    for (const sub of subTypes) {
+      const composite = `worktree:/tmp/my-worktree:${sub}` as DiffType;
+      const parsed = parseWorktreeDiffType(composite);
+      expect(parsed).toEqual({ path: "/tmp/my-worktree", subType: sub });
+    }
   });
 });

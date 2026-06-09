@@ -186,8 +186,9 @@ function formatDocSymbolTree(symbols: DocumentSymbol[], indent: number): string[
   for (const sym of symbols) {
     const kind = symbolKindLabel(sym.kind);
     const line = sym.selectionRange.start.line + 1;
+    const col = sym.selectionRange.start.character + 1;
     const detail = sym.detail ? ` — ${sym.detail}` : '';
-    lines.push(`${prefix}${sym.name} (${kind}) line ${line}${detail}`);
+    lines.push(`${prefix}${sym.name} (${kind}) line ${line}:${col}${detail}`);
     if (sym.children?.length) {
       lines.push(...formatDocSymbolTree(sym.children, indent + 1));
     }
@@ -212,8 +213,9 @@ export function formatDocumentSymbols(
     const kind = symbolKindLabel(sym.kind);
     const p = relativePath(sym.location.uri, rootPath);
     const line = sym.location.range.start.line + 1;
+    const col = sym.location.range.start.character + 1;
     const container = sym.containerName ? ` in ${sym.containerName}` : '';
-    return `${i + 1}. ${sym.name} (${kind}) ${p}:${line}${container}`;
+    return `${i + 1}. ${sym.name} (${kind}) ${p}:${line}:${col}${container}`;
   });
 
   return `Symbols in ${filePath} (${symbols.length}):\n\n${formatted.join('\n')}`;
@@ -232,8 +234,9 @@ export function formatWorkspaceSymbols(
     const kind = symbolKindLabel(sym.kind);
     const p = relativePath(sym.location.uri, rootPath);
     const line = sym.location.range.start.line + 1;
+    const col = sym.location.range.start.character + 1;
     const container = sym.containerName ? ` in ${sym.containerName}` : '';
-    return `${i + 1}. ${sym.name} (${kind}) ${p}:${line}${container}`;
+    return `${i + 1}. ${sym.name} (${kind}) ${p}:${line}:${col}${container}`;
   });
 
   const truncated = symbols.length > 50 ? `\n\n(showing 50 of ${symbols.length})` : '';

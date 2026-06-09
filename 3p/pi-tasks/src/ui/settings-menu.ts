@@ -50,6 +50,42 @@ export async function openSettingsMenu(
         values: ["on", "off"],
       },
       {
+        id: "showAll",
+        label: "Show all tasks in widget",
+        description:
+          "When ON, every task is shown regardless of the visible limit. " +
+          "When OFF, the list is capped by 'Max visible tasks'.",
+        currentValue: (cfg.showAll ?? false) ? "on" : "off",
+        values: ["on", "off"],
+      },
+      {
+        id: "maxVisible",
+        label: "Max visible tasks in widget",
+        description:
+          "Only applies when 'Show all tasks' is OFF. " +
+          "Caps how many task lines the widget shows.",
+        currentValue: String(cfg.maxVisible ?? 10),
+        values: ["5", "10", "15", "20", "30", "50", "100"],
+      },
+      {
+        id: "sortOrder",
+        label: "Widget sort order",
+        description:
+          '"status" groups by completed → in-progress → pending. ' +
+          '"id" sorts by creation order.',
+        currentValue: cfg.sortOrder ?? "id",
+        values: ["id", "status", "recent", "oldest"],
+      },
+      {
+        id: "hiddenAt",
+        label: "Hidden tasks position",
+        description:
+          '"bottom" hides tasks from the end of the list. ' +
+          '"top" hides tasks from the start (useful with status sort to collapse completed tasks).',
+        currentValue: cfg.hiddenAt ?? "bottom",
+        values: ["bottom", "top"],
+      },
+      {
         id: "autoClearCompleted",
         label: "Auto-clear completed tasks",
         description:
@@ -77,6 +113,22 @@ export async function openSettingsMenu(
         }
         if (id === "autoClearCompleted") {
           cfg.autoClearCompleted = newValue as TasksConfig["autoClearCompleted"];
+          saveTasksConfig(cfg);
+        }
+        if (id === "showAll") {
+          cfg.showAll = newValue === "on";
+          saveTasksConfig(cfg);
+        }
+        if (id === "maxVisible") {
+          cfg.maxVisible = Number(newValue);
+          saveTasksConfig(cfg);
+        }
+        if (id === "sortOrder") {
+          cfg.sortOrder = newValue as TasksConfig["sortOrder"];
+          saveTasksConfig(cfg);
+        }
+        if (id === "hiddenAt") {
+          cfg.hiddenAt = newValue as "top" | "bottom";
           saveTasksConfig(cfg);
         }
       },

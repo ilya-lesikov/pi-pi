@@ -25,16 +25,44 @@ import type {
   ResolvedServerConfig,
   SymbolInformation,
 } from './types';
+import { withRetry } from './retry';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-export function pathToUri(filePath: string): string {
-  const abs = filePath.startsWith('/') ? filePath : resolve(filePath);
-  return `file://${abs}`;
+/**
+ * Normalize a file URI for consistent map-key comparison.
+ *
+ * Some LSP servers (e.g. typescript-language-server on Windows) return URIs with
+ * percent-encoded colons (`%3A`) and lowercase drive letters.  We decode and
+ * uppercase so that `file:///d%3A/…` and `file:///D:/…` resolve to the same key.
+ */
+function normalizeUri(uri: string): string {
+  let normalized = decodeURIComponent(uri);
+  // Uppercase Windows drive letter: file:///d:/… → file:///D:/…
+  normalized = normalized.replace(
+    /^file:\/\/\/([a-z]):/,
+    (_, letter: string) => `file:///${letter.toUpperCase()}:`,
+  );
+  return normalized;
+}
+
+function pathToUri(filePath: string): string {
+  const abs = resolve(filePath);
+  const normalized = abs.replace(/\\/g, '/');
+  // Windows paths need file:///C:/... (three slashes), always uppercase drive letter
+  if (/^[A-Za-z]:/.test(normalized)) {
+    return `file:///${normalized[0].toUpperCase()}${normalized.slice(1)}`;
+  }
+  return `file://${normalized}`;
 }
 
 export function uriToPath(uri: string): string {
-  return uri.startsWith('file://') ? uri.slice(7) : uri;
+  if (!uri.startsWith('file://')) return uri;
+  const decoded = decodeURIComponent(uri);
+  const path = decoded.slice(7);
+  // Remove leading slash before Windows drive letter: /C:/... → C:/...
+  if (/^\/[A-Za-z]:/.test(path)) return path.slice(1);
+  return path;
 }
 
 function languageIdForFile(filePath: string): string {
@@ -79,9 +107,18 @@ interface OpenDocument {
   languageId: string;
 }
 
-interface DiagnosticWaiter {
+/**
+ * A single pending diagnostic request per URI.
+ *
+ * Instead of maintaining an array of waiters with individual timers, we keep one
+ * pending promise per URI.  Non-empty `publishDiagnostics` notifications resolve
+ * it immediately; empty ones are stored but do NOT resolve the pending — this
+ * avoids the "empty-then-real" race where the server clears stale diagnostics
+ * before sending real results.  A timeout passed via `Promise.race` in
+ * `waitForDiagnostics` acts as a safety net for genuinely clean files.
+ */
+interface PendingDiagnostic {
   resolve: () => void;
-  timer: ReturnType<typeof setTimeout>;
 }
 
 // ── Client ──────────────────────────────────────────────────────────────────
@@ -92,9 +129,12 @@ export class LspClient {
   private initializePromise: Promise<void> | null = null;
   private openDocs = new Map<string, OpenDocument>();
   private diagnosticStore = new Map<string, Diagnostic[]>();
-  private diagnosticWaiters = new Map<string, DiagnosticWaiter[]>();
+  private pendingDiagnostics = new Map<string, PendingDiagnostic>();
+  /** URIs where we just sent didChange and haven't yet received non-empty diagnostics. */
+  private invalidatedUris = new Set<string>();
   private serverCapabilities: Record<string, unknown> = {};
   private stderrLog: string[] = [];
+  private initTimestamp = 0;
 
   readonly config: ResolvedServerConfig;
   private rootPath: string;
@@ -116,15 +156,26 @@ export class LspClient {
     conn.setNotificationHandler((method, params) => {
       if (method === 'textDocument/publishDiagnostics') {
         const { uri, diagnostics } = params as PublishDiagnosticsParams;
-        this.diagnosticStore.set(uri, diagnostics);
+        const normalized = normalizeUri(uri);
+        this.diagnosticStore.set(normalized, diagnostics);
 
-        const waiters = this.diagnosticWaiters.get(uri);
-        if (waiters?.length) {
-          for (const w of waiters) {
-            clearTimeout(w.timer);
-            w.resolve();
+        // Decide whether to resolve the pending promise:
+        // • Non-empty diagnostics always resolve (real errors found).
+        // • Empty diagnostics resolve ONLY when the URI was NOT recently
+        //   invalidated by a didChange — this avoids the "empty-then-real"
+        //   race where servers clear stale diagnostics before sending real ones.
+        const shouldResolve = diagnostics.length > 0 || !this.invalidatedUris.has(normalized);
+
+        if (diagnostics.length > 0) {
+          this.invalidatedUris.delete(normalized);
+        }
+
+        if (shouldResolve) {
+          const pending = this.pendingDiagnostics.get(normalized);
+          if (pending) {
+            pending.resolve();
+            this.pendingDiagnostics.delete(normalized);
           }
-          this.diagnosticWaiters.delete(uri);
         }
       }
     });
@@ -202,6 +253,24 @@ export class LspClient {
     this.serverCapabilities = result?.capabilities ?? {};
     this.connection.sendNotification('initialized', {});
     this.initialized = true;
+    this.initTimestamp = Date.now();
+  }
+
+  /** Whether the server was initialized recently (within windowMs). */
+  private isRecentlyInitialized(windowMs = 30_000): boolean {
+    return this.initTimestamp > 0 && Date.now() - this.initTimestamp < windowMs;
+  }
+
+  /**
+   * Wrap an LSP operation with retry logic when the server was recently initialized.
+   * During indexing, servers may return empty results that resolve after a short wait.
+   */
+  private async retryIfIndexing<T>(
+    operation: () => Promise<T>,
+    isEmpty: (result: T) => boolean,
+  ): Promise<T> {
+    if (!this.isRecentlyInitialized()) return operation();
+    return withRetry(operation, isEmpty, { maxRetries: 2, delayMs: 2000 });
   }
 
   async shutdown(): Promise<void> {
@@ -221,15 +290,12 @@ export class LspClient {
     this.initializePromise = null;
     this.openDocs.clear();
     this.diagnosticStore.clear();
-    this.clearAllWaiters();
+    this.invalidatedUris.clear();
+    this.clearAllPending();
   }
 
   get isInitialized(): boolean {
     return this.initialized;
-  }
-
-  get capabilities(): Record<string, unknown> {
-    return this.serverCapabilities;
   }
 
   /** Check if the server advertised a specific capability. */
@@ -251,6 +317,8 @@ export class LspClient {
 
     if (existing) {
       existing.version++;
+      this.diagnosticStore.delete(uri); // Clear stale diagnostics before re-sync
+      this.invalidatedUris.add(uri); // Mark as invalidated until real diagnostics arrive
       this.connection.sendNotification('textDocument/didChange', {
         textDocument: { uri, version: existing.version },
         contentChanges: [{ text }],
@@ -263,19 +331,14 @@ export class LspClient {
       this.openDocs.set(uri, { uri, version, languageId });
     }
 
-    return uri;
-  }
-
-  async closeDocument(filePath: string): Promise<void> {
-    const uri = pathToUri(resolve(this.rootPath, filePath));
-    const doc = this.openDocs.get(uri);
-    if (!doc) return;
-
-    this.connection.sendNotification('textDocument/didClose', {
+    // Notify the server that the file was saved — some servers (e.g. rust-analyzer)
+    // only generate diagnostics after a didSave notification.
+    this.connection.sendNotification('textDocument/didSave', {
       textDocument: { uri },
+      text,
     });
-    this.openDocs.delete(uri);
-    this.diagnosticStore.delete(uri);
+
+    return uri;
   }
 
   // ── Diagnostics ───────────────────────────────────────────────────────
@@ -286,103 +349,143 @@ export class LspClient {
     return this.diagnosticStore.get(uri) ?? [];
   }
 
-  private waitForDiagnostics(uri: string, timeoutMs: number): Promise<void> {
-    return new Promise<void>((resolveWait) => {
-      const existing = this.diagnosticStore.get(uri);
-      if (existing !== undefined) {
-        setTimeout(resolveWait, 500);
-        return;
-      }
+  /**
+   * Wait until non-empty diagnostics arrive for `uri`, or until `timeoutMs` elapses.
+   *
+   * If non-empty diagnostics are already in the store (e.g. from a previous
+   * notification), resolves immediately.  Otherwise sets up a single pending
+   * promise that the notification handler will resolve when real diagnostics
+   * arrive.  `Promise.race` against a timeout ensures we don't wait forever
+   * for genuinely clean files.
+   */
+  private async waitForDiagnostics(uri: string, timeoutMs: number): Promise<void> {
+    // Fast path: diagnostics already present and meaningful.
+    // • Non-empty → file has errors, return immediately.
+    // • Empty + not invalidated → genuinely clean file (e.g. first open), return.
+    const existing = this.diagnosticStore.get(uri);
+    if (existing !== undefined) {
+      if (existing.length > 0 || !this.invalidatedUris.has(uri)) return;
+    }
 
-      const timer = setTimeout(() => {
-        const waiters = this.diagnosticWaiters.get(uri);
-        if (waiters) {
-          const idx = waiters.findIndex((w) => w.resolve === resolveWait);
-          if (idx !== -1) waiters.splice(idx, 1);
-          if (waiters.length === 0) this.diagnosticWaiters.delete(uri);
-        }
-        resolveWait();
-      }, timeoutMs);
+    // Resolve any previous pending for this URI so it doesn't leak.
+    const prev = this.pendingDiagnostics.get(uri);
+    if (prev) prev.resolve();
 
-      const waiters = this.diagnosticWaiters.get(uri) ?? [];
-      waiters.push({ resolve: resolveWait, timer });
-      this.diagnosticWaiters.set(uri, waiters);
+    const { promise, resolve } = Promise.withResolvers<void>();
+    this.pendingDiagnostics.set(uri, { resolve });
+
+    // Safety-net timeout: resolves the race for files with zero errors.
+    let timer: ReturnType<typeof setTimeout>;
+    const timeout = new Promise<void>((r) => {
+      timer = setTimeout(r, timeoutMs);
     });
+
+    await Promise.race([promise, timeout]);
+
+    clearTimeout(timer!);
+    this.pendingDiagnostics.delete(uri);
   }
 
-  private clearAllWaiters(): void {
-    for (const [, waiters] of this.diagnosticWaiters) {
-      for (const w of waiters) {
-        clearTimeout(w.timer);
-        w.resolve();
-      }
+  private clearAllPending(): void {
+    for (const pending of this.pendingDiagnostics.values()) {
+      pending.resolve();
     }
-    this.diagnosticWaiters.clear();
+    this.pendingDiagnostics.clear();
   }
 
   // ── Hover ─────────────────────────────────────────────────────────────
 
   async hover(filePath: string, position: Position): Promise<Hover | null> {
     const uri = await this.openDocument(filePath);
-    const result = await this.connection.sendRequest('textDocument/hover', {
-      textDocument: { uri },
-      position,
-    });
-    return (result as Hover) ?? null;
+    return this.retryIfIndexing(
+      async () => {
+        const result = await this.connection.sendRequest('textDocument/hover', {
+          textDocument: { uri },
+          position,
+        });
+        return (result as Hover) ?? null;
+      },
+      (result) => result === null,
+    );
   }
 
   // ── Definition ────────────────────────────────────────────────────────
 
   async definition(filePath: string, position: Position): Promise<Location[]> {
     const uri = await this.openDocument(filePath);
-    const result = await this.connection.sendRequest('textDocument/definition', {
-      textDocument: { uri },
-      position,
-    });
-    return normalizeLocations(result);
+    return this.retryIfIndexing(
+      async () => {
+        const result = await this.connection.sendRequest('textDocument/definition', {
+          textDocument: { uri },
+          position,
+        });
+        return normalizeLocations(result);
+      },
+      (result) => result.length === 0,
+    );
   }
 
   // ── References ────────────────────────────────────────────────────────
 
   async references(filePath: string, position: Position): Promise<Location[]> {
     const uri = await this.openDocument(filePath);
-    const result = await this.connection.sendRequest('textDocument/references', {
-      textDocument: { uri },
-      position,
-      context: { includeDeclaration: true },
-    });
-    return normalizeLocations(result);
+    return this.retryIfIndexing(
+      async () => {
+        const result = await this.connection.sendRequest('textDocument/references', {
+          textDocument: { uri },
+          position,
+          context: { includeDeclaration: true },
+        });
+        return normalizeLocations(result);
+      },
+      (result) => result.length === 0,
+    );
   }
 
   // ── Implementation ────────────────────────────────────────────────────
 
   async implementation(filePath: string, position: Position): Promise<Location[]> {
     const uri = await this.openDocument(filePath);
-    const result = await this.connection.sendRequest('textDocument/implementation', {
-      textDocument: { uri },
-      position,
-    });
-    return normalizeLocations(result);
+    return this.retryIfIndexing(
+      async () => {
+        const result = await this.connection.sendRequest('textDocument/implementation', {
+          textDocument: { uri },
+          position,
+        });
+        return normalizeLocations(result);
+      },
+      (result) => result.length === 0,
+    );
   }
 
   // ── Document Symbols ──────────────────────────────────────────────────
 
   async documentSymbol(filePath: string): Promise<DocumentSymbol[] | SymbolInformation[]> {
     const uri = await this.openDocument(filePath);
-    const result = await this.connection.sendRequest('textDocument/documentSymbol', {
-      textDocument: { uri },
-    });
-    if (!Array.isArray(result)) return [];
-    return result as DocumentSymbol[] | SymbolInformation[];
+    return this.retryIfIndexing(
+      async () => {
+        const result = await this.connection.sendRequest('textDocument/documentSymbol', {
+          textDocument: { uri },
+        });
+        if (!Array.isArray(result)) return [];
+        return result as DocumentSymbol[] | SymbolInformation[];
+      },
+      (result) => result.length === 0,
+    );
   }
 
   // ── Workspace Symbols ─────────────────────────────────────────────────
 
   async workspaceSymbol(query: string): Promise<SymbolInformation[]> {
     await this.ensureInitialized();
-    const result = await this.connection.sendRequest('workspace/symbol', { query });
-    if (!Array.isArray(result)) return [];
-    return result as SymbolInformation[];
+    return this.retryIfIndexing(
+      async () => {
+        const result = await this.connection.sendRequest('workspace/symbol', { query });
+        if (!Array.isArray(result)) return [];
+        return result as SymbolInformation[];
+      },
+      (result) => result.length === 0,
+    );
   }
 
   // ── Call Hierarchy ────────────────────────────────────────────────────

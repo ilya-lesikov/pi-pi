@@ -107,8 +107,9 @@ describe('extension/session layer', () => {
 
     const globalConfigPath = join(home, '.pi', 'agent', 'extensions', 'lsp', 'config.json');
     expect(await fileExists(globalConfigPath)).toBe(true);
-    const text = await readFile(globalConfigPath, 'utf8');
-    expect(text).toContain('typescript-language-server');
+    const parsed = JSON.parse(await readFile(globalConfigPath, 'utf8'));
+    // typescript is present only as a disabled example — never auto-enabled.
+    expect(parsed.lsp.typescript.disabled).toBe(true);
     expect(ui.notifications.some((n) => n.includes('created starter config'))).toBe(true);
   });
 

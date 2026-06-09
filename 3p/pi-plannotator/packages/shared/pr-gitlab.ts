@@ -5,8 +5,11 @@
  * Self-hosted instances are supported via the --hostname flag.
  */
 
-import type { PRRuntime, PRMetadata, PRContext, PRReviewFileComment, CommandResult } from "./pr-provider";
-import { encodeApiFilePath } from "./pr-provider";
+import { join } from "path";
+import { mkdirSync, writeFileSync } from "fs";
+import type { PRRuntime, PRMetadata, PRContext, PRReviewFileComment, CommandResult } from "./pr-types";
+import { encodeApiFilePath } from "./pr-types";
+import { getPlannotatorDataDir } from "./data-dir";
 
 // GitLab-specific MRRef shape (used internally)
 interface GlMRRef {
@@ -40,9 +43,61 @@ interface GitLabDiffEntry {
   renamed_file: boolean;
 }
 
-/** Parse JSON array from glab api --paginate output (already merged by glab) */
-function parsePaginatedArray<T>(stdout: string): T[] {
-  return JSON.parse(stdout) as T[];
+/**
+ * Parse output of `glab api --paginate`.
+ *
+ * glab concatenates pages as adjacent JSON arrays (`[...][...]`) which is not
+ * valid JSON. Walk the output, split it into top-level arrays, and merge them.
+ * Single-page output (the common case) round-trips through the same path.
+ */
+export function parsePaginatedArray<T>(stdout: string): T[] {
+  const trimmed = stdout.trim();
+  if (!trimmed) return [];
+
+  const slices: string[] = [];
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  let start = -1;
+
+  for (let i = 0; i < trimmed.length; i++) {
+    const c = trimmed[i];
+    if (inString) {
+      if (escape) {
+        escape = false;
+      } else if (c === "\\") {
+        escape = true;
+      } else if (c === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (c === '"') {
+      inString = true;
+      continue;
+    }
+    if (c === "[" || c === "{") {
+      if (depth === 0 && c === "[") start = i;
+      depth++;
+    } else if (c === "]" || c === "}") {
+      depth--;
+      if (depth === 0 && c === "]" && start !== -1) {
+        slices.push(trimmed.slice(start, i + 1));
+        start = -1;
+      }
+    }
+  }
+
+  if (slices.length === 0) {
+    return JSON.parse(trimmed) as T[];
+  }
+
+  const merged: T[] = [];
+  for (const slice of slices) {
+    const page = JSON.parse(slice) as T[];
+    if (Array.isArray(page)) merged.push(...page);
+  }
+  return merged;
 }
 
 /**
@@ -115,17 +170,12 @@ export async function fetchGlMR(
 ): Promise<{ metadata: PRMetadata; rawPatch: string }> {
   const encoded = encodeProject(ref.projectPath);
 
-  // Fetch diff and metadata in parallel via glab api (supports --hostname for self-hosted)
+  // Primary: raw_diffs — preserves Git's binary-marker shape and includes
+  // collapsed/generated file contents that the JSON diffs API can omit.
   const [diffResult, viewResult] = await Promise.all([
-    runtime.runCommand("glab", apiArgs(ref.host, `projects/${encoded}/merge_requests/${ref.iid}/diffs?per_page=100`, ["--paginate"])),
+    runtime.runCommand("glab", apiArgs(ref.host, `projects/${encoded}/merge_requests/${ref.iid}/raw_diffs`)),
     runtime.runCommand("glab", apiArgs(ref.host, `projects/${encoded}/merge_requests/${ref.iid}`)),
   ]);
-
-  if (diffResult.exitCode !== 0) {
-    throw new Error(
-      `Failed to fetch MR diff: ${diffResult.stderr.trim() || `exit code ${diffResult.exitCode}`}`,
-    );
-  }
 
   if (viewResult.exitCode !== 0) {
     throw new Error(
@@ -133,15 +183,37 @@ export async function fetchGlMR(
     );
   }
 
-  // Reconstruct unified patch from structured API response
-  const diffs = parsePaginatedArray<GitLabDiffEntry>(diffResult.stdout);
-  const rawPatch = reconstructPatch(diffs);
+  // Fall back to the paginated JSON diffs API when raw_diffs is unavailable
+  // (older self-hosted GitLab that doesn't expose the raw_diffs endpoint) or
+  // returns empty (very large MRs that exceed its safety limit). Reconstruct a
+  // unified patch from the JSON entries — the long-standing pre-raw_diffs path.
+  let rawPatch: string;
+  if (diffResult.exitCode === 0 && diffResult.stdout.trim()) {
+    rawPatch = diffResult.stdout;
+  } else {
+    const fallback = await runtime.runCommand(
+      "glab",
+      apiArgs(ref.host, `projects/${encoded}/merge_requests/${ref.iid}/diffs?per_page=100`, ["--paginate"]),
+    );
+    if (fallback.exitCode !== 0) {
+      const rawErr = diffResult.stderr.trim() || `exit code ${diffResult.exitCode}`;
+      const fbErr = fallback.stderr.trim() || `exit code ${fallback.exitCode}`;
+      throw new Error(`Failed to fetch MR diff (raw_diffs: ${rawErr}; diffs: ${fbErr}).`);
+    }
+    rawPatch = reconstructPatch(parsePaginatedArray<GitLabDiffEntry>(fallback.stdout));
+    if (!rawPatch.trim()) {
+      throw new Error(
+        "MR diff is empty — the diff may be too large to fetch via the GitLab API. Review it on the GitLab web UI.",
+      );
+    }
+  }
 
   const raw = JSON.parse(viewResult.stdout) as {
     title: string;
     author: { username: string };
     source_branch: string;
     target_branch: string;
+    target_project_id?: number;
     diff_refs: { base_sha: string; head_sha: string; start_sha: string } | null;
     web_url: string;
   };
@@ -149,6 +221,18 @@ export async function fetchGlMR(
   if (!raw.diff_refs) {
     throw new Error("MR has no diff refs — it may have been merged or the source branch deleted.");
   }
+
+  let defaultBranch: string | undefined;
+  const projectEndpoint = typeof raw.target_project_id === "number"
+    ? `projects/${raw.target_project_id}`
+    : `projects/${encoded}`;
+  try {
+    const projectResult = await runtime.runCommand("glab", apiArgs(ref.host, projectEndpoint));
+    if (projectResult.exitCode === 0 && projectResult.stdout.trim()) {
+      const project = JSON.parse(projectResult.stdout) as { default_branch?: string };
+      defaultBranch = project.default_branch;
+    }
+  } catch { /* default branch is best-effort metadata */ }
 
   const metadata: PRMetadata = {
     platform: "gitlab",
@@ -159,6 +243,7 @@ export async function fetchGlMR(
     author: raw.author.username,
     baseBranch: raw.target_branch,
     headBranch: raw.source_branch,
+    defaultBranch,
     baseSha: raw.diff_refs.base_sha,
     headSha: raw.diff_refs.head_sha,
     url: raw.web_url,
@@ -481,13 +566,42 @@ export async function submitGlMRReview(
       }
     }
 
-    if (errors.length > 0 && errors.length === fileComments.length) {
-      // All failed — throw
-      throw new Error(`Failed to post inline comments:\n${errors.join("\n")}`);
-    }
-    // Partial failures: some comments posted, some didn't — log but don't throw
     if (errors.length > 0) {
-      console.error(`Warning: ${errors.length}/${fileComments.length} inline comments failed:\n${errors.join("\n")}`);
+      // Persist unposted bodies to disk so the work survives transient GitLab errors.
+      // We keep the original throw-vs-warn split intentionally:
+      //  - all-fail → throw (nothing was posted, caller retries from clean state)
+      //  - partial-fail → warn only (some discussions + the MR note are already on
+      //    the server; throwing would have the client re-submit the whole review
+      //    and create duplicates).
+      const failed = results
+        .map((r, i) => (r.status === "rejected" ? fileComments[i] : null))
+        .filter((c): c is PRReviewFileComment => c !== null);
+      let savedTo: string | null = null;
+      try {
+        const dir = join(getPlannotatorDataDir(), "failed-comments");
+        mkdirSync(dir, { recursive: true });
+        const slug = `${ref.host}-${ref.projectPath.replace(/\//g, "_")}-mr${ref.iid}-${Date.now()}`;
+        savedTo = join(dir, `${slug}.json`);
+        writeFileSync(
+          savedTo,
+          JSON.stringify({ ref, headSha, baseSha, startSha, errors, failedComments: failed }, null, 2),
+        );
+      } catch (writeErr) {
+        console.error(`[plannotator] Failed to persist unposted comments: ${writeErr instanceof Error ? writeErr.message : String(writeErr)}`);
+      }
+      const suffix = savedTo ? ` (unposted bodies saved to ${savedTo})` : "";
+
+      if (errors.length === fileComments.length) {
+        // All failed — safe to throw, nothing was posted.
+        throw new Error(
+          `Failed to post inline comments${suffix}:\n${errors.join("\n")}`,
+        );
+      }
+      // Partial failure — some comments and the MR note are already posted.
+      // Don't throw, or the UI will resubmit the whole review and duplicate them.
+      console.error(
+        `[plannotator] ${errors.length}/${fileComments.length} inline comments failed${suffix}:\n${errors.join("\n")}`,
+      );
     }
   }
 

@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, mock, test } from "bun:test";
+import { beforeAll, describe, expect, mock, onTestFinished, test } from "bun:test";
 
 let editorInputs: string[] = [];
 let editorText = "";
@@ -72,9 +72,30 @@ function createKeybindings(overrides: Partial<Record<string, string[]>> = {}) {
 }
 
 beforeAll(() => {
+   // Model the failure mode from https://github.com/edlsh/pi-ask-user/issues/17.
+   // `getMarkdownTheme()` returns a bag of closures that read through a Proxy
+   // over the host's theme singleton. When the extension's bundled copy of
+   // `@earendil-works/pi-coding-agent` is a different module instance than
+   // the host's (e.g. legacy `@mariozechner/*` host ≤ Pi 0.73.1, where npm
+   // cannot dedupe across scopes), our copy's singleton is never initialised
+   // and any property read throws "Theme not initialized. Call initTheme()
+   // first." Constructing the bag itself succeeds; the throw surfaces lazily
+   // on `mdTheme.bold(...)` from inside pi-tui's `Markdown.render`. The
+   // extension MUST detect this and fall back to plain `Text` rendering.
+   const uninitialisedTheme = new Proxy({}, {
+      get(_target, prop) {
+         throw new Error(`Theme not initialized. Call initTheme() first. (read ${String(prop)})`);
+      },
+   });
+   const brokenMarkdownTheme = {
+      bold: (text: string) => (uninitialisedTheme as any).bold(text),
+      italic: (text: string) => (uninitialisedTheme as any).italic(text),
+      heading: (text: string) => (uninitialisedTheme as any).fg("mdHeading", text),
+   };
+
    mock.module("@earendil-works/pi-coding-agent", () => ({
       DynamicBorder: class { },
-      getMarkdownTheme: () => undefined,
+      getMarkdownTheme: () => brokenMarkdownTheme,
       rawKeyHint: (key: string, description: string) => `${key} ${description}`,
    }));
 
@@ -89,10 +110,23 @@ beforeAll(() => {
          space: "space",
          backspace: "backspace",
          ctrl: (key: string) => `ctrl+${key}`,
+         alt: (key: string) => `alt+${key}`,
          shift: (key: string) => `shift+${key}`,
          tab: "tab",
       },
-      Markdown: class extends MockText { },
+      Markdown: class extends MockText {
+         private mdTheme: any;
+         constructor(text: string, _a: number, _b: number, theme: any) {
+            super(text);
+            this.mdTheme = theme;
+         }
+         render() {
+            // Mirror pi-tui Markdown.render: invoke theme.bold during render
+            // so #17-style regressions surface as render-time crashes in
+            // tests instead of silently passing.
+            return super.render().map((line) => this.mdTheme.bold(line));
+         }
+      },
       matchesKey: (data: string, key: string) => data === key,
       Spacer: class { },
       Text: MockText,
@@ -113,8 +147,10 @@ beforeAll(() => {
          Optional: (value: unknown) => value,
          Array: (value: unknown) => value,
          Union: (value: unknown) => value,
+         Literal: (value: unknown) => value,
          Boolean: (value?: unknown) => value,
          Number: (value?: unknown) => value,
+         Unsafe: (value: unknown) => value,
       },
    }));
 });
@@ -123,6 +159,18 @@ type RegisteredTool = {
    execute: (...args: any[]) => Promise<any>;
    renderResult: (result: any, options: any, theme: any) => any;
 };
+
+function stubEnv(key: string, value: string): void {
+   const original = process.env[key];
+   process.env[key] = value;
+   onTestFinished(() => {
+      if (original === undefined) {
+         delete process.env[key];
+      } else {
+         process.env[key] = original;
+      }
+   });
+}
 
 async function setupTool(): Promise<RegisteredTool> {
    const { default: askUserExtension } = await import("./index");
@@ -156,7 +204,12 @@ function createTheme() {
 }
 
 describe("ask_user", () => {
-   test("does not hide the overlay on narrow terminals", async () => {
+   test("registers with executionMode 'sequential' so the agent loop awaits the user's answer before other tool calls run", async () => {
+      const tool = await setupTool();
+      expect((tool as any).executionMode).toBe("sequential");
+   });
+
+   test("uses overlay mode by default", async () => {
       const tool = await setupTool();
       let capturedOptions: any;
 
@@ -181,6 +234,529 @@ describe("ask_user", () => {
 
       expect(capturedOptions.overlay).toBe(true);
       expect(capturedOptions.overlayOptions.visible).toBeUndefined();
+   });
+
+   test("uses non-overlay custom UI when displayMode is inline", async () => {
+      const tool = await setupTool();
+      let capturedOptions: any;
+
+      const result = await tool.execute(
+         "tool-call-id",
+         {
+            question: "Which option should we use?",
+            options: ["A", "B"],
+            displayMode: "inline",
+         },
+         undefined,
+         undefined,
+         {
+            hasUI: true,
+            ui: {
+               custom: async (_factory: any, options: any) => {
+                  capturedOptions = options;
+                  return null;
+               },
+            },
+         },
+      );
+
+      expect(capturedOptions).toBeUndefined();
+      expect(result.details.cancelled).toBe(true);
+   });
+
+   test("inline mode resolves with the user's selection", async () => {
+      const tool = await setupTool();
+
+      const result = await tool.execute(
+         "tool-call-id",
+         {
+            question: "Which option should we use?",
+            options: ["A", "B"],
+            displayMode: "inline",
+         },
+         undefined,
+         undefined,
+         {
+            hasUI: true,
+            ui: {
+               custom: async (factory: any) =>
+                  await new Promise((resolve) => {
+                     factory(
+                        { requestRender() { }, terminal: { rows: 24 } },
+                        createTheme(),
+                        createKeybindings(),
+                        resolve,
+                     );
+                     resolve({ kind: "selection", selections: ["A"] });
+                  }),
+            },
+         },
+      );
+
+      expect(result.details.cancelled).toBe(false);
+      expect(result.details.response).toEqual({ kind: "selection", selections: ["A"] });
+   });
+
+   test("inline mode still respects timeout cancellation", async () => {
+      const tool = await setupTool();
+
+      const result = await tool.execute(
+         "tool-call-id",
+         {
+            question: "Which option should we use?",
+            options: ["A", "B"],
+            displayMode: "inline",
+            timeout: 5,
+         },
+         undefined,
+         undefined,
+         {
+            hasUI: true,
+            ui: {
+               custom: async (factory: any) =>
+                  await new Promise((resolve) => {
+                     factory(
+                        { requestRender() { }, terminal: { rows: 24 } },
+                        createTheme(),
+                        createKeybindings(),
+                        resolve,
+                     );
+                  }),
+            },
+         },
+      );
+
+      expect(result.details.cancelled).toBe(true);
+      expect(result.details.response).toBeNull();
+   });
+
+   test("uses PI_ASK_USER_DISPLAY_MODE env var when call-level displayMode is omitted", async () => {
+      stubEnv("PI_ASK_USER_DISPLAY_MODE", "inline");
+      const tool = await setupTool();
+      let capturedOptions: any;
+
+      await tool.execute(
+         "tool-call-id",
+         {
+            question: "Which option should we use?",
+            options: ["A", "B"],
+         },
+         undefined,
+         undefined,
+         {
+            hasUI: true,
+            ui: {
+               custom: async (_factory: any, options: any) => {
+                  capturedOptions = options;
+                  return null;
+               },
+            },
+         },
+      );
+
+      expect(capturedOptions).toBeUndefined();
+   });
+
+   test("call-level displayMode overrides PI_ASK_USER_DISPLAY_MODE env var", async () => {
+      stubEnv("PI_ASK_USER_DISPLAY_MODE", "inline");
+      const tool = await setupTool();
+      let capturedOptions: any;
+
+      await tool.execute(
+         "tool-call-id",
+         {
+            question: "Which option should we use?",
+            options: ["A", "B"],
+            displayMode: "overlay",
+         },
+         undefined,
+         undefined,
+         {
+            hasUI: true,
+            ui: {
+               custom: async (_factory: any, options: any) => {
+                  capturedOptions = options;
+                  return null;
+               },
+            },
+         },
+      );
+
+      expect(capturedOptions.overlay).toBe(true);
+   });
+
+   test("ignores unrecognised PI_ASK_USER_DISPLAY_MODE value and falls back to overlay", async () => {
+      stubEnv("PI_ASK_USER_DISPLAY_MODE", "fullscreen");
+      const tool = await setupTool();
+      let capturedOptions: any;
+
+      await tool.execute(
+         "tool-call-id",
+         {
+            question: "Which option should we use?",
+            options: ["A", "B"],
+         },
+         undefined,
+         undefined,
+         {
+            hasUI: true,
+            ui: {
+               custom: async (_factory: any, options: any) => {
+                  capturedOptions = options;
+                  return null;
+               },
+            },
+         },
+      );
+
+      expect(capturedOptions.overlay).toBe(true);
+   });
+
+   describe("overlay hide/show toggle (alt+o)", () => {
+      function createOverlayHandle() {
+         let hidden = false;
+         const calls: boolean[] = [];
+         return {
+            handle: {
+               hide() { },
+               setHidden(value: boolean) {
+                  hidden = value;
+                  calls.push(value);
+               },
+               isHidden() {
+                  return hidden;
+               },
+               focus() { },
+               unfocus() { },
+               isFocused() {
+                  return false;
+               },
+            },
+            calls,
+         };
+      }
+
+      test("registers an onTerminalInput listener and passes onHandle in overlay mode", async () => {
+         const tool = await setupTool();
+         let capturedOptions: any;
+         let inputHandler: ((data: string) => any) | undefined;
+         let unsubscribed = false;
+
+         await tool.execute(
+            "tool-call-id",
+            { question: "Q", options: ["A"] },
+            undefined,
+            undefined,
+            {
+               hasUI: true,
+               ui: {
+                  custom: async (_factory: any, options: any) => {
+                     capturedOptions = options;
+                     return null;
+                  },
+                  onTerminalInput: (handler: (data: string) => any) => {
+                     inputHandler = handler;
+                     return () => {
+                        unsubscribed = true;
+                     };
+                  },
+                  notify: () => { },
+               },
+            },
+         );
+
+         expect(typeof capturedOptions.onHandle).toBe("function");
+         expect(typeof inputHandler).toBe("function");
+         expect(unsubscribed).toBe(true);
+      });
+
+      test("does not register onTerminalInput in inline mode", async () => {
+         const tool = await setupTool();
+         let registered = false;
+
+         await tool.execute(
+            "tool-call-id",
+            { question: "Q", options: ["A"], displayMode: "inline" },
+            undefined,
+            undefined,
+            {
+               hasUI: true,
+               ui: {
+                  custom: async () => null,
+                  onTerminalInput: () => {
+                     registered = true;
+                     return () => { };
+                  },
+               },
+            },
+         );
+
+         expect(registered).toBe(false);
+      });
+
+      test("alt+o toggles overlay visibility via OverlayHandle.setHidden", async () => {
+         const tool = await setupTool();
+         const { handle, calls } = createOverlayHandle();
+         let inputHandler: ((data: string) => any) | undefined;
+         const notifications: Array<{ message: string; type?: string }> = [];
+
+         await tool.execute(
+            "tool-call-id",
+            { question: "Q", options: ["A"] },
+            undefined,
+            undefined,
+            {
+               hasUI: true,
+               ui: {
+                  custom: async (_factory: any, options: any) => {
+                     options.onHandle?.(handle);
+                     // Simulate the user pressing alt+o twice while the overlay is shown.
+                     const firstResult = inputHandler?.("alt+o");
+                     const secondResult = inputHandler?.("alt+o");
+                     expect(firstResult).toEqual({ consume: true });
+                     expect(secondResult).toEqual({ consume: true });
+                     return null;
+                  },
+                  onTerminalInput: (handler: (data: string) => any) => {
+                     inputHandler = handler;
+                     return () => { };
+                  },
+                  notify: (message: string, type?: string) => {
+                     notifications.push({ message, type });
+                  },
+               },
+            },
+         );
+
+         expect(calls).toEqual([true, false]);
+         expect(notifications).toHaveLength(1);
+         expect(notifications[0]?.message).toContain("alt+o");
+         expect(notifications[0]?.type).toBe("info");
+      });
+
+      test("does not consume ctrl+o from the terminal listener", async () => {
+         const tool = await setupTool();
+         const { handle, calls } = createOverlayHandle();
+         let inputHandler: ((data: string) => any) | undefined;
+
+         await tool.execute(
+            "tool-call-id",
+            { question: "Q", options: ["A"] },
+            undefined,
+            undefined,
+            {
+               hasUI: true,
+               ui: {
+                  custom: async (_factory: any, options: any) => {
+                     options.onHandle?.(handle);
+                     const result = inputHandler?.("ctrl+o");
+                     expect(result).toBeUndefined();
+                     return null;
+                  },
+                  onTerminalInput: (handler: (data: string) => any) => {
+                     inputHandler = handler;
+                     return () => { };
+                  },
+                  notify: () => { },
+               },
+            },
+         );
+
+         expect(calls).toEqual([]);
+      });
+
+      test("does not force a hidden overlay visible during cleanup", async () => {
+         const tool = await setupTool();
+         const { handle, calls } = createOverlayHandle();
+         let inputHandler: ((data: string) => any) | undefined;
+
+         await tool.execute(
+            "tool-call-id",
+            { question: "Q", options: ["A"] },
+            undefined,
+            undefined,
+            {
+               hasUI: true,
+               ui: {
+                  custom: async (_factory: any, options: any) => {
+                     options.onHandle?.(handle);
+                     // Hide and resolve while still hidden.
+                     inputHandler?.("alt+o");
+                     return null;
+                  },
+                  onTerminalInput: (handler: (data: string) => any) => {
+                     inputHandler = handler;
+                     return () => { };
+                  },
+                  notify: () => { },
+               },
+            },
+         );
+
+         expect(calls).toEqual([true]);
+      });
+
+      test("per-call overlayToggleKey replaces the default alt+o binding", async () => {
+         const tool = await setupTool();
+         const { handle, calls } = createOverlayHandle();
+         let inputHandler: ((data: string) => any) | undefined;
+         const notifications: Array<{ message: string; type?: string }> = [];
+
+         await tool.execute(
+            "tool-call-id",
+            { question: "Q", options: ["A"], overlayToggleKey: "alt+h" },
+            undefined,
+            undefined,
+            {
+               hasUI: true,
+               ui: {
+                  custom: async (_factory: any, options: any) => {
+                     options.onHandle?.(handle);
+                     const ignored = inputHandler?.("alt+o");
+                     const consumed = inputHandler?.("alt+h");
+                     expect(ignored).toBeUndefined();
+                     expect(consumed).toEqual({ consume: true });
+                     return null;
+                  },
+                  onTerminalInput: (handler: (data: string) => any) => {
+                     inputHandler = handler;
+                     return () => { };
+                  },
+                  notify: (message: string, type?: string) => {
+                     notifications.push({ message, type });
+                  },
+               },
+            },
+         );
+
+         expect(calls).toEqual([true]);
+         expect(notifications).toHaveLength(1);
+         expect(notifications[0]?.message).toContain("alt+h");
+      });
+
+      test("PI_ASK_USER_OVERLAY_TOGGLE_KEY env var overrides default", async () => {
+         stubEnv("PI_ASK_USER_OVERLAY_TOGGLE_KEY", "alt+h");
+         const tool = await setupTool();
+         const { handle, calls } = createOverlayHandle();
+         let inputHandler: ((data: string) => any) | undefined;
+
+         await tool.execute(
+            "tool-call-id",
+            { question: "Q", options: ["A"] },
+            undefined,
+            undefined,
+            {
+               hasUI: true,
+               ui: {
+                  custom: async (_factory: any, options: any) => {
+                     options.onHandle?.(handle);
+                     const ignored = inputHandler?.("alt+o");
+                     const consumed = inputHandler?.("alt+h");
+                     expect(ignored).toBeUndefined();
+                     expect(consumed).toEqual({ consume: true });
+                     return null;
+                  },
+                  onTerminalInput: (handler: (data: string) => any) => {
+                     inputHandler = handler;
+                     return () => { };
+                  },
+                  notify: () => { },
+               },
+            },
+         );
+
+         expect(calls).toEqual([true]);
+      });
+
+      test("per-call overlayToggleKey wins over env var", async () => {
+         stubEnv("PI_ASK_USER_OVERLAY_TOGGLE_KEY", "alt+h");
+         const tool = await setupTool();
+         const { handle, calls } = createOverlayHandle();
+         let inputHandler: ((data: string) => any) | undefined;
+
+         await tool.execute(
+            "tool-call-id",
+            { question: "Q", options: ["A"], overlayToggleKey: "alt+x" },
+            undefined,
+            undefined,
+            {
+               hasUI: true,
+               ui: {
+                  custom: async (_factory: any, options: any) => {
+                     options.onHandle?.(handle);
+                     const ignoredEnv = inputHandler?.("alt+h");
+                     const consumed = inputHandler?.("alt+x");
+                     expect(ignoredEnv).toBeUndefined();
+                     expect(consumed).toEqual({ consume: true });
+                     return null;
+                  },
+                  onTerminalInput: (handler: (data: string) => any) => {
+                     inputHandler = handler;
+                     return () => { };
+                  },
+                  notify: () => { },
+               },
+            },
+         );
+
+         expect(calls).toEqual([true]);
+      });
+
+      test("overlayToggleKey 'off' disables the listener entirely", async () => {
+         const tool = await setupTool();
+         let registered = false;
+
+         await tool.execute(
+            "tool-call-id",
+            { question: "Q", options: ["A"], overlayToggleKey: "off" },
+            undefined,
+            undefined,
+            {
+               hasUI: true,
+               ui: {
+                  custom: async () => null,
+                  onTerminalInput: () => {
+                     registered = true;
+                     return () => { };
+                  },
+               },
+            },
+         );
+
+         expect(registered).toBe(false);
+      });
+
+      test("invalid overlayToggleKey falls through to env var", async () => {
+         stubEnv("PI_ASK_USER_OVERLAY_TOGGLE_KEY", "alt+h");
+         const tool = await setupTool();
+         const { handle, calls } = createOverlayHandle();
+         let inputHandler: ((data: string) => any) | undefined;
+
+         await tool.execute(
+            "tool-call-id",
+            { question: "Q", options: ["A"], overlayToggleKey: "++bad++" },
+            undefined,
+            undefined,
+            {
+               hasUI: true,
+               ui: {
+                  custom: async (_factory: any, options: any) => {
+                     options.onHandle?.(handle);
+                     const consumed = inputHandler?.("alt+h");
+                     expect(consumed).toEqual({ consume: true });
+                     return null;
+                  },
+                  onTerminalInput: (handler: (data: string) => any) => {
+                     inputHandler = handler;
+                     return () => { };
+                  },
+                  notify: () => { },
+               },
+            },
+         );
+
+         expect(calls).toEqual([true]);
+      });
    });
 
    test("renders partial updates as waiting state instead of a successful empty answer", async () => {
@@ -415,6 +991,161 @@ describe("ask_user", () => {
       expect(result.details.cancelled).toBe(false);
    });
 
+   test("navigates single-select options with ctrl+j (vim down)", async () => {
+      const tool = await setupTool();
+
+      const result = await tool.execute(
+         "tool-call-id",
+         {
+            question: "Which option should we use?",
+            options: ["Alpha", "Beta", "Gamma"],
+         },
+         undefined,
+         undefined,
+         {
+            hasUI: true,
+            ui: {
+               custom: async (factory: any) => {
+                  let resolved: string | null | undefined;
+                  const component = factory(
+                     { requestRender() { }, terminal: { rows: 24 } },
+                     createTheme(),
+                     createKeybindings(),
+                     (value: string | null) => {
+                        resolved = value;
+                     },
+                  );
+
+                  component.handleInput("ctrl+j");
+                  component.handleInput("enter");
+                  return resolved ?? null;
+               },
+            },
+         },
+      );
+
+      expect(result.isError).not.toBe(true);
+      expect(result.details.response).toEqual({ kind: "selection", selections: ["Beta"] });
+      expect(result.details.cancelled).toBe(false);
+   });
+
+   test("wraps to last option when ctrl+k (vim up) is pressed at the top", async () => {
+      const tool = await setupTool();
+
+      const result = await tool.execute(
+         "tool-call-id",
+         {
+            question: "Which option should we use?",
+            options: ["Alpha", "Beta", "Gamma"],
+            allowFreeform: false,
+         },
+         undefined,
+         undefined,
+         {
+            hasUI: true,
+            ui: {
+               custom: async (factory: any) => {
+                  let resolved: string | null | undefined;
+                  const component = factory(
+                     { requestRender() { }, terminal: { rows: 24 } },
+                     createTheme(),
+                     createKeybindings(),
+                     (value: string | null) => {
+                        resolved = value;
+                     },
+                  );
+
+                  component.handleInput("ctrl+k");
+                  component.handleInput("enter");
+                  return resolved ?? null;
+               },
+            },
+         },
+      );
+
+      expect(result.isError).not.toBe(true);
+      expect(result.details.response).toEqual({ kind: "selection", selections: ["Gamma"] });
+      expect(result.details.cancelled).toBe(false);
+   });
+
+   test("treats bare j as fuzzy-search input rather than navigation", async () => {
+      const tool = await setupTool();
+
+      const result = await tool.execute(
+         "tool-call-id",
+         {
+            question: "Which option should we use?",
+            options: ["Alpha", "June", "Gamma"],
+         },
+         undefined,
+         undefined,
+         {
+            hasUI: true,
+            ui: {
+               custom: async (factory: any) => {
+                  let resolved: string | null | undefined;
+                  const component = factory(
+                     { requestRender() { }, terminal: { rows: 24 } },
+                     createTheme(),
+                     createKeybindings(),
+                     (value: string | null) => {
+                        resolved = value;
+                     },
+                  );
+
+                  component.handleInput("j");
+                  component.handleInput("enter");
+                  return resolved ?? null;
+               },
+            },
+         },
+      );
+
+      expect(result.isError).not.toBe(true);
+      expect(result.details.response).toEqual({ kind: "selection", selections: ["June"] });
+      expect(result.details.cancelled).toBe(false);
+   });
+
+   test("navigates multi-select options with ctrl+j before toggling", async () => {
+      const tool = await setupTool();
+
+      const result = await tool.execute(
+         "tool-call-id",
+         {
+            question: "Which options should we use?",
+            options: ["Alpha", "Beta", "Gamma"],
+            allowMultiple: true,
+         },
+         undefined,
+         undefined,
+         {
+            hasUI: true,
+            ui: {
+               custom: async (factory: any) => {
+                  let resolved: any;
+                  const component = factory(
+                     { requestRender() { }, terminal: { rows: 24 } },
+                     createTheme(),
+                     createKeybindings(),
+                     (value: any) => {
+                        resolved = value;
+                     },
+                  );
+
+                  component.handleInput("ctrl+j");
+                  component.handleInput("space");
+                  component.handleInput("enter");
+                  return resolved ?? null;
+               },
+            },
+         },
+      );
+
+      expect(result.isError).not.toBe(true);
+      expect(result.details.response).toEqual({ kind: "selection", selections: ["Beta"] });
+      expect(result.details.cancelled).toBe(false);
+   });
+
    test("keeps single-select search usable when comment toggling is enabled", async () => {
       const tool = await setupTool();
 
@@ -575,6 +1306,7 @@ describe("ask_user", () => {
       );
 
       expect(result.isError).not.toBe(true);
+      expect(helpText).toContain("alt+o hide");
       expect(helpText).toContain("q cancel");
       expect(helpText).not.toContain("ctrl+c cancel");
    });
@@ -770,6 +1502,97 @@ describe("ask_user", () => {
       expect(helpText).toContain("ctrl+g toggle context");
    });
 
+   test("uses custom commentToggleKey for comment toggling and help text", async () => {
+      const tool = await setupTool();
+      let renderedBefore = "";
+      let renderedAfterIgnored = "";
+      let renderedAfterCustom = "";
+      let helpText = "";
+
+      const result = await tool.execute(
+         "tool-call-id",
+         {
+            question: "Which option should we use?",
+            options: ["Alpha", "Beta"],
+            allowComment: true,
+            commentToggleKey: "alt+c",
+         },
+         undefined,
+         undefined,
+         {
+            hasUI: true,
+            ui: {
+               custom: async (factory: any) => {
+                  const component = factory(
+                     { requestRender() { }, terminal: { rows: 24 } },
+                     createTheme(),
+                     createKeybindings(),
+                     () => { },
+                  );
+
+                  renderedBefore = ((component as any).singleSelectList as any).render(80).join("\n");
+                  helpText = (component as any).helpText.render().join("\n");
+                  // Default ctrl+g should no longer toggle.
+                  component.handleInput("ctrl+g");
+                  renderedAfterIgnored = ((component as any).singleSelectList as any).render(80).join("\n");
+                  // Configured alt+c should toggle.
+                  component.handleInput("alt+c");
+                  renderedAfterCustom = ((component as any).singleSelectList as any).render(80).join("\n");
+                  return null;
+               },
+            },
+         },
+      );
+
+      expect(result.isError).not.toBe(true);
+      expect(renderedBefore).toContain("[ ] Add extra context after selection");
+      expect(renderedAfterIgnored).toContain("[ ] Add extra context after selection");
+      expect(renderedAfterCustom).toContain("[✓] Add extra context after selection");
+      expect(helpText).toContain("alt+c toggle context");
+      expect(helpText).not.toContain("ctrl+g toggle context");
+   });
+
+   test("commentToggleKey 'off' hides the toggle hint and ignores ctrl+g", async () => {
+      const tool = await setupTool();
+      let renderedBefore = "";
+      let renderedAfter = "";
+      let helpText = "";
+
+      await tool.execute(
+         "tool-call-id",
+         {
+            question: "Q",
+            options: ["Alpha", "Beta"],
+            allowComment: true,
+            commentToggleKey: "off",
+         },
+         undefined,
+         undefined,
+         {
+            hasUI: true,
+            ui: {
+               custom: async (factory: any) => {
+                  const component = factory(
+                     { requestRender() { }, terminal: { rows: 24 } },
+                     createTheme(),
+                     createKeybindings(),
+                     () => { },
+                  );
+                  renderedBefore = ((component as any).singleSelectList as any).render(80).join("\n");
+                  helpText = (component as any).helpText.render().join("\n");
+                  component.handleInput("ctrl+g");
+                  renderedAfter = ((component as any).singleSelectList as any).render(80).join("\n");
+                  return null;
+               },
+            },
+         },
+      );
+
+      expect(renderedBefore).toContain("[ ] Add extra context after selection");
+      expect(renderedAfter).toContain("[ ] Add extra context after selection");
+      expect(helpText).not.toContain("toggle context");
+   });
+
 
    test("collects an optional comment after a single selection before resolving", async () => {
       const tool = await setupTool();
@@ -866,6 +1689,72 @@ describe("ask_user", () => {
          comment: "Roll out both behind the same flag.",
       });
       expect(result.details.cancelled).toBe(false);
+   });
+
+
+   test("does not crash when host theme singleton is uninitialised (regression for #17)", async () => {
+      // The shared `getMarkdownTheme` mock above returns a bag of closures
+      // that throw on every property read of the underlying theme proxy,
+      // mirroring what happens on pre-rename hosts where our bundled copy of
+      // pi-coding-agent has its own (uninitialised) `globalThis` slot. The
+      // `Markdown` mock above also calls `theme.bold` during render. So if
+      // the extension ever stops gating through `safeMarkdownTheme()`, the
+      // throw surfaces at one of the two callsites: the constructor's
+      // context branch, or the split-pane preview built by
+      // `buildPreviewLines` — both must remain quiet.
+      const tool = await setupTool();
+      let constructionError: unknown;
+      let previewError: unknown;
+      let preview = "";
+
+      await tool.execute(
+         "tool-call-id",
+         {
+            question: "Pick one",
+            context: "Some **markdown** context",
+            options: [
+               { title: "Alpha", description: "First **emphasised** option" },
+               { title: "Beta", description: "Second option" },
+            ],
+         },
+         undefined,
+         undefined,
+         {
+            hasUI: true,
+            ui: {
+               custom: async (factory: any) => {
+                  let component: any;
+                  try {
+                     component = factory(
+                        { requestRender() { }, terminal: { rows: 24 } },
+                        createTheme(),
+                        createKeybindings(),
+                        () => { },
+                     );
+                  } catch (err) {
+                     constructionError = err;
+                     return null;
+                  }
+                  try {
+                     // Width 120 forces the split-pane preview, which is the
+                     // path that constructs and renders the Markdown
+                     // component over the option description.
+                     preview = (component.singleSelectList as any).render(120).join("\n");
+                  } catch (err) {
+                     previewError = err;
+                  }
+                  return null;
+               },
+            },
+         },
+      );
+
+      expect(constructionError).toBeUndefined();
+      expect(previewError).toBeUndefined();
+      // Confirm the raw markdown fell through to plain Text rendering rather
+      // than getting silently dropped when the theme proxy was unavailable.
+      expect(preview).toContain("## Alpha");
+      expect(preview).toContain("First **emphasised** option");
    });
 
 

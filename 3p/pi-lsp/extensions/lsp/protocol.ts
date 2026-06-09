@@ -43,6 +43,7 @@ export class LspConnection {
       stdio: ['pipe', 'pipe', 'pipe'],
       cwd: this.options?.cwd,
       env: { ...process.env, ...this.options?.env },
+      shell: process.platform === 'win32',
     });
 
     this.process.stdout!.on('data', (chunk: Buffer) => {

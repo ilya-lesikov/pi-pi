@@ -38,6 +38,12 @@ Servers are configured via two config files (project overrides global):
 | `~/.pi/agent/extensions/lsp/config.json` | Global defaults |
 | `.pi/lsp.json` | Project-local overrides |
 
+On first run a starter `config.json` is scaffolded with example servers
+(TypeScript, Python, Rust, Go) — **all `disabled` by default**. No language
+server is enabled out of the box; flip `"disabled": false` (or remove the flag)
+on the ones you want. This keeps the extension from spawning a server you never
+asked for.
+
 ### Example: TypeScript + oxlint
 
 `.pi/lsp.json`:

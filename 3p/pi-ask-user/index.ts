@@ -7,7 +7,7 @@
 
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import { Type, type TUnsafe } from "@sinclair/typebox";
 import {
    Container,
    type Component,
@@ -21,6 +21,7 @@ import {
    Markdown,
    type MarkdownTheme,
    matchesKey,
+   type OverlayHandle,
    Spacer,
    Text,
    type TUI,
@@ -28,12 +29,63 @@ import {
    wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { renderSingleSelectRows, type QuestionOption } from "./single-select-layout";
+export type { QuestionOption } from "./single-select-layout";
 
 import { createRequire } from "node:module";
 const _require = createRequire(import.meta.url);
 const ASK_USER_VERSION: string = (_require("./package.json") as { version: string }).version;
 
+/**
+ * Emit a flat `{ type: "string", enum: [...] }` JSON Schema instead of the
+ * `anyOf`/`oneOf` shape that `Type.Union([Type.Literal()])` produces. Google's
+ * function-calling API rejects the union form. Local copy of pi-ai's StringEnum
+ * to avoid a peer dependency for one helper.
+ */
+function StringEnum<const T extends readonly string[]>(
+   values: T,
+   options?: { description?: string; default?: T[number] },
+): TUnsafe<T[number]> {
+   return Type.Unsafe<T[number]>({
+      type: "string",
+      enum: [...values],
+      ...(options?.description ? { description: options.description } : {}),
+      ...(options?.default !== undefined ? { default: options.default } : {}),
+   });
+}
+
+/**
+ * `getMarkdownTheme()` returns a bag of closures that read through a Proxy
+ * over the host's theme singleton. The Proxy only throws on property access,
+ * not when the bag itself is constructed — so a naive
+ * `try { getMarkdownTheme() } catch {}` silently lets a broken bag escape
+ * and crashes mid-render the first time pi-tui's Markdown calls
+ * `mdTheme.bold(...)`.
+ *
+ * That broken-bag scenario shows up whenever this extension's bundled copy
+ * of `@earendil-works/pi-coding-agent` is a different module instance than
+ * the host's — e.g. an older Pi still on the legacy
+ * `@mariozechner/pi-coding-agent` scope (≤ 0.73.1) where npm cannot dedupe
+ * across scopes, so our copy's theme singleton is never initialised
+ * (`globalThis[Symbol.for("@earendil-works/pi-coding-agent:theme")]` is
+ * undefined). See https://github.com/edlsh/pi-ask-user/issues/17.
+ *
+ * Probe `bold("")` to force the Proxy lookup eagerly; on throw, callers
+ * fall back to plain `Text` rendering for context blocks.
+ */
+function safeMarkdownTheme(): MarkdownTheme | undefined {
+   try {
+      const md = getMarkdownTheme();
+      if (!md) return undefined;
+      md.bold("");
+      return md;
+   } catch {
+      return undefined;
+   }
+}
+
 type AskOptionInput = QuestionOption | string;
+
+type AskDisplayMode = "overlay" | "inline";
 
 interface AskParams {
    question: string;
@@ -42,6 +94,9 @@ interface AskParams {
    allowMultiple?: boolean;
    allowFreeform?: boolean;
    allowComment?: boolean;
+   displayMode?: AskDisplayMode;
+   overlayToggleKey?: string | null;
+   commentToggleKey?: string | null;
    timeout?: number;
 }
 
@@ -223,8 +278,63 @@ function literalHint(theme: Theme, key: string, description: string): string {
    return `${theme.fg("dim", key)}${theme.fg("muted", ` ${description}`)}`;
 }
 
-function isCommentToggleKey(data: string): boolean {
-   return matchesKey(data, Key.ctrl("g"));
+type ResolvedShortcut =
+   | { disabled: false; spec: string; matches: (data: string) => boolean }
+   | { disabled: true; spec: null; matches: (data: string) => false };
+
+interface ResolvedAskShortcuts {
+   overlayToggle: ResolvedShortcut;
+   commentToggle: ResolvedShortcut;
+}
+
+const DISABLED_SHORTCUT: ResolvedShortcut = {
+   disabled: true,
+   spec: null,
+   matches: ((_data: string) => false) as (data: string) => false,
+};
+
+const SHORTCUT_DISABLE_VALUES = new Set(["off", "none", "disabled", ""]);
+
+function normalizeShortcutSpec(value: string | null | undefined): string | null | undefined {
+   if (value === undefined) return undefined;
+   if (value === null) return null;
+   const trimmed = value.trim().toLowerCase();
+   if (SHORTCUT_DISABLE_VALUES.has(trimmed)) return null;
+   return trimmed;
+}
+
+function isValidShortcutSpec(spec: string): boolean {
+   // KeyId is canonical lowercase: modifiers (`ctrl|shift|alt|super`) joined by `+`,
+   // plus a base key. We do a light syntactic sanity check; matchesKey() does the rest.
+   if (!spec) return false;
+   if (!/^[a-z0-9+_\-!@#$%^&*()|~`'":;,./<>?[\]{}=\\]+$/i.test(spec)) return false;
+   if (spec.startsWith("+") || spec.endsWith("+")) return false;
+   if (spec.includes("++")) return false;
+   return true;
+}
+
+function buildShortcut(spec: string): ResolvedShortcut {
+   return {
+      disabled: false,
+      spec,
+      matches: (data: string) => matchesKey(data, spec as any),
+   };
+}
+
+function resolveShortcut(
+   paramValue: string | null | undefined,
+   envValue: string | undefined,
+   defaultSpec: string,
+): ResolvedShortcut {
+   const candidates: Array<string | null | undefined> = [paramValue, envValue, defaultSpec];
+   for (const raw of candidates) {
+      const normalized = normalizeShortcutSpec(raw);
+      if (normalized === undefined) continue; // not provided, fall through
+      if (normalized === null) return DISABLED_SHORTCUT; // explicit disable
+      if (isValidShortcutSpec(normalized)) return buildShortcut(normalized);
+      // Invalid spec: silently fall through to next candidate.
+   }
+   return DISABLED_SHORTCUT;
 }
 
 type AskMode = "select" | "freeform" | "comment";
@@ -238,6 +348,66 @@ const SINGLE_SELECT_SPLIT_PANE_RIGHT_MIN_WIDTH = 28;
 const SINGLE_SELECT_SPLIT_PANE_SEPARATOR = " │ ";
 const FREEFORM_SENTINEL = "\u270f\ufe0f Type custom response...";
 const COMMENT_TOGGLE_LABEL = "Add extra context after selection";
+const DEFAULT_OVERLAY_TOGGLE_KEY = "alt+o";
+const DEFAULT_COMMENT_TOGGLE_KEY = "ctrl+g";
+
+// Vim-style aliases for navigating option lists. ctrl+j/k are safe in the
+// searchable single-select because they don't collide with fuzzy-search input.
+const VIM_SELECT_UP_KEY = Key.ctrl("k");
+const VIM_SELECT_DOWN_KEY = Key.ctrl("j");
+
+function matchesSelectUp(data: string, keybindings: KeybindingsManager): boolean {
+   return (
+      keybindings.matches(data, "tui.select.up") ||
+      matchesKey(data, Key.shift("tab")) ||
+      matchesKey(data, VIM_SELECT_UP_KEY)
+   );
+}
+
+function matchesSelectDown(data: string, keybindings: KeybindingsManager): boolean {
+   return (
+      keybindings.matches(data, "tui.select.down") ||
+      matchesKey(data, Key.tab) ||
+      matchesKey(data, VIM_SELECT_DOWN_KEY)
+   );
+}
+
+function buildCustomUIOptions(
+   displayMode: AskDisplayMode,
+   onHandle?: (handle: OverlayHandle) => void,
+) {
+   switch (displayMode) {
+      case "inline":
+         return undefined;
+      case "overlay":
+         return {
+            overlay: true,
+            overlayOptions: {
+               anchor: "center" as const,
+               width: ASK_OVERLAY_WIDTH,
+               minWidth: ASK_OVERLAY_MIN_WIDTH,
+               maxHeight: "85%",
+               margin: 1,
+            },
+            ...(onHandle ? { onHandle } : {}),
+         };
+      default: {
+         const _exhaustive: never = displayMode;
+         void _exhaustive;
+         return {
+            overlay: true,
+            overlayOptions: {
+               anchor: "center" as const,
+               width: ASK_OVERLAY_WIDTH,
+               minWidth: ASK_OVERLAY_MIN_WIDTH,
+               maxHeight: "85%",
+               margin: 1,
+            },
+            ...(onHandle ? { onHandle } : {}),
+         };
+      }
+   }
+}
 
 class MultiSelectList implements Component {
    private options: QuestionOption[];
@@ -245,6 +415,7 @@ class MultiSelectList implements Component {
    private allowComment: boolean;
    private theme: Theme;
    private keybindings: KeybindingsManager;
+   private commentToggle: ResolvedShortcut;
    private selectedIndex = 0;
    private checked = new Set<number>();
    private commentEnabled = false;
@@ -261,12 +432,14 @@ class MultiSelectList implements Component {
       allowComment: boolean,
       theme: Theme,
       keybindings: KeybindingsManager,
+      commentToggle: ResolvedShortcut,
    ) {
       this.options = options;
       this.allowFreeform = allowFreeform;
       this.allowComment = allowComment;
       this.theme = theme;
       this.keybindings = keybindings;
+      this.commentToggle = commentToggle;
    }
 
    public isCommentEnabled(): boolean {
@@ -323,18 +496,18 @@ class MultiSelectList implements Component {
          return;
       }
 
-      if (this.allowComment && isCommentToggleKey(data)) {
+      if (this.allowComment && !this.commentToggle.disabled && this.commentToggle.matches(data)) {
          this.toggleComment();
          return;
       }
 
-      if (this.keybindings.matches(data, "tui.select.up") || matchesKey(data, Key.shift("tab"))) {
+      if (matchesSelectUp(data, this.keybindings)) {
          this.selectedIndex = this.selectedIndex === 0 ? count - 1 : this.selectedIndex - 1;
          this.invalidate();
          return;
       }
 
-      if (this.keybindings.matches(data, "tui.select.down") || matchesKey(data, Key.tab)) {
+      if (matchesSelectDown(data, this.keybindings)) {
          this.selectedIndex = this.selectedIndex === count - 1 ? 0 : this.selectedIndex + 1;
          this.invalidate();
          return;
@@ -467,6 +640,7 @@ class WrappedSingleSelectList implements Component {
    private allowComment: boolean;
    private theme: Theme;
    private keybindings: KeybindingsManager;
+   private commentToggle: ResolvedShortcut;
    private selectedIndex = 0;
    private searchQuery = "";
    private commentEnabled = false;
@@ -484,12 +658,14 @@ class WrappedSingleSelectList implements Component {
       allowComment: boolean,
       theme: Theme,
       keybindings: KeybindingsManager,
+      commentToggle: ResolvedShortcut,
    ) {
       this.options = options;
       this.allowFreeform = allowFreeform;
       this.allowComment = allowComment;
       this.theme = theme;
       this.keybindings = keybindings;
+      this.commentToggle = commentToggle;
    }
 
    public isCommentEnabled(): boolean {
@@ -640,10 +816,7 @@ class WrappedSingleSelectList implements Component {
    private buildPreviewLines(width: number, filteredOptions: QuestionOption[], maxLines: number): string[] {
       if (maxLines <= 0) return [];
 
-      let mdTheme: MarkdownTheme | undefined;
-      try {
-         mdTheme = getMarkdownTheme();
-      } catch { }
+      const mdTheme = safeMarkdownTheme();
 
       let md = "";
 
@@ -710,7 +883,7 @@ class WrappedSingleSelectList implements Component {
          return;
       }
 
-      if (this.allowComment && isCommentToggleKey(data)) {
+      if (this.allowComment && !this.commentToggle.disabled && this.commentToggle.matches(data)) {
          this.toggleComment();
          return;
       }
@@ -718,13 +891,13 @@ class WrappedSingleSelectList implements Component {
       const filteredOptions = this.getFilteredOptions();
       const count = this.getItemCount(filteredOptions);
 
-      if ((this.keybindings.matches(data, "tui.select.up") || matchesKey(data, Key.shift("tab"))) && count > 0) {
+      if (matchesSelectUp(data, this.keybindings) && count > 0) {
          this.selectedIndex = this.selectedIndex === 0 ? count - 1 : this.selectedIndex - 1;
          this.invalidate();
          return;
       }
 
-      if ((this.keybindings.matches(data, "tui.select.down") || matchesKey(data, Key.tab)) && count > 0) {
+      if (matchesSelectDown(data, this.keybindings) && count > 0) {
          this.selectedIndex = this.selectedIndex === count - 1 ? 0 : this.selectedIndex + 1;
          this.invalidate();
          return;
@@ -815,9 +988,11 @@ class AskComponent extends Container {
    private allowMultiple: boolean;
    private allowFreeform: boolean;
    private allowComment: boolean;
+   private displayMode: AskDisplayMode;
    private tui: TUI;
    private theme: Theme;
    private keybindings: KeybindingsManager;
+   private shortcuts: ResolvedAskShortcuts;
    private onDone: (result: AskUIResult | null) => void;
 
    private mode: AskMode = "select";
@@ -856,9 +1031,11 @@ class AskComponent extends Container {
       allowMultiple: boolean,
       allowFreeform: boolean,
       allowComment: boolean,
+      displayMode: AskDisplayMode,
       tui: TUI,
       theme: Theme,
       keybindings: KeybindingsManager,
+      shortcuts: ResolvedAskShortcuts,
       onDone: (result: AskUIResult | null) => void,
    ) {
       super();
@@ -869,9 +1046,11 @@ class AskComponent extends Container {
       this.allowMultiple = allowMultiple;
       this.allowFreeform = allowFreeform;
       this.allowComment = allowComment;
+      this.displayMode = displayMode;
       this.tui = tui;
       this.theme = theme;
       this.keybindings = keybindings;
+      this.shortcuts = shortcuts;
       this.onDone = onDone;
 
       // Layout skeleton
@@ -891,10 +1070,7 @@ class AskComponent extends Container {
 
       if (this.context) {
          this.addChild(new Spacer(1));
-         let mdTheme: MarkdownTheme | undefined;
-         try {
-            mdTheme = getMarkdownTheme();
-         } catch { }
+         const mdTheme = safeMarkdownTheme();
          if (mdTheme) {
             this.contextComponent = new Markdown("", 1, 0, mdTheme);
          } else {
@@ -991,6 +1167,12 @@ class AskComponent extends Container {
 
    private updateHelpText(): void {
       const theme = this.theme;
+      const overlayHint = this.displayMode === "overlay" && !this.shortcuts.overlayToggle.disabled
+         ? literalHint(theme, this.shortcuts.overlayToggle.spec, "hide")
+         : null;
+      const commentHint = this.allowComment && !this.shortcuts.commentToggle.disabled
+         ? literalHint(theme, this.shortcuts.commentToggle.spec, "toggle context")
+         : null;
       if (this.mode === "freeform" || this.mode === "comment") {
          const alternateCancelKeys = this.keybindings
             .getKeys("tui.select.cancel")
@@ -999,6 +1181,7 @@ class AskComponent extends Container {
             keybindingHint(theme, this.keybindings, "tui.input.submit", this.mode === "comment" ? "submit/skip" : "submit"),
             keybindingHint(theme, this.keybindings, "tui.input.newLine", "newline"),
             literalHint(theme, "esc", "back"),
+            overlayHint,
             alternateCancelKeys.length > 0 ? literalHint(theme, formatKeyList(alternateCancelKeys), "cancel") : null,
          ]
             .filter((hint): hint is string => !!hint)
@@ -1011,7 +1194,8 @@ class AskComponent extends Container {
          const hints = [
             literalHint(theme, "↑↓", "navigate"),
             literalHint(theme, "space", "toggle"),
-            this.allowComment ? literalHint(theme, "ctrl+g", "toggle context") : null,
+            commentHint,
+            overlayHint,
             keybindingHint(theme, this.keybindings, "tui.select.confirm", "submit"),
             keybindingHint(theme, this.keybindings, "tui.select.cancel", "cancel"),
          ]
@@ -1026,7 +1210,8 @@ class AskComponent extends Container {
             literalHint(theme, "type", "filter"),
             keybindingHint(theme, this.keybindings, "tui.editor.deleteCharBackward", "erase"),
             literalHint(theme, "↑↓", "navigate"),
-            this.allowComment ? literalHint(theme, "ctrl+g", "toggle context") : null,
+            commentHint,
+            overlayHint,
             keybindingHint(theme, this.keybindings, "tui.select.confirm", "select"),
             literalHint(theme, "esc", "clear/cancel"),
             alternateCancelKeys.length > 0
@@ -1048,6 +1233,7 @@ class AskComponent extends Container {
          this.allowComment,
          this.theme,
          this.keybindings,
+         this.shortcuts.commentToggle,
       );
       list.onSubmit = (result) => this.handleSelectionSubmit([result], list.isCommentEnabled());
       list.onCancel = () => this.onDone(null);
@@ -1066,6 +1252,7 @@ class AskComponent extends Container {
          this.allowComment,
          this.theme,
          this.keybindings,
+         this.shortcuts.commentToggle,
       );
       list.onCancel = () => this.onDone(null);
       list.onSubmit = (result) => this.handleSelectionSubmit(result, list.isCommentEnabled());
@@ -1287,23 +1474,22 @@ async function askViaDialogs(
    return createSelectionResponse([selected], comment);
 }
 
-export type { AskResponse, QuestionOption };
-
-export interface AskUserOptions {
-   question: string;
-   context?: string;
-   options?: AskOptionInput[];
-   allowMultiple?: boolean;
-   allowFreeform?: boolean;
-   allowComment?: boolean;
-   timeout?: number;
-   signal?: AbortSignal;
-   overlay?: boolean;
-}
-
 export async function askUser(
    ctx: { hasUI: boolean; ui: any },
-   opts: AskUserOptions,
+   opts: {
+      question: string;
+      context?: string;
+      options?: AskOptionInput[];
+      allowMultiple?: boolean;
+      allowFreeform?: boolean;
+      allowComment?: boolean;
+      timeout?: number;
+      signal?: AbortSignal;
+      overlay?: boolean;
+      displayMode?: AskDisplayMode;
+      overlayToggleKey?: string | null;
+      commentToggleKey?: string | null;
+   },
 ): Promise<AskResponse | null> {
    const {
       question,
@@ -1314,8 +1500,31 @@ export async function askUser(
       allowComment = false,
       timeout,
       signal,
-      overlay = false,
+      overlay,
+      displayMode,
+      overlayToggleKey,
+      commentToggleKey,
    } = opts;
+
+   const requestedMode = displayMode ?? (overlay === undefined ? undefined : overlay ? "overlay" : "inline");
+   const envMode = process.env.PI_ASK_USER_DISPLAY_MODE;
+   const envDisplayMode: AskDisplayMode | undefined =
+      envMode === "overlay" || envMode === "inline" ? envMode : undefined;
+   const effectiveDisplayMode: AskDisplayMode = requestedMode ?? envDisplayMode ?? "inline";
+
+   const shortcuts: ResolvedAskShortcuts = {
+      overlayToggle: resolveShortcut(
+         overlayToggleKey,
+         process.env.PI_ASK_USER_OVERLAY_TOGGLE_KEY,
+         DEFAULT_OVERLAY_TOGGLE_KEY,
+      ),
+      commentToggle: resolveShortcut(
+         commentToggleKey,
+         process.env.PI_ASK_USER_COMMENT_TOGGLE_KEY,
+         DEFAULT_COMMENT_TOGGLE_KEY,
+      ),
+   };
+
    const options = normalizeOptions(rawOptions);
    const normalizedContext = context?.trim() || undefined;
 
@@ -1327,12 +1536,13 @@ export async function askUser(
       return createFreeformResponse(answer);
    }
 
-   const customOpts = overlay
-      ? { overlay: true, overlayOptions: { anchor: "bottom-center" as const, width: ASK_OVERLAY_WIDTH, minWidth: ASK_OVERLAY_MIN_WIDTH, maxHeight: "85%" as const } }
-      : {};
+   let overlayHandle: OverlayHandle | undefined;
+   let removeOverlayInputListener: (() => void) | undefined;
+   let hasAnnouncedHide = false;
 
-   const customResult = await ctx.ui.custom<AskResponse | null>(
-      (tui: TUI, theme: Theme, keybindings: KeybindingsManager, done: (result: AskResponse | null) => void) => {
+   ctx.ui.setWorkingMessage?.("Waiting for user to answer…");
+   try {
+      const customFactory = (tui: TUI, theme: Theme, keybindings: KeybindingsManager, done: (result: AskUIResult | null) => void) => {
          if (signal) {
             const onAbort = () => done(null);
             signal.addEventListener("abort", onAbort, { once: true });
@@ -1347,18 +1557,46 @@ export async function askUser(
             allowMultiple,
             allowFreeform,
             allowComment,
+            effectiveDisplayMode,
             tui,
             theme,
             keybindings,
+            shortcuts,
             done,
          );
-      },
-      customOpts,
-   );
+      };
 
-   if (customResult !== undefined) return customResult;
+      const overlayToggle = shortcuts.overlayToggle;
+      if (
+         effectiveDisplayMode === "overlay"
+         && !overlayToggle.disabled
+         && typeof ctx.ui.onTerminalInput === "function"
+      ) {
+         removeOverlayInputListener = ctx.ui.onTerminalInput((data: string) => {
+            if (!overlayToggle.matches(data) || !overlayHandle) return undefined;
+            const nextHidden = !overlayHandle.isHidden();
+            overlayHandle.setHidden(nextHidden);
+            if (nextHidden && !hasAnnouncedHide) {
+               hasAnnouncedHide = true;
+               ctx.ui.notify?.(`ask_user hidden — press ${overlayToggle.spec} to reopen`, "info");
+            }
+            return { consume: true };
+         });
+      }
 
-   return askViaDialogs(ctx.ui, question, normalizedContext, options, allowMultiple, allowFreeform, allowComment, timeout);
+      const customResult = await ctx.ui.custom(
+         customFactory,
+         buildCustomUIOptions(effectiveDisplayMode, (handle) => {
+            overlayHandle = handle;
+         }),
+      ) as AskUIResult | null | undefined;
+
+      if (customResult !== undefined) return customResult;
+      return askViaDialogs(ctx.ui, question, normalizedContext, options, allowMultiple, allowFreeform, allowComment, timeout);
+   } finally {
+      removeOverlayInputListener?.();
+      ctx.ui.setWorkingMessage?.();
+   }
 }
 
 export default function(pi: ExtensionAPI) {
@@ -1375,6 +1613,10 @@ export default function(pi: ExtensionAPI) {
          "Ask exactly one focused question per ask_user call.",
          "Do not combine multiple numbered, multipart, or unrelated questions into one ask_user prompt.",
       ],
+      // Block other tool calls in the same assistant turn until the user answers,
+      // so the model can't batch ask_user with bash/edit/write and let those run
+      // (potentially with side effects) before the user sees the prompt.
+      executionMode: "sequential",
       parameters: Type.Object({
          question: Type.String({ description: "The question to ask the user" }),
          context: Type.Optional(
@@ -1405,6 +1647,23 @@ export default function(pi: ExtensionAPI) {
          allowComment: Type.Optional(
             Type.Boolean({ description: "Collect an optional comment after selecting one or more options. Default: false" }),
          ),
+         displayMode: Type.Optional(
+            StringEnum(["overlay", "inline"] as const, {
+               description: "UI rendering mode. 'overlay' shows a centered modal, 'inline' renders in-place. Default: PI_ASK_USER_DISPLAY_MODE env var if set, otherwise 'inline'. Omit to respect the user's configured preference.",
+            }),
+         ),
+         overlayToggleKey: Type.Optional(
+            Type.String({
+               description:
+                  "Shortcut for hiding/showing the overlay popup (overlay mode only), e.g. 'alt+o' or 'ctrl+shift+h'. Pass 'off' to disable. Default: PI_ASK_USER_OVERLAY_TOGGLE_KEY env var if set, otherwise 'alt+o'.",
+            }),
+         ),
+         commentToggleKey: Type.Optional(
+            Type.String({
+               description:
+                  "Shortcut for toggling the optional comment/extra-context row when allowComment is true, e.g. 'ctrl+g'. Pass 'off' to disable. Default: PI_ASK_USER_COMMENT_TOGGLE_KEY env var if set, otherwise 'ctrl+g'.",
+            }),
+         ),
          timeout: Type.Optional(
             Type.Number({ description: "Auto-dismiss after N milliseconds. Returns null (cancelled) when expired." }),
          ),
@@ -1413,7 +1672,7 @@ export default function(pi: ExtensionAPI) {
       async execute(_toolCallId, params, signal, onUpdate, ctx) {
          if (signal?.aborted) {
             return {
-               content: [{ type: "text", text: "Cancelled" }],
+               content: [{ type: "text" as const, text: "Cancelled" }],
                details: { question: params.question, options: [], response: null, cancelled: true } as AskToolDetails,
             };
          }
@@ -1425,8 +1684,12 @@ export default function(pi: ExtensionAPI) {
             allowMultiple = false,
             allowFreeform = true,
             allowComment = false,
+            displayMode,
+            overlayToggleKey,
+            commentToggleKey,
             timeout,
          } = params as AskParams;
+
          const options = normalizeOptions(rawOptions);
          const normalizedContext = context?.trim() || undefined;
 
@@ -1436,93 +1699,48 @@ export default function(pi: ExtensionAPI) {
             const commentHint = allowComment ? "\n\nAfter choosing an option, you may add an optional comment." : "";
             const contextText = normalizedContext ? `\n\nContext:\n${normalizedContext}` : "";
             return {
-               content: [
-                  {
-                     type: "text",
-                     text: `Ask requires interactive mode. Please answer:\n\n${question}${contextText}${optionText}${freeformHint}${commentHint}`,
-                  },
-               ],
+               content: [{ type: "text" as const, text: `Ask requires interactive mode. Please answer:\n\n${question}${contextText}${optionText}${freeformHint}${commentHint}` }],
                isError: true,
                details: { question, context: normalizedContext, options, response: null, cancelled: true } as AskToolDetails,
             };
          }
 
-         if (options.length === 0) {
-            const prompt = normalizedContext ? `${question}\n\nContext:\n${normalizedContext}` : question;
-            const answer = await ctx.ui.input(prompt, "Type your answer...", timeout ? { timeout } : undefined);
-            const response = createFreeformResponse(answer);
+         if (options.length > 0) {
+            onUpdate?.({
+               content: [{ type: "text" as const, text: "Waiting for user input..." }],
+               details: { question, context: normalizedContext, options, response: null, cancelled: false },
+            });
+         }
 
-            if (!response) {
-               return {
-                  content: [{ type: "text", text: "User cancelled the question" }],
-                  details: { question, context: normalizedContext, options, response: null, cancelled: true } as AskToolDetails,
-               };
-            }
-
-            pi.events.emit("ask:answered", { question, context: normalizedContext, response });
+         let result: AskResponse | null;
+         try {
+            result = await askUser(ctx, {
+               question,
+               context: normalizedContext,
+               options,
+               allowMultiple,
+               allowFreeform,
+               allowComment,
+               displayMode,
+               overlayToggleKey,
+               commentToggleKey,
+               timeout,
+               signal,
+            });
+         } catch (error) {
+            const message =
+               error instanceof Error ? `${error.message}\n${error.stack ?? ""}` : String(error);
             return {
-               content: [{ type: "text", text: `User answered: ${formatResponseSummary(response)}` }],
-               details: { question, context: normalizedContext, options, response, cancelled: false } as AskToolDetails,
+               content: [{ type: "text" as const, text: `Ask tool failed: ${message}` }],
+               isError: true,
+               details: { error: message },
             };
          }
 
-         onUpdate?.({
-            content: [{ type: "text", text: "Waiting for user input..." }],
-            details: { question, context: normalizedContext, options, response: null, cancelled: false },
-         });
-
-         ctx.ui.setWorkingMessage?.("Waiting for user to answer…");
-         let result: AskUIResult | null;
-         try {
-            const customResult = await ctx.ui.custom<AskUIResult | null>(
-               (tui, theme, keybindings, done) => {
-                  if (signal) {
-                     const onAbort = () => done(null);
-                     signal.addEventListener("abort", onAbort, { once: true });
-                  }
-
-                  if (timeout && timeout > 0) {
-                     setTimeout(() => done(null), timeout);
-                  }
-
-                  return new AskComponent(
-                     question,
-                     normalizedContext,
-                     options,
-                     allowMultiple,
-                     allowFreeform,
-                     allowComment,
-                     tui,
-                     theme,
-                     keybindings,
-                     done,
-                  );
-               },
-                {},
-            );
-
-            if (customResult !== undefined) {
-               result = customResult;
-            } else {
-               // RPC/headless mode: degrade to select()/input() dialog protocol
-               result = await askViaDialogs(ctx.ui, question, normalizedContext, options, allowMultiple, allowFreeform, allowComment, timeout);
-            }
-          } catch (error) {
-             ctx.ui.setWorkingMessage?.();
-             const message =
-                error instanceof Error ? `${error.message}\n${error.stack ?? ""}` : String(error);
-             return {
-                content: [{ type: "text", text: `Ask tool failed: ${message}` }],
-                isError: true,
-                details: { error: message },
-             };
-          }
-          ctx.ui.setWorkingMessage?.();
-
-          if (result === null) {
+         if (result === null) {
             pi.events.emit("ask:cancelled", { question, context: normalizedContext, options });
             return {
-               content: [{ type: "text", text: "User cancelled the question" }],
+               content: [{ type: "text" as const, text: "User cancelled the question" }],
                details: { question, context: normalizedContext, options, response: null, cancelled: true } as AskToolDetails,
             };
          }
@@ -1533,7 +1751,7 @@ export default function(pi: ExtensionAPI) {
             response: result,
          });
          return {
-            content: [{ type: "text", text: `User answered: ${formatResponseSummary(result)}` }],
+            content: [{ type: "text" as const, text: `User answered: ${formatResponseSummary(result)}` }],
             details: {
                question,
                context: normalizedContext,
@@ -1573,8 +1791,8 @@ export default function(pi: ExtensionAPI) {
 
          if (options.isPartial) {
             const waitingText = result.content
-               ?.filter((part: { type?: string; text?: string }) => part?.type === "text")
-               .map((part: { text?: string }) => part.text ?? "")
+               ?.filter((part) => part?.type === "text")
+               .map((part) => (part.type === "text" ? part.text : ""))
                .join("\n")
                .trim() || "Waiting for user input...";
             return new Text(theme.fg("muted", waitingText), 0, 0);

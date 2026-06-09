@@ -96,8 +96,8 @@ describe('formatting', () => {
       '/repo',
     );
     expect(docSymbols).toContain('Symbols in src/foo.ts');
-    expect(docSymbols).toContain('Foo (class)');
-    expect(docSymbols).toContain('bar (method)');
+    expect(docSymbols).toContain('Foo (class) line 1:7');
+    expect(docSymbols).toContain('bar (method) line 3:3');
 
     const wsSymbols = formatWorkspaceSymbols(
       [
@@ -115,7 +115,7 @@ describe('formatting', () => {
       '/repo',
     );
     expect(wsSymbols).toContain('Workspace symbols matching "Foo"');
-    expect(wsSymbols).toContain('FooService (class) src/service.ts:12 in services');
+    expect(wsSymbols).toContain('FooService (class) src/service.ts:12:1 in services');
   });
 
   test('formats call hierarchy and code actions', () => {

@@ -2,23 +2,38 @@
 # Sandbox script for testing Plannotator OpenCode plugin locally
 #
 # Usage:
-#   ./sandbox-opencode.sh [--disable-sharing] [--keep] [--no-git]
+#   ./sandbox-opencode.sh [--isolated] [--runtime MODE] [--workflow MODE] [--planning-agents AGENTS] [--disable-sharing] [--keep] [--no-git] [--no-launch]
 #
 # Options:
+#   --workflow MODE     Plugin workflow to test: manual | plan-agent | all-agents
+#                      Default: plan-agent
+#   --planning-agents   Comma-separated planning agent names for plan-agent mode
+#                      Default: plan
 #   --disable-sharing  Create opencode.json with "share": "disabled" to test
 #                      the sharing disable feature without env var pollution
+#   --isolated        Run OpenCode with temporary HOME/XDG/Bun cache dirs
+#                     so local plugin installs and command shims are ignored
+#   --isolation-root  Directory to use for isolated HOME/XDG/Bun cache dirs
+#   --no-auth         Don't copy the current OpenCode auth.json into isolation
+#   --runtime MODE    Plugin runtime to force: auto | cli | embedded
+#                     Default: auto
 #   --keep             Don't clean up sandbox on exit (for debugging)
 #   --no-git           Don't initialize git repo (tests non-git fallback)
+#   --no-launch        Create the sandbox and config, then exit before OpenCode
+#                      Implies --keep so the generated helpers remain usable
 #
 # What it does:
-#   1. Builds the plugin (ensures latest code)
-#   2. Creates a temp directory with git repo
-#   3. Creates sample files with uncommitted changes (for /plannotator-review)
-#   4. Sets up the local plugin
-#   5. Launches OpenCode in the sandbox
+#   1. Clears OpenCode-related caches
+#   2. Builds the plugin (ensures latest code)
+#   3. Creates a temp directory with git repo
+#   4. Creates sample files with uncommitted changes (for /plannotator-review)
+#   5. Creates two minimal folders for reproducing folder-annotation draft collisions
+#   6. Writes workflow-specific OpenCode config
+#   7. Sets up the local plugin
+#   8. Launches OpenCode in the sandbox
 #
 # To test:
-#   - Plan mode: Ask the agent to plan something, it should call submit_plan
+#   - Plan mode behavior varies by --workflow
 #   - Code review: Run /plannotator-review to review the sample changes
 
 set -e
@@ -26,16 +41,68 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 PLUGIN_DIR="$PROJECT_ROOT/apps/opencode-plugin"
+CLEAR_CACHE_SCRIPT="$PROJECT_ROOT/scripts/clear-opencode-cache.sh"
+PLUGIN_LOADER_RELATIVE_PATH="./.opencode/plannotator.ts"
 
 # Parse CLI flags
+WORKFLOW="plan-agent"
+PLANNING_AGENTS="plan"
 DISABLE_SHARING=false
+ISOLATED=false
+ISOLATION_ROOT=""
+COPY_AUTH=true
+RUNTIME="auto"
 KEEP_SANDBOX=false
 NO_GIT=false
-for arg in "$@"; do
-  case $arg in
+NO_LAUNCH=false
+SOURCE_HOME="${HOME:-}"
+SOURCE_XDG_DATA_HOME="${XDG_DATA_HOME:-}"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --workflow)
+      if [ -z "${2:-}" ]; then
+        echo "--workflow requires an argument" >&2
+        exit 1
+      fi
+      WORKFLOW="$2"
+      shift 2
+      ;;
+    --planning-agents)
+      if [ -z "${2:-}" ]; then
+        echo "--planning-agents requires an argument" >&2
+        exit 1
+      fi
+      PLANNING_AGENTS="$2"
+      shift 2
+      ;;
     --disable-sharing)
       DISABLE_SHARING=true
       shift
+      ;;
+    --isolated)
+      ISOLATED=true
+      shift
+      ;;
+    --isolation-root)
+      if [ -z "${2:-}" ]; then
+        echo "--isolation-root requires an argument" >&2
+        exit 1
+      fi
+      ISOLATION_ROOT="$2"
+      ISOLATED=true
+      shift 2
+      ;;
+    --no-auth)
+      COPY_AUTH=false
+      shift
+      ;;
+    --runtime)
+      if [ -z "${2:-}" ]; then
+        echo "--runtime requires an argument" >&2
+        exit 1
+      fi
+      RUNTIME="$2"
+      shift 2
       ;;
     --keep)
       KEEP_SANDBOX=true
@@ -45,10 +112,212 @@ for arg in "$@"; do
       NO_GIT=true
       shift
       ;;
+    --no-launch)
+      NO_LAUNCH=true
+      shift
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      exit 1
+      ;;
   esac
 done
 
+case "$WORKFLOW" in
+  manual|plan-agent|all-agents) ;;
+  *)
+    echo "Invalid --workflow value: $WORKFLOW" >&2
+    echo "Expected one of: manual, plan-agent, all-agents" >&2
+    exit 1
+    ;;
+esac
+
+case "$RUNTIME" in
+  auto|cli|embedded) ;;
+  *)
+    echo "Invalid --runtime value: $RUNTIME" >&2
+    echo "Expected one of: auto, cli, embedded" >&2
+    exit 1
+    ;;
+esac
+
+if [ "$NO_LAUNCH" = true ]; then
+  KEEP_SANDBOX=true
+fi
+
+if [ "$ISOLATED" = true ]; then
+  if [ -z "$ISOLATION_ROOT" ]; then
+    ISOLATION_ROOT=$(mktemp -d /tmp/plannotator-opencode-isolated-XXXXXX)
+  else
+    mkdir -p "$ISOLATION_ROOT"
+  fi
+
+  mkdir -p \
+    "$ISOLATION_ROOT/home" \
+    "$ISOLATION_ROOT/config" \
+    "$ISOLATION_ROOT/cache" \
+    "$ISOLATION_ROOT/data/opencode" \
+    "$ISOLATION_ROOT/state" \
+    "$ISOLATION_ROOT/bun-cache"
+
+  source_data_home="${SOURCE_XDG_DATA_HOME:-$SOURCE_HOME/.local/share}"
+  source_auth="$source_data_home/opencode/auth.json"
+
+  export HOME="$ISOLATION_ROOT/home"
+  export XDG_CONFIG_HOME="$ISOLATION_ROOT/config"
+  export XDG_CACHE_HOME="$ISOLATION_ROOT/cache"
+  export XDG_DATA_HOME="$ISOLATION_ROOT/data"
+  export XDG_STATE_HOME="$ISOLATION_ROOT/state"
+  export BUN_INSTALL_CACHE_DIR="$ISOLATION_ROOT/bun-cache"
+  export PLANNOTATOR_BIN="${PLANNOTATOR_BIN:-$PROJECT_ROOT/bin/plannotator.js}"
+
+  if [ "$COPY_AUTH" = true ]; then
+    if [ -f "$source_auth" ]; then
+      cp "$source_auth" "$XDG_DATA_HOME/opencode/auth.json"
+    else
+      echo "Warning: OpenCode auth not found at $source_auth; isolated OpenCode may need login." >&2
+    fi
+  fi
+fi
+
+planning_agents_json() {
+  local raw="$1"
+  local IFS=','
+  local parts=()
+  local item
+  for item in $raw; do
+    item="${item#"${item%%[![:space:]]*}"}"
+    item="${item%"${item##*[![:space:]]}"}"
+    if [ -n "$item" ]; then
+      parts+=("\"$item\"")
+    fi
+  done
+
+  if [ ${#parts[@]} -eq 0 ]; then
+    parts+=("\"plan\"")
+  fi
+
+  local IFS=', '
+  printf '[%s]' "${parts[*]}"
+}
+
+shell_quote() {
+  printf "'%s'" "$(printf "%s" "$1" | sed "s/'/'\\\\''/g")"
+}
+
+write_runtime_helpers() {
+  if [ "$ISOLATED" != true ]; then
+    return
+  fi
+
+  local opencode_bin
+  opencode_bin="$(command -v opencode || true)"
+  local openchamber_repo="${OPENCHAMBER_REPO:-}"
+  local openchamber_data_dir="$ISOLATION_ROOT/openchamber-data"
+  mkdir -p "$openchamber_data_dir"
+
+  cat > "$SANDBOX_DIR/plannotator-opencode-env.sh" << EOF
+# Source this file to reuse the isolated OpenCode/Plannotator sandbox.
+export PLANNOTATOR_OPENCODE_SANDBOX=$(shell_quote "$SANDBOX_DIR")
+export PLANNOTATOR_OPENCODE_ISOLATION_ROOT=$(shell_quote "$ISOLATION_ROOT")
+export HOME=$(shell_quote "$HOME")
+export XDG_CONFIG_HOME=$(shell_quote "$XDG_CONFIG_HOME")
+export XDG_CACHE_HOME=$(shell_quote "$XDG_CACHE_HOME")
+export XDG_DATA_HOME=$(shell_quote "$XDG_DATA_HOME")
+export XDG_STATE_HOME=$(shell_quote "$XDG_STATE_HOME")
+export BUN_INSTALL_CACHE_DIR=$(shell_quote "$BUN_INSTALL_CACHE_DIR")
+export PLANNOTATOR_BIN=$(shell_quote "$PLANNOTATOR_BIN")
+export OPENCHAMBER_DATA_DIR=$(shell_quote "$openchamber_data_dir")
+export OPENCHAMBER_REPO=$(shell_quote "$openchamber_repo")
+EOF
+
+  if [ -n "$opencode_bin" ]; then
+    cat >> "$SANDBOX_DIR/plannotator-opencode-env.sh" << EOF
+export OPENCODE_BINARY=$(shell_quote "$opencode_bin")
+export OPENCHAMBER_OPENCODE_PATH=$(shell_quote "$opencode_bin")
+EOF
+  fi
+
+  cat > "$SANDBOX_DIR/run-opencode.sh" << 'EOF'
+#!/bin/bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. "$SCRIPT_DIR/plannotator-opencode-env.sh"
+cd "$PLANNOTATOR_OPENCODE_SANDBOX"
+exec "${OPENCODE_BINARY:-opencode}" "$@"
+EOF
+
+  cat > "$SANDBOX_DIR/run-opencode-serve.sh" << 'EOF'
+#!/bin/bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. "$SCRIPT_DIR/plannotator-opencode-env.sh"
+cd "$PLANNOTATOR_OPENCODE_SANDBOX"
+PORT="${OPENCODE_PORT:-4097}"
+exec "${OPENCODE_BINARY:-opencode}" serve --port "$PORT" "$@"
+EOF
+
+  cat > "$SANDBOX_DIR/run-openchamber.sh" << 'EOF'
+#!/bin/bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. "$SCRIPT_DIR/plannotator-opencode-env.sh"
+cd "$PLANNOTATOR_OPENCODE_SANDBOX"
+export OPENCODE_PORT="${OPENCODE_PORT:-4097}"
+
+if [ -n "${OPENCHAMBER_CLI:-}" ]; then
+  exec "$OPENCHAMBER_CLI" serve --foreground "$@"
+fi
+
+if command -v openchamber >/dev/null 2>&1; then
+  exec openchamber serve --foreground "$@"
+fi
+
+if [ -n "${OPENCHAMBER_REPO:-}" ]; then
+  LOCAL_OPENCHAMBER_CLI="$OPENCHAMBER_REPO/packages/web/bin/cli.js"
+  LOCAL_OPENCHAMBER_DIST="$OPENCHAMBER_REPO/packages/web/dist/index.html"
+
+  if [ -f "$LOCAL_OPENCHAMBER_CLI" ]; then
+    if [ ! -x "$OPENCHAMBER_REPO/node_modules/.bin/vite" ] && [ ! -x "$OPENCHAMBER_REPO/packages/web/node_modules/.bin/vite" ]; then
+      echo "Installing OpenChamber dependencies in $OPENCHAMBER_REPO..."
+      (cd "$OPENCHAMBER_REPO" && bun install)
+    fi
+    if [ ! -f "$LOCAL_OPENCHAMBER_DIST" ]; then
+      echo "Building OpenChamber web UI from $OPENCHAMBER_REPO..."
+      (cd "$OPENCHAMBER_REPO" && bun run build:web)
+    fi
+    exec node "$LOCAL_OPENCHAMBER_CLI" serve --foreground "$@"
+  fi
+fi
+
+echo "Could not find OpenChamber." >&2
+echo "Install openchamber or set OPENCHAMBER_REPO / OPENCHAMBER_CLI before running this script." >&2
+exit 1
+EOF
+
+  cat > "$SANDBOX_DIR/run-openchamber-external.sh" << 'EOF'
+#!/bin/bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. "$SCRIPT_DIR/plannotator-opencode-env.sh"
+export OPENCODE_PORT="${OPENCODE_PORT:-4097}"
+export OPENCODE_SKIP_START=true
+exec "$SCRIPT_DIR/run-openchamber.sh" "$@"
+EOF
+
+  chmod +x \
+    "$SANDBOX_DIR/run-opencode.sh" \
+    "$SANDBOX_DIR/run-opencode-serve.sh" \
+    "$SANDBOX_DIR/run-openchamber.sh" \
+    "$SANDBOX_DIR/run-openchamber-external.sh"
+}
+
 echo "=== Plannotator OpenCode Sandbox ==="
+echo ""
+
+# Clear OpenCode caches so the sandbox always starts from a fresh plugin state
+echo "Clearing OpenCode caches..."
+bash "$CLEAR_CACHE_SCRIPT"
 echo ""
 
 # Build the plugin (includes building dependencies)
@@ -74,6 +343,15 @@ cleanup() {
     rm -rf "$SANDBOX_DIR"
     echo "Done."
   fi
+
+  if [ "$ISOLATED" = true ]; then
+    if [ "$KEEP_SANDBOX" = true ]; then
+      echo "Keeping isolation root at: $ISOLATION_ROOT"
+      echo "To clean up manually: rm -rf $ISOLATION_ROOT"
+    else
+      rm -rf "$ISOLATION_ROOT"
+    fi
+  fi
 }
 trap cleanup EXIT
 
@@ -87,6 +365,7 @@ fi
 
 # Create initial project structure
 mkdir -p src/{api,components,hooks,utils,types}
+mkdir -p docs/folder-draft-a docs/folder-draft-b
 mkdir -p tests
 
 cat > package.json << 'EOF'
@@ -176,6 +455,21 @@ export async function fetchApi<T>(
 
   return response.json();
 }
+EOF
+
+# Minimal folder-annotation repro fixture
+cat > docs/folder-draft-a/spec.md << 'EOF'
+# Folder Draft A
+
+- This folder exists only to reproduce draft collisions.
+- Leave a draft here, then open folder B.
+EOF
+
+cat > docs/folder-draft-b/spec.md << 'EOF'
+# Folder Draft B
+
+- This folder exists only to reproduce draft collisions.
+- If the bug is present, it will show folder A's draft.
 EOF
 
 # Task API
@@ -1538,12 +1832,13 @@ echo ""
 
 # Set up local plugin via loader file
 echo "Setting up local plugin..."
-mkdir -p .opencode/plugins
+mkdir -p .opencode
 
-# Create a loader file that re-exports from the source
-# OpenCode only loads top-level .ts/.js files in the plugins directory
-cat > .opencode/plugins/plannotator.ts << EOF
+# Create a loader file that re-exports from the source.
+# The loader is referenced from opencode.json so we can pass plugin options.
+cat > .opencode/plannotator.ts << EOF
 // Loader for local Plannotator plugin development
+export { default } from "$PLUGIN_DIR/index.ts";
 export * from "$PLUGIN_DIR/index.ts";
 EOF
 
@@ -1552,24 +1847,55 @@ mkdir -p .opencode/commands
 cp "$PLUGIN_DIR/commands/"*.md .opencode/commands/
 
 # Also install to global commands directory (some OpenCode versions need this)
-mkdir -p ~/.config/opencode/commands
-cp "$PLUGIN_DIR/commands/"*.md ~/.config/opencode/commands/ 2>/dev/null || true
+GLOBAL_COMMANDS_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/commands"
+mkdir -p "$GLOBAL_COMMANDS_DIR"
+cp "$PLUGIN_DIR/commands/"*.md "$GLOBAL_COMMANDS_DIR/" 2>/dev/null || true
 
 echo ""
 
-# Create opencode.json config if --disable-sharing was passed
-if [ "$DISABLE_SHARING" = true ]; then
-  echo "Creating opencode.json with sharing disabled..."
-  cat > opencode.json << 'EOF'
+# Create opencode.json with workflow-specific plugin config
+echo "Writing opencode.json for workflow: $WORKFLOW"
+PLUGIN_CONFIG=$(cat <<EOF
+[
+  ["$PLUGIN_LOADER_RELATIVE_PATH", {
+    "workflow": "$WORKFLOW"$(
+      if [ "$RUNTIME" != "auto" ]; then
+        printf ',\n    "runtime": "%s"' "$RUNTIME"
+      fi
+    )$(
+      if [ "$WORKFLOW" = "plan-agent" ]; then
+        printf ',\n    "planningAgents": %s' "$(planning_agents_json "$PLANNING_AGENTS")"
+      fi
+    )
+  }]
+]
+EOF
+)
+
+cat > opencode.json << EOF
 {
-  "share": "disabled"
+  "\$schema": "https://opencode.ai/config.json",
+  "plugin": $PLUGIN_CONFIG$(
+    if [ "$DISABLE_SHARING" = true ]; then
+      printf ',\n  "share": "disabled"'
+    fi
+  )
 }
 EOF
-fi
+
+write_runtime_helpers
 
 echo "=== Sandbox Ready ==="
 echo ""
 echo "Directory: $SANDBOX_DIR"
+if [ "$ISOLATED" = true ]; then
+  echo "Isolation root: $ISOLATION_ROOT"
+fi
+echo "Workflow: $WORKFLOW"
+echo "Runtime: $RUNTIME"
+if [ "$WORKFLOW" = "plan-agent" ]; then
+  echo "Planning agents: $PLANNING_AGENTS"
+fi
 if [ "$NO_GIT" = true ]; then
   echo "Git: DISABLED (--no-git)"
 else
@@ -1580,13 +1906,44 @@ if [ "$DISABLE_SHARING" = true ]; then
 else
   echo "Sharing: enabled (default)"
 fi
-echo ""
-echo "To test:"
-echo "  1. Plan mode: Ask the agent to plan something"
-if [ "$NO_GIT" = false ]; then
-  echo "  2. Code review: Run /plannotator-review"
+if [ "$ISOLATED" = true ]; then
+  echo ""
+  echo "Reusable helpers:"
+  echo "  OpenCode TUI:        $SANDBOX_DIR/run-opencode.sh"
+  echo "  OpenChamber managed: $SANDBOX_DIR/run-openchamber.sh"
+  echo "  OpenCode server:     $SANDBOX_DIR/run-opencode-serve.sh"
+  echo "  OpenChamber external: $SANDBOX_DIR/run-openchamber-external.sh"
 fi
 echo ""
+echo "To test:"
+case "$WORKFLOW" in
+  manual)
+    echo "  1. Plan mode: ask for a plan and confirm submit_plan is not available"
+    echo "  2. Manual review: run /plannotator-last or /plannotator-annotate"
+    ;;
+  plan-agent)
+    echo "  1. Plan mode: ask the plan agent to produce a plan and call submit_plan"
+    echo "  2. Confirm build does not get submit_plan access"
+    ;;
+  all-agents)
+    echo "  1. Plan mode: ask a primary agent to produce a plan and call submit_plan"
+    echo "  2. Confirm broad primary-agent access is restored"
+    ;;
+esac
+if [ "$NO_GIT" = false ]; then
+  echo "  3. Code review: Run /plannotator-review"
+fi
+echo "  4. Folder draft repro:"
+echo "     /plannotator-annotate docs/folder-draft-a"
+echo "     Type a draft in the browser, wait a few seconds, then close the tab without sending feedback"
+echo "     /plannotator-annotate docs/folder-draft-b"
+echo "     If the bug is present, folder B will show folder A's draft"
+echo ""
+if [ "$NO_LAUNCH" = true ]; then
+  echo "Not launching OpenCode (--no-launch)."
+  exit 0
+fi
+
 echo "Launching OpenCode..."
 echo ""
 

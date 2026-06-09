@@ -14,6 +14,20 @@
 
 export type AgentJobStatus = "starting" | "running" | "done" | "failed" | "killed";
 
+/**
+ * Snapshot of the diff the reviewer was looking at when this job was launched.
+ * Carried on the job so downstream UIs (agent-result panel "Copy All") export
+ * the same `**Diff:** ...` header the job was actually run against — if the
+ * reviewer switches the UI to a different diff afterwards, the job's snapshot
+ * still reflects truth. Structurally compatible with the UI-side
+ * `FeedbackDiffContext` in `packages/review-editor/utils/exportFeedback.ts`.
+ */
+export interface AgentJobDiffContext {
+  mode: string;
+  base?: string;
+  worktreePath?: string | null;
+}
+
 export interface AgentJobInfo {
   /** Unique job identifier (UUID). */
   id: string;
@@ -55,6 +69,12 @@ export interface AgentJobInfo {
     explanation: string;
     confidence: number;
   };
+  /** PR URL at launch time — used to attribute findings to the correct PR. */
+  prUrl?: string;
+  /** PR diff scope at launch time — "layer" or "full-stack". */
+  diffScope?: string;
+  /** Diff context at launch time (see AgentJobDiffContext). */
+  diffContext?: AgentJobDiffContext;
 }
 
 export interface AgentCapability {

@@ -13,7 +13,7 @@ import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 
 import { LspClient } from './client';
 import { loadConfig, scaffoldGlobalConfig, serversForExtension, type LoadedConfig } from './config';
-import { registerLspTool, type ServerManager } from './tools';
+import { registerLspTool, type ServerManagerService } from './tools';
 import type { ResolvedServerConfig } from './types';
 
 export default function lspExtension(pi: ExtensionAPI) {
@@ -70,7 +70,7 @@ export default function lspExtension(pi: ExtensionAPI) {
 
   // ── Server manager (passed to tool) ───────────────────────────────────
 
-  const serverManager: ServerManager = {
+  const serverManager: ServerManagerService = {
     clientsForFile(filePath: string): LspClient[] {
       if (!config) return [];
       const matching = serversForExtension(config.servers, filePath);

@@ -4,7 +4,7 @@
 
 # Plannotator
 
-Interactive Plan & Code Review for AI Coding Agents. Mark up and refine your plans or code diffs using a visual UI, share for team collaboration, and seamlessly integrate with **Claude Code**, **Copilot CLI**, **Gemini CLI**, **OpenCode**, **Pi**, and **Codex**.
+Review AI-agent plans and code diffs in a browser. Add inline annotations, send structured feedback back to your agent, and share encrypted review links with teammates. Works with **Claude Code**, **Copilot CLI**, **Gemini CLI**, **OpenCode**, **Pi**, **Codex**, **Droid**, and **Amp**.
 
 **Plan Mode Demos:**
 <table>
@@ -26,16 +26,22 @@ Interactive Plan & Code Review for AI Coding Agents. Mark up and refine your pla
 </tr>
 </table>
 
-**New:** [Code Review](https://x.com/backnotprop/status/2031145299738263567?s=20)
+**Annotate:** Plans, specs, folders, files, urls. send feedback directly to agents. 
 
+**New:** [Code Review](https://x.com/backnotprop/status/2031145299738263567?s=20)
+  
+  - send your feedback to agents
+  - built-in: 
+    - ask ai
+    - agent code reviews 
 
 ### Features
 
 <table>
-<tr><td><strong>Visual Plan Review</strong></td><td>Built-in hook</td><td>Approve or deny agent plans with inline annotations</td></tr>
+<tr><td><strong>Visual Plan Review</strong></td><td>Built-in hook</td><td>Approve or deny agent plans with inline annotations and Ask AI side chat</td></tr>
 <tr><td><strong>Plan Diff</strong></td><td>Automatic</td><td>See what changed when the agent revises a plan</td></tr>
 <tr><td><strong>Code Review</strong></td><td><code>/plannotator-review</code></td><td>View git diffs or remote PRs. Package annotations and ask AI about the code as you review.</td></tr>
-<tr><td><strong>Annotate Any File</strong></td><td><code>/plannotator-annotate &lt;file|folder|url&gt;</code></td><td>Annotate markdown, HTML, URLs, or folders and send feedback to your agent</td></tr>
+<tr><td><strong>Annotate Any File</strong></td><td><code>/plannotator-annotate &lt;file|folder|url&gt;</code></td><td>Annotate markdown, HTML, URLs, or folders, ask AI about the active document, and send feedback to your agent</td></tr>
 <tr><td><strong>Annotate Last Message</strong></td><td><code>/plannotator-last</code></td><td>Annotate the agent's last response and send structured feedback</td></tr>
 </table>
 
@@ -58,6 +64,7 @@ Plannotator lets you privately share plans, annotations, and feedback with colle
 - [OpenCode](#install-for-opencode)
 - [Pi](#install-for-pi)
 - [Codex](#install-for-codex)
+- [Droid](#install-for-droid)
 
 ## Install for Claude Code
 
@@ -211,13 +218,24 @@ See [apps/pi-extension/README.md](apps/pi-extension/README.md) for full usage de
 curl -fsSL https://plannotator.ai/install.sh | bash
 ```
 
+The installer also enables Codex Stop hooks when Codex is installed or `~/.codex` already exists. Restart Codex Desktop
+after installing or changing hooks.
+
 **Windows PowerShell:**
 
 ```powershell
 irm https://plannotator.ai/install.ps1 | iex
 ```
 
+Codex plan review is automatic on macOS, Linux, and WSL. Codex hooks are currently disabled on Windows in the official Codex docs, so the Windows installer does not enable them automatically; the direct `!plannotator` commands still work.
+
 **Then in Codex — feedback flows back into the agent loop automatically:**
+
+```
+$plannotator-review          # Code review skill for current changes
+$plannotator-annotate        # Annotate a markdown file, URL, or folder
+$plannotator-last            # Annotate the last agent message
+```
 
 ```
 !plannotator review           # Code review for current changes
@@ -226,9 +244,46 @@ irm https://plannotator.ai/install.ps1 | iex
 !plannotator last             # Annotate the last agent message
 ```
 
-Plan mode is not yet supported.
+Plan review uses Codex's experimental `Stop` hook on macOS, Linux, and WSL.
 
 See [apps/codex/README.md](apps/codex/README.md) for details.
+
+---
+
+## Install for Droid
+
+**Install the `plannotator` command:**
+
+**macOS / Linux / WSL:**
+
+```bash
+curl -fsSL https://plannotator.ai/install.sh | bash
+```
+
+**Windows PowerShell:**
+
+```powershell
+irm https://plannotator.ai/install.ps1 | iex
+```
+
+**Then in Droid:**
+
+```bash
+droid plugin marketplace add https://github.com/backnotprop/plannotator
+droid plugin install plannotator@plannotator
+```
+
+This Droid plugin is commands-only. It adds:
+
+```text
+/plannotator-review
+/plannotator-annotate <file|folder|url>
+/plannotator-last
+```
+
+It does not currently intercept Droid's planning flow.
+
+See [apps/droid-plugin/README.md](apps/droid-plugin/README.md) for details.
 
 ---
 
@@ -238,8 +293,9 @@ When your AI agent finishes planning, Plannotator:
 
 1. Opens the Plannotator UI in your browser
 2. Lets you annotate the plan visually (delete, insert, replace, comment)
-3. **Approve** → Agent proceeds with implementation
-4. **Request changes** → Your annotations are sent back as structured feedback
+3. Lets you ask AI about the plan or a highlighted selection when a provider is available
+4. **Approve** → Agent proceeds with implementation
+5. **Request changes** → Your annotations are sent back as structured feedback
 
 (Similar flow for code review, except you can also comment on specific lines of code diffs)
 
@@ -261,3 +317,18 @@ at your option.
 Unless you explicitly state otherwise, any contribution intentionally submitted
 for inclusion in this project by you, as defined in the Apache-2.0 license,
 shall be dual licensed as above, without any additional terms or conditions.
+
+## Development
+
+To make the global `plannotator` command run from this checkout:
+
+```bash
+bun install
+bun link
+```
+
+After linking, commands like `plannotator review` use `apps/hook/server/index.ts` from your local repo. Rebuild the bundled HTML when changing UI code:
+
+```bash
+bun run --cwd apps/review build && bun run build:hook
+```

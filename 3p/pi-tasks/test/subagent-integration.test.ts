@@ -288,38 +288,6 @@ describe("TaskExecute", () => {
   });
 });
 
-describe("store upgrade preserves pre-upgrade tasks", () => {
-  let mock: ReturnType<typeof mockPi>;
-
-  beforeEach(() => {
-    delete process.env.PI_TASKS;
-    mock = mockPi();
-    initExtension(mock.pi as any);
-  });
-
-  afterEach(() => {
-    delete process.env.PI_TASKS;
-  });
-
-  it("keeps tasks created before session upgrade visible after upgrade", async () => {
-    const store = (globalThis as any)[Symbol.for("pi-tasks:store")];
-    const created = store.create("plan", "Orchestration phase: plan");
-    store.update(created.id, { status: "in_progress" });
-
-    const sessionCtx = {
-      ...mockCtx(),
-      sessionManager: { getSessionId: () => "session-123" },
-    };
-
-    await mock.fireLifecycle("before_agent_start", {}, sessionCtx);
-
-    const tasks = store.list();
-    expect(tasks).toHaveLength(1);
-    expect(tasks[0].subject).toBe("plan");
-    expect(tasks[0].status).toBe("in_progress");
-  });
-});
-
 describe("TaskExecute via ready broadcast", () => {
   it("detects subagents when ready fires after tasks init", async () => {
     // Init tasks WITHOUT the mock — subagents not available yet
@@ -921,5 +889,108 @@ describe("Widget agent ID display", () => {
 
     const lines = renderWidget(ui.state);
     expect(lines[1]).not.toContain("agent abc");
+  });
+});
+
+describe("Cascade data injection (buildTaskPrompt)", () => {
+  let mock: ReturnType<typeof mockPi>;
+  let rpc: ReturnType<typeof installSubagentsMock>;
+
+  beforeEach(async () => {
+    // Enable autoCascade via config file in cwd
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const configPath = path.join(process.cwd(), ".pi", "tasks-config.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify({ autoCascade: true }));
+
+    mock = mockPi();
+    rpc = installSubagentsMock(mock.pi);
+    initExtension(mock.pi as any);
+
+    // Set latestCtx via turn_start lifecycle event
+    await mock.fireLifecycle("turn_start", {}, mockCtx());
+  });
+
+  afterEach(async () => {
+    rpc.unsub();
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    try { fs.unlinkSync(path.join(process.cwd(), ".pi", "tasks-config.json")); } catch {}
+  });
+
+  it("injects prerequisite result into cascaded agent prompt", async () => {
+    await mock.executeTool("TaskCreate", {
+      subject: "Task A",
+      description: "Produce a result",
+      agentType: "general-purpose",
+    });
+    await mock.executeTool("TaskCreate", {
+      subject: "Task B",
+      description: "Use Task A result",
+      agentType: "general-purpose",
+    });
+    await mock.executeTool("TaskUpdate", { taskId: "2", addBlockedBy: ["1"] });
+
+    await mock.executeTool("TaskExecute", { task_ids: ["1"] });
+    expect(rpc.spawned).toHaveLength(1);
+
+    mock.emitEvent("subagents:completed", { id: "agent-1", result: "The answer is 42" });
+
+    await vi.waitFor(() => expect(rpc.spawned).toHaveLength(2), { timeout: 1000 });
+
+    const bPrompt = rpc.spawned[1].prompt;
+    expect(bPrompt).toContain("Prerequisite task results");
+    expect(bPrompt).toContain("Task #1");
+    expect(bPrompt).toContain("The answer is 42");
+  });
+
+  it("truncates long prerequisite results at 4KB", async () => {
+    await mock.executeTool("TaskCreate", {
+      subject: "Task A",
+      description: "Produce a long result",
+      agentType: "general-purpose",
+    });
+    await mock.executeTool("TaskCreate", {
+      subject: "Task B",
+      description: "Use truncated result",
+      agentType: "general-purpose",
+    });
+    await mock.executeTool("TaskUpdate", { taskId: "2", addBlockedBy: ["1"] });
+
+    await mock.executeTool("TaskExecute", { task_ids: ["1"] });
+
+    const longResult = "x".repeat(5000);
+    mock.emitEvent("subagents:completed", { id: "agent-1", result: longResult });
+
+    await vi.waitFor(() => expect(rpc.spawned).toHaveLength(2), { timeout: 1000 });
+
+    const bPrompt = rpc.spawned[1].prompt;
+    expect(bPrompt).toContain("truncated");
+    expect(bPrompt).toContain("TaskGet");
+    expect(bPrompt.length).toBeLessThan(longResult.length);
+  });
+
+  it("handles dependencies with no stored result gracefully", async () => {
+    await mock.executeTool("TaskCreate", {
+      subject: "Task A",
+      description: "No result stored",
+      agentType: "general-purpose",
+    });
+    await mock.executeTool("TaskCreate", {
+      subject: "Task B",
+      description: "Works without A result",
+      agentType: "general-purpose",
+    });
+    await mock.executeTool("TaskUpdate", { taskId: "2", addBlockedBy: ["1"] });
+
+    await mock.executeTool("TaskExecute", { task_ids: ["1"] });
+
+    mock.emitEvent("subagents:completed", { id: "agent-1" });
+
+    await vi.waitFor(() => expect(rpc.spawned).toHaveLength(2), { timeout: 1000 });
+
+    const bPrompt = rpc.spawned[1].prompt;
+    expect(bPrompt).not.toContain("Prerequisite task results");
   });
 });

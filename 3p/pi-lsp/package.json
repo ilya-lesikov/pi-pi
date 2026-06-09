@@ -1,6 +1,6 @@
 {
   "name": "@dreki-gg/pi-lsp",
-  "version": "0.1.1",
+  "version": "0.4.0",
   "description": "Language-agnostic LSP code intelligence for pi — diagnostics, hover, definitions, references, symbols, and call hierarchy",
   "keywords": [],
   "author": "Juan Albarran <jalbarrandev@gmail.com>",
@@ -23,8 +23,11 @@
       "./extensions/lsp"
     ]
   },
+  "dependencies": {
+    "effect": "^3.21.2"
+  },
   "devDependencies": {
-    "@earendil-works/pi-ai": "^0.75.5",
+    "@earendil-works/pi-ai": "^0.74.0",
     "@types/node": "24",
     "bun-types": "latest",
     "oxfmt": "^0.43.0",
@@ -35,6 +38,17 @@
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",
-    "@sinclair/typebox": "*"
+    "typebox": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-ai": {
+      "optional": true
+    },
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "typebox": {
+      "optional": true
+    }
   }
 }

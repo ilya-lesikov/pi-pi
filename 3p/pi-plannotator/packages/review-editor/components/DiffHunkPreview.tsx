@@ -1,8 +1,11 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { FileDiff } from '@pierre/diffs/react';
 import { getSingularPatch } from '@pierre/diffs';
+import type { DiffLineBgIntensity } from '@plannotator/shared/config';
 import { useTheme } from '@plannotator/ui/components/ThemeProvider';
+import { useConfigValue } from '@plannotator/ui/config';
 import { useReviewState } from '../dock/ReviewStateContext';
+import { resolveSyntaxTheme, buildLineBgOverrides } from '../hooks/usePierreTheme';
 
 interface DiffHunkPreviewProps {
   /** Raw diff hunk string (unified diff format). */
@@ -16,7 +19,12 @@ interface DiffHunkPreviewProps {
  * Build the unsafeCSS string for @pierre/diffs by reading computed CSS variables.
  * Called synchronously so the first render is already themed (no flash on tooltip open).
  */
-function buildPierreCSS(mode: 'dark' | 'light', fontFamily: string, fontSize: string): string {
+function buildPierreCSS(
+  mode: 'light' | 'dark',
+  fontFamily: string,
+  fontSize: string,
+  lineBgIntensity: DiffLineBgIntensity,
+): string {
   try {
     const styles = getComputedStyle(document.documentElement);
     const bg = styles.getPropertyValue('--background').trim();
@@ -43,6 +51,7 @@ function buildPierreCSS(mode: 'dark' | 'light', fontFamily: string, fontSize: st
       [data-file-info] { display: none !important; }
       [data-diffs-header] { display: none !important; }
       ${fontCSS}
+      ${buildLineBgOverrides(lineBgIntensity, mode)}
     `;
   } catch {
     return '';
@@ -59,8 +68,9 @@ export const DiffHunkPreview: React.FC<DiffHunkPreviewProps> = ({
   maxHeight = 128,
   className,
 }) => {
-  const { resolvedMode } = useTheme();
+  const { resolvedMode, colorTheme } = useTheme();
   const state = useReviewState();
+  const lineBgIntensity = useConfigValue('diffLineBgIntensity');
   const [expanded, setExpanded] = useState(false);
 
   const fileDiff = useMemo(() => {
@@ -85,19 +95,21 @@ export const DiffHunkPreview: React.FC<DiffHunkPreviewProps> = ({
   // The lazy initializer reads computed CSS variables from the document root.
   const [pierreTheme, setPierreTheme] = useState<{ type: 'dark' | 'light'; css: string }>(() => ({
     type: resolvedMode ?? 'dark',
-    css: buildPierreCSS(resolvedMode ?? 'dark', state.fontFamily, state.fontSize),
+    css: buildPierreCSS(resolvedMode ?? 'dark', state.fontFamily, state.fontSize, lineBgIntensity),
   }));
 
-  // Re-compute on theme / font changes
+  // Re-compute on theme / font / intensity changes
   useEffect(() => {
     const rafId = requestAnimationFrame(() => {
       setPierreTheme({
         type: resolvedMode ?? 'dark',
-        css: buildPierreCSS(resolvedMode ?? 'dark', state.fontFamily, state.fontSize),
+        css: buildPierreCSS(resolvedMode ?? 'dark', state.fontFamily, state.fontSize, lineBgIntensity),
       });
     });
     return () => cancelAnimationFrame(rafId);
-  }, [resolvedMode, state.fontFamily, state.fontSize]);
+  }, [resolvedMode, colorTheme, state.fontFamily, state.fontSize, lineBgIntensity]);
+
+  const syntaxTheme = resolveSyntaxTheme(colorTheme, resolvedMode ?? 'dark');
 
   if (!fileDiff) {
     return (
@@ -118,6 +130,7 @@ export const DiffHunkPreview: React.FC<DiffHunkPreviewProps> = ({
           options={{
             themeType: pierreTheme.type,
             unsafeCSS: pierreTheme.css,
+            ...(syntaxTheme && { theme: syntaxTheme }),
             diffStyle: 'unified',
             disableLineNumbers: true,
             overflow: 'wrap',

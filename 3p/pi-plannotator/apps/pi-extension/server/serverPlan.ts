@@ -24,6 +24,7 @@ import {
 	handleUploadRequest,
 } from "./handlers.js";
 import { html, json, parseBody, requestUrl } from "./helpers.js";
+import { createPiAIRuntime, handlePiAIRequest } from "./ai-runtime.js";
 import { openEditorDiff } from "./ide.js";
 import {
 	type BearConfig,
@@ -36,15 +37,19 @@ import {
 } from "./integrations.js";
 import { listenOnPort } from "./network.js";
 
-import { saveConfig, detectGitUser, getServerConfig } from "../generated/config.js";
+import { loadConfig, saveConfig, detectGitUser, getServerConfig } from "../generated/config.js";
+import { readImprovementHook, getImprovementHookExpectedPath } from "../generated/improvement-hooks.js";
+import { composeImproveContext } from "../generated/pfm-reminder.js";
 import { detectProjectName, getRepoInfo } from "./project.js";
 import {
 	handleDocRequest,
+	handleDocExistsRequest,
 	handleFileBrowserRequest,
 	handleObsidianDocRequest,
 	handleObsidianFilesRequest,
 	handleObsidianVaultsRequest,
 } from "./reference.js";
+import { warmFileListCache } from "../generated/resolve-file.js";
 
 export interface PlanReviewDecision {
 	approved: boolean;
@@ -76,6 +81,8 @@ export async function startPlanReviewServer(options: {
 	mode?: "archive";
 	customPlanPath?: string | null;
 }): Promise<PlanServerResult> {
+	// Side-channel pre-warm so /api/doc/exists POSTs land on warm cache.
+	void warmFileListCache(process.cwd(), "code");
 	const gitUser = detectGitUser();
 	const sharingEnabled =
 		options.sharingEnabled ?? process.env.PLANNOTATOR_SHARE !== "disabled";
@@ -150,6 +157,7 @@ export async function startPlanReviewServer(options: {
 	// Editor annotations (in-memory, VS Code integration — skip in archive mode)
 	const editorAnnotations = options.mode !== "archive" ? createEditorAnnotationHandler() : null;
 	const externalAnnotations = options.mode !== "archive" ? createExternalAnnotationHandler("plan") : null;
+	const aiRuntime = options.mode !== "archive" ? await createPiAIRuntime() : null;
 
 	// Lazy cache for in-session archive tab
 	let cachedArchivePlans: ArchivedPlan[] | null = null;
@@ -223,13 +231,29 @@ export async function startPlanReviewServer(options: {
 					serverConfig: getServerConfig(gitUser),
 				});
 			}
+		} else if (url.pathname === "/api/hooks/status" && req.method === "GET") {
+			const config = loadConfig();
+			const hook = readImprovementHook("enterplanmode-improve");
+			const pfmEnabled = config.pfmReminder === true;
+			const composed = composeImproveContext({ pfmEnabled, improvementHookContent: hook?.content ?? null });
+			json(res, {
+				pfmReminder: { enabled: pfmEnabled },
+				improvementHook: {
+					present: !!hook,
+					filePath: hook?.filePath ?? getImprovementHookExpectedPath("enterplanmode-improve"),
+					fileSize: hook?.content?.length ?? null,
+					content: hook?.content ?? null,
+				},
+				composedLength: composed?.length ?? null,
+			});
 		} else if (url.pathname === "/api/config" && req.method === "POST") {
 			try {
-				const body = (await parseBody(req)) as { displayName?: string; diffOptions?: Record<string, unknown>; conventionalComments?: boolean };
+				const body = (await parseBody(req)) as { displayName?: string; diffOptions?: Record<string, unknown>; conventionalComments?: boolean; pfmReminder?: boolean };
 				const toSave: Record<string, unknown> = {};
 				if (body.displayName !== undefined) toSave.displayName = body.displayName;
 				if (body.diffOptions !== undefined) toSave.diffOptions = body.diffOptions;
 				if (body.conventionalComments !== undefined) toSave.conventionalComments = body.conventionalComments;
+				if (body.pfmReminder !== undefined) toSave.pfmReminder = body.pfmReminder;
 				if (Object.keys(toSave).length > 0) saveConfig(toSave as Parameters<typeof saveConfig>[0]);
 				json(res, { ok: true });
 			} catch {
@@ -245,8 +269,12 @@ export async function startPlanReviewServer(options: {
 			return;
 		} else if (externalAnnotations && (await externalAnnotations.handle(req, res, url))) {
 			return;
+		} else if (url.pathname.startsWith("/api/ai/") && await handlePiAIRequest(req, res, url, aiRuntime)) {
+			return;
 		} else if (url.pathname === "/api/doc" && req.method === "GET") {
-			handleDocRequest(res, url);
+			await handleDocRequest(res, url);
+		} else if (url.pathname === "/api/doc/exists" && req.method === "POST") {
+			await handleDocExistsRequest(res, req);
 		} else if (url.pathname === "/api/obsidian/vaults") {
 			handleObsidianVaultsRequest(res);
 		} else if (url.pathname === "/api/reference/obsidian/files" && req.method === "GET") {
@@ -469,6 +497,9 @@ export async function startPlanReviewServer(options: {
 			};
 		},
 		...(donePromise && { waitForDone: () => donePromise }),
-		stop: () => server.close(),
+		stop: () => {
+			aiRuntime?.dispose();
+			server.close();
+		},
 	};
 }

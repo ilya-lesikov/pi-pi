@@ -56,6 +56,40 @@ describe('config loader', () => {
     expect(again).toBe(false);
   });
 
+  test('scaffolded starter config does not enable typescript (or any) server by default', async () => {
+    const home = await makeTempDir('pi-lsp-home-');
+    const cwd = await makeTempDir('pi-lsp-cwd-');
+    process.env.HOME = home;
+
+    await scaffoldGlobalConfig(cwd);
+
+    const globalConfigPath = join(home, '.pi', 'agent', 'extensions', 'lsp', 'config.json');
+    const parsed = JSON.parse(await readFile(globalConfigPath, 'utf8'));
+    // Every example server is opt-in (disabled), so typescript is not a default.
+    for (const server of Object.values(parsed.lsp as Record<string, { disabled?: boolean }>)) {
+      expect(server.disabled).toBe(true);
+    }
+
+    const config = await loadConfig(cwd);
+    expect(config.globalDisabled).toBe(false);
+    expect(config.servers).toEqual([]);
+  });
+
+  test('disabled servers are excluded even when their command exists', async () => {
+    const home = await makeTempDir('pi-lsp-home-');
+    const cwd = await makeTempDir('pi-lsp-cwd-');
+    process.env.HOME = home;
+
+    await writeJson(join(cwd, '.pi', 'lsp.json'), {
+      lsp: {
+        node: { command: ['node'], extensions: ['.js'], disabled: true },
+      },
+    });
+
+    const config = await loadConfig(cwd);
+    expect(config.servers).toEqual([]);
+  });
+
   test('does not scaffold when project config exists', async () => {
     const home = await makeTempDir('pi-lsp-home-');
     const cwd = await makeTempDir('pi-lsp-cwd-');

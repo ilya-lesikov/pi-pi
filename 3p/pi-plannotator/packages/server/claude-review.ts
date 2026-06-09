@@ -88,7 +88,7 @@ project guidance files explicitly expand your scope.
 ## Pipeline
 
 Step 1: Gather context
-  - Retrieve the PR diff (gh pr diff or git diff)
+  - Retrieve the PR diff or local diff (gh pr diff, git diff, or jj diff)
   - Read CLAUDE.md and REVIEW.md at the repo root and in every directory
     containing modified files
   - Build a map of which rules apply to which file paths
@@ -205,7 +205,11 @@ export function buildClaudeCommand(prompt: string, model: string = "claude-opus-
     "Bash(git show:*)", "Bash(git blame:*)", "Bash(git branch:*)",
     "Bash(git grep:*)", "Bash(git ls-remote:*)", "Bash(git ls-tree:*)",
     "Bash(git merge-base:*)", "Bash(git remote:*)", "Bash(git rev-parse:*)",
-    "Bash(git show-ref:*)",
+    "Bash(git show-ref:*)", "Bash(git -C:*)",
+    // JJ (read-only)
+    "Bash(jj status:*)", "Bash(jj diff:*)", "Bash(jj log:*)",
+    "Bash(jj show:*)", "Bash(jj file show:*)", "Bash(jj cat:*)",
+    "Bash(jj bookmark list:*)",
     "Bash(wc:*)",
   ].join(",");
 
@@ -278,6 +282,7 @@ export function transformClaudeFindings(
   findings: ClaudeFinding[],
   source: string,
   cwd?: string,
+  pathTransform?: (path: string) => string,
 ): Array<{
   source: string;
   filePath: string;
@@ -295,7 +300,9 @@ export function transformClaudeFindings(
     .filter(f => f.file && typeof f.line === "number")
     .map(f => ({
       source,
-      filePath: toRelativePath(f.file, cwd),
+      filePath: pathTransform
+        ? pathTransform(toRelativePath(f.file, cwd))
+        : toRelativePath(f.file, cwd),
       lineStart: f.line,
       lineEnd: f.end_line ?? f.line,
       type: "comment",

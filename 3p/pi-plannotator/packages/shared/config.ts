@@ -5,12 +5,13 @@
  * Runtime-agnostic: uses only node:fs, node:os, node:child_process.
  */
 
-import { homedir } from "os";
 import { join } from "path";
+import { getPlannotatorDataDir } from "./data-dir";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { execSync } from "child_process";
 
-export type DefaultDiffType = 'uncommitted' | 'unstaged' | 'staged';
+export type DefaultDiffType = 'uncommitted' | 'unstaged' | 'staged' | 'merge-base' | 'all';
+export type DiffLineBgIntensity = 'subtle' | 'normal' | 'strong';
 
 export interface DiffOptions {
   diffStyle?: 'split' | 'unified';
@@ -21,7 +22,11 @@ export interface DiffOptions {
   showDiffBackground?: boolean;
   fontFamily?: string;
   fontSize?: string;
+  tabSize?: number;
+  hideWhitespace?: boolean;
+  expandUnchanged?: boolean;
   defaultDiffType?: DefaultDiffType;
+  lineBgIntensity?: DiffLineBgIntensity;
 }
 
 /** Single conventional comment label entry stored in config.json */
@@ -31,9 +36,73 @@ export interface CCLabelConfig {
   blocking: boolean;
 }
 
+export type PromptSectionOverrides = Record<string, string | undefined>;
+
+export type PromptRuntime =
+  | "claude-code"
+  | "amp"
+  | "droid"
+  | "kiro-cli"
+  | "opencode"
+  | "copilot-cli"
+  | "pi"
+  | "codex"
+  | "gemini-cli";
+
+interface PromptSectionConfig {
+  [key: string]: string | Partial<Record<PromptRuntime, PromptSectionOverrides>> | undefined;
+  runtimes?: Partial<Record<PromptRuntime, PromptSectionOverrides>>;
+}
+
+export interface PromptConfig {
+  review?: PromptSectionConfig & {
+    approved?: string;
+    denied?: string;
+  };
+  plan?: PromptSectionConfig & {
+    approved?: string;
+    approvedWithNotes?: string;
+    autoApproved?: string;
+    denied?: string;
+  };
+  annotate?: PromptSectionConfig & {
+    fileFeedback?: string;
+    messageFeedback?: string;
+    approved?: string;
+  };
+}
+
+const PROMPT_SECTIONS = ["review", "plan", "annotate"] as const;
+
+export function mergePromptConfig(
+  current?: PromptConfig,
+  partial?: PromptConfig,
+): PromptConfig | undefined {
+  if (!current && !partial) return undefined;
+
+  const result: Record<string, any> = { ...current, ...partial };
+
+  for (const section of PROMPT_SECTIONS) {
+    const cur = current?.[section];
+    const par = partial?.[section];
+    if (cur || par) {
+      result[section] = {
+        ...cur,
+        ...par,
+        runtimes: (cur?.runtimes || par?.runtimes)
+          ? { ...cur?.runtimes, ...par?.runtimes }
+          : undefined,
+      };
+    }
+  }
+
+  return result as PromptConfig;
+}
+
 export interface PlannotatorConfig {
   displayName?: string;
   diffOptions?: DiffOptions;
+  prompts?: PromptConfig;
   conventionalComments?: boolean;
   /** null = explicitly cleared (use defaults), undefined = not set */
   conventionalLabels?: CCLabelConfig[] | null;
@@ -52,9 +121,23 @@ export interface PlannotatorConfig {
    * Set to false to always use plain fetch + Turndown.
    */
   jina?: boolean;
+  /**
+   * Inject a Plannotator Flavored Markdown reminder into every EnterPlanMode
+   * call so the agent is aware it can enrich plans with code-file links,
+   * callouts, tables, diagrams, task lists, and the other PFM extensions.
+   * Read by the `improve-context` PreToolUse handler. Default: false.
+   */
+  pfmReminder?: boolean;
+  /**
+   * Open Plannotator in a Glimpse native window when available.
+   * When true (default), the server spawns `glimpseui` if it is on PATH,
+   * no explicit browser is configured, and the session is local.
+   * Set to false to always use the system browser even when Glimpse is installed.
+   */
+  glimpse?: boolean;
 }
 
-const CONFIG_DIR = join(homedir(), ".plannotator");
+const CONFIG_DIR = getPlannotatorDataDir();
 const CONFIG_PATH = join(CONFIG_DIR, "config.json");
 
 /**
@@ -83,7 +166,13 @@ export function saveConfig(partial: Partial<PlannotatorConfig>): void {
     const mergedDiffOptions = (current.diffOptions || partial.diffOptions)
       ? { ...current.diffOptions, ...partial.diffOptions }
       : undefined;
-    const merged = { ...current, ...partial, diffOptions: mergedDiffOptions };
+    const mergedPrompts = mergePromptConfig(current.prompts, partial.prompts);
+    const merged = {
+      ...current,
+      ...partial,
+      diffOptions: mergedDiffOptions,
+      prompts: mergedPrompts,
+    };
     mkdirSync(CONFIG_DIR, { recursive: true });
     writeFileSync(CONFIG_PATH, JSON.stringify(merged, null, 2) + "\n", "utf-8");
   } catch (e) {
@@ -129,8 +218,24 @@ export function getServerConfig(gitUser: string | null): {
  * Read the user's preferred default diff type from config, falling back to 'unstaged'.
  */
 export function resolveDefaultDiffType(cfg?: PlannotatorConfig): DefaultDiffType {
-  const v = cfg?.diffOptions?.defaultDiffType;
-  return v === 'uncommitted' || v === 'unstaged' || v === 'staged' ? v : 'unstaged';
+  const v = cfg?.diffOptions?.defaultDiffType as string | undefined;
+  if (v === 'branch') return 'merge-base';
+  return v === 'uncommitted' || v === 'unstaged' || v === 'staged' || v === 'merge-base' || v === 'all' ? v : 'unstaged';
+}
+
+/**
+ * Resolve whether to use Glimpse native window.
+ *
+ * Priority (highest wins):
+ *   PLANNOTATOR_GLIMPSE env var  →  config.glimpse  →  default true
+ */
+export function resolveUseGlimpse(config: PlannotatorConfig): boolean {
+  const envVal = process.env.PLANNOTATOR_GLIMPSE;
+  if (envVal !== undefined) {
+    return envVal === "1" || envVal.toLowerCase() === "true";
+  }
+  if (config.glimpse !== undefined) return config.glimpse;
+  return true;
 }
 
 /**

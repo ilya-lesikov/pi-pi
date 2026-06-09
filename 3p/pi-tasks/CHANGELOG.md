@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-05-30
+
+### Changed
+- **⚠ Behaviour change — system-reminder delivery.** The periodic `<system-reminder>` nudge was previously appended onto the `content` of whatever unrelated tool (`read`, `bash`, `grep`, …) happened to run when it was due. That misattributed host policy text as tool output and **persisted a now-stale reminder into session history**, so it reappeared on every later turn even after task tools were used. It is now injected via the `context` hook as a **transient** `<system-reminder>`-tagged user message on the one request where it's due — not persisted, and not attached to any tool result. `tool_result` is now used solely for cadence tracking and never mutates tool output. The *cadence* (when a reminder fires) is unchanged; only the delivery mechanism and persistence differ. Cadence logic was extracted into a pure, unit-tested `src/reminder-cadence.ts`. (#19)
+
+### Added
+- **Configurable widget display settings** — four new options in `/tasks` → Settings (persisted to `.pi/tasks-config.json`), all defaulting to the previous behaviour: (#22)
+  - `sortOrder` (default `id`) — `id` (creation order), `status` (completed → in-progress → pending), `recent` / `oldest` (by last-updated time). Sort logic lives in `TaskStore.list(sortOrder)`.
+  - `maxVisible` (default `10`) — caps how many task lines the widget shows (`5`–`100`).
+  - `showAll` (default `false`) — when `true`, every task is shown regardless of `maxVisible`.
+  - `hiddenAt` (default `bottom`) — controls whether the `… and N more` overflow collapses from the `bottom` or `top` of the list; `top` pairs with `sortOrder: status` to keep active work visible.
+
+## [0.6.1] - 2026-05-30
+
+### Fixed
+- **CI test failures on `webidl.util.markAsUncloneable is not a function`** — bumped the GitHub Actions `node-version` from `20` to `22`. Node 20's bundled `undici` lacks `webidl.util.markAsUncloneable`, which pi's event/RPC layer (exercised by `subagent-integration.test.ts`) requires. Matches the same fix in `@tintinweb/pi-subagents`.
+
+## [0.6.0] - 2026-05-30
+
+### Changed
+- **Migrated pi peer dependencies to the `@earendil-works` scope** — `@mariozechner/pi-coding-agent` and `@mariozechner/pi-tui` (`>=0.70.5`) → `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui` (`>=0.74.0`). Package was renamed/rescoped across `package.json` and `src` imports; lockfile regenerated. Matches the same migration in `@tintinweb/pi-subagents`. (#21)
+
+## [0.5.0] - 2026-04-28
+
+### Changed
+- **Bumped `@mariozechner/pi-coding-agent` and `@mariozechner/pi-tui` `^0.62.0` → `^0.70.5`.** Picks up the TypeBox 1.x validator path (pi 0.69), session-replacement context invalidation (pi 0.69), the cwd-bound built-in tool removals (pi 0.68), and the working-indicator / autocomplete-provider APIs along the way. No public surface used by this extension was renamed or removed.
+- **Migrated from `@sinclair/typebox` to `typebox` `^1.1.34`** per the pi 0.69 extension guidance. One-line import change in `src/index.ts`; all `Type.*` calls (`Object`, `String`, `Optional`, `Boolean`, `Number`, `Array`, `Record`, `Any`, `Unsafe`) work unchanged.
+- **Toolchain bumps**: TypeScript `^5` → `^6`, `@types/node` `^20` → `^25`, `@biomejs/biome` `^2.3.5` → `^2.4.13`, `vitest` `^4.0.18` → `^4.1.5`.
+
+## [0.4.3] - 2026-04-28
+
+### Added
+- **Cascade dependency-result injection** — when `autoCascade` is enabled, a cascaded subagent's prompt now includes a `## Prerequisite task results` section listing each completed blocker's stored `metadata.result` (capped at 4 KB per dep, with a truncation marker pointing at `TaskGet`). Cascaded agents previously had no context from their prerequisites. (#7)
+
+### Performance
+- **Spinner render rate** — reduced widget animation interval from 80 ms (12.5 fps) to 150 ms (~6.7 fps). pi-tui's `requestRender()` triggers a full component-tree re-render with no scoped invalidation, so the spinner alone could drive sustained ~70-100% single-core CPU on long sessions. ~47% fewer renders, well above the perceptual threshold where the twinkling-star animation reads as alive. (#11)
+
+### Fixed
+- **`TaskUpdate.status` schema** — replaced the `anyOf` of `enum`+`const` shape with a single flat `enum: ["pending", "in_progress", "completed", "deleted"]`. Some LLMs (notably Gemini and earlier Claude variants) parsed the previous shape into double-quoted values like `"\"completed\""`, causing `TaskUpdate` calls to silently fail validation. The accepted value set is unchanged. (#13)
+- **`TaskExecute` `model` parameter now actually forwards** — the `model` option was declared on the tool and captured into the cascade config, but silently dropped at both `spawnSubagent` call sites (initial spawn and cascade). Now propagated end-to-end. (#7)
+
 ## [0.4.2] - 2026-03-24
 
 ### Added
@@ -133,6 +174,11 @@ Initial release — Claude Code-style task tracking and coordination for pi.
 - **Background process tracker** — output buffering (stdout + stderr), waiter notification, graceful stop with timeout escalation (SIGTERM → 5s → SIGKILL).
 - **78 unit tests** — task store CRUD, dependencies, warnings, file persistence; widget rendering, icons, spinners, token/duration formatting; process tracker lifecycle.
 
+[0.7.0]: https://github.com/tintinweb/pi-tasks/releases/tag/v0.7.0
+[0.6.1]: https://github.com/tintinweb/pi-tasks/releases/tag/v0.6.1
+[0.6.0]: https://github.com/tintinweb/pi-tasks/releases/tag/v0.6.0
+[0.5.0]: https://github.com/tintinweb/pi-tasks/releases/tag/v0.5.0
+[0.4.3]: https://github.com/tintinweb/pi-tasks/releases/tag/v0.4.3
 [0.4.2]: https://github.com/tintinweb/pi-tasks/releases/tag/v0.4.2
 [0.4.1]: https://github.com/tintinweb/pi-tasks/releases/tag/v0.4.1
 [0.4.0]: https://github.com/tintinweb/pi-tasks/releases/tag/v0.4.0

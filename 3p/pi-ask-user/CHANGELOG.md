@@ -1,5 +1,60 @@
 # Changelog
 
+## [0.11.2](https://github.com/edlsh/pi-ask-user/releases/tag/v0.11.2) - 2026-06-03
+
+### Changed
+
+- Declare `executionMode: "sequential"` on the `ask_user` tool so the agent loop awaits the user's answer before running any other tool call in the same assistant turn. Without this, hosts running the default `"parallel"` tool-execution mode could batch `ask_user` with `bash`/`edit`/`write` calls and let those execute — potentially with irreversible side effects — before the user even sees the prompt. Requires no peer-dep bump; `executionMode` has been part of `ToolDefinition` since `@earendil-works/pi-coding-agent@0.74.0`.
+
+## [0.11.1](https://github.com/edlsh/pi-ask-user/releases/tag/v0.11.1) - 2026-05-23
+
+### Fixed
+
+- Crash with `Theme not initialized. Call initTheme() first.` on hosts still using the legacy `@mariozechner/pi-coding-agent` scope (Pi ≤ 0.73.1). When npm cannot dedupe across package scopes the extension brings its own copy of `@earendil-works/pi-coding-agent`, whose theme singleton is never initialised; pi-tui's `Markdown.render` then threw on the first `theme.bold` access. The existing `try { getMarkdownTheme() } catch {}` guard never fired because the bag of closures returned by `getMarkdownTheme` only proxies the singleton lazily. A new `safeMarkdownTheme()` helper now eagerly probes `bold("")` and falls back to plain `Text` rendering when the probe throws. Closes #17.
+
+### Changed
+
+- Tightened `peerDependencies` on `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui` from `"*"` to `">=0.74.0"` so npm refuses to install this version against legacy `@mariozechner/*` hosts at install time instead of crashing at render time
+
+## [0.11.0](https://github.com/edlsh/pi-ask-user/releases/tag/v0.11.0) - 2026-05-09
+
+### Added
+
+- Vim-style navigation aliases for option lists: `ctrl+j` moves to the next option and `ctrl+k` moves to the previous option in both single-select (with active fuzzy search) and multi-select prompts. Bare `j`/`k` continue to feed the fuzzy filter so search behavior is unchanged. Closes #16.
+
+## [0.10.0](https://github.com/edlsh/pi-ask-user/releases/tag/v0.10.0) - 2026-05-07
+
+### Changed
+
+- Updated peer dependencies and references for the move to `earendil-works/pi-mono` and `@earendil-works/*` package scopes. `@mariozechner/pi-coding-agent` and `@mariozechner/pi-tui` peer deps are now `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui`.
+
+## [0.9.0](https://github.com/edlsh/pi-ask-user/releases/tag/v0.9.0) - 2026-05-04
+
+### Added
+
+- Configurable shortcuts: new `overlayToggleKey` and `commentToggleKey` parameters on `ask_user` accept any Pi-TUI [`KeyId`](https://github.com/earendil-works/pi-mono/blob/main/packages/tui/src/keys.ts) spec (e.g. `"alt+o"`, `"ctrl+shift+h"`)
+- Matching env vars `PI_ASK_USER_OVERLAY_TOGGLE_KEY` and `PI_ASK_USER_COMMENT_TOGGLE_KEY` for setting personal defaults globally; per-call parameter wins over env var, which wins over the built-in defaults `alt+o` and `ctrl+g`
+- Pass `"off"`, `"none"`, or `"disabled"` at any level to disable a shortcut entirely; invalid specs silently fall through to the next source
+- Defaults preserved: existing `alt+o` overlay-toggle and `ctrl+g` comment-toggle continue to work unchanged. Closes #13.
+
+## [0.8.0](https://github.com/edlsh/pi-ask-user/releases/tag/v0.8.0) - 2026-05-01
+
+### Added
+
+- Runtime overlay toggle: in `overlay` mode, press `alt+o` while the prompt is open to temporarily hide/show the popup so you can read prior agent output. Press again to restore. Implemented via `OverlayHandle.setHidden()` and a global `ctx.ui.onTerminalInput` listener so the overlay can be revived even while hidden. A one-shot info notification on first hide reminds the user how to restore. Closes #11.
+
+## [0.7.0](https://github.com/edlsh/pi-ask-user/releases/tag/v0.7.0) - 2026-05-01
+
+### Added
+
+- `displayMode` parameter on `ask_user` (`"overlay"` | `"inline"`) controlling whether the custom UI renders as a centered modal or in the conversation flow
+- `PI_ASK_USER_DISPLAY_MODE` environment variable for setting a personal default display mode; per-call `displayMode` always wins over the env var, which always wins over the built-in `"overlay"` fallback
+- Skill guidance documenting when to override `displayMode` per call vs. respect the user's env-var preference
+
+### Changed
+
+- Tool schema now uses a flat `{ type: "string", enum: [...] }` JSON Schema for `displayMode` (Google function-calling compatible) via a small local helper rather than `Type.Union([Type.Literal()])`
+
 ## [0.6.1](https://github.com/edlsh/pi-ask-user/releases/tag/v0.6.1) - 2026-04-07
 
 ### Changed

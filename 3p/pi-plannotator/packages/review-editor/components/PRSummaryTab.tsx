@@ -2,7 +2,7 @@ import React, { useMemo, useRef, useEffect } from 'react';
 import DOMPurify from 'dompurify';
 import { parseMarkdownToBlocks } from '@plannotator/ui/utils/parser';
 import { renderInlineMarkdown } from '../utils/renderInlineMarkdown';
-import type { PRContext, PRMetadata } from '@plannotator/shared/pr-provider';
+import type { PRContext, PRMetadata } from '@plannotator/shared/pr-types';
 
 interface PRSummaryTabProps {
   context: PRContext;
@@ -137,6 +137,14 @@ export const PRSummaryTab: React.FC<PRSummaryTabProps> = React.memo(({ context, 
         <div className="text-[10px] text-muted-foreground font-mono">
           {metadata.author} wants to merge <code className="bg-muted px-1 rounded">{metadata.headBranch}</code> into <code className="bg-muted px-1 rounded">{metadata.baseBranch}</code>
         </div>
+        {metadata.defaultBranch && metadata.baseBranch !== metadata.defaultBranch && (
+          <div className="inline-flex items-center gap-1.5 rounded border border-accent/20 bg-accent/10 px-2 py-1 text-[10px] text-accent">
+            <span className="font-medium uppercase tracking-wide">Stacked</span>
+            <span className="text-accent/80">
+              Diffs against <code className="font-mono">{metadata.baseBranch}</code>, default branch is <code className="font-mono">{metadata.defaultBranch}</code>
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Labels */}
