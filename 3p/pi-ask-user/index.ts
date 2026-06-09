@@ -1471,6 +1471,7 @@ export default function(pi: ExtensionAPI) {
             details: { question, context: normalizedContext, options, response: null, cancelled: false },
          });
 
+         ctx.ui.setWorkingMessage?.("Waiting for user to answer…");
          let result: AskUIResult | null;
          try {
             const customResult = await ctx.ui.custom<AskUIResult | null>(
@@ -1506,17 +1507,19 @@ export default function(pi: ExtensionAPI) {
                // RPC/headless mode: degrade to select()/input() dialog protocol
                result = await askViaDialogs(ctx.ui, question, normalizedContext, options, allowMultiple, allowFreeform, allowComment, timeout);
             }
-         } catch (error) {
-            const message =
-               error instanceof Error ? `${error.message}\n${error.stack ?? ""}` : String(error);
-            return {
-               content: [{ type: "text", text: `Ask tool failed: ${message}` }],
-               isError: true,
-               details: { error: message },
-            };
-         }
+          } catch (error) {
+             ctx.ui.setWorkingMessage?.();
+             const message =
+                error instanceof Error ? `${error.message}\n${error.stack ?? ""}` : String(error);
+             return {
+                content: [{ type: "text", text: `Ask tool failed: ${message}` }],
+                isError: true,
+                details: { error: message },
+             };
+          }
+          ctx.ui.setWorkingMessage?.();
 
-         if (result === null) {
+          if (result === null) {
             pi.events.emit("ask:cancelled", { question, context: normalizedContext, options });
             return {
                content: [{ type: "text", text: "User cancelled the question" }],
