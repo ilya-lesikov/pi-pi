@@ -753,13 +753,13 @@ export async function showActiveTaskMenu(
     const { autoLabel, deepLabel } = getReviewLabels(orchestrator);
 
     const options = waiting
-      ? ["Status", "Finish", "Subagents", "LSP"]
+      ? ["Status", "Subagents", "LSP", "Finish"]
       : phase === "brainstorm" && task.type === "implement"
-      ? ["Approve brainstorm", autoLabel, deepLabel, "Continue brainstorming", "Status", "Finish", "Subagents", "LSP"]
+      ? ["Approve brainstorm", autoLabel, deepLabel, "Continue brainstorming", "Status", "Subagents", "LSP", "Finish"]
       : phase === "brainstorm" && task.type === "brainstorm"
-      ? ["Approve brainstorm", autoLabel, deepLabel, "Continue brainstorming", "Finish brainstorming", "Status", "Finish", "Subagents", "LSP"]
+      ? ["Approve brainstorm", autoLabel, deepLabel, "Continue brainstorming", "Finish brainstorming", "Status", "Subagents", "LSP", "Finish"]
       : phase === "debug"
-      ? ["Approve debug", autoLabel, deepLabel, "Continue debugging", "Finish debugging", "Status", "Finish", "Subagents", "LSP"]
+      ? ["Approve debug", autoLabel, deepLabel, "Continue debugging", "Finish debugging", "Status", "Subagents", "LSP", "Finish"]
       : phase === "plan"
       ? [
         "Approve plan",
@@ -769,9 +769,9 @@ export async function showActiveTaskMenu(
         "Review on my own",
         "Continue planning",
         "Status",
-        "Finish",
         "Subagents",
         "LSP",
+        "Finish",
       ]
       : phase === "implement"
       ? [
@@ -782,11 +782,11 @@ export async function showActiveTaskMenu(
         "Review on my own",
         "Continue implementation",
         "Status",
-        "Finish",
         "Subagents",
         "LSP",
+        "Finish",
       ]
-      : ["Status", "Finish", "Subagents", "LSP"];
+      : ["Status", "Subagents", "LSP", "Finish"];
 
     const choice = await selectOption(ctx, summary, options);
     if (!choice) return mode === "tool" ? "No action selected." : "";
