@@ -774,7 +774,7 @@ export async function showActiveTaskMenu(
 
     const options: OptionInput[] = [];
     if (!waiting) {
-      options.push(opt("Approve", "Advance to the next phase"));
+      options.push(opt("Approve & continue", "Advance to the next phase"));
       options.push(opt(autoLabel, "Run automated review with configured reviewers"));
       options.push(opt(deepLabel, "Run automated review with higher thinking level"));
       if (hasPlannotator) {
@@ -813,7 +813,7 @@ export async function showActiveTaskMenu(
 
     finalizeReviewCycle(task);
 
-    if (choice === "Approve") {
+    if (choice === "Approve & continue") {
       const result = await orchestrator.transitionToNextPhase(ctx);
       if (!result.ok) return `Transition blocked: ${result.error}`;
       if (orchestrator.phaseCompactionPending || orchestrator.taskDoneCompactionPending) return "";
