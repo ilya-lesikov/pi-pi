@@ -3,9 +3,35 @@
   "version": "0.1.0",
   "description": "Pi-Pi Coding Agent: based on Pi Coding Agent, but twice as good",
   "keywords": [
-    "pi-package"
+    "pi-package",
+    "pi",
+    "coding-agent",
+    "orchestration"
   ],
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ilya-lesikov/pi-pi.git"
+  },
+  "files": [
+    "extensions/",
+    "3p/pi-subagents/src/",
+    "3p/pi-subagents/package.json",
+    "3p/pi-tasks/src/",
+    "3p/pi-tasks/package.json",
+    "3p/pi-lsp/extensions/",
+    "3p/pi-lsp/package.json",
+    "3p/pi-ask-user/index.ts",
+    "3p/pi-ask-user/single-select-layout.ts",
+    "3p/pi-ask-user/package.json",
+    "3p/pi-plannotator/apps/pi-extension/",
+    "3p/pi-plannotator/packages/shared/",
+    "3p/pi-plannotator/packages/server/",
+    "3p/pi-plannotator/packages/ai/",
+    "3p/pi-plannotator/package.json",
+    "scripts/",
+    "AGENTS.md"
+  ],
   "scripts": {
     "postinstall": "bash scripts/postinstall.sh",
     "test": "vitest run --exclude '3p/**'",
