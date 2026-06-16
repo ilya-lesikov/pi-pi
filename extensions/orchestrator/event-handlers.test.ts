@@ -34,6 +34,7 @@ function makeConfig() {
       implement: { model: "a/b", thinking: "high" },
       debug: { model: "a/b", thinking: "high" },
       brainstorm: { model: "a/b", thinking: "high" },
+      review: { model: "a/b", thinking: "high" },
     },
     planners: {},
     planReviewers: {},

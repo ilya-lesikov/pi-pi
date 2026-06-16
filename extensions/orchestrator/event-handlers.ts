@@ -1376,6 +1376,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     }
 
     if (orchestrator.active.type === "brainstorm" && phase === "brainstorm") return;
+    if (orchestrator.active.type === "review" && phase === "review") return;
 
     const contentParts = Array.isArray(msg?.content) ? msg.content : [];
     const hasText = contentParts.some((c: any) => c.type === "text" && c.text?.trim());

@@ -89,6 +89,7 @@ describe("validateConfig", () => {
           implement: { model: "provider/model-1" },
           debug: { model: "provider/model-2" },
           brainstorm: { model: "provider/model-3" },
+          review: { model: "provider/model-4" },
         },
         planners: {
           good: { enabled: true, model: "provider/model-4" },

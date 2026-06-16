@@ -25,6 +25,7 @@ vi.mock("./config.js", async (importOriginal) => {
       implement: { model: "test/model", thinking: "high" },
       debug: { model: "test/model", thinking: "high" },
       brainstorm: { model: "test/model", thinking: "high" },
+      review: { model: "test/model", thinking: "high" },
     },
     planners: { test: { enabled: true, model: "test/planner", thinking: "low" } },
     planReviewers: {},
@@ -142,6 +143,7 @@ function makeConfig() {
       implement: { model: "test/model", thinking: "high" },
       debug: { model: "test/model", thinking: "high" },
       brainstorm: { model: "test/model", thinking: "high" },
+      review: { model: "test/model", thinking: "high" },
     },
     planners: {
       test: { enabled: true, model: "test/planner", thinking: "low" },

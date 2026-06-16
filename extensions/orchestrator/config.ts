@@ -37,6 +37,7 @@ export interface PiPiConfig {
     implement: ModelConfig;
     debug: ModelConfig;
     brainstorm: ModelConfig;
+    review: ModelConfig;
   };
   planners: Record<string, VariantConfig>;
   planReviewers: Record<string, VariantConfig>;
@@ -61,6 +62,7 @@ const DEFAULT_CONFIG: PiPiConfig = {
     implement: { model: "anthropic/claude-opus-4-6", thinking: "high" },
     debug: { model: "openai/gpt-5.4", thinking: "high" },
     brainstorm: { model: "anthropic/claude-opus-4-6", thinking: "high" },
+    review: { model: "anthropic/claude-opus-4-6", thinking: "high" },
   },
   planners: {
     opus: { enabled: true, model: "anthropic/claude-opus-4-6", thinking: "high" },
@@ -128,7 +130,7 @@ export function deepMerge(target: Record<string, any>, source: Record<string, an
 
 export function validateConfig(config: Record<string, any>): void {
   if (config.mainModel) {
-    for (const key of ["implement", "debug", "brainstorm"]) {
+    for (const key of ["implement", "debug", "brainstorm", "review"]) {
       const mc = config.mainModel[key];
       if (mc && typeof mc.model === "string" && mc.model.length === 0) {
         throw new Error(`config.mainModel.${key}.model must be non-empty`);

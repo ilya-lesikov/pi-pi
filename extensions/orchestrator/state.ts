@@ -13,12 +13,13 @@ function getLockfileFs(): typeof import("fs") | undefined {
 }
 import type { TimeoutConfig } from "./config.js";
 
-export type TaskType = "implement" | "debug" | "brainstorm";
+export type TaskType = "implement" | "debug" | "brainstorm" | "review";
 
 export type ImplementPhase = "brainstorm" | "plan" | "implement" | "done";
 export type DebugPhase = "debug" | "plan" | "implement" | "done";
 export type BrainstormPhase = "brainstorm" | "plan" | "implement" | "done";
-export type Phase = ImplementPhase | DebugPhase | BrainstormPhase;
+export type ReviewPhase = "review" | "plan" | "implement" | "done";
+export type Phase = ImplementPhase | DebugPhase | BrainstormPhase | ReviewPhase;
 
 export interface TaskState {
   phase: Phase;
@@ -60,7 +61,7 @@ export function createTask(cwd: string, type: TaskType, description: string): st
   mkdirSync(taskDir, { recursive: true });
 
   const state: TaskState = {
-    phase: type === "implement" ? "brainstorm" : type === "debug" ? "debug" : "brainstorm",
+    phase: type === "implement" ? "brainstorm" : type === "debug" ? "debug" : type === "review" ? "review" : "brainstorm",
     step: "llm_work",
     reviewCycle: null,
     reviewPass: 0,
@@ -95,7 +96,7 @@ export function listTasks(cwd: string, type?: TaskType): TaskInfo[] {
   const base = stateDir(cwd);
   if (!existsSync(base)) return [];
 
-  const types: TaskType[] = type ? [type] : ["implement", "debug", "brainstorm"];
+  const types: TaskType[] = type ? [type] : ["implement", "debug", "brainstorm", "review"];
   const results: TaskInfo[] = [];
 
   for (const t of types) {
@@ -196,7 +197,7 @@ export function taskName(taskDir: string): string {
     const state = loadTask(taskDir);
     let desc = state.description ?? "";
 
-    if (["implement", "debug", "brainstorm"].includes(desc)) {
+    if (["implement", "debug", "brainstorm", "review"].includes(desc)) {
       const urPath = join(taskDir, "USER_REQUEST.md");
       if (existsSync(urPath)) {
         const content = readFileSync(urPath, "utf-8");

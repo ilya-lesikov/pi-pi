@@ -16,7 +16,8 @@ import { loadContextFiles, getPhaseArtifacts, getLatestSynthesizedPlan } from ".
 import { brainstormSystemPrompt } from "./phases/brainstorm.js";
 import { planningSystemPrompt, spawnPlanners } from "./phases/planning.js";
 import { implementationSystemPrompt } from "./phases/implementation.js";
-import { reviewSystemPrompt } from "./phases/review.js";
+import { reviewSystemPrompt as reviewCycleSystemPrompt } from "./phases/review.js";
+import { reviewSystemPrompt as reviewTaskSystemPrompt, loadReviewContext } from "./phases/review-task.js";
 import { registerAgentDefinitions, unregisterAgentDefinitions } from "./agents/registry.js";
 import { createExploreAgent } from "./agents/explore.js";
 import { createLibrarianAgent } from "./agents/librarian.js";
@@ -207,7 +208,7 @@ export class Orchestrator {
     if (this.active.state.reviewCycle?.step === "apply_feedback") {
       const pass = this.active.state.reviewCycle.pass;
       const manualReview = this.active.state.reviewCycle.kind === "manual";
-      return reviewSystemPrompt(this.active.dir, pass, manualReview, this.active.state.phase);
+      return reviewCycleSystemPrompt(this.active.dir, pass, manualReview, this.active.state.phase);
     }
 
     switch (this.active.state.phase) {
@@ -219,6 +220,8 @@ export class Orchestrator {
         return planningSystemPrompt(this.active.dir);
       case "implement":
         return implementationSystemPrompt(this.active.dir);
+      case "review":
+        return reviewTaskSystemPrompt(this.active.dir, loadReviewContext(this.active.dir));
       default:
         return "";
     }
@@ -314,7 +317,12 @@ export class Orchestrator {
       description: state.description,
     };
 
-    const modelConfig = this.config.mainModel[type === "debug" ? "debug" : type === "brainstorm" ? "brainstorm" : "implement"];
+    const modelConfig = this.config.mainModel[
+      type === "debug" ? "debug"
+      : type === "brainstorm" ? "brainstorm"
+      : type === "review" ? "review"
+      : "implement"
+    ];
     const modelOk = await this.switchModel(ctx, modelConfig.model, modelConfig.thinking);
     if (!modelOk) {
       ctx.ui.notify(`Model "${modelConfig.model}" not found — using current model`, "warning");
@@ -328,7 +336,7 @@ export class Orchestrator {
     this.injectContextAndArtifacts(this.active.dir, this.active.state.phase);
 
     this.phaseStartTime = Date.now();
-    const isGenericDescription = ["implement", "debug", "brainstorm"].includes(this.active.description);
+    const isGenericDescription = ["implement", "debug", "brainstorm", "review"].includes(this.active.description);
     const hasInheritedTaskContext = Boolean(fromTaskDir && type === "implement");
     const isWaitingForPlanners = this.active.state.phase === "plan" && this.active.state.step === "await_planners";
     if (isGenericDescription && !hasInheritedTaskContext) {

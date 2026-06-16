@@ -98,6 +98,7 @@ describe("deepReviewConfig", () => {
         implement: { model: "a/impl", thinking: "high" },
         debug: { model: "a/debug", thinking: "high" },
         brainstorm: { model: "a/brain", thinking: "high" },
+        review: { model: "a/review", thinking: "high" },
       },
       planners: {},
       planReviewers: {

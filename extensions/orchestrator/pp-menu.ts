@@ -8,12 +8,13 @@ import {
   loadCodeReviewOutputs,
   loadPlanReviewOutputs,
 } from "./context.js";
-import { enterReviewCycle, finalizeReviewCycle } from "./event-handlers.js";
+import { detectDefaultBranch, enterReviewCycle, finalizeReviewCycle } from "./event-handlers.js";
 import { Orchestrator, deepReviewConfig } from "./orchestrator.js";
 import { cancelPendingPlannotatorWait } from "./plannotator.js";
 import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
 import { spawnCodeReviewers } from "./phases/review.js";
 import { spawnBrainstormReviewers } from "./phases/brainstorm.js";
+import { loadReviewContext, saveReviewContext, type ReviewContext } from "./phases/review-task.js";
 import {
   listTasks,
   loadTask,
@@ -162,7 +163,12 @@ export async function resumeTask(
     description: task.state.description,
   };
 
-  const modelConfig = orchestrator.config.mainModel[task.type === "debug" ? "debug" : task.type === "brainstorm" ? "brainstorm" : "implement"];
+  const modelConfig = orchestrator.config.mainModel[
+    task.type === "debug" ? "debug"
+    : task.type === "brainstorm" ? "brainstorm"
+    : task.type === "review" ? "review"
+    : "implement"
+  ];
   const modelOk = await orchestrator.switchModel(ctx, modelConfig.model, modelConfig.thinking);
   if (!modelOk) {
     ctx.ui.notify(`Model "${modelConfig.model}" not found — using current model`, "warning");
@@ -401,6 +407,7 @@ function collectRoleAssignments(config: Partial<PiPiConfig> | null): string[] {
   add("mainModel.implement", config.mainModel?.implement?.model);
   add("mainModel.debug", config.mainModel?.debug?.model);
   add("mainModel.brainstorm", config.mainModel?.brainstorm?.model);
+  add("mainModel.review", config.mainModel?.review?.model);
 
   for (const [name, variant] of Object.entries(config.planners ?? {})) {
     if (variant.enabled) add(`planners.${name}`, variant.model);
@@ -643,6 +650,149 @@ async function showImplementMenu(orchestrator: Orchestrator, ctx: any): Promise<
   }
 }
 
+function buildPrContext(parsed: any): { prUrl: string | null; prContext: string | null } {
+  const title = typeof parsed?.title === "string" ? parsed.title.trim() : "";
+  const body = typeof parsed?.body === "string" ? parsed.body.trim() : "";
+  const commentsRaw = Array.isArray(parsed?.comments)
+    ? parsed.comments
+    : Array.isArray(parsed?.comments?.nodes)
+    ? parsed.comments.nodes
+    : [];
+  const comments: string[] = commentsRaw
+    .map((comment: any) => {
+      const text = typeof comment?.body === "string"
+        ? comment.body.trim()
+        : typeof comment?.bodyText === "string"
+        ? comment.bodyText.trim()
+        : "";
+      return text;
+    })
+    .filter((text: string): text is string => text.length > 0);
+
+  const parts: string[] = [];
+  if (title) parts.push(`Title: ${title}`);
+  if (body) parts.push(`Body:\n${body}`);
+  if (comments.length > 0) {
+    parts.push(`Comments:\n${comments.map((comment, index) => `${index + 1}. ${comment}`).join("\n\n")}`);
+  }
+
+  const prUrl = typeof parsed?.url === "string" && parsed.url.trim().length > 0 ? parsed.url.trim() : null;
+  return { prUrl, prContext: parts.length > 0 ? parts.join("\n\n") : null };
+}
+
+async function detectCurrentPrContext(orchestrator: Orchestrator): Promise<{ prUrl: string | null; prContext: string | null }> {
+  try {
+    const prResult = await orchestrator.pi.exec("gh", ["pr", "view", "--json", "url,title,body,comments"], {
+      cwd: orchestrator.cwd,
+      timeout: 10000,
+    });
+    if (prResult.code !== 0) return { prUrl: null, prContext: null };
+    const parsed = JSON.parse(prResult.stdout);
+    return buildPrContext(parsed);
+  } catch {
+    return { prUrl: null, prContext: null };
+  }
+}
+
+function toPlannotatorDiffType(diffRange: string): string {
+  const normalized = diffRange.trim();
+  if (!normalized) return "uncommitted";
+  if (normalized === "uncommitted" || normalized === "staged" || normalized === "unstaged" || normalized === "last-commit" || normalized === "branch" || normalized === "merge-base" || normalized === "all") {
+    return normalized;
+  }
+  if (normalized.startsWith("range:")) return normalized;
+  if (normalized.includes("..")) return `range:${normalized}`;
+  return normalized;
+}
+
+async function openReviewTaskInPlannotator(orchestrator: Orchestrator): Promise<string> {
+  if (!orchestrator.active) return "No active task.";
+  const context = loadReviewContext(orchestrator.active.dir);
+  const payload: Record<string, unknown> = {
+    cwd: orchestrator.cwd,
+    diffType: toPlannotatorDiffType(context.diffRange),
+  };
+  if (context.prUrl) payload.prUrl = context.prUrl;
+
+  return await new Promise((resolve) => {
+    let handled = false;
+    orchestrator.pi.events.emit("plannotator:request", {
+      requestId: crypto.randomUUID(),
+      action: "code-review",
+      payload,
+      respond: (response: any) => {
+        handled = true;
+        if (response?.status !== "handled") {
+          resolve(`Plannotator is not available${response?.error ? `: ${response.error}` : "."}`);
+          return;
+        }
+        const approved = !!response?.result?.approved;
+        const feedback = typeof response?.result?.feedback === "string" && response.result.feedback.trim().length > 0
+          ? `\n\nFeedback:\n${response.result.feedback}`
+          : "";
+        resolve(approved ? "Plannotator approved the review." : `Plannotator requested changes.${feedback}`);
+      },
+    });
+    setTimeout(() => {
+      if (!handled) resolve("Plannotator is not available.");
+    }, 30000);
+  });
+}
+
+async function showReviewMenu(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK | "started"> {
+  while (true) {
+    const choice = await selectOption(ctx, "Review", [
+      { title: "Diff with base branch", description: "Auto-detect base branch, review current branch changes" },
+      { title: "Uncommitted changes", description: "Review working directory changes against HEAD" },
+      { title: "Custom range", description: "Specify a git range (e.g. HEAD~3..HEAD, branch..main)" },
+      { title: "Resume", description: "Resume a previously unfinished review" },
+      { title: "Back", description: "Return to the previous menu" },
+    ]);
+    if (!choice || choice === "Back") return BACK;
+
+    if (choice === "Resume") {
+      const result = await showResumeMenu(orchestrator, ctx, "review", "No paused review tasks found.");
+      if (result === "started") return result;
+      continue;
+    }
+
+    let reviewContext: ReviewContext;
+    if (choice === "Diff with base branch") {
+      const base = await detectDefaultBranch(orchestrator.pi, orchestrator.cwd, orchestrator.config);
+      const pr = await detectCurrentPrContext(orchestrator);
+      reviewContext = {
+        diffRange: `${base}..HEAD`,
+        prUrl: pr.prUrl,
+        prContext: pr.prContext,
+      };
+    } else if (choice === "Uncommitted changes") {
+      reviewContext = {
+        diffRange: "uncommitted",
+        prUrl: null,
+        prContext: null,
+      };
+    } else {
+      const input = await ctx.ui.input("Git range (e.g. HEAD~3..HEAD)");
+      if (input === undefined || input === null) continue;
+      const trimmed = String(input).trim();
+      if (!trimmed) continue;
+      reviewContext = {
+        diffRange: `range:${trimmed}`,
+        prUrl: null,
+        prContext: null,
+      };
+    }
+
+    const description = await promptDescription(ctx, "Describe the review (optional)", "review");
+    if (!description) continue;
+
+    await orchestrator.startTask(ctx, "review", description);
+    if (!orchestrator.active || orchestrator.active.type !== "review") return BACK;
+    saveReviewContext(orchestrator.active.dir, reviewContext);
+    return "started";
+  }
+}
+
 async function showTaskTypeMenu(
   orchestrator: Orchestrator,
   ctx: any,
@@ -675,6 +825,7 @@ async function showNoActiveMenu(orchestrator: Orchestrator, ctx: any): Promise<s
       { title: "Debug", description: "Diagnose an issue. Then (optionally) fix it" },
       { title: "Brainstorm", description: "Explore and brainstorm. Then (optionally) plan and implement" },
       { title: "Implement", description: "Brainstorm, plan and implement" },
+      { title: "Review", description: "Review code changes, diffs, or pull requests" },
       { title: "Resume", description: "Resume a previously unfinished task" },
       { title: "Subagents", description: "Manage running agents" },
       { title: "LSP", description: "Language server status and controls" },
@@ -697,6 +848,12 @@ async function showNoActiveMenu(orchestrator: Orchestrator, ctx: any): Promise<s
 
     if (choice === "Implement") {
       const result = await showImplementMenu(orchestrator, ctx);
+      if (result === "started") return undefined;
+      continue;
+    }
+
+    if (choice === "Review") {
+      const result = await showReviewMenu(orchestrator, ctx);
       if (result === "started") return undefined;
       continue;
     }
@@ -767,23 +924,33 @@ export async function showActiveTaskMenu(
 
     const waiting = step === "await_planners" || step === "await_reviewers";
     const { autoLabel, deepLabel } = getReviewLabels(orchestrator);
-    const hasPlannotator = phase === "plan" || phase === "implement";
-    const canFinishPhase = (phase === "brainstorm" && task.type === "brainstorm") || phase === "debug";
+    const isReviewPhase = phase === "review";
+    const hasPlannotator = phase === "plan" || phase === "implement" || isReviewPhase;
+    const canFinishPhase = (phase === "brainstorm" && task.type === "brainstorm") || phase === "debug" || isReviewPhase;
 
     const opt = (title: string, description: string): OptionInput => ({ title, description });
 
     const options: OptionInput[] = [];
     if (!waiting) {
-      options.push(opt("Approve & continue", "Advance to the next phase"));
-      options.push(opt(autoLabel, "Run automated review with configured reviewers"));
-      options.push(opt(deepLabel, "Run automated review with higher thinking level"));
-      if (hasPlannotator) {
+      if (isReviewPhase) {
+        options.push(opt("Finish", "Complete the review and end the task"));
+        options.push(opt("Fix", "Transition to plan phase to fix issues found"));
+        options.push(opt(autoLabel, "Run automated review with configured reviewers"));
+        options.push(opt(deepLabel, "Run automated review with higher thinking level"));
         options.push(opt("Review in Plannotator", "Open visual review in browser"));
-        options.push(opt("Review on my own", "Review manually, then continue"));
-      }
-      options.push(opt("Back to prompt", "Return to the prompt and keep working"));
-      if (canFinishPhase) {
-        options.push(opt("Finish", "Complete this phase and end the task"));
+        options.push(opt("Back to prompt", "Return to the prompt and keep working"));
+      } else {
+        options.push(opt("Approve & continue", "Advance to the next phase"));
+        options.push(opt(autoLabel, "Run automated review with configured reviewers"));
+        options.push(opt(deepLabel, "Run automated review with higher thinking level"));
+        if (hasPlannotator) {
+          options.push(opt("Review in Plannotator", "Open visual review in browser"));
+          options.push(opt("Review on my own", "Review manually, then continue"));
+        }
+        options.push(opt("Back to prompt", "Return to the prompt and keep working"));
+        if (canFinishPhase) {
+          options.push(opt("Finish", "Complete this phase and end the task"));
+        }
       }
     }
     options.push(opt("Abort", "Stop the task without completing"));
@@ -820,6 +987,21 @@ export async function showActiveTaskMenu(
       const curStep = orchestrator.active?.state.step;
       if (curStep === "await_planners" || curStep === "await_reviewers") return "";
       return "";
+    }
+
+    if (choice === "Fix") {
+      const result = await orchestrator.transitionToNextPhase(ctx);
+      if (!result.ok) return `Transition blocked: ${result.error}`;
+      if (orchestrator.phaseCompactionPending || orchestrator.taskDoneCompactionPending) return "";
+      const curStep = orchestrator.active?.state.step;
+      if (curStep === "await_planners" || curStep === "await_reviewers") return "";
+      return "";
+    }
+
+    if (choice === "Review in Plannotator" && isReviewPhase) {
+      const text = await openReviewTaskInPlannotator(orchestrator);
+      ctx.ui.notify(text, "info");
+      continue;
     }
 
     if (choice === autoLabel || choice === deepLabel || choice === "Review in Plannotator") {

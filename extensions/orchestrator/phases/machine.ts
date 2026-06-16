@@ -67,6 +67,11 @@ const TRANSITIONS: Record<TaskType, Record<string, string[]>> = {
     plan: ["implement"],
     implement: ["done"],
   },
+  review: {
+    review: ["plan"],
+    plan: ["implement"],
+    implement: ["done"],
+  },
 };
 
 export function canTransition(taskType: TaskType, from: Phase, to: Phase): boolean {
@@ -86,6 +91,37 @@ export function validateExitCriteria(
 ): { ok: true } | { ok: false; reason: string } {
   switch (phase) {
     case "brainstorm": {
+      const ur = join(taskDir, "USER_REQUEST.md");
+      const res = join(taskDir, "RESEARCH.md");
+      if (isMissingOrEmpty(ur)) {
+        return { ok: false, reason: "USER_REQUEST.md does not exist or is empty" };
+      }
+      if (isMissingOrEmpty(res)) {
+        return { ok: false, reason: "RESEARCH.md does not exist or is empty" };
+      }
+      const urContent = readFileSync(ur, "utf-8");
+      const resContent = readFileSync(res, "utf-8");
+
+      const userRequestValidation = validateUserRequest(urContent);
+      if (!userRequestValidation.ok) {
+        return {
+          ok: false,
+          reason: formatValidationErrors("USER_REQUEST.md", userRequestValidation.errors, USER_REQUEST_TEMPLATE),
+        };
+      }
+
+      const researchValidation = validateResearch(resContent);
+      if (!researchValidation.ok) {
+        return {
+          ok: false,
+          reason: formatValidationErrors("RESEARCH.md", researchValidation.errors, RESEARCH_TEMPLATE),
+        };
+      }
+
+      return { ok: true };
+    }
+
+    case "review": {
       const ur = join(taskDir, "USER_REQUEST.md");
       const res = join(taskDir, "RESEARCH.md");
       if (isMissingOrEmpty(ur)) {
@@ -205,5 +241,7 @@ export function phasePipeline(taskType: TaskType): Phase[] {
       return ["debug", "plan", "implement", "done"];
     case "brainstorm":
       return ["brainstorm", "plan", "implement", "done"];
+    case "review":
+      return ["review", "plan", "implement", "done"];
   }
 }
