@@ -106,6 +106,14 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
   pi.registerCommand("pp", {
     description: "Open pi-pi task menu",
     handler: async (_args, ctx) => {
+      if (orchestrator.active) {
+        orchestrator.abortAllSubagents();
+        ctx.abort();
+        await ctx.waitForIdle();
+        const taskStore = (globalThis as any)[Symbol.for("pi-tasks:store")];
+        taskStore?.clearAll?.();
+        taskStore?.refreshWidget?.(ctx.ui);
+      }
       const { showPpMenu } = await import("./pp-menu.js");
       const text = await showPpMenu(orchestrator, ctx, "command");
       if (text) {
