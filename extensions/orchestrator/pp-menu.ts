@@ -557,9 +557,101 @@ async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise
   }
 }
 
+function formatTokenCount(count: number): string {
+  if (count < 1000) return String(count);
+  if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
+  if (count < 1000000) return `${Math.round(count / 1000)}k`;
+  if (count < 10000000) return `${(count / 1000000).toFixed(1)}M`;
+  return `${Math.round(count / 1000000)}M`;
+}
+
+function formatDuration(ms: number): string {
+  const sec = Math.floor(ms / 1000);
+  if (sec < 60) return `${sec}s`;
+  const min = Math.floor(sec / 60);
+  const remSec = sec % 60;
+  if (min < 60) return remSec > 0 ? `${min}m ${remSec}s` : `${min}m`;
+  const hr = Math.floor(min / 60);
+  const remMin = min % 60;
+  return remMin > 0 ? `${hr}h ${remMin}m` : `${hr}h`;
+}
+
+function showUsage(ctx: any): void {
+  const tracker = (globalThis as any)[Symbol.for("pi-pi:usage-tracker")] as
+    | {
+        getTotalInputTokens(): number; getTotalOutputTokens(): number;
+        getTotalCacheReadTokens(): number; getTotalCacheWriteTokens(): number;
+        getTotalCost(): number; getCacheHitRate(): number;
+        getPerModelUsage(): Record<string, { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; turns: number }>;
+        getSubagentList(): Array<{ description: string; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; cost: number; durationMs: number; toolUses: number }>;
+      }
+    | undefined;
+
+  if (!tracker) {
+    ctx.ui.notify("No usage data available.", "info");
+    return;
+  }
+
+  const totalInput = tracker.getTotalInputTokens();
+  const totalOutput = tracker.getTotalOutputTokens();
+  const cacheRead = tracker.getTotalCacheReadTokens();
+  const cacheWrite = tracker.getTotalCacheWriteTokens();
+  const cost = tracker.getTotalCost();
+  const cacheRate = tracker.getCacheHitRate();
+  const models = tracker.getPerModelUsage();
+  const subagents = tracker.getSubagentList();
+
+  const lines: string[] = ["Session usage:"];
+  lines.push(`  Input: ${formatTokenCount(totalInput)} tokens`);
+  lines.push(`  Output: ${formatTokenCount(totalOutput)} tokens`);
+  if (cacheRead > 0) lines.push(`  Cache read: ${formatTokenCount(cacheRead)} tokens (⚡${Math.round(cacheRate * 100)}% hit rate)`);
+  if (cacheWrite > 0) lines.push(`  Cache write: ${formatTokenCount(cacheWrite)} tokens`);
+  if (cost > 0) lines.push(`  Cost: $${cost.toFixed(3)}`);
+
+  const modelEntries = Object.entries(models);
+  if (modelEntries.length > 0) {
+    lines.push("");
+    lines.push("Models:");
+    for (const [modelId, usage] of modelEntries) {
+      const mCacheRate = (usage.cacheReadTokens + usage.inputTokens) > 0
+        ? Math.round(usage.cacheReadTokens / (usage.cacheReadTokens + usage.inputTokens) * 100)
+        : 0;
+      const parts = [
+        `↑${formatTokenCount(usage.inputTokens)}`,
+        `↓${formatTokenCount(usage.outputTokens)}`,
+      ];
+      if (mCacheRate > 0) parts.push(`⚡${mCacheRate}%`);
+      parts.push(`(${usage.turns} turns)`);
+      lines.push(`  ${modelId}: ${parts.join("  ")}`);
+    }
+  }
+
+  if (subagents.length > 0) {
+    lines.push("");
+    lines.push("Subagents:");
+    for (const sa of subagents) {
+      const saCacheRate = (sa.cacheReadTokens + sa.inputTokens) > 0
+        ? Math.round(sa.cacheReadTokens / (sa.cacheReadTokens + sa.inputTokens) * 100)
+        : 0;
+      const parts = [
+        `↑${formatTokenCount(sa.inputTokens)}`,
+        `↓${formatTokenCount(sa.outputTokens)}`,
+      ];
+      if (saCacheRate > 0) parts.push(`⚡${saCacheRate}%`);
+      if (sa.cost > 0) parts.push(`$${sa.cost.toFixed(3)}`);
+      if (sa.durationMs > 0) parts.push(formatDuration(sa.durationMs));
+      if (sa.toolUses > 0) parts.push(`${sa.toolUses} tools`);
+      lines.push(`  ${sa.description}: ${parts.join("  ")}`);
+    }
+  }
+
+  ctx.ui.notify(lines.join("\n"), "info");
+}
+
 async function showSettingsMenu(orchestrator: Orchestrator, ctx: any, showFlant = true): Promise<typeof BACK> {
   while (true) {
     const options: OptionInput[] = [
+      { title: "Usage", description: "Show session token usage and cost breakdown" },
       { title: "LSP", description: "Language server status and controls" },
     ];
     if (showFlant) {
@@ -569,6 +661,10 @@ async function showSettingsMenu(orchestrator: Orchestrator, ctx: any, showFlant 
 
     const choice = await selectOption(ctx, "Settings", options);
     if (!choice || choice === "Back") return BACK;
+    if (choice === "Usage") {
+      showUsage(ctx);
+      continue;
+    }
     if (choice === "LSP") {
       await showLspMenu(ctx);
       continue;

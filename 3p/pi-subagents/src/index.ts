@@ -368,14 +368,17 @@ Use get_subagent_result for full output.`,
   /** Helper: build event data for lifecycle events from an AgentRecord. */
   function buildEventData(record: AgentRecord) {
     const durationMs = record.completedAt ? record.completedAt - record.startedAt : Date.now() - record.startedAt;
-    let tokens: { input: number; output: number; total: number } | undefined;
+    let tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number; cost: number } | undefined;
     try {
       if (record.session) {
         const stats = record.session.getSessionStats();
         tokens = {
           input: stats.tokens?.input ?? 0,
           output: stats.tokens?.output ?? 0,
+          cacheRead: stats.tokens?.cacheRead ?? 0,
+          cacheWrite: stats.tokens?.cacheWrite ?? 0,
           total: stats.tokens?.total ?? 0,
+          cost: typeof stats.cost === "number" ? stats.cost : 0,
         };
       }
     } catch { /* session stats unavailable */ }

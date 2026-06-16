@@ -12,7 +12,7 @@ export interface ModelUsage {
 
 export interface UsageTracker {
   recordTurn(modelId: string, provider: string, input: number, output: number, cacheRead: number, cacheWrite: number, cost: number): void;
-  recordSubagentCompletion(tokens: { input?: number; output?: number; total?: number }, cost?: number): void;
+  recordSubagentCompletion(tokens: { input?: number; output?: number; total?: number }, cost?: number, meta?: { description?: string; durationMs?: number; toolUses?: number }): void;
   loadFromSummary(summary: Record<string, unknown>): void;
   getTotalInputTokens(): number;
   getTotalOutputTokens(): number;
@@ -22,8 +22,20 @@ export interface UsageTracker {
   getCacheHitRate(): number;
   getPerModelUsage(): Record<string, ModelUsage>;
   getSubagentTotals(): { inputTokens: number; outputTokens: number; cost: number };
+  getSubagentList(): SubagentUsage[];
   toSummary(): object;
   reset(): void;
+}
+
+export interface SubagentUsage {
+  description: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  cost: number;
+  durationMs: number;
+  toolUses: number;
 }
 
 interface TrackerState {
@@ -38,6 +50,7 @@ interface TrackerState {
   subagentOutputTokens: number;
   subagentCost: number;
   models: Map<string, ModelUsage>;
+  subagents: SubagentUsage[];
 }
 
 function toFiniteNumber(value: unknown): number {
@@ -68,6 +81,7 @@ function createInitialState(): TrackerState {
     subagentOutputTokens: 0,
     subagentCost: 0,
     models: new Map<string, ModelUsage>(),
+    subagents: [],
   };
 }
 
@@ -106,17 +120,34 @@ export function createUsageTracker(): UsageTracker {
       state.models.set(key, usage);
     },
 
-    recordSubagentCompletion(tokens: { input?: number; output?: number; total?: number }, cost?: number): void {
+    recordSubagentCompletion(
+      tokens: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; total?: number; cost?: number },
+      cost?: number,
+      meta?: { description?: string; durationMs?: number; toolUses?: number },
+    ): void {
       const safeInput = toFiniteNumber(tokens.input);
       const safeOutput = toFiniteNumber(tokens.output);
       const safeTotal = toFiniteNumber(tokens.total);
+      const safeCacheRead = toFiniteNumber(tokens.cacheRead);
+      const safeCacheWrite = toFiniteNumber(tokens.cacheWrite);
+      const safeCost = toFiniteNumber(tokens.cost ?? cost);
 
       const effectiveInput = safeInput === 0 && safeOutput === 0 ? safeTotal : safeInput;
-      const effectiveOutput = safeOutput;
 
       state.subagentInputTokens += effectiveInput;
-      state.subagentOutputTokens += effectiveOutput;
-      state.subagentCost += toFiniteNumber(cost);
+      state.subagentOutputTokens += safeOutput;
+      state.subagentCost += safeCost;
+
+      state.subagents.push({
+        description: meta?.description ?? "unknown",
+        inputTokens: effectiveInput,
+        outputTokens: safeOutput,
+        cacheReadTokens: safeCacheRead,
+        cacheWriteTokens: safeCacheWrite,
+        cost: safeCost,
+        durationMs: toFiniteNumber(meta?.durationMs),
+        toolUses: toFiniteNumber(meta?.toolUses),
+      });
     },
 
     loadFromSummary(summary: Record<string, unknown>): void {
@@ -131,10 +162,23 @@ export function createUsageTracker(): UsageTracker {
         state.totalCost = toFiniteNumber(totals.cost);
         state.totalTurns = toFiniteNumber(totals.turns);
       }
-      if (subagents) {
-        state.subagentInputTokens = toFiniteNumber(subagents.inputTokens);
-        state.subagentOutputTokens = toFiniteNumber(subagents.outputTokens);
-        state.subagentCost = toFiniteNumber(subagents.cost);
+      if (Array.isArray(summary.subagents)) {
+        for (const sa of summary.subagents as Record<string, unknown>[]) {
+          const entry: SubagentUsage = {
+            description: typeof sa.description === "string" ? sa.description : "unknown",
+            inputTokens: toFiniteNumber(sa.inputTokens),
+            outputTokens: toFiniteNumber(sa.outputTokens),
+            cacheReadTokens: toFiniteNumber(sa.cacheReadTokens),
+            cacheWriteTokens: toFiniteNumber(sa.cacheWriteTokens),
+            cost: toFiniteNumber(sa.cost),
+            durationMs: toFiniteNumber(sa.durationMs),
+            toolUses: toFiniteNumber(sa.toolUses),
+          };
+          state.subagents.push(entry);
+          state.subagentInputTokens += entry.inputTokens;
+          state.subagentOutputTokens += entry.outputTokens;
+          state.subagentCost += entry.cost;
+        }
       }
       if (models) {
         for (const [modelId, usage] of Object.entries(models)) {
@@ -194,6 +238,10 @@ export function createUsageTracker(): UsageTracker {
       };
     },
 
+    getSubagentList(): SubagentUsage[] {
+      return [...state.subagents];
+    },
+
     toSummary(): object {
       return {
         startedAt: state.startedAt,
@@ -206,11 +254,7 @@ export function createUsageTracker(): UsageTracker {
           cost: Number(state.totalCost.toFixed(6)),
           turns: state.totalTurns,
         },
-        subagents: {
-          inputTokens: state.subagentInputTokens,
-          outputTokens: state.subagentOutputTokens,
-          cost: Number(state.subagentCost.toFixed(6)),
-        },
+        subagents: [...state.subagents],
         models: this.getPerModelUsage(),
       };
     },
@@ -228,6 +272,7 @@ export function createUsageTracker(): UsageTracker {
       state.subagentOutputTokens = 0;
       state.subagentCost = 0;
       state.models.clear();
+      state.subagents = [];
     },
   };
 }

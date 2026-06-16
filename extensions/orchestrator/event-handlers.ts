@@ -726,7 +726,11 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   pi.events.on("subagents:completed", (data: any) => {
     const usageTracker = getUsageTracker();
     if (usageTracker && data?.tokens) {
-      usageTracker.recordSubagentCompletion(data.tokens);
+      usageTracker.recordSubagentCompletion(data.tokens, undefined, {
+        description: data.description || data.type || data.id || "unknown",
+        durationMs: data.durationMs,
+        toolUses: data.toolUses,
+      });
       (orchestrator.lastCtx?.ui as any)?.requestRender?.();
     }
 
