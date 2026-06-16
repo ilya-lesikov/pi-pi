@@ -17,7 +17,7 @@ import { brainstormSystemPrompt } from "./phases/brainstorm.js";
 import { planningSystemPrompt, spawnPlanners } from "./phases/planning.js";
 import { implementationSystemPrompt } from "./phases/implementation.js";
 import { reviewSystemPrompt as reviewCycleSystemPrompt } from "./phases/review.js";
-import { reviewSystemPrompt as reviewTaskSystemPrompt, loadReviewContext } from "./phases/review-task.js";
+import { reviewSystemPrompt as reviewTaskSystemPrompt } from "./phases/review-task.js";
 import { registerAgentDefinitions, unregisterAgentDefinitions } from "./agents/registry.js";
 import { createExploreAgent } from "./agents/explore.js";
 import { createLibrarianAgent } from "./agents/librarian.js";
@@ -220,8 +220,14 @@ export class Orchestrator {
         return planningSystemPrompt(this.active.dir);
       case "implement":
         return implementationSystemPrompt(this.active.dir);
-      case "review":
-        return reviewTaskSystemPrompt(this.active.dir, loadReviewContext(this.active.dir));
+      case "review": {
+        const rc = {
+          diffRange: this.active.state.reviewDiffRange ?? "uncommitted",
+          prUrl: this.active.state.reviewPrUrl ?? null,
+          prContext: null,
+        };
+        return reviewTaskSystemPrompt(this.active.dir, rc);
+      }
       default:
         return "";
     }

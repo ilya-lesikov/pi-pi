@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from "fs";
+import { existsSync, readdirSync, writeFileSync } from "fs";
 import { join, relative } from "path";
 import { askUser } from "../../3p/pi-ask-user/index.js";
 import { unregisterAgentDefinitions } from "./agents/registry.js";
@@ -14,7 +14,7 @@ import { cancelPendingPlannotatorWait } from "./plannotator.js";
 import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
 import { spawnCodeReviewers } from "./phases/review.js";
 import { spawnBrainstormReviewers } from "./phases/brainstorm.js";
-import { loadReviewContext, saveReviewContext, type ReviewContext } from "./phases/review-task.js";
+import type { ReviewContext } from "./phases/review-task.js";
 import {
   listTasks,
   loadTask,
@@ -707,12 +707,13 @@ function toPlannotatorDiffType(diffRange: string): string {
 
 async function openReviewTaskInPlannotator(orchestrator: Orchestrator): Promise<string> {
   if (!orchestrator.active) return "No active task.";
-  const context = loadReviewContext(orchestrator.active.dir);
+  const diffRange = orchestrator.active.state.reviewDiffRange ?? "uncommitted";
+  const prUrl = orchestrator.active.state.reviewPrUrl;
   const payload: Record<string, unknown> = {
     cwd: orchestrator.cwd,
-    diffType: toPlannotatorDiffType(context.diffRange),
+    diffType: toPlannotatorDiffType(diffRange),
   };
-  if (context.prUrl) payload.prUrl = context.prUrl;
+  if (prUrl) payload.prUrl = prUrl;
 
   return await new Promise((resolve) => {
     let handled = false;
@@ -788,7 +789,32 @@ async function showReviewMenu(orchestrator: Orchestrator, ctx: any): Promise<typ
 
     await orchestrator.startTask(ctx, "review", description);
     if (!orchestrator.active || orchestrator.active.type !== "review") return BACK;
-    saveReviewContext(orchestrator.active.dir, reviewContext);
+
+    orchestrator.active.state.reviewDiffRange = reviewContext.diffRange;
+    if (reviewContext.prUrl) orchestrator.active.state.reviewPrUrl = reviewContext.prUrl;
+    saveTask(orchestrator.active.dir, orchestrator.active.state);
+
+    const urLines = ["# User Request", `Review code changes: ${reviewContext.diffRange}`];
+    if (reviewContext.prUrl) urLines.push(`PR: ${reviewContext.prUrl}`);
+    if (description !== "review") urLines.push("", "## Problem", description);
+    else urLines.push("", "## Problem", "Review and identify issues in the code changes.");
+    urLines.push("", "## Constraints", "Focus on correctness, edge cases, style, missing tests, potential bugs.");
+    writeFileSync(join(orchestrator.active.dir, "USER_REQUEST.md"), urLines.join("\n") + "\n", "utf-8");
+
+    if (reviewContext.prContext) {
+      const resLines = [
+        "## Affected Code",
+        `See diff: ${reviewContext.diffRange}`,
+        "",
+        "## Architecture Context",
+        "(to be filled during review)",
+        "",
+        "## PR Context",
+        reviewContext.prContext,
+      ];
+      writeFileSync(join(orchestrator.active.dir, "RESEARCH.md"), resLines.join("\n") + "\n", "utf-8");
+    }
+
     return "started";
   }
 }
