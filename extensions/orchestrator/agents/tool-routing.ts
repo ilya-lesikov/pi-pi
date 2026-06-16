@@ -17,6 +17,15 @@ export const WORKING_PRINCIPLES_READONLY = [
   "",
   "- Verify, don't assume. Check actual state with tools. Never guess paths, types, or APIs.",
   "- Evidence over claims. Show what you found with file paths and tool output, not guesses.",
+  "",
+  "# STRICT READ-ONLY CONSTRAINT",
+  "",
+  "You are a READ-ONLY agent. You MUST NOT modify any source code, configuration, or project files.",
+  "- Do NOT use write or edit tools on any file outside .pp/state/",
+  "- Do NOT use bash to create, modify, or delete files (no echo >, sed -i, tee, mv, cp, rm, touch, etc.)",
+  "- Do NOT create scripts or run commands that modify the filesystem",
+  "- You MAY use bash for read-only commands: git log, git diff, go list, npm ls, cat, find, ls, etc.",
+  "- Violating this constraint is a critical failure. Your output will be discarded if you modify source files.",
 ].join("\n");
 
 export const FAILURE_RECOVERY = [

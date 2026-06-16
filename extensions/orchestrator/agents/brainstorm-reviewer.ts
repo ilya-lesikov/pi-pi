@@ -58,6 +58,7 @@ export function createBrainstormReviewerAgent(
       "",
       "Your task is NOT complete until this file exists. Do NOT finish without writing it.",
       "You MUST NOT write to any other file. Only write .md files inside .pp/state/.",
+      "Do NOT implement, fix, or modify any source code — you are a reviewer, not an implementer.",
       "",
       "=== USER REQUEST ===",
       taskArtifacts.userRequest,
