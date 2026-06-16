@@ -73,6 +73,15 @@ function showStatus(orchestrator: Orchestrator, ctx: any): void {
   );
 }
 
+async function abortCurrentWork(orchestrator: Orchestrator, ctx: any): Promise<void> {
+  orchestrator.abortAllSubagents();
+  ctx.abort?.();
+  await ctx.waitForIdle?.();
+  const taskStore = (globalThis as any)[Symbol.for("pi-tasks:store")];
+  taskStore?.clearAll?.();
+  taskStore?.refreshWidget?.(ctx.ui);
+}
+
 async function pauseTask(orchestrator: Orchestrator, ctx: any): Promise<string> {
   if (!orchestrator.active) return "No active task.";
 
@@ -1095,6 +1104,11 @@ export async function showActiveTaskMenu(
       await showSettingsMenu(orchestrator, ctx, false);
       continue;
     }
+
+    if (mode === "command") {
+      await abortCurrentWork(orchestrator, ctx);
+    }
+
     if (choice === "Finish") {
       const canContinue = phase !== "implement" && !waiting;
       const continueLabel = phase === "plan" ? "Continue to implement" : "Continue to plan & implement";
