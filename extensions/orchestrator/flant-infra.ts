@@ -265,8 +265,8 @@ function buildProviderModelConfig(
     reasoning: true,
     input: modality.includes("image") ? ["text", "image"] : ["text"],
     cost: {
-      input: toNumber(modelMeta?.pricing.prompt, 0) * 1_000_000,
-      output: toNumber(modelMeta?.pricing.completion, 0) * 1_000_000,
+      input: 0,
+      output: 0,
       cacheRead: 0,
       cacheWrite: 0,
     },
