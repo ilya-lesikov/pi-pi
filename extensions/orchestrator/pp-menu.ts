@@ -1080,14 +1080,15 @@ export async function showActiveTaskMenu(
 
     const choice = await selectOption(ctx, summary, options);
     if (!choice || choice === "Back") {
-      if (step !== "await_planners" && step !== "await_reviewers") {
+      if (mode === "tool" && step !== "await_planners" && step !== "await_reviewers") {
         if (phase === "plan") {
           setStep(orchestrator, "synthesize");
         } else {
           setStep(orchestrator, "llm_work");
         }
+        return continueMessage;
       }
-      return continueMessage;
+      return "";
     }
 
     if (choice === "Status") {
