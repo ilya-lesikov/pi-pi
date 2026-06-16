@@ -445,8 +445,15 @@ function registerSpecifyReviewsTool(orchestrator: Orchestrator): void {
 
       ctx.ui?.setWorkingMessage?.("Waiting for user input…");
       try {
-        const gateResult = await runUserGateDialog(orchestrator, ctx, `Plannotator review complete.\n\n${summary}`);
-        return { content: [{ type: "text" as const, text: gateResult }], details: {} };
+        const { showActiveTaskMenu } = await import("./pp-menu.js");
+        const text = await showActiveTaskMenu(orchestrator, ctx, `Plannotator review complete.\n\n${summary}`, "tool");
+        if (orchestrator.phaseCompactionPending || orchestrator.taskDoneCompactionPending) {
+          return { content: [{ type: "text" as const, text: "Phase transition in progress." }], details: {} };
+        }
+        if (!text) {
+          return { content: [{ type: "text" as const, text: "No action selected." }], details: {} };
+        }
+        return { content: [{ type: "text" as const, text }], details: {} };
       } finally {
         ctx.ui?.setWorkingMessage?.();
       }

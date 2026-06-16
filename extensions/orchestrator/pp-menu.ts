@@ -550,13 +550,22 @@ async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise
   }
 }
 
-async function showSettingsMenu(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
+async function showSettingsMenu(orchestrator: Orchestrator, ctx: any, showFlant = true): Promise<typeof BACK> {
   while (true) {
-    const choice = await selectOption(ctx, "Settings", [
-      { title: "Flant AI Infrastructure", description: "Configure corporate AI model provider" },
-      { title: "Back", description: "Return to the previous menu" },
-    ]);
+    const options: OptionInput[] = [
+      { title: "LSP", description: "Language server status and controls" },
+    ];
+    if (showFlant) {
+      options.push({ title: "Flant AI Infrastructure", description: "Configure corporate AI model provider" });
+    }
+    options.push({ title: "Back", description: "Return to the previous menu" });
+
+    const choice = await selectOption(ctx, "Settings", options);
     if (!choice || choice === "Back") return BACK;
+    if (choice === "LSP") {
+      await showLspMenu(ctx);
+      continue;
+    }
     await showFlantInfraMenu(orchestrator, ctx);
   }
 }
@@ -877,11 +886,10 @@ async function showNoActiveMenu(orchestrator: Orchestrator, ctx: any): Promise<s
       { title: "Review", description: "Review code changes, diffs, or pull requests" },
       { title: "Resume", description: "Resume a previously unfinished task" },
       { title: "Subagents", description: "Manage running agents" },
-      { title: "LSP", description: "Language server status and controls" },
-      { title: "Settings", description: "Configure pi-pi extension" },
-      { title: "Close", description: "Close this menu" },
+      { title: "Settings", description: "LSP, Flant AI, and other configuration" },
+      { title: "Back", description: "Close this menu" },
     ]);
-    if (!choice || choice === "Close") return undefined;
+    if (!choice || choice === "Back") return undefined;
 
     if (choice === "Debug") {
       const result = await showTaskTypeMenu(orchestrator, ctx, "debug", "Describe the task");
@@ -918,12 +926,7 @@ async function showNoActiveMenu(orchestrator: Orchestrator, ctx: any): Promise<s
       continue;
     }
 
-    if (choice === "LSP") {
-      await showLspMenu(ctx);
-      continue;
-    }
-
-    await showSettingsMenu(orchestrator, ctx);
+    await showSettingsMenu(orchestrator, ctx, true);
   }
 }
 
@@ -979,31 +982,35 @@ export async function showActiveTaskMenu(
     const opt = (title: string, description: string): OptionInput => ({ title, description });
 
     const options: OptionInput[] = [];
+    options.push(opt("Finish", "Complete, pause, or continue to next phase"));
     if (!waiting) {
-      if (isReviewPhase) {
-        options.push(opt("Fix", "Transition to plan phase to fix issues found"));
-        options.push(opt(autoLabel, "Run automated review with configured reviewers"));
-        options.push(opt(deepLabel, "Run automated review with higher thinking level"));
-        options.push(opt("Review in Plannotator", "Open visual review in browser"));
-        options.push(opt("Back to prompt", "Return to the prompt and keep working"));
-      } else {
-        options.push(opt("Approve & continue", "Advance to the next phase"));
-        options.push(opt(autoLabel, "Run automated review with configured reviewers"));
-        options.push(opt(deepLabel, "Run automated review with higher thinking level"));
-        if (hasPlannotator) {
+      options.push(opt(autoLabel, "Run automated review with configured reviewers"));
+      options.push(opt(deepLabel, "Run automated review with higher thinking level"));
+      if (hasPlannotator) {
+        if (isReviewPhase) {
+          options.push(opt("Review in Plannotator", "Open visual diff review in browser"));
+        } else {
           options.push(opt("Review in Plannotator", "Open visual review in browser"));
+        }
+        if (!isReviewPhase) {
           options.push(opt("Review on my own", "Review manually, then continue"));
         }
-        options.push(opt("Back to prompt", "Return to the prompt and keep working"));
       }
     }
-    options.push(opt("Finish", "Complete or pause the task"));
-    options.push(opt("Status", "Show current task phase, step, and timing"));
     options.push(opt("Subagents", "Manage running agents"));
-    options.push(opt("LSP", "Language server status and controls"));
+    options.push(opt("Status", "Show current task phase, step, and timing"));
+    options.push(opt("Settings", "LSP and other configuration"));
+    options.push(opt("Back", "Return to the prompt and keep working"));
 
     const choice = await selectOption(ctx, summary, options);
-    if (!choice) return mode === "tool" ? "No action selected." : "";
+    if (!choice || choice === "Back") {
+      if (phase === "plan") {
+        setStep(orchestrator, "synthesize");
+      } else {
+        setStep(orchestrator, "llm_work");
+      }
+      return continueMessage;
+    }
 
     if (choice === "Status") {
       showStatus(orchestrator, ctx);
@@ -1013,37 +1020,32 @@ export async function showActiveTaskMenu(
       await showSubagentsMenu(ctx);
       continue;
     }
-    if (choice === "LSP") {
-      await showLspMenu(ctx);
+    if (choice === "Settings") {
+      await showSettingsMenu(orchestrator, ctx, false);
       continue;
     }
     if (choice === "Finish") {
-      const finishChoice = await selectOption(ctx, "Finish", [
-        opt("Complete", "Mark task as done and clean up"),
-        opt("Pause", "Suspend task to resume later"),
-        opt("Back", "Return to the previous menu"),
-      ]);
+      const canContinue = phase !== "implement";
+      const continueLabel = phase === "plan" ? "Continue to implement" : "Continue to plan & implement";
+      const finishOptions: OptionInput[] = [];
+      if (canContinue) {
+        finishOptions.push(opt(continueLabel, "Approve and advance to the next phase"));
+      }
+      finishOptions.push(opt("Complete", "Mark task as done and clean up"));
+      finishOptions.push(opt("Pause", "Suspend task to resume later"));
+      finishOptions.push(opt("Back", "Return to the previous menu"));
+
+      const finishChoice = await selectOption(ctx, "Finish", finishOptions);
       if (!finishChoice || finishChoice === "Back") continue;
       if (finishChoice === "Pause") {
         const text = await pauseTask(orchestrator, ctx);
         return mode === "tool" ? text : "";
       }
-      const text = await finishTask(orchestrator, ctx);
-      return mode === "tool" ? text : "";
-    }
-
-    finalizeReviewCycle(task);
-
-    if (choice === "Approve & continue") {
-      const result = await orchestrator.transitionToNextPhase(ctx);
-      if (!result.ok) return `Transition blocked: ${result.error}`;
-      if (orchestrator.phaseCompactionPending || orchestrator.taskDoneCompactionPending) return "";
-      const curStep = orchestrator.active?.state.step;
-      if (curStep === "await_planners" || curStep === "await_reviewers") return "";
-      return "";
-    }
-
-    if (choice === "Fix") {
+      if (finishChoice === "Complete") {
+        const text = await finishTask(orchestrator, ctx);
+        return mode === "tool" ? text : "";
+      }
+      finalizeReviewCycle(task);
       const result = await orchestrator.transitionToNextPhase(ctx);
       if (!result.ok) return `Transition blocked: ${result.error}`;
       if (orchestrator.phaseCompactionPending || orchestrator.taskDoneCompactionPending) return "";
@@ -1057,6 +1059,8 @@ export async function showActiveTaskMenu(
       ctx.ui.notify(text, "info");
       continue;
     }
+
+    finalizeReviewCycle(task);
 
     if (choice === autoLabel || choice === deepLabel || choice === "Review in Plannotator") {
       const kind = choice === autoLabel ? "auto" as const : choice === deepLabel ? "auto-deep" as const : "plannotator" as const;
@@ -1074,15 +1078,6 @@ export async function showActiveTaskMenu(
     }
 
     if (choice === "Review on my own") {
-      if (phase === "plan") {
-        setStep(orchestrator, "synthesize");
-      } else {
-        setStep(orchestrator, "llm_work");
-      }
-      return continueMessage;
-    }
-
-    if (choice === "Back to prompt") {
       if (phase === "plan") {
         setStep(orchestrator, "synthesize");
       } else {
