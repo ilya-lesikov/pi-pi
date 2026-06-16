@@ -14,7 +14,7 @@ import { cancelPendingPlannotatorWait } from "./plannotator.js";
 import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
 import { spawnCodeReviewers } from "./phases/review.js";
 import { spawnBrainstormReviewers } from "./phases/brainstorm.js";
-import type { ReviewContext } from "./phases/review-task.js";
+
 import {
   listTasks,
   loadTask,
@@ -733,26 +733,9 @@ async function detectCurrentPrContext(orchestrator: Orchestrator): Promise<{ prU
   }
 }
 
-function toPlannotatorDiffType(diffRange: string): string {
-  const normalized = diffRange.trim();
-  if (!normalized) return "uncommitted";
-  if (normalized === "uncommitted" || normalized === "staged" || normalized === "unstaged" || normalized === "last-commit" || normalized === "branch" || normalized === "merge-base" || normalized === "all") {
-    return normalized;
-  }
-  if (normalized.startsWith("range:")) return normalized;
-  if (normalized.includes("..")) return `range:${normalized}`;
-  return normalized;
-}
-
 async function openReviewTaskInPlannotator(orchestrator: Orchestrator): Promise<string> {
   if (!orchestrator.active) return "No active task.";
-  const diffRange = orchestrator.active.state.reviewDiffRange ?? "uncommitted";
-  const prUrl = orchestrator.active.state.reviewPrUrl;
-  const payload: Record<string, unknown> = {
-    cwd: orchestrator.cwd,
-    diffType: toPlannotatorDiffType(diffRange),
-  };
-  if (prUrl) payload.prUrl = prUrl;
+  const payload: Record<string, unknown> = { cwd: orchestrator.cwd };
 
   return await new Promise((resolve) => {
     let handled = false;
@@ -779,12 +762,28 @@ async function openReviewTaskInPlannotator(orchestrator: Orchestrator): Promise<
   });
 }
 
+async function startReviewTask(
+  orchestrator: Orchestrator,
+  ctx: any,
+  userRequestContent: string,
+  researchContent: string | null,
+  description: string,
+): Promise<"started" | typeof BACK> {
+  await orchestrator.startTask(ctx, "review", description);
+  if (!orchestrator.active || orchestrator.active.type !== "review") return BACK;
+  writeFileSync(join(orchestrator.active.dir, "USER_REQUEST.md"), userRequestContent, "utf-8");
+  if (researchContent) {
+    writeFileSync(join(orchestrator.active.dir, "RESEARCH.md"), researchContent, "utf-8");
+  }
+  return "started";
+}
+
 async function showReviewMenu(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK | "started"> {
   while (true) {
     const choice = await selectOption(ctx, "Review", [
-      { title: "Diff with base branch", description: "Auto-detect base branch, review current branch changes" },
-      { title: "Uncommitted changes", description: "Review working directory changes against HEAD" },
-      { title: "Custom range", description: "Specify a git range (e.g. HEAD~3..HEAD, branch..main)" },
+      { title: "Current branch", description: "Review changes on current branch vs base" },
+      { title: "Uncommitted changes", description: "Review working directory changes" },
+      { title: "Describe", description: "Describe what to review and let the agent figure it out" },
       { title: "Resume", description: "Resume a previously unfinished review" },
       { title: "Back", description: "Return to the previous menu" },
     ]);
@@ -796,65 +795,39 @@ async function showReviewMenu(orchestrator: Orchestrator, ctx: any): Promise<typ
       continue;
     }
 
-    let reviewContext: ReviewContext;
-    if (choice === "Diff with base branch") {
+    if (choice === "Current branch") {
       const base = await detectDefaultBranch(orchestrator.pi, orchestrator.cwd, orchestrator.config);
       const pr = await detectCurrentPrContext(orchestrator);
-      reviewContext = {
-        diffRange: `${base}..HEAD`,
-        prUrl: pr.prUrl,
-        prContext: pr.prContext,
-      };
-    } else if (choice === "Uncommitted changes") {
-      reviewContext = {
-        diffRange: "uncommitted",
-        prUrl: null,
-        prContext: null,
-      };
-    } else {
-      const input = await ctx.ui.input("Git range (e.g. HEAD~3..HEAD)");
-      if (input === undefined || input === null) continue;
-      const trimmed = String(input).trim();
-      if (!trimmed) continue;
-      reviewContext = {
-        diffRange: `range:${trimmed}`,
-        prUrl: null,
-        prContext: null,
-      };
+
+      const urLines = [`# User Request\nReview current branch changes (${base}..HEAD)`];
+      if (pr.prUrl) urLines.push(`PR: ${pr.prUrl}`);
+      urLines.push("", "## Problem", "Review and identify issues in the code changes.", "", "## Constraints", "Focus on correctness, edge cases, style, missing tests, potential bugs.");
+      const urContent = urLines.join("\n") + "\n";
+
+      let resContent: string | null = null;
+      if (pr.prContext) {
+        resContent = ["## PR Context", pr.prContext, "", "## Affected Code", "(to be filled during review)", "", "## Architecture Context", "(to be filled during review)"].join("\n") + "\n";
+      }
+
+      const description = await promptDescription(ctx, "Describe the review (optional)", "review");
+      if (!description) continue;
+      return startReviewTask(orchestrator, ctx, urContent, resContent, description);
     }
 
-    const description = await promptDescription(ctx, "Describe the review (optional)", "review");
-    if (!description) continue;
-
-    await orchestrator.startTask(ctx, "review", description);
-    if (!orchestrator.active || orchestrator.active.type !== "review") return BACK;
-
-    orchestrator.active.state.reviewDiffRange = reviewContext.diffRange;
-    if (reviewContext.prUrl) orchestrator.active.state.reviewPrUrl = reviewContext.prUrl;
-    saveTask(orchestrator.active.dir, orchestrator.active.state);
-
-    const urLines = ["# User Request", `Review code changes: ${reviewContext.diffRange}`];
-    if (reviewContext.prUrl) urLines.push(`PR: ${reviewContext.prUrl}`);
-    if (description !== "review") urLines.push("", "## Problem", description);
-    else urLines.push("", "## Problem", "Review and identify issues in the code changes.");
-    urLines.push("", "## Constraints", "Focus on correctness, edge cases, style, missing tests, potential bugs.");
-    writeFileSync(join(orchestrator.active.dir, "USER_REQUEST.md"), urLines.join("\n") + "\n", "utf-8");
-
-    if (reviewContext.prContext) {
-      const resLines = [
-        "## Affected Code",
-        `See diff: ${reviewContext.diffRange}`,
-        "",
-        "## Architecture Context",
-        "(to be filled during review)",
-        "",
-        "## PR Context",
-        reviewContext.prContext,
-      ];
-      writeFileSync(join(orchestrator.active.dir, "RESEARCH.md"), resLines.join("\n") + "\n", "utf-8");
+    if (choice === "Uncommitted changes") {
+      const urContent = "# User Request\nReview uncommitted changes\n\n## Problem\nReview and identify issues in uncommitted working directory changes.\n\n## Constraints\nFocus on correctness, edge cases, style, missing tests, potential bugs.\n";
+      const description = await promptDescription(ctx, "Describe the review (optional)", "review");
+      if (!description) continue;
+      return startReviewTask(orchestrator, ctx, urContent, null, description);
     }
 
-    return "started";
+    const input = await ctx.ui.input("Describe what to review");
+    if (input === undefined || input === null) continue;
+    const trimmed = String(input).trim();
+    if (!trimmed) continue;
+
+    const urContent = `# User Request\n${trimmed}\n\n## Problem\n${trimmed}\n\n## Constraints\nFocus on correctness, edge cases, style, missing tests, potential bugs.\n`;
+    return startReviewTask(orchestrator, ctx, urContent, null, trimmed);
   }
 }
 

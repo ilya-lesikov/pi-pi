@@ -32,8 +32,7 @@ export interface TaskState {
   from: string | null;
   description: string;
   startedAt: string;
-  reviewDiffRange?: string;
-  reviewPrUrl?: string;
+
 }
 
 export interface TaskInfo {

@@ -220,14 +220,8 @@ export class Orchestrator {
         return planningSystemPrompt(this.active.dir);
       case "implement":
         return implementationSystemPrompt(this.active.dir);
-      case "review": {
-        const rc = {
-          diffRange: this.active.state.reviewDiffRange ?? "uncommitted",
-          prUrl: this.active.state.reviewPrUrl ?? null,
-          prContext: null,
-        };
-        return reviewTaskSystemPrompt(this.active.dir, rc);
-      }
+      case "review":
+        return reviewTaskSystemPrompt(this.active.dir);
       default:
         return "";
     }
