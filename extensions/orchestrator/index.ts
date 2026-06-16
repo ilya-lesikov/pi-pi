@@ -13,10 +13,32 @@ import { initFlantSync } from "./flant-infra.js";
 const ORCHESTRATOR_KEY = Symbol.for("pi-pi:orchestrator-initialized");
 export const SUBAGENT_SESSION_KEY = Symbol.for("pi-pi:subagent-session");
 
+const USAGE_TRACKER_KEY = Symbol.for("pi-pi:usage-tracker");
+
+function registerSubagentUsageTracking(pi: ExtensionAPI): void {
+  pi.on("turn_end", async (event, ctx) => {
+    const tracker = (globalThis as any)[USAGE_TRACKER_KEY] as
+      | { recordTurn(modelId: string, provider: string, input: number, output: number, cacheRead: number, cacheWrite: number, cost: number): void }
+      | undefined;
+    if (!tracker) return;
+    const msg = event.message as any;
+    if (!msg?.usage) return;
+    const input = typeof msg.usage.input === "number" ? msg.usage.input : 0;
+    const output = typeof msg.usage.output === "number" ? msg.usage.output : 0;
+    const cacheRead = typeof msg.usage.cacheRead === "number" ? msg.usage.cacheRead : 0;
+    const cacheWrite = typeof msg.usage.cacheWrite === "number" ? msg.usage.cacheWrite : 0;
+    const cost = typeof msg.usage.cost?.total === "number" ? msg.usage.cost.total : 0;
+    const modelId = (typeof msg.model === "string" && msg.model) || ctx.model?.id || "unknown-model";
+    const provider = (typeof msg.provider === "string" && msg.provider) || ctx.model?.provider || "unknown";
+    tracker.recordTurn(modelId, provider, input, output, cacheRead, cacheWrite, cost);
+  });
+}
+
 export default function (pi: ExtensionAPI) {
   if ((globalThis as any)[ORCHESTRATOR_KEY]) {
     (globalThis as any)[SUBAGENT_SESSION_KEY] = true;
     registerSubagentTools(pi);
+    registerSubagentUsageTracking(pi);
     return;
   }
   (globalThis as any)[ORCHESTRATOR_KEY] = true;
