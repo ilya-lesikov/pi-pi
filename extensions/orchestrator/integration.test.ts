@@ -4,7 +4,7 @@ import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Orchestrator } from "./orchestrator.js";
 import { registerCommandHandlers } from "./command-handlers.js";
-import { registerEventHandlers, runUserGateDialog } from "./event-handlers.js";
+import { registerEventHandlers } from "./event-handlers.js";
 import { createTask, loadTask, saveTask } from "./state.js";
 
 vi.mock("./cbm.js", () => ({ registerCbmTools: vi.fn() }));

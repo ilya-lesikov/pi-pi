@@ -5,11 +5,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerCommandHandlers } from "./command-handlers.js";
 import { Orchestrator, type ActiveTask } from "./orchestrator.js";
 
-vi.mock("./event-handlers.js", () => ({
-  runUserGateDialog: vi.fn().mockResolvedValue("User wants to continue. Run /pp:next when ready to advance."),
+vi.mock("./pp-menu.js", () => ({
+  showPpMenu: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { runUserGateDialog } from "./event-handlers.js";
+import { showPpMenu } from "./pp-menu.js";
 
 type Handler = (args: string | undefined, ctx: any) => any;
 
@@ -22,7 +22,7 @@ function makeTempDir(): string {
 }
 
 afterEach(() => {
-  vi.mocked(runUserGateDialog).mockClear();
+  vi.mocked(showPpMenu).mockClear();
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
     if (dir) rmSync(dir, { recursive: true, force: true });
@@ -110,8 +110,8 @@ function makeCtx() {
   };
 }
 
-describe("pp:next user gate", () => {
-  it("routes pp:next to shared user gate dialog", async () => {
+describe("pp command", () => {
+  it("opens pp menu command", async () => {
     const pi = makePi();
     const orchestrator = new Orchestrator(pi as any);
     const taskDir = makeTempDir();
@@ -122,30 +122,13 @@ describe("pp:next user gate", () => {
 
     const ctx = makeCtx();
 
-    const ppNext = pi._commands.get("pp:next");
-    await ppNext!.handler(undefined, ctx);
-
-    expect(runUserGateDialog).toHaveBeenCalledOnce();
-    expect(pi.sendUserMessage).toHaveBeenCalledWith("[PI-PI] User wants to continue. Run /pp:next when ready to advance.");
+    const pp = pi._commands.get("pp");
+    expect(pp).toBeTruthy();
+    await pp!.handler(undefined, ctx);
+    expect(showPpMenu).toHaveBeenCalledWith(orchestrator, ctx, "command");
   });
 
-  it("returns error when no active task", async () => {
-    const pi = makePi();
-    const orchestrator = new Orchestrator(pi as any);
-    orchestrator.cwd = makeTempDir();
-    orchestrator.config = makeConfig() as any;
-    registerCommandHandlers(orchestrator);
-
-    const ctx = makeCtx();
-
-    const ppNext = pi._commands.get("pp:next");
-    await ppNext!.handler(undefined, ctx);
-
-    expect(ctx.ui.notify).toHaveBeenCalledWith("No active task.", "error");
-    expect(runUserGateDialog).not.toHaveBeenCalled();
-  });
-
-  it("passes standard summary text to user gate dialog", async () => {
+  it("sends follow-up message when menu returns text", async () => {
     const pi = makePi();
     const orchestrator = new Orchestrator(pi as any);
     const taskDir = makeTempDir();
@@ -155,10 +138,23 @@ describe("pp:next user gate", () => {
     registerCommandHandlers(orchestrator);
 
     const ctx = makeCtx();
+    vi.mocked(showPpMenu).mockResolvedValueOnce("User wants to continue. Run /pp when ready to advance.");
 
-    const ppNext = pi._commands.get("pp:next");
-    await ppNext!.handler(undefined, ctx);
+    const pp = pi._commands.get("pp");
+    expect(pp).toBeTruthy();
+    await pp!.handler(undefined, ctx);
+    expect(pi.sendUserMessage).toHaveBeenCalledWith("[PI-PI] User wants to continue. Run /pp when ready to advance.");
+  });
 
-    expect(runUserGateDialog).toHaveBeenCalledWith(orchestrator, ctx, "Choose next action");
+  it("registers pp command", () => {
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi as any);
+    const taskDir = makeTempDir();
+    orchestrator.cwd = taskDir;
+    orchestrator.config = makeConfig() as any;
+    orchestrator.active = makeActiveTask(taskDir);
+    registerCommandHandlers(orchestrator);
+
+    expect(pi._commands.has("pp")).toBe(true);
   });
 });

@@ -50,17 +50,6 @@ export async function detectDefaultBranch(pi: ExtensionAPI, cwd: string, config?
   return "main";
 }
 
-export async function detectRepoCwd(pi: ExtensionAPI, modifiedFiles: Set<string>, fallbackCwd: string): Promise<string> {
-  if (modifiedFiles.size === 0) return fallbackCwd;
-  const firstFile = [...modifiedFiles][0];
-  const dir = resolve(firstFile, "..");
-  try {
-    const result = await pi.exec("git", ["rev-parse", "--show-toplevel"], { cwd: dir, timeout: 5000 });
-    if (result.code === 0 && result.stdout.trim()) return result.stdout.trim();
-  } catch {}
-  return fallbackCwd;
-}
-
 export async function selectOption(ctx: any, question: string, options: string[]): Promise<string | undefined> {
   const result = await askUser(ctx, {
     question,
@@ -71,12 +60,6 @@ export async function selectOption(ctx: any, question: string, options: string[]
   });
   if (!result || result.kind !== "selection") return undefined;
   return result.selections[0];
-}
-
-function setStep(orchestrator: Orchestrator, step: string): void {
-  if (!orchestrator.active) return;
-  orchestrator.active.state.step = step;
-  saveTask(orchestrator.active.dir, orchestrator.active.state);
 }
 
 function tryCompleteReviewCycle(orchestrator: Orchestrator): void {
@@ -218,13 +201,13 @@ export async function enterReviewCycle(orchestrator: Orchestrator, ctx: any, kin
   return `Started review cycle pass ${pass} (${kind}). Awaiting reviewers.`;
 }
 
-export function stopTask(orchestrator: Orchestrator): string {
+export async function stopTask(orchestrator: Orchestrator): Promise<string> {
   if (!orchestrator.active) return "No active task.";
   orchestrator.abortAllSubagents();
   orchestrator.active.state.phase = "done";
   saveTask(orchestrator.active.dir, orchestrator.active.state);
   const desc = orchestrator.active.description;
-  orchestrator.cleanupActive();
+  await orchestrator.cleanupActive();
   const taskStore = (globalThis as any)[Symbol.for("pi-tasks:store")];
   taskStore?.clearAll?.();
   return `Task "${desc}" stopped.`;
@@ -240,128 +223,6 @@ export function finalizeReviewCycle(task: ActiveTask): void {
   task.state.reviewCycle = null;
   task.state.step = "user_gate";
   saveTask(task.dir, task.state);
-}
-
-export async function runUserGateDialog(orchestrator: Orchestrator, ctx: any, summary: string): Promise<string> {
-  if (!orchestrator.active) return "No active task.";
-  if (orchestrator.userGatePending) return "A user-gate dialog is already in progress.";
-  orchestrator.userGatePending = true;
-
-  try {
-    return await runUserGateDialogInner(orchestrator, ctx, summary);
-  } finally {
-    orchestrator.userGatePending = false;
-  }
-}
-
-async function runUserGateDialogInner(orchestrator: Orchestrator, ctx: any, summary: string): Promise<string> {
-  if (!orchestrator.active) return "No active task.";
-  const pi = orchestrator.pi;
-  const phase = orchestrator.active.state.phase;
-  const task = orchestrator.active;
-
-  if (orchestrator.spawnedAgentIds.size > 0 || orchestrator.pendingSubagentSpawns > 0) {
-    const count = orchestrator.spawnedAgentIds.size + orchestrator.pendingSubagentSpawns;
-    return `${count} subagent(s) still running or spawning.`;
-  }
-
-    const byKind = task.state.reviewPassByKind ?? {};
-    const autoCount = byKind["auto"] ?? 0;
-    const deepCount = byKind["auto-deep"] ?? 0;
-    const autoLabel = autoCount > 0 ? `Review (pass ${autoCount + 1})` : "Review";
-    const deepLabel = deepCount > 0 ? `Deep review (pass ${deepCount + 1})` : "Deep review";
-
-  const continueMessage = "User wants to continue. Run /pp when ready to advance.";
-
-  if (phase === "brainstorm" && task.type === "implement") {
-    const choice = await selectOption(ctx, summary, ["Approve brainstorm", autoLabel, deepLabel, "Continue brainstorming", "Stop task"]);
-    finalizeReviewCycle(task);
-    if (choice === "Approve brainstorm") {
-      const result = await orchestrator.transitionToNextPhase(ctx);
-      return result.ok ? "Brainstorm approved. Transitioned to plan." : `Transition blocked: ${result.error}`;
-    }
-    if (choice === autoLabel) return enterReviewCycle(orchestrator, ctx, "auto");
-    if (choice === deepLabel) return enterReviewCycle(orchestrator, ctx, "auto-deep");
-    if (choice === "Stop task") return stopTask(orchestrator);
-    setStep(orchestrator, "llm_work");
-    return continueMessage;
-  }
-
-  if (phase === "brainstorm" && task.type === "brainstorm") {
-    const choice = await selectOption(ctx, summary, ["Approve brainstorm", autoLabel, deepLabel, "Continue brainstorming", "Finish brainstorming", "Stop task"]);
-    finalizeReviewCycle(task);
-    if (choice === "Approve brainstorm") {
-      const result = await orchestrator.transitionToNextPhase(ctx);
-      return result.ok ? "Brainstorm approved. Transitioned to plan." : `Transition blocked: ${result.error}`;
-    }
-    if (choice === autoLabel) return enterReviewCycle(orchestrator, ctx, "auto");
-    if (choice === deepLabel) return enterReviewCycle(orchestrator, ctx, "auto-deep");
-    if (choice === "Finish brainstorming" || choice === "Stop task") return stopTask(orchestrator);
-    setStep(orchestrator, "llm_work");
-    return continueMessage;
-  }
-
-  if (phase === "debug") {
-    const choice = await selectOption(ctx, summary, ["Approve debug", autoLabel, deepLabel, "Continue debugging", "Finish debugging", "Stop task"]);
-    finalizeReviewCycle(task);
-    if (choice === "Approve debug") {
-      const result = await orchestrator.transitionToNextPhase(ctx);
-      return result.ok ? "Debug approved. Transitioned to plan." : `Transition blocked: ${result.error}`;
-    }
-    if (choice === autoLabel) return enterReviewCycle(orchestrator, ctx, "auto");
-    if (choice === deepLabel) return enterReviewCycle(orchestrator, ctx, "auto-deep");
-    if (choice === "Finish debugging" || choice === "Stop task") return stopTask(orchestrator);
-    setStep(orchestrator, "llm_work");
-    return continueMessage;
-  }
-
-  if (phase === "plan") {
-    const choice = await selectOption(ctx, summary, [
-      "Approve plan",
-      autoLabel,
-      deepLabel,
-      "Review in Plannotator",
-      "Review on my own",
-      "Continue planning",
-      "Stop task",
-    ]);
-    finalizeReviewCycle(task);
-    if (choice === "Approve plan") {
-      const result = await orchestrator.transitionToNextPhase(ctx);
-      return result.ok ? "Plan approved. Transitioned to implement." : `Transition blocked: ${result.error}`;
-    }
-    if (choice === autoLabel) return enterReviewCycle(orchestrator, ctx, "auto");
-    if (choice === deepLabel) return enterReviewCycle(orchestrator, ctx, "auto-deep");
-    if (choice === "Review in Plannotator") return enterReviewCycle(orchestrator, ctx, "plannotator");
-    if (choice === "Stop task") return stopTask(orchestrator);
-    setStep(orchestrator, "synthesize");
-    return continueMessage;
-  }
-
-  if (phase === "implement") {
-    const choice = await selectOption(ctx, summary, [
-      "Approve implementation",
-      autoLabel,
-      deepLabel,
-      "Review in Plannotator",
-      "Review on my own",
-      "Continue implementation",
-      "Stop task",
-    ]);
-    finalizeReviewCycle(task);
-    if (choice === "Approve implementation") {
-      const result = await orchestrator.transitionToNextPhase(ctx);
-      return result.ok ? "Implementation approved. Task completed." : `Transition blocked: ${result.error}`;
-    }
-    if (choice === autoLabel) return enterReviewCycle(orchestrator, ctx, "auto");
-    if (choice === deepLabel) return enterReviewCycle(orchestrator, ctx, "auto-deep");
-    if (choice === "Review in Plannotator") return enterReviewCycle(orchestrator, ctx, "plannotator");
-    if (choice === "Stop task") return stopTask(orchestrator);
-    setStep(orchestrator, "llm_work");
-    return continueMessage;
-  }
-
-  return "No dialog available for this phase.";
 }
 
 function registerOrchestratorTools(orchestrator: Orchestrator): void {
@@ -724,7 +585,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
           }
 
           if (choice === "Stop task") {
-            pi.sendUserMessage(`[PI-PI] ${stopTask(orchestrator)}`, { deliverAs: "followUp" });
+            pi.sendUserMessage(`[PI-PI] ${await stopTask(orchestrator)}`, { deliverAs: "followUp" });
             return;
           }
 
@@ -836,7 +697,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
           }
 
           if (choice === "Stop task") {
-            pi.sendUserMessage(`[PI-PI] ${stopTask(orchestrator)}`, { deliverAs: "followUp" });
+            pi.sendUserMessage(`[PI-PI] ${await stopTask(orchestrator)}`, { deliverAs: "followUp" });
             return;
           }
 
@@ -941,7 +802,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if ((globalThis as any)[SUBAGENT_SESSION_KEY]) return;
     const tracker = getUsageTracker();
     if (!tracker) return;
-    const sessionId = ctx.sessionManager.getSessionId?.() || `session-${Date.now()}`;
+    const sessionId = ctx.sessionManager?.getSessionId?.() || `session-${Date.now()}`;
     try {
       dumpUsageSummary(tracker, sessionId);
     } catch (err: any) {
@@ -956,7 +817,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
 
     if (!(globalThis as any)[SUBAGENT_SESSION_KEY]) {
       const tracker = createUsageTracker();
-      const sessionId = (ctx.sessionManager as any).getSessionId?.() || "";
+      const sessionId = ctx.sessionManager?.getSessionId?.() || "";
       if (sessionId) {
         const previous = loadUsageSummary(sessionId);
         if (previous) tracker.loadFromSummary(previous);

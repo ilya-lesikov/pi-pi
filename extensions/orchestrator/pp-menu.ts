@@ -530,7 +530,14 @@ async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise
     }
 
     if (choice.startsWith("Cache period:")) {
-      const selected = await selectOption(ctx, "Cache period", ["1 day", "3 days", "7 days", "14 days", "30 days", "Back"]);
+      const selected = await selectOption(ctx, "Cache period", [
+        { title: "1 day", description: "Refresh model metadata daily" },
+        { title: "3 days", description: "Refresh model metadata every three days" },
+        { title: "7 days", description: "Default — refresh weekly" },
+        { title: "14 days", description: "Refresh model metadata every two weeks" },
+        { title: "30 days", description: "Refresh model metadata monthly" },
+        { title: "Back", description: "Return to the previous menu" },
+      ]);
       if (!selected || selected === "Back") continue;
       const days = Number(selected.split(" ")[0]);
       if (!Number.isFinite(days) || days <= 0) continue;
@@ -1004,10 +1011,12 @@ export async function showActiveTaskMenu(
 
     const choice = await selectOption(ctx, summary, options);
     if (!choice || choice === "Back") {
-      if (phase === "plan") {
-        setStep(orchestrator, "synthesize");
-      } else {
-        setStep(orchestrator, "llm_work");
+      if (step !== "await_planners" && step !== "await_reviewers") {
+        if (phase === "plan") {
+          setStep(orchestrator, "synthesize");
+        } else {
+          setStep(orchestrator, "llm_work");
+        }
       }
       return continueMessage;
     }
@@ -1025,7 +1034,7 @@ export async function showActiveTaskMenu(
       continue;
     }
     if (choice === "Finish") {
-      const canContinue = phase !== "implement";
+      const canContinue = phase !== "implement" && !waiting;
       const continueLabel = phase === "plan" ? "Continue to implement" : "Continue to plan & implement";
       const finishOptions: OptionInput[] = [];
       if (canContinue) {
