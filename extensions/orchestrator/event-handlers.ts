@@ -728,6 +728,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (usageTracker && data?.tokens) {
       usageTracker.recordSubagentCompletion(data.tokens, undefined, {
         description: data.description || data.type || data.id || "unknown",
+        modelId: data.modelId || "unknown",
         durationMs: data.durationMs,
         toolUses: data.toolUses,
       });

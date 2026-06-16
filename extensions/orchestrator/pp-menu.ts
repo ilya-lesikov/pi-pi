@@ -592,7 +592,7 @@ function showUsage(ctx: any): void {
         getTotalCacheReadTokens(): number; getTotalCacheWriteTokens(): number;
         getTotalCost(): number; getCacheHitRate(): number;
         getPerModelUsage(): Record<string, { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; turns: number }>;
-        getSubagentList(): Array<{ description: string; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; cost: number; durationMs: number; toolUses: number }>;
+        getSubagentList(): Array<{ description: string; modelId: string; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; cost: number; durationMs: number; toolUses: number }>;
       }
     | undefined;
 
@@ -601,57 +601,97 @@ function showUsage(ctx: any): void {
     return;
   }
 
-  const totalInput = tracker.getTotalInputTokens();
-  const totalOutput = tracker.getTotalOutputTokens();
-  const cacheRead = tracker.getTotalCacheReadTokens();
-  const cacheWrite = tracker.getTotalCacheWriteTokens();
-  const cost = tracker.getTotalCost();
-  const cacheRate = tracker.getCacheHitRate();
+  const mainInput = tracker.getTotalInputTokens();
+  const mainOutput = tracker.getTotalOutputTokens();
+  const mainCacheRead = tracker.getTotalCacheReadTokens();
+  const mainCacheWrite = tracker.getTotalCacheWriteTokens();
+  const mainCost = tracker.getTotalCost();
   const models = tracker.getPerModelUsage();
   const subagents = tracker.getSubagentList();
 
-  const lines: string[] = ["Session usage:"];
+  let saInput = 0, saOutput = 0, saCacheRead = 0, saCacheWrite = 0, saCost = 0;
+  for (const sa of subagents) {
+    saInput += sa.inputTokens;
+    saOutput += sa.outputTokens;
+    saCacheRead += sa.cacheReadTokens;
+    saCacheWrite += sa.cacheWriteTokens;
+    saCost += sa.cost;
+  }
+
+  const totalInput = mainInput + saInput;
+  const totalOutput = mainOutput + saOutput;
+  const totalCacheRead = mainCacheRead + saCacheRead;
+  const totalCost = mainCost + saCost;
+  const totalCacheRate = (totalCacheRead + totalInput) > 0
+    ? totalCacheRead / (totalCacheRead + totalInput)
+    : 0;
+
+  const byModel = new Map<string, { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number }>();
+  for (const [modelId, usage] of Object.entries(models)) {
+    byModel.set(modelId, {
+      input: usage.inputTokens, output: usage.outputTokens,
+      cacheRead: usage.cacheReadTokens, cacheWrite: usage.cacheWriteTokens, cost: 0,
+    });
+  }
+  if (mainCost > 0 && Object.keys(models).length === 1) {
+    const entry = byModel.values().next().value;
+    if (entry) entry.cost = mainCost;
+  }
+  for (const sa of subagents) {
+    const key = sa.modelId !== "unknown" ? sa.modelId : sa.description;
+    const existing = byModel.get(key);
+    if (existing) {
+      existing.input += sa.inputTokens;
+      existing.output += sa.outputTokens;
+      existing.cacheRead += sa.cacheReadTokens;
+      existing.cacheWrite += sa.cacheWriteTokens;
+      existing.cost += sa.cost;
+    } else {
+      byModel.set(key, {
+        input: sa.inputTokens, output: sa.outputTokens,
+        cacheRead: sa.cacheReadTokens, cacheWrite: sa.cacheWriteTokens, cost: sa.cost,
+      });
+    }
+  }
+
+  const lines: string[] = ["Session usage (total):"];
   lines.push(`  Input: ${formatTokenCount(totalInput)} tokens`);
   lines.push(`  Output: ${formatTokenCount(totalOutput)} tokens`);
-  if (cacheRead > 0) lines.push(`  Cache read: ${formatTokenCount(cacheRead)} tokens (⚡${Math.round(cacheRate * 100)}% hit rate)`);
-  if (cacheWrite > 0) lines.push(`  Cache write: ${formatTokenCount(cacheWrite)} tokens`);
-  if (cost > 0) lines.push(`  Cost: $${cost.toFixed(3)}`);
+  if (totalCacheRead > 0) lines.push(`  Cache: ⚡${Math.round(totalCacheRate * 100)}% hit rate`);
+  if (totalCost > 0) lines.push(`  Cost: $${totalCost.toFixed(3)}`);
 
-  const modelEntries = Object.entries(models);
-  if (modelEntries.length > 0) {
+  if (byModel.size > 0) {
     lines.push("");
-    lines.push("Models:");
-    for (const [modelId, usage] of modelEntries) {
-      const mCacheRate = (usage.cacheReadTokens + usage.inputTokens) > 0
-        ? Math.round(usage.cacheReadTokens / (usage.cacheReadTokens + usage.inputTokens) * 100)
-        : 0;
-      const parts = [
-        `↑${formatTokenCount(usage.inputTokens)}`,
-        `↓${formatTokenCount(usage.outputTokens)}`,
-      ];
-      if (mCacheRate > 0) parts.push(`⚡${mCacheRate}%`);
-      parts.push(`(${usage.turns} turns)`);
+    lines.push("By model:");
+    for (const [modelId, m] of byModel) {
+      const cr = (m.cacheRead + m.input) > 0 ? Math.round(m.cacheRead / (m.cacheRead + m.input) * 100) : 0;
+      const parts = [`↑${formatTokenCount(m.input)}`, `↓${formatTokenCount(m.output)}`];
+      if (cr > 0) parts.push(`⚡${cr}%`);
+      if (m.cost > 0) parts.push(`$${m.cost.toFixed(3)}`);
       lines.push(`  ${modelId}: ${parts.join("  ")}`);
     }
   }
 
-  if (subagents.length > 0) {
-    lines.push("");
-    lines.push("Subagents:");
-    for (const sa of subagents) {
-      const saCacheRate = (sa.cacheReadTokens + sa.inputTokens) > 0
-        ? Math.round(sa.cacheReadTokens / (sa.cacheReadTokens + sa.inputTokens) * 100)
-        : 0;
-      const parts = [
-        `↑${formatTokenCount(sa.inputTokens)}`,
-        `↓${formatTokenCount(sa.outputTokens)}`,
-      ];
-      if (saCacheRate > 0) parts.push(`⚡${saCacheRate}%`);
-      if (sa.cost > 0) parts.push(`$${sa.cost.toFixed(3)}`);
-      if (sa.durationMs > 0) parts.push(formatDuration(sa.durationMs));
-      if (sa.toolUses > 0) parts.push(`${sa.toolUses} tools`);
-      lines.push(`  ${sa.description}: ${parts.join("  ")}`);
-    }
+  lines.push("");
+  lines.push("By agent:");
+  const mainModelEntries = Object.entries(models);
+  if (mainModelEntries.length > 0) {
+    const mainParts = [`↑${formatTokenCount(mainInput)}`, `↓${formatTokenCount(mainOutput)}`];
+    const mainCR = (mainCacheRead + mainInput) > 0 ? Math.round(mainCacheRead / (mainCacheRead + mainInput) * 100) : 0;
+    if (mainCR > 0) mainParts.push(`⚡${mainCR}%`);
+    if (mainCost > 0) mainParts.push(`$${mainCost.toFixed(3)}`);
+    const mainModel = mainModelEntries.map(([id]) => id).join(", ");
+    lines.push(`  Main (${mainModel}): ${mainParts.join("  ")}`);
+  }
+  for (const sa of subagents) {
+    const saCR = (sa.cacheReadTokens + sa.inputTokens) > 0
+      ? Math.round(sa.cacheReadTokens / (sa.cacheReadTokens + sa.inputTokens) * 100) : 0;
+    const parts = [`↑${formatTokenCount(sa.inputTokens)}`, `↓${formatTokenCount(sa.outputTokens)}`];
+    if (saCR > 0) parts.push(`⚡${saCR}%`);
+    if (sa.cost > 0) parts.push(`$${sa.cost.toFixed(3)}`);
+    if (sa.durationMs > 0) parts.push(formatDuration(sa.durationMs));
+    if (sa.toolUses > 0) parts.push(`${sa.toolUses} tools`);
+    lines.push(`  ${sa.description}: ${parts.join("  ")}`);
   }
 
   ctx.ui.notify(lines.join("\n"), "info");

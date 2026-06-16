@@ -382,6 +382,10 @@ Use get_subagent_result for full output.`,
         };
       }
     } catch { /* session stats unavailable */ }
+    let modelId: string | undefined;
+    try {
+      modelId = record.session?.model?.id;
+    } catch {}
     return {
       id: record.id,
       type: record.type,
@@ -391,6 +395,7 @@ Use get_subagent_result for full output.`,
       status: record.status,
       toolUses: record.toolUses,
       durationMs,
+      modelId,
       tokens,
     };
   }
