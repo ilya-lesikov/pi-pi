@@ -22,6 +22,7 @@ export type DiffType =
   | "branch"
   | "merge-base"
   | "all"
+  | `range:${string}`
   | `worktree:${string}`
   | "p4-default"
   | `p4-changelist:${string}`;
@@ -736,13 +737,31 @@ export async function runGitDiff(
         break;
       }
 
-      default:
+      default: {
+        if (effectiveDiffType.startsWith("range:")) {
+          const range = effectiveDiffType.slice("range:".length);
+          const rangeArgs = [
+            "diff",
+            "--no-ext-diff",
+            ...wFlag,
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            "--end-of-options",
+            range,
+          ];
+          const rangeDiff = assertGitSuccess(
+            await runtime.runGit(rangeArgs, { cwd }),
+            rangeArgs,
+          );
+          patch = rangeDiff.stdout;
+          label = `Commits ${range}`;
+          break;
+        }
         return { patch: "", label: "Unknown diff type" };
+      }
     }
   } catch (error) {
     const raw = error instanceof Error ? error.message : String(error);
-    // Git dumps its entire --help output on some failures; keep only the
-    // first meaningful line so the UI doesn't vomit a wall of text.
     const firstLine = raw.split("\n").find((l) => l.trim().length > 0) ?? raw;
     const message = firstLine.length > 200 ? firstLine.slice(0, 200) + "…" : firstLine;
     return {
