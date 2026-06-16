@@ -73,6 +73,29 @@ function showStatus(orchestrator: Orchestrator, ctx: any): void {
   );
 }
 
+async function pauseTask(orchestrator: Orchestrator, ctx: any): Promise<string> {
+  if (!orchestrator.active) return "No active task.";
+
+  cancelPendingPlannotatorWait(orchestrator);
+  orchestrator.abortAllSubagents();
+  ctx.abort?.();
+  await ctx.waitForIdle?.();
+
+  const name = orchestrator.active.description;
+
+  saveTask(orchestrator.active.dir, orchestrator.active.state);
+  unregisterAgentDefinitions(orchestrator.pi);
+  await orchestrator.cleanupActive();
+
+  const taskStore = (globalThis as any)[Symbol.for("pi-tasks:store")];
+  taskStore?.clearAll?.();
+  taskStore?.refreshWidget?.(ctx.ui);
+
+  orchestrator.updateStatus(ctx);
+  ctx.ui.notify(`Task "${name}" paused. Use /pp → Resume to continue.`, "info");
+  return `Task "${name}" paused.`;
+}
+
 async function finishTask(orchestrator: Orchestrator, ctx: any): Promise<string> {
   if (!orchestrator.active) return "No active task.";
 
@@ -952,14 +975,12 @@ export async function showActiveTaskMenu(
     const { autoLabel, deepLabel } = getReviewLabels(orchestrator);
     const isReviewPhase = phase === "review";
     const hasPlannotator = phase === "plan" || phase === "implement" || isReviewPhase;
-    const canFinishPhase = (phase === "brainstorm" && task.type === "brainstorm") || phase === "debug" || isReviewPhase;
 
     const opt = (title: string, description: string): OptionInput => ({ title, description });
 
     const options: OptionInput[] = [];
     if (!waiting) {
       if (isReviewPhase) {
-        options.push(opt("Finish", "Complete the review and end the task"));
         options.push(opt("Fix", "Transition to plan phase to fix issues found"));
         options.push(opt(autoLabel, "Run automated review with configured reviewers"));
         options.push(opt(deepLabel, "Run automated review with higher thinking level"));
@@ -974,12 +995,9 @@ export async function showActiveTaskMenu(
           options.push(opt("Review on my own", "Review manually, then continue"));
         }
         options.push(opt("Back to prompt", "Return to the prompt and keep working"));
-        if (canFinishPhase) {
-          options.push(opt("Finish", "Complete this phase and end the task"));
-        }
       }
     }
-    options.push(opt("Abort", "Stop the task without completing"));
+    options.push(opt("Finish", "Complete or pause the task"));
     options.push(opt("Status", "Show current task phase, step, and timing"));
     options.push(opt("Subagents", "Manage running agents"));
     options.push(opt("LSP", "Language server status and controls"));
@@ -999,7 +1017,17 @@ export async function showActiveTaskMenu(
       await showLspMenu(ctx);
       continue;
     }
-    if (choice === "Abort" || choice === "Finish") {
+    if (choice === "Finish") {
+      const finishChoice = await selectOption(ctx, "Finish", [
+        opt("Complete", "Mark task as done and clean up"),
+        opt("Pause", "Suspend task to resume later"),
+        opt("Back", "Return to the previous menu"),
+      ]);
+      if (!finishChoice || finishChoice === "Back") continue;
+      if (finishChoice === "Pause") {
+        const text = await pauseTask(orchestrator, ctx);
+        return mode === "tool" ? text : "";
+      }
       const text = await finishTask(orchestrator, ctx);
       return mode === "tool" ? text : "";
     }
