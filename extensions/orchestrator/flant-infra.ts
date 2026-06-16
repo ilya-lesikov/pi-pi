@@ -11,6 +11,8 @@ export interface OpenRouterModelData {
   pricing: {
     prompt: number;
     completion: number;
+    cacheRead: number;
+    cacheWrite: number;
   };
   modality: string;
 }
@@ -241,6 +243,8 @@ export async function fetchOpenRouterMetadata(modelIds: string[]): Promise<Recor
       pricing: {
         prompt: toNumber(pricing.prompt, 0),
         completion: toNumber(pricing.completion, 0),
+        cacheRead: toNumber(pricing.input_cache_read, 0),
+        cacheWrite: toNumber(pricing.input_cache_write, 0),
       },
       modality: typeof architecture.modality === "string" ? architecture.modality : "text",
     };
@@ -265,10 +269,10 @@ function buildProviderModelConfig(
     reasoning: true,
     input: modality.includes("image") ? ["text", "image"] : ["text"],
     cost: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
+      input: toNumber(modelMeta?.pricing.prompt, 0) * 1_000_000,
+      output: toNumber(modelMeta?.pricing.completion, 0) * 1_000_000,
+      cacheRead: toNumber(modelMeta?.pricing.cacheRead, 0) * 1_000_000,
+      cacheWrite: toNumber(modelMeta?.pricing.cacheWrite, 0) * 1_000_000,
     },
     contextWindow: toNumber(modelMeta?.context_length, 200000),
     maxTokens: toNumber(modelMeta?.max_completion_tokens, 32000),

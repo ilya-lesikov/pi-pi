@@ -24,8 +24,12 @@ import { spawnCodeReviewers } from "./phases/review.js";
 import { spawnBrainstormReviewers } from "./phases/brainstorm.js";
 import { openPlannotator, waitForPlannotatorResult, cancelPendingPlannotatorWait } from "./plannotator.js";
 import { Orchestrator, deepReviewConfig, type ActiveTask } from "./orchestrator.js";
+import { createCustomFooter, setFooterContext, setFooterTracker } from "./custom-footer.js";
+import { createUsageTracker, dumpUsageSummary, loadUsageSummary, type UsageTracker } from "./usage-tracker.js";
 import { askUser } from "../../3p/pi-ask-user/index.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+
+const USAGE_TRACKER_KEY = Symbol.for("pi-pi:usage-tracker");
 
 export async function detectDefaultBranch(pi: ExtensionAPI, cwd: string, config?: { diffBaseBranch?: string }): Promise<string> {
   if (config?.diffBaseBranch) return config.diffBaseBranch;
@@ -539,6 +543,10 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
 export function registerEventHandlers(orchestrator: Orchestrator): void {
   const pi = orchestrator.pi;
 
+  function getUsageTracker(): UsageTracker | undefined {
+    return (globalThis as any)[USAGE_TRACKER_KEY] as UsageTracker | undefined;
+  }
+
   function trackSubagentEvent(data: any, event: "created" | "started" | "first_tool" | "first_turn" | "completed" | "failed"): void {
     if (!orchestrator.active || !data?.id) return;
     const now = Date.now();
@@ -848,6 +856,12 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   }
 
   pi.events.on("subagents:completed", (data: any) => {
+    const usageTracker = getUsageTracker();
+    if (usageTracker && data?.tokens) {
+      usageTracker.recordSubagentCompletion(data.tokens);
+      (orchestrator.lastCtx?.ui as any)?.requestRender?.();
+    }
+
     if (!orchestrator.active || !data?.id) return;
     trackSubagentEvent(data, "completed");
     orchestrator.spawnedAgentIds.delete(data.id);
@@ -916,9 +930,35 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     await orchestrator.cleanupActive();
   });
 
+  pi.on("session_shutdown", async (_event, ctx) => {
+    if ((globalThis as any)[SUBAGENT_SESSION_KEY]) return;
+    const tracker = getUsageTracker();
+    if (!tracker) return;
+    const sessionId = ctx.sessionManager.getSessionId?.() || `session-${Date.now()}`;
+    try {
+      dumpUsageSummary(tracker, sessionId);
+    } catch (err: any) {
+      console.error(`[pi-pi] Failed to dump usage summary: ${err.message}`);
+    }
+    delete (globalThis as any)[USAGE_TRACKER_KEY];
+  });
+
   pi.on("session_start", async (_event, ctx) => {
     orchestrator.lastCtx = ctx;
     orchestrator.cwd = ctx.cwd;
+
+    if (!(globalThis as any)[SUBAGENT_SESSION_KEY]) {
+      const tracker = createUsageTracker();
+      const sessionId = (ctx.sessionManager as any).getSessionId?.() || "";
+      if (sessionId) {
+        const previous = loadUsageSummary(sessionId);
+        if (previous) tracker.loadFromSummary(previous);
+      }
+      (globalThis as any)[USAGE_TRACKER_KEY] = tracker;
+      setFooterContext(ctx);
+      setFooterTracker(tracker);
+      ctx.ui.setFooter(createCustomFooter);
+    }
 
     const subagentsMgr = (globalThis as any)[Symbol.for("pi-subagents:manager")];
     subagentsMgr?.refreshWidget?.(ctx.ui);
@@ -1196,6 +1236,20 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   });
 
   pi.on("turn_end", async (event, ctx) => {
+    const msg = event.message as any;
+    const usageTracker = getUsageTracker();
+    if (usageTracker && msg?.usage) {
+      const input = typeof msg.usage.input === "number" ? msg.usage.input : 0;
+      const output = typeof msg.usage.output === "number" ? msg.usage.output : 0;
+      const cacheRead = typeof msg.usage.cacheRead === "number" ? msg.usage.cacheRead : 0;
+      const cacheWrite = typeof msg.usage.cacheWrite === "number" ? msg.usage.cacheWrite : 0;
+      const cost = typeof msg.usage.cost?.total === "number" ? msg.usage.cost.total : 0;
+      const modelId = (typeof msg.model === "string" && msg.model) || ctx.model?.id || "unknown-model";
+      const provider = (typeof msg.provider === "string" && msg.provider) || ctx.model?.provider || "unknown";
+      usageTracker.recordTurn(modelId, provider, input, output, cacheRead, cacheWrite, cost);
+      (ctx.ui as any)?.requestRender?.();
+    }
+
     if (!orchestrator.active || orchestrator.active.state.phase === "done") return;
     orchestrator.updateStatus(ctx);
 
@@ -1218,7 +1272,6 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
 
     const phase = orchestrator.active.state.phase;
 
-    const msg = event.message as any;
     if (msg?.stopReason === "aborted") return;
     if (msg?.stopReason === "error") {
       const errorMsg = msg.errorMessage || "unknown error";
