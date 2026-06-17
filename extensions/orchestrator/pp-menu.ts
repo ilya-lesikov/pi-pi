@@ -878,9 +878,9 @@ async function detectCurrentPrContext(orchestrator: Orchestrator): Promise<{ prU
   }
 }
 
-async function openReviewTaskInPlannotator(orchestrator: Orchestrator): Promise<string> {
-  if (!orchestrator.active) return "No active task.";
+async function openCodeReviewInPlannotator(orchestrator: Orchestrator, diffType?: string): Promise<string> {
   const payload: Record<string, unknown> = { cwd: orchestrator.cwd };
+  if (diffType) payload.diffType = diffType;
 
   return await new Promise((resolve) => {
     let handled = false;
@@ -1109,18 +1109,7 @@ export async function showActiveTaskMenu(
     const options: OptionInput[] = [];
     options.push(opt("Finish", "Complete, pause, or continue to next phase"));
     if (!waiting) {
-      options.push(opt(autoLabel, "Run automated review with configured reviewers"));
-      options.push(opt(deepLabel, "Run automated review with higher thinking level"));
-      if (hasPlannotator) {
-        if (isReviewPhase) {
-          options.push(opt("Review in Plannotator", "Open visual diff review in browser"));
-        } else {
-          options.push(opt("Review in Plannotator", "Open visual review in browser"));
-        }
-        if (!isReviewPhase) {
-          options.push(opt("Review on my own", "Review manually, then continue"));
-        }
-      }
+      options.push(opt("Review", "Auto review, Plannotator, or manual review"));
     }
     options.push(opt("Subagents", "Manage running agents"));
     options.push(opt("Status", "Show current task phase, step, and timing"));
@@ -1179,17 +1168,68 @@ export async function showActiveTaskMenu(
       return "";
     }
 
-    if (choice === "Review in Plannotator" && isReviewPhase) {
-      const text = await openReviewTaskInPlannotator(orchestrator);
-      ctx.ui.notify(text, "info");
-      continue;
-    }
+    if (choice === "Review") {
+      const reviewOptions: OptionInput[] = [
+        opt(autoLabel, "Run automated review with configured reviewers"),
+        opt(deepLabel, "Run automated review with higher thinking level"),
+      ];
+      if (hasPlannotator) {
+        reviewOptions.push(opt("Review in Plannotator", phase === "plan" ? "Open plan review in browser" : "Open code diff review in browser"));
+      }
+      reviewOptions.push(opt("Review on my own", "Review manually, then continue"));
+      reviewOptions.push(opt("Back", "Return to the previous menu"));
 
-    finalizeReviewCycle(task);
+      const reviewChoice = await selectOption(ctx, "Review", reviewOptions);
+      if (!reviewChoice || reviewChoice === "Back") continue;
 
-    if (choice === autoLabel || choice === deepLabel || choice === "Review in Plannotator") {
-      const kind = choice === autoLabel ? "auto" as const : choice === deepLabel ? "auto-deep" as const : "plannotator" as const;
-      if (kind !== "plannotator" && !hasEnabledReviewers(orchestrator, kind)) {
+      if (reviewChoice === "Review in Plannotator") {
+        if (phase === "plan") {
+          finalizeReviewCycle(task);
+          const text = await enterReviewCycle(orchestrator, ctx, "plannotator");
+          const curStep = orchestrator.active?.state.step;
+          if (curStep === "await_reviewers") return "";
+          const handled = handleReviewResult(ctx, text);
+          if (handled.continueLoop) continue;
+          return handled.text ?? text;
+        }
+        const diffChoice = await selectOption(ctx, "Review in Plannotator", [
+          opt("Current branch vs base", "Auto-detect base branch"),
+          opt("Uncommitted changes", "Working directory changes"),
+          opt("Last commit", "Changes in the most recent commit"),
+          opt("Custom range", "Specify a git range"),
+          opt("Back", "Return to the previous menu"),
+        ]);
+        if (!diffChoice || diffChoice === "Back") continue;
+
+        let diffType: string | undefined;
+        if (diffChoice === "Current branch vs base") diffType = "branch";
+        else if (diffChoice === "Uncommitted changes") diffType = "uncommitted";
+        else if (diffChoice === "Last commit") diffType = "last-commit";
+        else {
+          const rangeInput = await ctx.ui.input("Git range (e.g. HEAD~2..HEAD)");
+          if (!rangeInput) continue;
+          const trimmed = String(rangeInput).trim();
+          if (!trimmed) continue;
+          diffType = trimmed.includes("..") ? `range:${trimmed}` : trimmed;
+        }
+
+        const text = await openCodeReviewInPlannotator(orchestrator, diffType);
+        ctx.ui.notify(text, "info");
+        continue;
+      }
+
+      if (reviewChoice === "Review on my own") {
+        if (phase === "plan") {
+          setStep(orchestrator, "synthesize");
+        } else {
+          setStep(orchestrator, "llm_work");
+        }
+        return continueMessage;
+      }
+
+      finalizeReviewCycle(task);
+      const kind = reviewChoice === autoLabel ? "auto" as const : "auto-deep" as const;
+      if (!hasEnabledReviewers(orchestrator, kind)) {
         const label = phase === "brainstorm" ? "brainstorm" : phase === "plan" ? "plan" : "code";
         ctx.ui.notify(`No ${label} reviewers enabled.`, "info");
         continue;
@@ -1200,15 +1240,6 @@ export async function showActiveTaskMenu(
       const handled = handleReviewResult(ctx, text);
       if (handled.continueLoop) continue;
       return handled.text ?? text;
-    }
-
-    if (choice === "Review on my own") {
-      if (phase === "plan") {
-        setStep(orchestrator, "synthesize");
-      } else {
-        setStep(orchestrator, "llm_work");
-      }
-      return continueMessage;
     }
   }
 }
