@@ -348,11 +348,22 @@ function registerCommitTool(orchestrator: Orchestrator): void {
       if (!orchestrator.config.autoCommit) {
         return { content: [{ type: "text" as const, text: "autoCommit is disabled in config." }], details: {} };
       }
-      if (orchestrator.active.modifiedFiles.size === 0) {
+      const files: string[] = [];
+      try {
+        const gitResult = await pi.exec("git", ["diff", "--name-only"], { cwd: orchestrator.cwd, timeout: 5000 });
+        if (gitResult.code === 0 && gitResult.stdout.trim()) {
+          files.push(...gitResult.stdout.trim().split("\n").filter(Boolean));
+        }
+        const stagedResult = await pi.exec("git", ["diff", "--name-only", "--cached"], { cwd: orchestrator.cwd, timeout: 5000 });
+        if (stagedResult.code === 0 && stagedResult.stdout.trim()) {
+          for (const f of stagedResult.stdout.trim().split("\n").filter(Boolean)) {
+            if (!files.includes(f)) files.push(f);
+          }
+        }
+      } catch {}
+      if (files.length === 0) {
         return { content: [{ type: "text" as const, text: "No modified files to commit." }], details: {} };
       }
-
-      const files = [...orchestrator.active.modifiedFiles];
       const result = autoCommit(files, params.message, orchestrator.cwd);
       if (result.ok) {
         orchestrator.active.modifiedFiles.clear();
