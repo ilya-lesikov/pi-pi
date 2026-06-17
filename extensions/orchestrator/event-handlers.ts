@@ -150,7 +150,7 @@ export async function enterReviewCycle(orchestrator: Orchestrator, ctx: any, kin
       orchestrator.active.state.step = "synthesize";
       saveTask(orchestrator.active.dir, orchestrator.active.state);
       const feedback = result.feedback ? `\n\nFeedback:\n${result.feedback}` : "";
-      return `Plannotator requested changes.${feedback}\n\nUser wants to continue. Run /pp when ready to advance.`;
+      return `Plannotator requested changes.${feedback}\n\nAddress the user's feedback. If the feedback contains questions, answer them. If it requests changes, make the changes. Then call pp_phase_complete when done.`;
     }
 
     orchestrator.active.state.reviewCycle = null;
@@ -299,7 +299,7 @@ function registerSpecifyReviewsTool(orchestrator: Orchestrator): void {
           saveTask(orchestrator.active.dir, orchestrator.active.state);
         }
         return {
-          content: [{ type: "text" as const, text: `Plannotator review complete.\n\n${summary}\n\nFix the issues noted above, then call pp_phase_complete when done.` }],
+          content: [{ type: "text" as const, text: `Plannotator review complete.\n\n${summary}\n\nAddress the user's feedback. If the feedback contains questions, answer them. If it requests changes, make the changes. Then call pp_phase_complete when done.` }],
           details: {},
         };
       }
