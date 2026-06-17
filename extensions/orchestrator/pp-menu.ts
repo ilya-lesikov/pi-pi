@@ -627,18 +627,18 @@ function showUsage(ctx: any): void {
     : 0;
 
   const byModel = new Map<string, { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number }>();
-  for (const [modelId, usage] of Object.entries(models)) {
+  const mainModelEntries = Object.entries(models);
+  const mainTotalTokens = mainModelEntries.reduce((s, [, u]) => s + u.inputTokens + u.outputTokens, 0);
+  for (const [modelId, usage] of mainModelEntries) {
+    const modelTokens = usage.inputTokens + usage.outputTokens;
+    const modelCostShare = mainTotalTokens > 0 ? mainCost * (modelTokens / mainTotalTokens) : 0;
     byModel.set(modelId, {
       input: usage.inputTokens, output: usage.outputTokens,
-      cacheRead: usage.cacheReadTokens, cacheWrite: usage.cacheWriteTokens, cost: 0,
+      cacheRead: usage.cacheReadTokens, cacheWrite: usage.cacheWriteTokens, cost: modelCostShare,
     });
   }
-  if (mainCost > 0 && Object.keys(models).length === 1) {
-    const entry = byModel.values().next().value;
-    if (entry) entry.cost = mainCost;
-  }
   for (const sa of subagents) {
-    const key = sa.modelId !== "unknown" ? sa.modelId : sa.description;
+    const key = sa.modelId !== "unknown" ? sa.modelId : `subagent:${sa.description}`;
     const existing = byModel.get(key);
     if (existing) {
       existing.input += sa.inputTokens;
@@ -674,14 +674,13 @@ function showUsage(ctx: any): void {
 
   lines.push("");
   lines.push("By agent:");
-  const mainModelEntries = Object.entries(models);
-  if (mainModelEntries.length > 0) {
+  const agentModelNames = Object.keys(models);
+  if (agentModelNames.length > 0) {
     const mainParts = [`↑${formatTokenCount(mainInput)}`, `↓${formatTokenCount(mainOutput)}`];
     const mainCR = (mainCacheRead + mainInput) > 0 ? Math.round(mainCacheRead / (mainCacheRead + mainInput) * 100) : 0;
     if (mainCR > 0) mainParts.push(`⚡${mainCR}%`);
     if (mainCost > 0) mainParts.push(`$${mainCost.toFixed(2)}`);
-    const mainModel = mainModelEntries.map(([id]) => id).join(", ");
-    lines.push(`  Main (${mainModel}): ${mainParts.join("  ")}`);
+    lines.push(`  Main (${agentModelNames.join(", ")}): ${mainParts.join("  ")}`);
   }
   for (const sa of subagents) {
     const saCR = (sa.cacheReadTokens + sa.inputTokens) > 0
