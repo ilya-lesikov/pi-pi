@@ -658,7 +658,7 @@ function showUsage(ctx: any): void {
   lines.push(`  Input: ${formatTokenCount(totalInput)} tokens`);
   lines.push(`  Output: ${formatTokenCount(totalOutput)} tokens`);
   if (totalCacheRead > 0) lines.push(`  Cache: ⚡${Math.round(totalCacheRate * 100)}% hit rate`);
-  if (totalCost > 0) lines.push(`  Cost: $${totalCost.toFixed(3)}`);
+  if (totalCost > 0) lines.push(`  Cost: $${totalCost.toFixed(2)}`);
 
   if (byModel.size > 0) {
     lines.push("");
@@ -667,7 +667,7 @@ function showUsage(ctx: any): void {
       const cr = (m.cacheRead + m.input) > 0 ? Math.round(m.cacheRead / (m.cacheRead + m.input) * 100) : 0;
       const parts = [`↑${formatTokenCount(m.input)}`, `↓${formatTokenCount(m.output)}`];
       if (cr > 0) parts.push(`⚡${cr}%`);
-      if (m.cost > 0) parts.push(`$${m.cost.toFixed(3)}`);
+      if (m.cost > 0) parts.push(`$${m.cost.toFixed(2)}`);
       lines.push(`  ${modelId}: ${parts.join("  ")}`);
     }
   }
@@ -679,7 +679,7 @@ function showUsage(ctx: any): void {
     const mainParts = [`↑${formatTokenCount(mainInput)}`, `↓${formatTokenCount(mainOutput)}`];
     const mainCR = (mainCacheRead + mainInput) > 0 ? Math.round(mainCacheRead / (mainCacheRead + mainInput) * 100) : 0;
     if (mainCR > 0) mainParts.push(`⚡${mainCR}%`);
-    if (mainCost > 0) mainParts.push(`$${mainCost.toFixed(3)}`);
+    if (mainCost > 0) mainParts.push(`$${mainCost.toFixed(2)}`);
     const mainModel = mainModelEntries.map(([id]) => id).join(", ");
     lines.push(`  Main (${mainModel}): ${mainParts.join("  ")}`);
   }
@@ -688,7 +688,7 @@ function showUsage(ctx: any): void {
       ? Math.round(sa.cacheReadTokens / (sa.cacheReadTokens + sa.inputTokens) * 100) : 0;
     const parts = [`↑${formatTokenCount(sa.inputTokens)}`, `↓${formatTokenCount(sa.outputTokens)}`];
     if (saCR > 0) parts.push(`⚡${saCR}%`);
-    if (sa.cost > 0) parts.push(`$${sa.cost.toFixed(3)}`);
+    if (sa.cost > 0) parts.push(`$${sa.cost.toFixed(2)}`);
     if (sa.durationMs > 0) parts.push(formatDuration(sa.durationMs));
     if (sa.toolUses > 0) parts.push(`${sa.toolUses} tools`);
     lines.push(`  ${sa.description}: ${parts.join("  ")}`);
