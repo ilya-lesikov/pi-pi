@@ -442,12 +442,7 @@ export async function startCodeReviewBrowserSession(
 			gitRef = result.gitRef;
 			diffError = result.error;
 			initialBase = result.base;
-			if (typeof diffType === "string" && diffType.startsWith("range:") && gitCtx) {
-				const range = diffType.slice("range:".length);
-				if (!gitCtx.diffOptions.some((o: { id: string }) => o.id === diffType)) {
-					gitCtx.diffOptions.push({ id: diffType, label: `Commits ${range}` });
-				}
-			}
+
 		} else {
 			workspace = await buildLocalWorkspaceReview(cwd, {
 				requestedDiffType: options.diffType,

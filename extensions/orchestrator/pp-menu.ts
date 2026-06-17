@@ -878,9 +878,10 @@ async function detectCurrentPrContext(orchestrator: Orchestrator): Promise<{ prU
   }
 }
 
-async function openCodeReviewInPlannotator(orchestrator: Orchestrator, diffType?: string): Promise<string> {
+async function openCodeReviewInPlannotator(orchestrator: Orchestrator, diffType?: string, defaultBranch?: string): Promise<string> {
   const payload: Record<string, unknown> = { cwd: orchestrator.cwd };
   if (diffType) payload.diffType = diffType;
+  if (defaultBranch) payload.defaultBranch = defaultBranch;
 
   return await new Promise((resolve) => {
     let handled = false;
@@ -1193,27 +1194,54 @@ export async function showActiveTaskMenu(
           return handled.text ?? text;
         }
         const diffChoice = await selectOption(ctx, "Review in Plannotator", [
-          opt("Current branch vs base", "Auto-detect base branch"),
-          opt("Uncommitted changes", "Working directory changes"),
+          opt("All branch changes", "Committed changes vs base branch"),
           opt("Last commit", "Changes in the most recent commit"),
-          opt("Custom range", "Specify a git range"),
+          opt("Recent commits", "Choose how many recent commits to review"),
+          opt("Uncommitted changes", "Working directory changes"),
           opt("Back", "Return to the previous menu"),
         ]);
         if (!diffChoice || diffChoice === "Back") continue;
 
         let diffType: string | undefined;
-        if (diffChoice === "Current branch vs base") diffType = "branch";
-        else if (diffChoice === "Uncommitted changes") diffType = "uncommitted";
-        else if (diffChoice === "Last commit") diffType = "last-commit";
-        else {
-          const rangeInput = await ctx.ui.input("Git range (e.g. HEAD~2..HEAD)");
-          if (!rangeInput) continue;
-          const trimmed = String(rangeInput).trim();
-          if (!trimmed) continue;
-          diffType = trimmed.includes("..") ? `range:${trimmed}` : trimmed;
+        let defaultBranch: string | undefined;
+        if (diffChoice === "All branch changes") {
+          diffType = "branch";
+        } else if (diffChoice === "Last commit") {
+          diffType = "last-commit";
+        } else if (diffChoice === "Recent commits") {
+          let commits: Array<{ hash: string; message: string; age: string }> = [];
+          try {
+            const logResult = await orchestrator.pi.exec(
+              "git", ["log", "--oneline", "--format=%h\t%s\t%cr", "-15"],
+              { cwd: orchestrator.cwd, timeout: 5000 },
+            );
+            if (logResult.code === 0 && logResult.stdout.trim()) {
+              commits = logResult.stdout.trim().split("\n").map((line) => {
+                const [hash, message, age] = line.split("\t");
+                return { hash: hash || "", message: message || "", age: age || "" };
+              }).filter((c) => c.hash);
+            }
+          } catch {}
+          if (commits.length === 0) {
+            ctx.ui.notify("No commits found.", "info");
+            continue;
+          }
+          const commitOptions: OptionInput[] = commits.map((c) => ({
+            title: `${c.hash} ${c.message}`,
+            description: c.age,
+          }));
+          commitOptions.push(opt("Back", "Return to the previous menu"));
+          const picked = await selectOption(ctx, "Review changes since:", commitOptions);
+          if (!picked || picked === "Back") continue;
+          const pickedHash = picked.split(" ")[0];
+          if (!pickedHash) continue;
+          diffType = "branch";
+          defaultBranch = pickedHash;
+        } else {
+          diffType = "uncommitted";
         }
 
-        const text = await openCodeReviewInPlannotator(orchestrator, diffType);
+        const text = await openCodeReviewInPlannotator(orchestrator, diffType, defaultBranch);
         ctx.ui.notify(text, "info");
         continue;
       }

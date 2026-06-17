@@ -22,7 +22,6 @@ export type DiffType =
   | "branch"
   | "merge-base"
   | "all"
-  | `range:${string}`
   | `worktree:${string}`
   | "p4-default"
   | `p4-changelist:${string}`;
@@ -737,28 +736,8 @@ export async function runGitDiff(
         break;
       }
 
-      default: {
-        if (effectiveDiffType.startsWith("range:")) {
-          const range = effectiveDiffType.slice("range:".length);
-          const rangeArgs = [
-            "diff",
-            "--no-ext-diff",
-            ...wFlag,
-            "--src-prefix=a/",
-            "--dst-prefix=b/",
-            "--end-of-options",
-            range,
-          ];
-          const rangeDiff = assertGitSuccess(
-            await runtime.runGit(rangeArgs, { cwd }),
-            rangeArgs,
-          );
-          patch = rangeDiff.stdout;
-          label = `Commits ${range}`;
-          break;
-        }
+      default:
         return { patch: "", label: "Unknown diff type" };
-      }
     }
   } catch (error) {
     const raw = error instanceof Error ? error.message : String(error);

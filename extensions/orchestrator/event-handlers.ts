@@ -276,9 +276,11 @@ function registerSpecifyReviewsTool(orchestrator: Orchestrator): void {
       let hasNeedsChanges = false;
       for (const review of params.reviews) {
         ctx.ui?.setWorkingMessage?.(`Waiting for Plannotator review: ${review.range}…`);
+        const rangeBase = review.range.includes("..") ? review.range.split("..")[0] : review.range;
         const result = await openCodeReviewDirect(pi, {
           cwd: review.cwd,
-          diffType: `range:${review.range}`,
+          diffType: "branch",
+          defaultBranch: rangeBase,
         });
         if ("error" in result) {
           results.push(`${review.cwd} (${review.range}): ${result.error}`);
