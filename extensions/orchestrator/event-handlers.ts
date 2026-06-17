@@ -312,7 +312,7 @@ function registerSpecifyReviewsTool(orchestrator: Orchestrator): void {
           return { content: [{ type: "text" as const, text: "Phase transition in progress." }], details: {} };
         }
         if (!text) {
-          return { content: [{ type: "text" as const, text: "No action selected." }], details: {} };
+          return { content: [{ type: "text" as const, text: "User dismissed the menu. Wait for the user's next message. When you resume work, update USER_REQUEST.md and RESEARCH.md with any new findings before calling pp_phase_complete." }], details: {} };
         }
         return { content: [{ type: "text" as const, text }], details: {} };
       } finally {
@@ -398,7 +398,7 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
           return { content: [{ type: "text" as const, text: "Phase transition in progress." }], details: {} };
         }
         if (!text) {
-          return { content: [{ type: "text" as const, text: "No action selected." }], details: {} };
+          return { content: [{ type: "text" as const, text: "User dismissed the menu. Wait for the user's next message. When you resume work, update USER_REQUEST.md and RESEARCH.md with any new findings before calling pp_phase_complete." }], details: {} };
         }
         return { content: [{ type: "text" as const, text }], details: {} };
       } finally {
