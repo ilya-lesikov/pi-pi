@@ -469,6 +469,10 @@ export class Orchestrator {
           this.phaseCompactionResolve = null;
         }
         this.phaseStartTime = Date.now();
+        if (this.active && (phase === "plan" || phase === "implement")) {
+          const modelConfig = this.config.mainModel.implement;
+          this.switchModel(ctx, modelConfig.model, modelConfig.thinking).catch(() => {});
+        }
         this.injectContextAndArtifacts(taskDir, phase);
         if (this.active?.state.phase === "plan" && this.active.state.step === "await_planners") {
           ctx.ui.notify("Entered plan phase. Waiting for planners to complete before synthesis.", "info");
@@ -484,6 +488,10 @@ export class Orchestrator {
           this.phaseCompactionResolve = null;
         }
         this.phaseStartTime = Date.now();
+        if (this.active && (phase === "plan" || phase === "implement")) {
+          const modelConfig = this.config.mainModel.implement;
+          this.switchModel(ctx, modelConfig.model, modelConfig.thinking).catch(() => {});
+        }
         this.injectContextAndArtifacts(taskDir, phase);
         if (this.active?.state.phase === "plan" && this.active.state.step === "await_planners") {
           ctx.ui.notify("Entered plan phase. Waiting for planners to complete before synthesis.", "info");
