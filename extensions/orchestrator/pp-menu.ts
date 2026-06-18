@@ -592,7 +592,7 @@ function showUsage(ctx: any): void {
         getTotalCacheReadTokens(): number; getTotalCacheWriteTokens(): number;
         getTotalCost(): number; getCacheHitRate(): number;
         getPerModelUsage(): Record<string, { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; turns: number }>;
-        getSubagentList(): Array<{ description: string; modelId: string; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; cost: number; durationMs: number; toolUses: number }>;
+        getSubagentList(): Array<{ description: string; agentType: string; modelId: string; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; cost: number; durationMs: number; toolUses: number }>;
       }
     | undefined;
 
@@ -682,15 +682,35 @@ function showUsage(ctx: any): void {
     if (mainCost > 0) mainParts.push(`$${mainCost.toFixed(2)}`);
     lines.push(`  Main (${agentModelNames.join(", ")}): ${mainParts.join("  ")}`);
   }
+  const byAgentType = new Map<string, { input: number; output: number; cacheRead: number; cost: number; durationMs: number; toolUses: number; count: number }>();
   for (const sa of subagents) {
-    const saCR = (sa.cacheReadTokens + sa.inputTokens) > 0
-      ? Math.round(sa.cacheReadTokens / (sa.cacheReadTokens + sa.inputTokens) * 100) : 0;
-    const parts = [`↑${formatTokenCount(sa.inputTokens)}`, `↓${formatTokenCount(sa.outputTokens)}`];
+    const key = sa.agentType || sa.description;
+    const existing = byAgentType.get(key);
+    if (existing) {
+      existing.input += sa.inputTokens;
+      existing.output += sa.outputTokens;
+      existing.cacheRead += sa.cacheReadTokens;
+      existing.cost += sa.cost;
+      existing.durationMs += sa.durationMs;
+      existing.toolUses += sa.toolUses;
+      existing.count += 1;
+    } else {
+      byAgentType.set(key, {
+        input: sa.inputTokens, output: sa.outputTokens, cacheRead: sa.cacheReadTokens,
+        cost: sa.cost, durationMs: sa.durationMs, toolUses: sa.toolUses, count: 1,
+      });
+    }
+  }
+  for (const [agentType, agg] of byAgentType) {
+    const saCR = (agg.cacheRead + agg.input) > 0
+      ? Math.round(agg.cacheRead / (agg.cacheRead + agg.input) * 100) : 0;
+    const parts = [`↑${formatTokenCount(agg.input)}`, `↓${formatTokenCount(agg.output)}`];
     if (saCR > 0) parts.push(`⚡${saCR}%`);
-    if (sa.cost > 0) parts.push(`$${sa.cost.toFixed(2)}`);
-    if (sa.durationMs > 0) parts.push(formatDuration(sa.durationMs));
-    if (sa.toolUses > 0) parts.push(`${sa.toolUses} tools`);
-    lines.push(`  ${sa.description}: ${parts.join("  ")}`);
+    if (agg.cost > 0) parts.push(`$${agg.cost.toFixed(2)}`);
+    if (agg.durationMs > 0) parts.push(formatDuration(agg.durationMs));
+    if (agg.toolUses > 0) parts.push(`${agg.toolUses} tools`);
+    const countSuffix = agg.count > 1 ? ` (×${agg.count})` : "";
+    lines.push(`  ${agentType}${countSuffix}: ${parts.join("  ")}`);
   }
 
   ctx.ui.notify(lines.join("\n"), "info");
@@ -698,10 +718,12 @@ function showUsage(ctx: any): void {
 
 async function showSettingsMenu(orchestrator: Orchestrator, ctx: any, showFlant = true): Promise<typeof BACK> {
   while (true) {
-    const options: OptionInput[] = [
-      { title: "Usage", description: "Show session token usage and cost breakdown" },
-      { title: "LSP", description: "Language server status and controls" },
-    ];
+    const options: OptionInput[] = [];
+    if (orchestrator.active) {
+      options.push({ title: "Task status", description: "Show current task phase, step, and timing" });
+    }
+    options.push({ title: "Usage", description: "Show session token usage and cost breakdown" });
+    options.push({ title: "LSP", description: "Language server status and controls" });
     if (showFlant) {
       options.push({ title: "Flant AI Infrastructure", description: "Configure corporate AI model provider" });
     }
@@ -709,6 +731,10 @@ async function showSettingsMenu(orchestrator: Orchestrator, ctx: any, showFlant 
 
     const choice = await selectOption(ctx, "Settings", options);
     if (!choice || choice === "Back") return BACK;
+    if (choice === "Task status") {
+      showStatus(orchestrator, ctx);
+      continue;
+    }
     if (choice === "Usage") {
       showUsage(ctx);
       continue;
@@ -1112,19 +1138,16 @@ export async function showActiveTaskMenu(
       options.push(opt("Review", "Auto review, Plannotator, or manual review"));
     }
     options.push(opt("Subagents", "Manage running agents"));
-    options.push(opt("Status", "Show current task phase, step, and timing"));
-    options.push(opt("Settings", "LSP and other configuration"));
+    options.push(opt("Settings", "Task status, usage, and LSP"));
     options.push(opt("Back", "Return to the prompt and keep working"));
 
-    const choice = await selectOption(ctx, summary, options);
+    const phaseLabel = phase === task.type ? phase : `${task.type}/${phase}`;
+    const menuTitle = `[${phaseLabel}] ${summary}`;
+    const choice = await selectOption(ctx, menuTitle, options);
     if (!choice || choice === "Back") {
       return "";
     }
 
-    if (choice === "Status") {
-      showStatus(orchestrator, ctx);
-      continue;
-    }
     if (choice === "Subagents") {
       await showSubagentsMenu(ctx);
       continue;
@@ -1275,6 +1298,6 @@ export async function showPpMenu(orchestrator: Orchestrator, ctx: any, mode: Men
   if (!orchestrator.active) {
     return showNoActiveMenu(orchestrator, ctx);
   }
-  const text = await showActiveTaskMenu(orchestrator, ctx, "Choose next action", mode);
+  const text = await showActiveTaskMenu(orchestrator, ctx, "/pp", mode);
   return text || undefined;
 }

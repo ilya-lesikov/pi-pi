@@ -458,6 +458,13 @@ export class Orchestrator {
     }
   }
 
+  waitForCompaction(): Promise<void> {
+    if (!this.phaseCompactionPending && !this.taskDoneCompactionPending) return Promise.resolve();
+    return new Promise((resolve) => {
+      this.phaseCompactionResolve = resolve;
+    });
+  }
+
   compactAndTransition(ctx: ExtensionContext, taskDir: string, phase: Phase): void {
     this.phaseCompactionPending = true;
     ctx.compact({

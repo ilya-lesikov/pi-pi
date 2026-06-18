@@ -311,7 +311,8 @@ function registerSpecifyReviewsTool(orchestrator: Orchestrator): void {
         const { showActiveTaskMenu } = await import("./pp-menu.js");
         const text = await showActiveTaskMenu(orchestrator, ctx, `Plannotator review complete.\n\n${summary}`, "tool");
         if (orchestrator.phaseCompactionPending || orchestrator.taskDoneCompactionPending) {
-          return { content: [{ type: "text" as const, text: "Phase transition in progress." }], details: {} };
+          await orchestrator.waitForCompaction();
+          return { content: [{ type: "text" as const, text: "Phase transition complete." }], details: {} };
         }
         if (!text) {
           return { content: [{ type: "text" as const, text: "User dismissed the menu. Wait for the user's next message. When you resume work, update USER_REQUEST.md and RESEARCH.md with any new findings before calling pp_phase_complete." }], details: {} };
@@ -408,7 +409,8 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
         const { showActiveTaskMenu } = await import("./pp-menu.js");
         const text = await showActiveTaskMenu(orchestrator, ctx, params.summary, "tool");
         if (orchestrator.phaseCompactionPending || orchestrator.taskDoneCompactionPending) {
-          return { content: [{ type: "text" as const, text: "Phase transition in progress." }], details: {} };
+          await orchestrator.waitForCompaction();
+          return { content: [{ type: "text" as const, text: "Phase transition complete." }], details: {} };
         }
         if (!text) {
           return { content: [{ type: "text" as const, text: "User dismissed the menu. Wait for the user's next message. When you resume work, update USER_REQUEST.md and RESEARCH.md with any new findings before calling pp_phase_complete." }], details: {} };
@@ -741,6 +743,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (usageTracker && data?.tokens) {
       usageTracker.recordSubagentCompletion(data.tokens, undefined, {
         description: data.description || data.type || data.id || "unknown",
+        agentType: data.type || "unknown",
         modelId: data.modelId || "unknown",
         durationMs: data.durationMs,
         toolUses: data.toolUses,
@@ -1271,7 +1274,9 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     const turnWasEmpty = !hasText && !hasToolCalls && !hasToolResults;
 
     if (!turnWasEmpty) {
-      if (hasText && !hasToolCalls) {
+      const lastPart = contentParts.length > 0 ? contentParts[contentParts.length - 1] : null;
+      const endsWithText = lastPart?.type === "text" && lastPart?.text?.trim();
+      if (hasText && (!hasToolCalls || endsWithText)) {
         const step = orchestrator.active.state.step;
         if (step !== "await_planners" && step !== "await_reviewers") {
           pi.sendMessage(

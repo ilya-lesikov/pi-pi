@@ -12,7 +12,7 @@ export interface ModelUsage {
 
 export interface UsageTracker {
   recordTurn(modelId: string, provider: string, input: number, output: number, cacheRead: number, cacheWrite: number, cost: number): void;
-  recordSubagentCompletion(tokens: { input?: number; output?: number; total?: number }, cost?: number, meta?: { description?: string; modelId?: string; durationMs?: number; toolUses?: number }): void;
+  recordSubagentCompletion(tokens: { input?: number; output?: number; total?: number }, cost?: number, meta?: { description?: string; agentType?: string; modelId?: string; durationMs?: number; toolUses?: number }): void;
   loadFromSummary(summary: Record<string, unknown>): void;
   getTotalInputTokens(): number;
   getTotalOutputTokens(): number;
@@ -29,6 +29,7 @@ export interface UsageTracker {
 
 export interface SubagentUsage {
   description: string;
+  agentType: string;
   modelId: string;
   inputTokens: number;
   outputTokens: number;
@@ -124,7 +125,7 @@ export function createUsageTracker(): UsageTracker {
     recordSubagentCompletion(
       tokens: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; total?: number; cost?: number },
       cost?: number,
-      meta?: { description?: string; modelId?: string; durationMs?: number; toolUses?: number },
+      meta?: { description?: string; agentType?: string; modelId?: string; durationMs?: number; toolUses?: number },
     ): void {
       const safeInput = toFiniteNumber(tokens.input);
       const safeOutput = toFiniteNumber(tokens.output);
@@ -141,6 +142,7 @@ export function createUsageTracker(): UsageTracker {
 
       state.subagents.push({
         description: meta?.description ?? "unknown",
+        agentType: meta?.agentType ?? "unknown",
         modelId: meta?.modelId ?? "unknown",
         inputTokens: effectiveInput,
         outputTokens: safeOutput,
@@ -168,6 +170,7 @@ export function createUsageTracker(): UsageTracker {
         for (const sa of summary.subagents as Record<string, unknown>[]) {
           const entry: SubagentUsage = {
             description: typeof sa.description === "string" ? sa.description : "unknown",
+            agentType: typeof sa.agentType === "string" ? sa.agentType : "unknown",
             modelId: typeof sa.modelId === "string" ? sa.modelId : "unknown",
             inputTokens: toFiniteNumber(sa.inputTokens),
             outputTokens: toFiniteNumber(sa.outputTokens),
