@@ -69,6 +69,7 @@ export class Orchestrator {
   pendingSubagentSpawns = 0;
   errorRetryCount = 0;
   commitReminderSent = false;
+  textStopReminderSent = false;
   phaseStartTime = 0;
   awaitPollTimer: ReturnType<typeof setInterval> | null = null;
   pendingRetryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -401,6 +402,7 @@ export class Orchestrator {
     this.pendingSubagentSpawns = 0;
     this.errorRetryCount = 0;
     this.commitReminderSent = false;
+    this.textStopReminderSent = false;
     this.nudgeTimestamps = [];
     this.cooldownHits = [];
     this.nudgeHalted = false;

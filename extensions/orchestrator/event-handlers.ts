@@ -1282,12 +1282,16 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       const endsWithText = lastPart?.type === "text" && lastPart?.text?.trim();
       if (hasText && (!hasToolCalls || endsWithText)) {
         const step = orchestrator.active.state.step;
-        if (step !== "await_planners" && step !== "await_reviewers") {
+        if (step !== "await_planners" && step !== "await_reviewers" && !orchestrator.textStopReminderSent) {
+          orchestrator.textStopReminderSent = true;
           orchestrator.safeSendUserMessage(`[PI-PI] You stopped without calling pp_phase_complete. If you are done with the ${phase} phase, call pp_phase_complete now. If not, continue working.`);
         }
+      } else {
+        orchestrator.textStopReminderSent = false;
       }
       return;
     }
+    orchestrator.textStopReminderSent = false;
     if (orchestrator.nudgeHalted) return;
     if (orchestrator.spawnedAgentIds.size > 0 || orchestrator.pendingSubagentSpawns > 0) return;
 
