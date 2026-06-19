@@ -310,7 +310,8 @@ function registerSpecifyReviewsTool(orchestrator: Orchestrator): void {
         const { showActiveTaskMenu } = await import("./pp-menu.js");
         const text = await showActiveTaskMenu(orchestrator, ctx, `Plannotator review complete.\n\n${summary}`, "tool");
         if (orchestrator.phaseCompactionPending || orchestrator.taskDoneCompactionPending) {
-          return { content: [{ type: "text" as const, text: "Phase transition in progress. Do not take any action — wait for the next instruction." }], details: {} };
+          ctx.abort?.();
+          return { content: [{ type: "text" as const, text: "" }], details: {} };
         }
         if (!text) {
           return { content: [{ type: "text" as const, text: "User dismissed the menu. Wait for the user's next message. When you resume work, update USER_REQUEST.md and RESEARCH.md with any new findings before calling pp_phase_complete." }], details: {} };
@@ -407,7 +408,8 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
         const { showActiveTaskMenu } = await import("./pp-menu.js");
         const text = await showActiveTaskMenu(orchestrator, ctx, params.summary, "tool");
         if (orchestrator.phaseCompactionPending || orchestrator.taskDoneCompactionPending) {
-          return { content: [{ type: "text" as const, text: "Phase transition in progress. Do not take any action — wait for the next instruction." }], details: {} };
+          ctx.abort?.();
+          return { content: [{ type: "text" as const, text: "" }], details: {} };
         }
         if (!text) {
           return { content: [{ type: "text" as const, text: "User dismissed the menu. Wait for the user's next message. When you resume work, update USER_REQUEST.md and RESEARCH.md with any new findings before calling pp_phase_complete." }], details: {} };
