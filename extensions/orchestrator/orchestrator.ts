@@ -89,16 +89,19 @@ export class Orchestrator {
   safeSendUserMessage(text: string): void {
     const ctx = this.lastCtx;
     if (!ctx || ctx.isIdle?.()) {
-      this.pi.sendUserMessage(text);
-      return;
-    }
-    const poll = setInterval(() => {
-      if (ctx.isIdle?.()) {
-        clearInterval(poll);
+      try {
         this.pi.sendUserMessage(text);
+        return;
+      } catch { /* not idle, fall through */ }
+    }
+    void (async () => {
+      try {
+        await ctx?.waitForIdle?.();
+        this.pi.sendUserMessage(text);
+      } catch {
+        console.error(`[pi-pi] safeSendUserMessage failed for: ${text.slice(0, 80)}`);
       }
-    }, 500);
-    setTimeout(() => clearInterval(poll), 60_000);
+    })();
   }
 
   truncateResult(result: string): string {
