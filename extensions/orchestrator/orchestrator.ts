@@ -484,8 +484,22 @@ export class Orchestrator {
     });
   }
 
-  compactAndTransition(ctx: ExtensionContext, taskDir: string, phase: Phase): void {
+  compactAndTransition(ctx: ExtensionContext, taskDir: string, phase: Phase, onReady?: () => void): void {
     this.phaseCompactionPending = true;
+    const finalize = () => {
+      this.phaseStartTime = Date.now();
+      if (this.active && (phase === "plan" || phase === "implement")) {
+        const modelConfig = this.config.mainModel.implement;
+        this.switchModel(ctx, modelConfig.model, modelConfig.thinking).catch(() => {});
+      }
+      this.injectContextAndArtifacts(taskDir, phase);
+      onReady?.();
+      if (this.active?.state.phase === "plan" && this.active.state.step === "await_planners") {
+        ctx.ui.notify("Entered plan phase. Waiting for planners to complete before synthesis.", "info");
+      } else {
+        this.safeSendUserMessage(`[PI-PI] Entered ${phase} phase. Begin working.`);
+      }
+    };
     ctx.compact({
       customInstructions: "Phase transition — discard all prior conversation. Produce a one-line summary: 'Previous phase completed.'",
       onComplete: () => {
@@ -494,17 +508,7 @@ export class Orchestrator {
           this.phaseCompactionResolve();
           this.phaseCompactionResolve = null;
         }
-        this.phaseStartTime = Date.now();
-        if (this.active && (phase === "plan" || phase === "implement")) {
-          const modelConfig = this.config.mainModel.implement;
-          this.switchModel(ctx, modelConfig.model, modelConfig.thinking).catch(() => {});
-        }
-        this.injectContextAndArtifacts(taskDir, phase);
-        if (this.active?.state.phase === "plan" && this.active.state.step === "await_planners") {
-          ctx.ui.notify("Entered plan phase. Waiting for planners to complete before synthesis.", "info");
-        } else {
-          this.safeSendUserMessage(`[PI-PI] Entered ${phase} phase. Begin working.`);
-        }
+        finalize();
       },
       onError: (err) => {
         console.error(`[pi-pi] Phase compaction failed: ${err.message}`);
@@ -513,17 +517,7 @@ export class Orchestrator {
           this.phaseCompactionResolve();
           this.phaseCompactionResolve = null;
         }
-        this.phaseStartTime = Date.now();
-        if (this.active && (phase === "plan" || phase === "implement")) {
-          const modelConfig = this.config.mainModel.implement;
-          this.switchModel(ctx, modelConfig.model, modelConfig.thinking).catch(() => {});
-        }
-        this.injectContextAndArtifacts(taskDir, phase);
-        if (this.active?.state.phase === "plan" && this.active.state.step === "await_planners") {
-          ctx.ui.notify("Entered plan phase. Waiting for planners to complete before synthesis.", "info");
-        } else {
-          this.safeSendUserMessage(`[PI-PI] Entered ${phase} phase. Begin working.`);
-        }
+        finalize();
       },
     });
   }

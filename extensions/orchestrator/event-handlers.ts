@@ -544,7 +544,8 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       orchestrator.active.state.phase !== "plan" ||
       orchestrator.active.state.step !== "await_planners" ||
       orchestrator.spawnedAgentIds.size > 0 ||
-      orchestrator.pendingSubagentSpawns > 0
+      orchestrator.pendingSubagentSpawns > 0 ||
+      orchestrator.phaseCompactionPending
     ) return;
 
     const plansDir = join(orchestrator.active.dir, "plans");
@@ -639,7 +640,8 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       !orchestrator.active?.state.reviewCycle ||
       orchestrator.active.state.reviewCycle.step !== "await_reviewers" ||
       orchestrator.spawnedAgentIds.size > 0 ||
-      orchestrator.pendingSubagentSpawns > 0
+      orchestrator.pendingSubagentSpawns > 0 ||
+      orchestrator.phaseCompactionPending
     ) return;
 
     const failedReviewerVariants = [...orchestrator.failedReviewerVariants];

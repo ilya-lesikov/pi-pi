@@ -78,9 +78,8 @@ export async function transitionToNextPhase(
     saveTask(orchestrator.active.dir, orchestrator.active.state);
   }
 
-  orchestrator.compactAndTransition(ctx, orchestrator.active.dir, orchestrator.active.state.phase);
-
-  if (next === "plan") {
+  const onReady = next === "plan" ? () => {
+    if (!orchestrator.active) return;
     orchestrator.pendingSubagentSpawns = Object.values(orchestrator.config.planners).filter((v) => v.enabled).length;
     orchestrator.failedPlannerVariants = [];
     spawnPlanners(orchestrator.pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, orchestrator.config).then((result) => {
@@ -94,7 +93,9 @@ export async function transitionToNextPhase(
       orchestrator.pendingSubagentSpawns = 0;
       console.error(`[pi-pi] spawnPlanners failed: ${err.message}`);
     });
-  }
+  } : undefined;
+
+  orchestrator.compactAndTransition(ctx, orchestrator.active.dir, orchestrator.active.state.phase, onReady);
 
   return { ok: true };
 }
