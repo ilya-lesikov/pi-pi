@@ -1084,10 +1084,10 @@ async function showTaskTypeMenu(
 async function showTaskMenu(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK | "started"> {
   while (true) {
     const choice = await selectOption(ctx, "Task", [
-      { title: "Debug", description: "Diagnose an issue. Then (optionally) fix it" },
-      { title: "Brainstorm", description: "Explore and brainstorm. Then (optionally) plan and implement" },
-      { title: "Implement", description: "Brainstorm, plan and implement" },
-      { title: "Review", description: "Review code changes, diffs, or pull requests" },
+      { title: "Implement", description: "Want to make some changes? Research any topic or a codebase, brainstorm solutions and implement the chosen one" },
+      { title: "Debug", description: "Something is broken? Investigate it. If there is an issue — brainstorm solutions and fix it" },
+      { title: "Brainstorm", description: "No idea where to start? Research any topic or a codebase. If there is a problem to solve — brainstorm solutions and solve it" },
+      { title: "Review", description: "Want to ensure that some commits or a GitHub PR are good to go? Review it. Even fix it yourself, if you want" },
       { title: "Resume", description: "Resume a previously unfinished task" },
       { title: "Back", description: "Return to the previous menu" },
     ]);
