@@ -957,13 +957,16 @@ async function startReviewTask(
 
 async function showReviewMenu(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK | "started"> {
   while (true) {
-    const choice = await selectOption(ctx, "Review", [
+    const options: OptionInput[] = [
       { title: "Current branch", description: "Review changes on current branch vs base" },
+      { title: "Last commit", description: "Review changes in the most recent commit" },
+      { title: "Since commit", description: "Review all changes since a specific commit" },
       { title: "Uncommitted changes", description: "Review working directory changes" },
       { title: "Describe", description: "Describe what to review and let the agent figure it out" },
       { title: "Resume", description: "Resume a previously unfinished review" },
       { title: "Back", description: "Return to the previous menu" },
-    ]);
+    ];
+    const choice = await selectOption(ctx, "Review", options);
     if (!choice || choice === "Back") return BACK;
 
     if (choice === "Resume") {
@@ -989,6 +992,47 @@ async function showReviewMenu(orchestrator: Orchestrator, ctx: any): Promise<typ
       const description = await promptDescription(ctx, "Describe the review (optional)", "review");
       if (!description) continue;
       return startReviewTask(orchestrator, ctx, urContent, resContent, description);
+    }
+
+    if (choice === "Last commit") {
+      const urContent = "# User Request\nReview last commit changes\n\n## Problem\nReview and identify issues in the most recent commit.\n\n## Constraints\nFocus on correctness, edge cases, style, missing tests, potential bugs.\n";
+      const description = await promptDescription(ctx, "Describe the review (optional)", "review");
+      if (!description) continue;
+      return startReviewTask(orchestrator, ctx, urContent, null, description);
+    }
+
+    if (choice === "Since commit") {
+      let commits: Array<{ hash: string; message: string; age: string }> = [];
+      try {
+        const logResult = await orchestrator.pi.exec(
+          "git", ["log", "--oneline", "--format=%h\t%s\t%cr", "-30"],
+          { cwd: orchestrator.cwd, timeout: 5000 },
+        );
+        if (logResult.code === 0 && logResult.stdout.trim()) {
+          commits = logResult.stdout.trim().split("\n").map((line) => {
+            const [hash, message, age] = line.split("\t");
+            return { hash: hash || "", message: message || "", age: age || "" };
+          }).filter((c) => c.hash);
+        }
+      } catch {}
+      if (commits.length === 0) {
+        ctx.ui.notify("No commits found.", "info");
+        continue;
+      }
+      const commitOptions: OptionInput[] = commits.map((c) => ({
+        title: `${c.hash} ${c.message}`,
+        description: c.age,
+      }));
+      commitOptions.push({ title: "Back", description: "Return to the previous menu" });
+      const picked = await selectOption(ctx, "Review changes since:", commitOptions);
+      if (!picked || picked === "Back") continue;
+      const pickedHash = picked.split(" ")[0];
+      if (!pickedHash) continue;
+
+      const urContent = `# User Request\nReview changes since commit ${pickedHash}\n\n## Problem\nReview and identify issues in all changes since ${pickedHash}.\n\n## Constraints\nFocus on correctness, edge cases, style, missing tests, potential bugs.\n`;
+      const description = await promptDescription(ctx, "Describe the review (optional)", "review");
+      if (!description) continue;
+      return startReviewTask(orchestrator, ctx, urContent, null, description);
     }
 
     if (choice === "Uncommitted changes") {
@@ -1241,7 +1285,7 @@ export async function showActiveTaskMenu(
         const diffChoice = await selectOption(ctx, "Review in Plannotator", [
           opt("All branch changes", "Committed changes vs base branch"),
           opt("Last commit", "Changes in the most recent commit"),
-          opt("Recent commits", "Choose how many recent commits to review"),
+          opt("Since commit", "Review all changes since a specific commit"),
           opt("Uncommitted changes", "Working directory changes"),
           opt("Back", "Return to the previous menu"),
         ]);
@@ -1253,11 +1297,11 @@ export async function showActiveTaskMenu(
           diffType = "branch";
         } else if (diffChoice === "Last commit") {
           diffType = "last-commit";
-        } else if (diffChoice === "Recent commits") {
+        } else if (diffChoice === "Since commit") {
           let commits: Array<{ hash: string; message: string; age: string }> = [];
           try {
             const logResult = await orchestrator.pi.exec(
-              "git", ["log", "--oneline", "--format=%h\t%s\t%cr", "-15"],
+              "git", ["log", "--oneline", "--format=%h\t%s\t%cr", "-30"],
               { cwd: orchestrator.cwd, timeout: 5000 },
             );
             if (logResult.code === 0 && logResult.stdout.trim()) {
