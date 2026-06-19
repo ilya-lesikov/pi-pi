@@ -72,6 +72,7 @@ export async function transitionToNextPhase(
   }
 
   orchestrator.updateStatus(ctx);
+  orchestrator.phaseCompactionSummary = `Phase "${currentPhase}" completed. Now entering "${next}" phase.`;
 
   if (next === "plan") {
     orchestrator.active.state.step = "await_planners";

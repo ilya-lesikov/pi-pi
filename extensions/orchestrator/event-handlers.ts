@@ -1098,9 +1098,11 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (!orchestrator.active || orchestrator.active.state.phase === "done") return;
 
     if (orchestrator.phaseCompactionPending) {
+      const summary = orchestrator.phaseCompactionSummary || "Phase transition in progress.";
+      orchestrator.phaseCompactionSummary = "";
       return {
         compaction: {
-          summary: `Previous phase (${orchestrator.active.state.phase}) completed. Transitioning to next phase.`,
+          summary,
           firstKeptEntryId: event.preparation.firstKeptEntryId,
           tokensBefore: event.preparation.tokensBefore,
         },

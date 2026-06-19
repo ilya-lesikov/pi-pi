@@ -61,6 +61,7 @@ export class Orchestrator {
   }>();
   staleAgentTimer: ReturnType<typeof setInterval> | null = null;
   phaseCompactionPending = false;
+  phaseCompactionSummary = "";
   taskDoneCompactionPending = false;
   taskDoneCompactionSummary = "";
   nudgeTimestamps: number[] = [];
@@ -407,6 +408,7 @@ export class Orchestrator {
     this.cooldownHits = [];
     this.nudgeHalted = false;
     this.phaseCompactionPending = false;
+    this.phaseCompactionSummary = "";
     this.phaseStartTime = 0;
     this.userGatePending = false;
     this.reviewTransitionToken = -1;
