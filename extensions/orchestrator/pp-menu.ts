@@ -709,33 +709,46 @@ function showUsage(ctx: any): void {
   ctx.ui.notify(lines.join("\n"), "info");
 }
 
-async function showSettingsMenu(orchestrator: Orchestrator, ctx: any, showFlant = true): Promise<typeof BACK> {
+async function showInfoMenu(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
   while (true) {
     const options: OptionInput[] = [];
+    options.push({ title: "Subagents", description: "Manage running agents" });
+    options.push({ title: "LSP", description: "Language server status and controls" });
+    options.push({ title: "Usage", description: "Show session token usage and cost breakdown" });
     if (orchestrator.active) {
       options.push({ title: "Task status", description: "Show current task phase, step, and timing" });
     }
-    options.push({ title: "Usage", description: "Show session token usage and cost breakdown" });
-    options.push({ title: "LSP", description: "Language server status and controls" });
-    if (showFlant) {
-      options.push({ title: "Flant AI Infrastructure", description: "Configure corporate AI model provider" });
-    }
     options.push({ title: "Back", description: "Return to the previous menu" });
 
-    const choice = await selectOption(ctx, "Settings", options);
+    const choice = await selectOption(ctx, "Info", options);
     if (!choice || choice === "Back") return BACK;
-    if (choice === "Task status") {
-      showStatus(orchestrator, ctx);
-      continue;
-    }
-    if (choice === "Usage") {
-      showUsage(ctx);
+    if (choice === "Subagents") {
+      await showSubagentsMenu(ctx);
       continue;
     }
     if (choice === "LSP") {
       await showLspMenu(ctx);
       continue;
     }
+    if (choice === "Usage") {
+      showUsage(ctx);
+      continue;
+    }
+    if (choice === "Task status") {
+      showStatus(orchestrator, ctx);
+      continue;
+    }
+  }
+}
+
+async function showSettingsMenu(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
+  while (true) {
+    const options: OptionInput[] = [];
+    options.push({ title: "Flant AI Infrastructure", description: "Configure corporate AI model provider" });
+    options.push({ title: "Back", description: "Return to the previous menu" });
+
+    const choice = await selectOption(ctx, "Settings", options);
+    if (!choice || choice === "Back") return BACK;
     await showFlantInfraMenu(orchestrator, ctx);
   }
 }
@@ -1069,8 +1082,8 @@ async function showNoActiveMenu(orchestrator: Orchestrator, ctx: any): Promise<s
   while (true) {
     const choice = await selectOption(ctx, "/pp", [
       { title: "Task", description: "Start a new task or resume a paused one" },
-      { title: "Subagents", description: "Manage running agents" },
-      { title: "Settings", description: "LSP, Flant AI, and other configuration" },
+      { title: "Info", description: "Subagents, LSP, usage, and task status" },
+      { title: "Settings", description: "Flant AI and other configuration" },
       { title: "Back", description: "Close this menu" },
     ]);
     if (!choice || choice === "Back") return undefined;
@@ -1081,12 +1094,12 @@ async function showNoActiveMenu(orchestrator: Orchestrator, ctx: any): Promise<s
       continue;
     }
 
-    if (choice === "Subagents") {
-      await showSubagentsMenu(ctx);
+    if (choice === "Info") {
+      await showInfoMenu(orchestrator, ctx);
       continue;
     }
 
-    await showSettingsMenu(orchestrator, ctx, true);
+    await showSettingsMenu(orchestrator, ctx);
   }
 }
 
@@ -1146,8 +1159,8 @@ export async function showActiveTaskMenu(
     if (!waiting) {
       options.push(opt("Review", "Auto review, Plannotator, or manual review"));
     }
-    options.push(opt("Subagents", "Manage running agents"));
-    options.push(opt("Settings", "Task status, usage, and LSP"));
+    options.push(opt("Info", "Subagents, LSP, usage, and task status"));
+    options.push(opt("Settings", "Flant AI and other configuration"));
     options.push(opt("Back", "Return to the prompt and keep working"));
 
     const headerLines = [`/pp\n\nTask: ${task.type}\nPhase: ${phase}`];
@@ -1158,12 +1171,12 @@ export async function showActiveTaskMenu(
       return "";
     }
 
-    if (choice === "Subagents") {
-      await showSubagentsMenu(ctx);
+    if (choice === "Info") {
+      await showInfoMenu(orchestrator, ctx);
       continue;
     }
     if (choice === "Settings") {
-      await showSettingsMenu(orchestrator, ctx, false);
+      await showSettingsMenu(orchestrator, ctx);
       continue;
     }
 
