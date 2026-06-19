@@ -1273,8 +1273,9 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       orchestrator.awaitPollTimer = null;
     }
 
-    if (orchestrator.active.type === "brainstorm" && phase === "brainstorm") return;
-    if (orchestrator.active.type === "review" && phase === "review") return;
+    const skipPhaseCompleteReminder =
+      (orchestrator.active.type === "brainstorm" && phase === "brainstorm") ||
+      (orchestrator.active.type === "review" && phase === "review");
 
     const contentParts = Array.isArray(msg?.content) ? msg.content : [];
     const hasText = contentParts.some((c: any) => c.type === "text" && c.text?.trim());
@@ -1287,7 +1288,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       const endsWithText = lastPart?.type === "text" && lastPart?.text?.trim();
       if (hasText && (!hasToolCalls || endsWithText)) {
         const step = orchestrator.active.state.step;
-        if (step !== "await_planners" && step !== "await_reviewers" && !orchestrator.textStopReminderSent) {
+        if (!skipPhaseCompleteReminder && step !== "await_planners" && step !== "await_reviewers" && !orchestrator.textStopReminderSent) {
           orchestrator.textStopReminderSent = true;
           orchestrator.safeSendUserMessage(`[PI-PI] You stopped without calling pp_phase_complete. If you are done with the ${phase} phase, call pp_phase_complete now. If not, continue working.`);
         }
