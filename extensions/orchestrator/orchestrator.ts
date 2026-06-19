@@ -88,28 +88,18 @@ export class Orchestrator {
   constructor(readonly pi: ExtensionAPI) {}
 
   safeSendUserMessage(text: string): void {
-    const ctx = this.lastCtx;
     const log = (event: string, extra?: Record<string, unknown>) => {
       if (this.active) appendTaskLog(this.active.dir, "debug.jsonl", { timestamp: new Date().toISOString(), event, text: text.slice(0, 200), ...extra });
     };
-    if (!ctx || ctx.isIdle?.()) {
-      try {
-        this.pi.sendUserMessage(text);
-        log("safeSend_immediate");
-        return;
-      } catch { /* not idle, fall through */ }
+    try {
+      this.pi.sendMessage(
+        { customType: "pp-user-message", content: text, display: true },
+        { deliverAs: "followUp", triggerTurn: true },
+      );
+      log("safeSend_queued");
+    } catch (err: any) {
+      log("safeSend_failed", { error: err?.message ?? String(err) });
     }
-    log("safeSend_waiting", { isIdle: !!ctx?.isIdle?.() });
-    void (async () => {
-      try {
-        await ctx?.waitForIdle?.();
-        log("safeSend_afterWait");
-        this.pi.sendUserMessage(text);
-        log("safeSend_sent");
-      } catch (err: any) {
-        log("safeSend_failed", { error: err?.message ?? String(err) });
-      }
-    })();
   }
 
   truncateResult(result: string): string {
