@@ -63,8 +63,9 @@ function renderStatsLine(width: number, theme: Theme): string {
   const cacheRate = tracker?.getCacheHitRate() ?? 0;
   const totalCost = tracker?.getTotalCost() ?? 0;
 
+  const cacheSupported = tracker?.isCacheSupported() ?? false;
   const leftParts: string[] = [`↑${formatTokens(inputTokens)}`, `↓${formatTokens(outputTokens)}`];
-  if (cacheRate > 0) leftParts.push(`⚡${Math.round(cacheRate * 100)}%`);
+  if (cacheSupported) leftParts.push(`⚡${Math.round(cacheRate * 100)}%`);
   if (totalCost > 0) leftParts.push(`$${totalCost.toFixed(2)}`);
   leftParts.push(toContextUsagePart(ctx, theme));
   let left = leftParts.join(" ");

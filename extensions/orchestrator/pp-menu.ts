@@ -594,8 +594,8 @@ function showUsage(ctx: any): void {
         getMainInputTokens(): number; getMainOutputTokens(): number;
         getMainCacheReadTokens(): number; getMainCacheWriteTokens(): number;
         getMainCost(): number;
-        getPerModelUsage(): Record<string, { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; turns: number }>;
-        getSubagentList(): Array<{ description: string; agentType: string; modelId: string; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; cost: number; durationMs: number; toolUses: number }>;
+        getPerModelUsage(): Record<string, { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; cacheSupported: boolean; turns: number }>;
+        getSubagentList(): Array<{ description: string; agentType: string; modelId: string; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; cacheSupported: boolean; cost: number; durationMs: number; toolUses: number }>;
       }
     | undefined;
 
@@ -619,7 +619,7 @@ function showUsage(ctx: any): void {
   const models = tracker.getPerModelUsage();
   const subagents = tracker.getSubagentList();
 
-  const byModel = new Map<string, { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number }>();
+  const byModel = new Map<string, { input: number; output: number; cacheRead: number; cacheWrite: number; cacheSupported: boolean; cost: number }>();
   const mainModelEntries = Object.entries(models);
   const mainTotalTokens = mainModelEntries.reduce((s, [, u]) => s + u.inputTokens + u.outputTokens, 0);
   for (const [modelId, usage] of mainModelEntries) {
@@ -627,7 +627,7 @@ function showUsage(ctx: any): void {
     const modelCostShare = mainTotalTokens > 0 ? mainCost * (modelTokens / mainTotalTokens) : 0;
     byModel.set(modelId, {
       input: usage.inputTokens, output: usage.outputTokens,
-      cacheRead: usage.cacheReadTokens, cacheWrite: usage.cacheWriteTokens, cost: modelCostShare,
+      cacheRead: usage.cacheReadTokens, cacheWrite: usage.cacheWriteTokens, cacheSupported: usage.cacheSupported, cost: modelCostShare,
     });
   }
   for (const sa of subagents) {
@@ -638,11 +638,12 @@ function showUsage(ctx: any): void {
       existing.output += sa.outputTokens;
       existing.cacheRead += sa.cacheReadTokens;
       existing.cacheWrite += sa.cacheWriteTokens;
+      if (sa.cacheSupported) existing.cacheSupported = true;
       existing.cost += sa.cost;
     } else {
       byModel.set(key, {
         input: sa.inputTokens, output: sa.outputTokens,
-        cacheRead: sa.cacheReadTokens, cacheWrite: sa.cacheWriteTokens, cost: sa.cost,
+        cacheRead: sa.cacheReadTokens, cacheWrite: sa.cacheWriteTokens, cacheSupported: sa.cacheSupported, cost: sa.cost,
       });
     }
   }
@@ -659,7 +660,7 @@ function showUsage(ctx: any): void {
     for (const [modelId, m] of byModel) {
       const cr = (m.cacheRead + m.input) > 0 ? Math.round(m.cacheRead / (m.cacheRead + m.input) * 100) : 0;
       const parts = [`↑${formatTokenCount(m.input)}`, `↓${formatTokenCount(m.output)}`];
-      if (cr > 0) parts.push(`⚡${cr}%`);
+      if (m.cacheSupported) parts.push(`⚡${cr}%`);
       if (m.cost > 0) parts.push(`$${m.cost.toFixed(2)}`);
       lines.push(`  ${modelId}: ${parts.join("  ")}`);
     }
@@ -669,13 +670,14 @@ function showUsage(ctx: any): void {
   lines.push("By agent:");
   const agentModelNames = Object.keys(models);
   if (agentModelNames.length > 0) {
+    const mainCacheSupported = mainModelEntries.some(([, u]) => u.cacheSupported);
     const mainParts = [`↑${formatTokenCount(mainInput)}`, `↓${formatTokenCount(mainOutput)}`];
     const mainCR = (mainCacheRead + mainInput) > 0 ? Math.round(mainCacheRead / (mainCacheRead + mainInput) * 100) : 0;
-    if (mainCR > 0) mainParts.push(`⚡${mainCR}%`);
+    if (mainCacheSupported) mainParts.push(`⚡${mainCR}%`);
     if (mainCost > 0) mainParts.push(`$${mainCost.toFixed(2)}`);
     lines.push(`  Main (${agentModelNames.join(", ")}): ${mainParts.join("  ")}`);
   }
-  const byAgentType = new Map<string, { input: number; output: number; cacheRead: number; cost: number; durationMs: number; toolUses: number; count: number }>();
+  const byAgentType = new Map<string, { input: number; output: number; cacheRead: number; cacheSupported: boolean; cost: number; durationMs: number; toolUses: number; count: number }>();
   for (const sa of subagents) {
     const key = sa.agentType || sa.description;
     const existing = byAgentType.get(key);
@@ -683,6 +685,7 @@ function showUsage(ctx: any): void {
       existing.input += sa.inputTokens;
       existing.output += sa.outputTokens;
       existing.cacheRead += sa.cacheReadTokens;
+      if (sa.cacheSupported) existing.cacheSupported = true;
       existing.cost += sa.cost;
       existing.durationMs += sa.durationMs;
       existing.toolUses += sa.toolUses;
@@ -690,7 +693,7 @@ function showUsage(ctx: any): void {
     } else {
       byAgentType.set(key, {
         input: sa.inputTokens, output: sa.outputTokens, cacheRead: sa.cacheReadTokens,
-        cost: sa.cost, durationMs: sa.durationMs, toolUses: sa.toolUses, count: 1,
+        cacheSupported: sa.cacheSupported, cost: sa.cost, durationMs: sa.durationMs, toolUses: sa.toolUses, count: 1,
       });
     }
   }
@@ -698,7 +701,7 @@ function showUsage(ctx: any): void {
     const saCR = (agg.cacheRead + agg.input) > 0
       ? Math.round(agg.cacheRead / (agg.cacheRead + agg.input) * 100) : 0;
     const parts = [`↑${formatTokenCount(agg.input)}`, `↓${formatTokenCount(agg.output)}`];
-    if (saCR > 0) parts.push(`⚡${saCR}%`);
+    if (agg.cacheSupported) parts.push(`⚡${saCR}%`);
     if (agg.cost > 0) parts.push(`$${agg.cost.toFixed(2)}`);
     if (agg.durationMs > 0) parts.push(formatDuration(agg.durationMs));
     if (agg.toolUses > 0) parts.push(`${agg.toolUses} tools`);

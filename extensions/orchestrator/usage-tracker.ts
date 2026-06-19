@@ -7,11 +7,12 @@ export interface ModelUsage {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  cacheSupported: boolean;
   turns: number;
 }
 
 export interface UsageTracker {
-  recordTurn(modelId: string, provider: string, input: number, output: number, cacheRead: number, cacheWrite: number, cost: number): void;
+  recordTurn(modelId: string, provider: string, input: number, output: number, cacheRead: number, cacheWrite: number, cost: number, cacheSupported?: boolean): void;
   recordSubagentCompletion(tokens: { input?: number; output?: number; total?: number }, cost?: number, meta?: { description?: string; agentType?: string; modelId?: string; durationMs?: number; toolUses?: number }): void;
   loadFromSummary(summary: Record<string, unknown>): void;
   getTotalInputTokens(): number;
@@ -25,6 +26,7 @@ export interface UsageTracker {
   getMainCacheWriteTokens(): number;
   getMainCost(): number;
   getCacheHitRate(): number;
+  isCacheSupported(): boolean;
   getPerModelUsage(): Record<string, ModelUsage>;
   getSubagentTotals(): { inputTokens: number; outputTokens: number; cost: number };
   getSubagentList(): SubagentUsage[];
@@ -40,6 +42,7 @@ export interface SubagentUsage {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  cacheSupported: boolean;
   cost: number;
   durationMs: number;
   toolUses: number;
@@ -96,7 +99,7 @@ export function createUsageTracker(): UsageTracker {
   const state = createInitialState();
 
   return {
-    recordTurn(modelId: string, _provider: string, input: number, output: number, cacheRead: number, cacheWrite: number, cost: number): void {
+    recordTurn(modelId: string, _provider: string, input: number, output: number, cacheRead: number, cacheWrite: number, cost: number, cacheSupported?: boolean): void {
       const safeInput = toFiniteNumber(input);
       const safeOutput = toFiniteNumber(output);
       const safeCacheRead = toFiniteNumber(cacheRead);
@@ -116,6 +119,7 @@ export function createUsageTracker(): UsageTracker {
         outputTokens: 0,
         cacheReadTokens: 0,
         cacheWriteTokens: 0,
+        cacheSupported: false,
         turns: 0,
       };
 
@@ -123,6 +127,7 @@ export function createUsageTracker(): UsageTracker {
       usage.outputTokens += safeOutput;
       usage.cacheReadTokens += safeCacheRead;
       usage.cacheWriteTokens += safeCacheWrite;
+      if (cacheSupported) usage.cacheSupported = true;
       usage.turns += 1;
       state.models.set(key, usage);
     },
@@ -145,6 +150,8 @@ export function createUsageTracker(): UsageTracker {
       state.subagentOutputTokens += safeOutput;
       state.subagentCost += safeCost;
 
+      const cacheSupported = typeof tokens.cacheRead === "number" || typeof tokens.cacheWrite === "number";
+
       state.subagents.push({
         description: meta?.description ?? "unknown",
         agentType: meta?.agentType ?? "unknown",
@@ -153,6 +160,7 @@ export function createUsageTracker(): UsageTracker {
         outputTokens: safeOutput,
         cacheReadTokens: safeCacheRead,
         cacheWriteTokens: safeCacheWrite,
+        cacheSupported,
         cost: safeCost,
         durationMs: toFiniteNumber(meta?.durationMs),
         toolUses: toFiniteNumber(meta?.toolUses),
@@ -181,6 +189,7 @@ export function createUsageTracker(): UsageTracker {
             outputTokens: toFiniteNumber(sa.outputTokens),
             cacheReadTokens: toFiniteNumber(sa.cacheReadTokens),
             cacheWriteTokens: toFiniteNumber(sa.cacheWriteTokens),
+            cacheSupported: sa.cacheSupported === true,
             cost: toFiniteNumber(sa.cost),
             durationMs: toFiniteNumber(sa.durationMs),
             toolUses: toFiniteNumber(sa.toolUses),
@@ -198,6 +207,7 @@ export function createUsageTracker(): UsageTracker {
             outputTokens: toFiniteNumber(usage.outputTokens),
             cacheReadTokens: toFiniteNumber(usage.cacheReadTokens),
             cacheWriteTokens: toFiniteNumber(usage.cacheWriteTokens),
+            cacheSupported: (usage as any).cacheSupported === true,
             turns: toFiniteNumber(usage.turns),
           });
         }
@@ -253,6 +263,13 @@ export function createUsageTracker(): UsageTracker {
       const denominator = totalCacheRead + totalInput;
       if (denominator <= 0) return 0;
       return totalCacheRead / denominator;
+    },
+
+    isCacheSupported(): boolean {
+      for (const usage of state.models.values()) {
+        if (usage.cacheSupported) return true;
+      }
+      return state.subagents.some((sa) => sa.cacheSupported);
     },
 
     getPerModelUsage(): Record<string, ModelUsage> {

@@ -1136,12 +1136,13 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (usageTracker && msg?.usage) {
       const input = typeof msg.usage.input === "number" ? msg.usage.input : 0;
       const output = typeof msg.usage.output === "number" ? msg.usage.output : 0;
+      const cacheSupported = typeof msg.usage.cacheRead === "number" || typeof msg.usage.cacheWrite === "number";
       const cacheRead = typeof msg.usage.cacheRead === "number" ? msg.usage.cacheRead : 0;
       const cacheWrite = typeof msg.usage.cacheWrite === "number" ? msg.usage.cacheWrite : 0;
       const cost = typeof msg.usage.cost?.total === "number" ? msg.usage.cost.total : 0;
       const modelId = (typeof msg.model === "string" && msg.model) || ctx.model?.id || "unknown-model";
       const provider = (typeof msg.provider === "string" && msg.provider) || ctx.model?.provider || "unknown";
-      usageTracker.recordTurn(modelId, provider, input, output, cacheRead, cacheWrite, cost);
+      usageTracker.recordTurn(modelId, provider, input, output, cacheRead, cacheWrite, cost, cacheSupported);
       (ctx.ui as any)?.requestRender?.();
     }
 
