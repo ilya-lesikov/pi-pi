@@ -1021,46 +1021,62 @@ async function showTaskTypeMenu(
   }
 }
 
-async function showNoActiveMenu(orchestrator: Orchestrator, ctx: any): Promise<string | undefined> {
+async function showTaskMenu(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK | "started"> {
   while (true) {
-    const choice = await selectOption(ctx, "/pp", [
+    const choice = await selectOption(ctx, "Task", [
       { title: "Debug", description: "Diagnose an issue. Then (optionally) fix it" },
       { title: "Brainstorm", description: "Explore and brainstorm. Then (optionally) plan and implement" },
       { title: "Implement", description: "Brainstorm, plan and implement" },
       { title: "Review", description: "Review code changes, diffs, or pull requests" },
       { title: "Resume", description: "Resume a previously unfinished task" },
+      { title: "Back", description: "Return to the previous menu" },
+    ]);
+    if (!choice || choice === "Back") return BACK;
+
+    if (choice === "Debug") {
+      const result = await showTaskTypeMenu(orchestrator, ctx, "debug", "Describe the task");
+      if (result === "started") return "started";
+      continue;
+    }
+
+    if (choice === "Brainstorm") {
+      const result = await showTaskTypeMenu(orchestrator, ctx, "brainstorm", "Describe the task");
+      if (result === "started") return "started";
+      continue;
+    }
+
+    if (choice === "Implement") {
+      const result = await showImplementMenu(orchestrator, ctx);
+      if (result === "started") return "started";
+      continue;
+    }
+
+    if (choice === "Review") {
+      const result = await showReviewMenu(orchestrator, ctx);
+      if (result === "started") return "started";
+      continue;
+    }
+
+    if (choice === "Resume") {
+      const result = await showResumeMenu(orchestrator, ctx, undefined, "No paused tasks found.");
+      if (result === "started") return "started";
+      continue;
+    }
+  }
+}
+
+async function showNoActiveMenu(orchestrator: Orchestrator, ctx: any): Promise<string | undefined> {
+  while (true) {
+    const choice = await selectOption(ctx, "/pp", [
+      { title: "Task", description: "Start a new task or resume a paused one" },
       { title: "Subagents", description: "Manage running agents" },
       { title: "Settings", description: "LSP, Flant AI, and other configuration" },
       { title: "Back", description: "Close this menu" },
     ]);
     if (!choice || choice === "Back") return undefined;
 
-    if (choice === "Debug") {
-      const result = await showTaskTypeMenu(orchestrator, ctx, "debug", "Describe the task");
-      if (result === "started") return undefined;
-      continue;
-    }
-
-    if (choice === "Brainstorm") {
-      const result = await showTaskTypeMenu(orchestrator, ctx, "brainstorm", "Describe the task");
-      if (result === "started") return undefined;
-      continue;
-    }
-
-    if (choice === "Implement") {
-      const result = await showImplementMenu(orchestrator, ctx);
-      if (result === "started") return undefined;
-      continue;
-    }
-
-    if (choice === "Review") {
-      const result = await showReviewMenu(orchestrator, ctx);
-      if (result === "started") return undefined;
-      continue;
-    }
-
-    if (choice === "Resume") {
-      const result = await showResumeMenu(orchestrator, ctx, undefined, "No paused tasks found.");
+    if (choice === "Task") {
+      const result = await showTaskMenu(orchestrator, ctx);
       if (result === "started") return undefined;
       continue;
     }
