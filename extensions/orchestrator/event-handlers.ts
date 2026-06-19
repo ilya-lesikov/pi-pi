@@ -1283,14 +1283,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       if (hasText && (!hasToolCalls || endsWithText)) {
         const step = orchestrator.active.state.step;
         if (step !== "await_planners" && step !== "await_reviewers") {
-          pi.sendMessage(
-            {
-              customType: "pp-phase-complete-reminder",
-              content: `[PI-PI] You stopped without calling pp_phase_complete. If you are done with the ${phase} phase, call pp_phase_complete now. If not, continue working.`,
-              display: false,
-            },
-            { deliverAs: "followUp" },
-          );
+          orchestrator.safeSendUserMessage(`[PI-PI] You stopped without calling pp_phase_complete. If you are done with the ${phase} phase, call pp_phase_complete now. If not, continue working.`);
         }
       }
       return;
@@ -1307,14 +1300,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     orchestrator.nudgeTimestamps = orchestrator.nudgeTimestamps.filter((t) => now - t < 60000);
 
     const sendNudge = () => {
-      pi.sendMessage(
-        {
-          customType: "pp-continuation",
-          content: `[PI-PI] Your previous response was interrupted. Continue working on the current phase (${phase}). Pick up where you left off.`,
-          display: false,
-        },
-        { deliverAs: "followUp" },
-      );
+      orchestrator.safeSendUserMessage(`[PI-PI] Your previous response was interrupted. Continue working on the current phase (${phase}). Pick up where you left off.`);
     };
 
     if (orchestrator.nudgeTimestamps.length <= 3) {
