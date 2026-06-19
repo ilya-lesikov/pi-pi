@@ -19,6 +19,11 @@ export interface UsageTracker {
   getTotalCacheReadTokens(): number;
   getTotalCacheWriteTokens(): number;
   getTotalCost(): number;
+  getMainInputTokens(): number;
+  getMainOutputTokens(): number;
+  getMainCacheReadTokens(): number;
+  getMainCacheWriteTokens(): number;
+  getMainCost(): number;
   getCacheHitRate(): number;
   getPerModelUsage(): Record<string, ModelUsage>;
   getSubagentTotals(): { inputTokens: number; outputTokens: number; cost: number };
@@ -203,11 +208,11 @@ export function createUsageTracker(): UsageTracker {
     },
 
     getTotalInputTokens(): number {
-      return state.totalInputTokens;
+      return state.totalInputTokens + state.subagentInputTokens;
     },
 
     getTotalOutputTokens(): number {
-      return state.totalOutputTokens;
+      return state.totalOutputTokens + state.subagentOutputTokens;
     },
 
     getTotalCacheReadTokens(): number {
@@ -219,13 +224,35 @@ export function createUsageTracker(): UsageTracker {
     },
 
     getTotalCost(): number {
+      return state.totalCost + state.subagentCost;
+    },
+
+    getMainInputTokens(): number {
+      return state.totalInputTokens;
+    },
+
+    getMainOutputTokens(): number {
+      return state.totalOutputTokens;
+    },
+
+    getMainCacheReadTokens(): number {
+      return state.totalCacheReadTokens;
+    },
+
+    getMainCacheWriteTokens(): number {
+      return state.totalCacheWriteTokens;
+    },
+
+    getMainCost(): number {
       return state.totalCost;
     },
 
     getCacheHitRate(): number {
-      const denominator = state.totalCacheReadTokens + state.totalInputTokens;
+      const totalInput = state.totalInputTokens + state.subagentInputTokens;
+      const totalCacheRead = state.totalCacheReadTokens;
+      const denominator = totalCacheRead + totalInput;
       if (denominator <= 0) return 0;
-      return state.totalCacheReadTokens / denominator;
+      return totalCacheRead / denominator;
     },
 
     getPerModelUsage(): Record<string, ModelUsage> {

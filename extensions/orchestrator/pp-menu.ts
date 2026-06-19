@@ -344,9 +344,9 @@ export async function resumeTask(
   if (step === "await_planners" || step === "await_reviewers") {
     ctx.ui.notify(`Resumed task. Awaiting subagents (${step}).`, "info");
   } else if (step === "apply_feedback") {
-    pi.sendUserMessage(`[PI-PI] Resumed ${orchestrator.active.state.phase} phase. Read reviewer outputs and apply feedback.`);
+    pi.sendUserMessage(`[PI-PI] Resumed ${orchestrator.active.state.phase} phase. Read reviewer outputs and apply feedback.`, { deliverAs: "followUp" });
   } else {
-    pi.sendUserMessage(`[PI-PI] Resumed ${orchestrator.active.state.phase} phase. Continue working.`);
+    pi.sendUserMessage(`[PI-PI] Resumed ${orchestrator.active.state.phase} phase. Continue working.`, { deliverAs: "followUp" });
   }
 
   return { ok: true };
@@ -591,6 +591,9 @@ function showUsage(ctx: any): void {
         getTotalInputTokens(): number; getTotalOutputTokens(): number;
         getTotalCacheReadTokens(): number; getTotalCacheWriteTokens(): number;
         getTotalCost(): number; getCacheHitRate(): number;
+        getMainInputTokens(): number; getMainOutputTokens(): number;
+        getMainCacheReadTokens(): number; getMainCacheWriteTokens(): number;
+        getMainCost(): number;
         getPerModelUsage(): Record<string, { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; turns: number }>;
         getSubagentList(): Array<{ description: string; agentType: string; modelId: string; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; cost: number; durationMs: number; toolUses: number }>;
       }
@@ -601,30 +604,20 @@ function showUsage(ctx: any): void {
     return;
   }
 
-  const mainInput = tracker.getTotalInputTokens();
-  const mainOutput = tracker.getTotalOutputTokens();
-  const mainCacheRead = tracker.getTotalCacheReadTokens();
-  const mainCacheWrite = tracker.getTotalCacheWriteTokens();
-  const mainCost = tracker.getTotalCost();
-  const models = tracker.getPerModelUsage();
-  const subagents = tracker.getSubagentList();
-
-  let saInput = 0, saOutput = 0, saCacheRead = 0, saCacheWrite = 0, saCost = 0;
-  for (const sa of subagents) {
-    saInput += sa.inputTokens;
-    saOutput += sa.outputTokens;
-    saCacheRead += sa.cacheReadTokens;
-    saCacheWrite += sa.cacheWriteTokens;
-    saCost += sa.cost;
-  }
-
-  const totalInput = mainInput + saInput;
-  const totalOutput = mainOutput + saOutput;
-  const totalCacheRead = mainCacheRead + saCacheRead;
-  const totalCost = mainCost + saCost;
+  const totalInput = tracker.getTotalInputTokens();
+  const totalOutput = tracker.getTotalOutputTokens();
+  const totalCacheRead = tracker.getTotalCacheReadTokens();
+  const totalCost = tracker.getTotalCost();
   const totalCacheRate = (totalCacheRead + totalInput) > 0
     ? totalCacheRead / (totalCacheRead + totalInput)
     : 0;
+
+  const mainInput = tracker.getMainInputTokens();
+  const mainOutput = tracker.getMainOutputTokens();
+  const mainCacheRead = tracker.getMainCacheReadTokens();
+  const mainCost = tracker.getMainCost();
+  const models = tracker.getPerModelUsage();
+  const subagents = tracker.getSubagentList();
 
   const byModel = new Map<string, { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number }>();
   const mainModelEntries = Object.entries(models);
