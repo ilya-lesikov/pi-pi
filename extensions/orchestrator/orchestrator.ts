@@ -255,11 +255,10 @@ export class Orchestrator {
   ): Promise<void> {
     if (this.active) {
       ctx.ui.notify(
-        `Finishing previous task "${this.active.description}" (phase: ${this.active.state.phase})…`,
+        `Pausing previous task "${this.active.description}" (phase: ${this.active.state.phase})…`,
         "info",
       );
       this.abortAllSubagents();
-      this.active.state.phase = "done";
       saveTask(this.active.dir, this.active.state);
       unregisterAgentDefinitions(this.pi);
       await this.cleanupActive();

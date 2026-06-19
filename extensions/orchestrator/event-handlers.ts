@@ -204,13 +204,12 @@ export async function enterReviewCycle(orchestrator: Orchestrator, ctx: any, kin
 export async function stopTask(orchestrator: Orchestrator): Promise<string> {
   if (!orchestrator.active) return "No active task.";
   orchestrator.abortAllSubagents();
-  orchestrator.active.state.phase = "done";
   saveTask(orchestrator.active.dir, orchestrator.active.state);
   const desc = orchestrator.active.description;
   await orchestrator.cleanupActive();
   const taskStore = (globalThis as any)[Symbol.for("pi-tasks:store")];
   taskStore?.clearAll?.();
-  return `Task "${desc}" stopped.`;
+  return `Task "${desc}" stopped. Use /pp → Resume to continue.`;
 }
 
 export function finalizeReviewCycle(task: ActiveTask): void {
