@@ -40,7 +40,10 @@ export function createPlannerAgent(
       "- No other top-level sections allowed",
       "- Describe outcomes, not code-level mechanics",
       "",
-      'You can spawn subagents: Agent(subagent_type="Explore", ...) for codebase, Agent(subagent_type="Librarian", ...) for external docs.',
+      "subagent_type is REQUIRED when spawning subagents — calls without it are rejected:",
+    '- Agent(subagent_type="Explore", ...) — codebase research. Prefer this for most lookups. Fast and cheap.',
+    '- Agent(subagent_type="Librarian", ...) — external docs, library APIs, web research.',
+    "Spawn multiple Explore agents in parallel for broad searches.",
       "",
       // --- dynamic suffix ---
       "# MANDATORY OUTPUT",

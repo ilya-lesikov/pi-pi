@@ -943,7 +943,10 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (event.toolName === "Agent" && orchestrator.active) {
       const input = event.input as Record<string, unknown>;
       const requestedType = ((input.subagent_type as string) || "").toLowerCase();
-      const isExplore = !requestedType || requestedType === "explore";
+      if (!requestedType) {
+        return { block: true, reason: "subagent_type is required. Use Explore for codebase research, Librarian for external docs, or Task for implementation subtasks." };
+      }
+      const isExplore = requestedType === "explore";
       const isLibrarian = requestedType === "librarian";
 
       if (isExplore) {
@@ -1183,7 +1186,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
         orchestrator.pendingRetryTimer = setTimeout(() => {
           orchestrator.pendingRetryTimer = null;
           if (orchestrator.activeTaskToken !== taskToken || !orchestrator.active) return;
-          pi.sendUserMessage(`[PI-PI] Previous request failed due to an API error. Continue working on the current phase (${phase}).`);
+          pi.sendUserMessage(`[PI-PI] Previous request failed due to an API error. Continue working on the current phase (${phase}).`, { deliverAs: "followUp" });
         }, delay);
       } else {
         ctx.ui.notify(`API error persisted after 3 retries: ${errorMsg}. Stopping auto-retry.`, "error");
@@ -1218,7 +1221,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
                 orchestrator.pendingSubagentSpawns = 0;
                 orchestrator.active.state.step = "synthesize";
                 saveTask(orchestrator.active.dir, orchestrator.active.state);
-                pi.sendUserMessage("[PI-PI] All planners completed. Read their outputs and synthesize the plan.");
+                pi.sendUserMessage("[PI-PI] All planners completed. Read their outputs and synthesize the plan.", { deliverAs: "followUp" });
               }
             }
           } else if (orchestrator.active.state.step === "await_reviewers" && orchestrator.active.state.reviewCycle) {
@@ -1249,7 +1252,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
                 { customType: "pp-review-ready", content: `[PI-PI] Reviewer outputs are ready.\n\n${rendered}`, display: false },
                 { deliverAs: "followUp" },
               );
-              pi.sendUserMessage("[PI-PI] Review cycle is ready for apply_feedback. Read reviewer outputs and proceed.");
+              pi.sendUserMessage("[PI-PI] Review cycle is ready for apply_feedback. Read reviewer outputs and proceed.", { deliverAs: "followUp" });
             }
           } else {
             clearInterval(orchestrator.awaitPollTimer!);
