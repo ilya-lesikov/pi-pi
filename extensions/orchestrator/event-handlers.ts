@@ -1142,6 +1142,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     }
 
     if (!orchestrator.active || orchestrator.active.state.phase === "done") return;
+    if (orchestrator.phaseCompactionPending || orchestrator.taskDoneCompactionPending) return;
     orchestrator.updateStatus(ctx);
 
     if (
