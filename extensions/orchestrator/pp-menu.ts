@@ -344,9 +344,9 @@ export async function resumeTask(
   if (step === "await_planners" || step === "await_reviewers") {
     ctx.ui.notify(`Resumed task. Awaiting subagents (${step}).`, "info");
   } else if (step === "apply_feedback") {
-    pi.sendUserMessage(`[PI-PI] Resumed ${orchestrator.active.state.phase} phase. Read reviewer outputs and apply feedback.`, { deliverAs: "followUp" });
+    orchestrator.safeSendUserMessage(`[PI-PI] Resumed ${orchestrator.active.state.phase} phase. Read reviewer outputs and apply feedback.`);
   } else {
-    pi.sendUserMessage(`[PI-PI] Resumed ${orchestrator.active.state.phase} phase. Continue working.`, { deliverAs: "followUp" });
+    orchestrator.safeSendUserMessage(`[PI-PI] Resumed ${orchestrator.active.state.phase} phase. Continue working.`);
   }
 
   return { ok: true };

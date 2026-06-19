@@ -94,7 +94,7 @@ function tryCompleteReviewCycle(orchestrator: Orchestrator): void {
     },
     { deliverAs: "followUp" },
   );
-  pi.sendUserMessage("[PI-PI] Review cycle is ready for apply_feedback. Read reviewer outputs and proceed.", { deliverAs: "followUp" });
+  orchestrator.safeSendUserMessage("[PI-PI] Review cycle is ready for apply_feedback. Read reviewer outputs and proceed.");
 }
 
 export async function enterReviewCycle(orchestrator: Orchestrator, ctx: any, kind: "auto" | "auto-deep" | "plannotator") {
@@ -594,13 +594,13 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
                 console.error(`[pi-pi] retry spawnPlanners failed: ${err.message}`);
                 checkPlannerCompletion();
               });
-              pi.sendUserMessage(`[PI-PI] Retrying failed planners: ${variantsText}.`, { deliverAs: "followUp" });
+              orchestrator.safeSendUserMessage(`[PI-PI] Retrying failed planners: ${variantsText}.`);
               return;
             }
           }
 
           if (choice === "Stop task") {
-            pi.sendUserMessage(`[PI-PI] ${await stopTask(orchestrator)}`, { deliverAs: "followUp" });
+            orchestrator.safeSendUserMessage(`[PI-PI] ${await stopTask(orchestrator)}`);
             return;
           }
 
@@ -632,7 +632,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     orchestrator.failedPlannerVariants = [];
     orchestrator.active.state.step = "synthesize";
     saveTask(orchestrator.active.dir, orchestrator.active.state);
-    pi.sendUserMessage("[PI-PI] All planners completed. Read their outputs and synthesize the plan.", { deliverAs: "followUp" });
+    orchestrator.safeSendUserMessage("[PI-PI] All planners completed. Read their outputs and synthesize the plan.");
   }
 
   function checkReviewCycleCompletion(): void {
@@ -705,14 +705,14 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
                   console.error(`[pi-pi] retry spawn reviewers failed (${phase}): ${err.message}`);
                   checkReviewCycleCompletion();
                 });
-                pi.sendUserMessage(`[PI-PI] Retrying failed reviewers: ${variantsText}.`, { deliverAs: "followUp" });
+                orchestrator.safeSendUserMessage(`[PI-PI] Retrying failed reviewers: ${variantsText}.`);
                 return;
               }
             }
           }
 
           if (choice === "Stop task") {
-            pi.sendUserMessage(`[PI-PI] ${await stopTask(orchestrator)}`, { deliverAs: "followUp" });
+            orchestrator.safeSendUserMessage(`[PI-PI] ${await stopTask(orchestrator)}`);
             return;
           }
 
@@ -722,7 +722,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
             orchestrator.active.state.reviewCycle = null;
             orchestrator.active.state.step = "user_gate";
             saveTask(orchestrator.active.dir, orchestrator.active.state);
-            pi.sendUserMessage("[PI-PI] Review cycle skipped. Use /pp to choose the next action.", { deliverAs: "followUp" });
+            orchestrator.safeSendUserMessage("[PI-PI] Review cycle skipped. Use /pp to choose the next action.");
             return;
           }
 
@@ -1186,7 +1186,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
         orchestrator.pendingRetryTimer = setTimeout(() => {
           orchestrator.pendingRetryTimer = null;
           if (orchestrator.activeTaskToken !== taskToken || !orchestrator.active) return;
-          pi.sendUserMessage(`[PI-PI] Previous request failed due to an API error. Continue working on the current phase (${phase}).`, { deliverAs: "followUp" });
+          orchestrator.safeSendUserMessage(`[PI-PI] Previous request failed due to an API error. Continue working on the current phase (${phase}).`);
         }, delay);
       } else {
         ctx.ui.notify(`API error persisted after 3 retries: ${errorMsg}. Stopping auto-retry.`, "error");
@@ -1221,7 +1221,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
                 orchestrator.pendingSubagentSpawns = 0;
                 orchestrator.active.state.step = "synthesize";
                 saveTask(orchestrator.active.dir, orchestrator.active.state);
-                pi.sendUserMessage("[PI-PI] All planners completed. Read their outputs and synthesize the plan.", { deliverAs: "followUp" });
+                orchestrator.safeSendUserMessage("[PI-PI] All planners completed. Read their outputs and synthesize the plan.");
               }
             }
           } else if (orchestrator.active.state.step === "await_reviewers" && orchestrator.active.state.reviewCycle) {
@@ -1252,7 +1252,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
                 { customType: "pp-review-ready", content: `[PI-PI] Reviewer outputs are ready.\n\n${rendered}`, display: false },
                 { deliverAs: "followUp" },
               );
-              pi.sendUserMessage("[PI-PI] Review cycle is ready for apply_feedback. Read reviewer outputs and proceed.", { deliverAs: "followUp" });
+              orchestrator.safeSendUserMessage("[PI-PI] Review cycle is ready for apply_feedback. Read reviewer outputs and proceed.");
             }
           } else {
             clearInterval(orchestrator.awaitPollTimer!);

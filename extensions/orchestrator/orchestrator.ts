@@ -86,6 +86,14 @@ export class Orchestrator {
 
   constructor(readonly pi: ExtensionAPI) {}
 
+  safeSendUserMessage(text: string): void {
+    try {
+      this.pi.sendUserMessage(text);
+    } catch {
+      this.pi.sendUserMessage(text, { deliverAs: "followUp" });
+    }
+  }
+
   truncateResult(result: string): string {
     const trimmed = result.trim();
     if (!trimmed) return "";
@@ -344,7 +352,7 @@ export class Orchestrator {
     } else if (isWaitingForPlanners) {
       ctx.ui.notify("Entered plan phase. Waiting for planners to complete before synthesis.", "info");
     } else {
-      this.pi.sendUserMessage(`[PI-PI] Entered ${this.active.state.phase} phase. Begin working.`, { deliverAs: "followUp" });
+      this.safeSendUserMessage(`[PI-PI] Entered ${this.active.state.phase} phase. Begin working.`);
     }
 
     if (this.active.state.phase === "plan" && this.active.state.step === "await_planners") {
@@ -484,7 +492,7 @@ export class Orchestrator {
         if (this.active?.state.phase === "plan" && this.active.state.step === "await_planners") {
           ctx.ui.notify("Entered plan phase. Waiting for planners to complete before synthesis.", "info");
         } else {
-          this.pi.sendUserMessage(`[PI-PI] Entered ${phase} phase. Begin working.`, { deliverAs: "followUp" });
+          this.safeSendUserMessage(`[PI-PI] Entered ${phase} phase. Begin working.`);
         }
       },
       onError: (err) => {
@@ -503,7 +511,7 @@ export class Orchestrator {
         if (this.active?.state.phase === "plan" && this.active.state.step === "await_planners") {
           ctx.ui.notify("Entered plan phase. Waiting for planners to complete before synthesis.", "info");
         } else {
-          this.pi.sendUserMessage(`[PI-PI] Entered ${phase} phase. Begin working.`, { deliverAs: "followUp" });
+          this.safeSendUserMessage(`[PI-PI] Entered ${phase} phase. Begin working.`);
         }
       },
     });
