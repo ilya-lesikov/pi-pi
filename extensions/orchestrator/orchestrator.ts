@@ -61,7 +61,6 @@ export class Orchestrator {
   }>();
   staleAgentTimer: ReturnType<typeof setInterval> | null = null;
   phaseCompactionPending = false;
-  phaseCompactionResolve: (() => void) | null = null;
   taskDoneCompactionPending = false;
   taskDoneCompactionSummary = "";
   nudgeTimestamps: number[] = [];
@@ -406,7 +405,6 @@ export class Orchestrator {
     this.cooldownHits = [];
     this.nudgeHalted = false;
     this.phaseCompactionPending = false;
-    this.phaseCompactionResolve = null;
     this.phaseStartTime = 0;
     this.userGatePending = false;
     this.reviewTransitionToken = -1;
@@ -477,13 +475,6 @@ export class Orchestrator {
     }
   }
 
-  waitForCompaction(): Promise<void> {
-    if (!this.phaseCompactionPending && !this.taskDoneCompactionPending) return Promise.resolve();
-    return new Promise((resolve) => {
-      this.phaseCompactionResolve = resolve;
-    });
-  }
-
   compactAndTransition(ctx: ExtensionContext, taskDir: string, phase: Phase, onReady?: () => void): void {
     this.phaseCompactionPending = true;
     const finalize = () => {
@@ -504,19 +495,11 @@ export class Orchestrator {
       customInstructions: "Phase transition — discard all prior conversation. Produce a one-line summary: 'Previous phase completed.'",
       onComplete: () => {
         this.phaseCompactionPending = false;
-        if (this.phaseCompactionResolve) {
-          this.phaseCompactionResolve();
-          this.phaseCompactionResolve = null;
-        }
         finalize();
       },
       onError: (err) => {
         console.error(`[pi-pi] Phase compaction failed: ${err.message}`);
         this.phaseCompactionPending = false;
-        if (this.phaseCompactionResolve) {
-          this.phaseCompactionResolve();
-          this.phaseCompactionResolve = null;
-        }
         finalize();
       },
     });
