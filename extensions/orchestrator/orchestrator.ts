@@ -91,15 +91,19 @@ export class Orchestrator {
     const log = (event: string, extra?: Record<string, unknown>) => {
       if (this.active) appendTaskLog(this.active.dir, "debug.jsonl", { timestamp: new Date().toISOString(), event, text: text.slice(0, 200), ...extra });
     };
-    try {
-      this.pi.sendMessage(
-        { customType: "pp-user-message", content: text, display: true },
-        { deliverAs: "followUp", triggerTurn: true },
-      );
-      log("safeSend_queued");
-    } catch (err: any) {
-      log("safeSend_failed", { error: err?.message ?? String(err) });
-    }
+    const attempt = (retries: number) => {
+      try {
+        this.pi.sendUserMessage(text);
+        log("safeSend_sent", { retries });
+      } catch (err: any) {
+        if (retries < 30) {
+          setTimeout(() => attempt(retries + 1), 1000);
+        } else {
+          log("safeSend_failed", { error: err?.message ?? String(err), retries });
+        }
+      }
+    };
+    attempt(0);
   }
 
   truncateResult(result: string): string {
