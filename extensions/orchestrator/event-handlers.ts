@@ -970,6 +970,11 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       const ppStateDir = resolve(orchestrator.cwd, ".pp", "state");
       const ppDir = resolve(orchestrator.cwd, ".pp");
 
+      const phase = orchestrator.active?.state.phase;
+      if (phase && phase !== "implement" && !resolvedPath.startsWith(ppStateDir + "/")) {
+        return { block: true, reason: `Cannot modify project files during ${phase} phase. Only the implement phase allows code changes. Call pp_phase_complete to advance.` };
+      }
+
       if (resolvedPath.startsWith(ppStateDir + "/") || resolvedPath === ppStateDir) {
         if (!resolvedPath.endsWith(".md")) {
           return { block: true, reason: "Cannot write non-.md files in .pp/state/" };
