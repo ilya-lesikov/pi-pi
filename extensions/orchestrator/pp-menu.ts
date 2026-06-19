@@ -1126,7 +1126,7 @@ export async function showActiveTaskMenu(
     const opt = (title: string, description: string): OptionInput => ({ title, description });
 
     const options: OptionInput[] = [];
-    options.push(opt("Finish", "Complete, pause, or continue to next phase"));
+    options.push(opt("Next", "Complete, pause, or continue to next phase"));
     if (!waiting) {
       options.push(opt("Review", "Auto review, Plannotator, or manual review"));
     }
@@ -1155,7 +1155,7 @@ export async function showActiveTaskMenu(
       await abortCurrentWork(orchestrator, ctx);
     }
 
-    if (choice === "Finish") {
+    if (choice === "Next") {
       const canContinue = phase !== "implement" && !waiting;
       const continueLabel = phase === "plan" ? "Continue to implement" : "Continue to plan & implement";
       const finishOptions: OptionInput[] = [];
@@ -1166,7 +1166,7 @@ export async function showActiveTaskMenu(
       finishOptions.push(opt("Pause", "Suspend task to resume later"));
       finishOptions.push(opt("Back", "Return to the previous menu"));
 
-      const finishChoice = await selectOption(ctx, "Finish", finishOptions);
+      const finishChoice = await selectOption(ctx, "Next", finishOptions);
       if (!finishChoice || finishChoice === "Back") continue;
       if (finishChoice === "Pause") {
         const text = await pauseTask(orchestrator, ctx);
