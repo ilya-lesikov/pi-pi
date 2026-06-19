@@ -87,11 +87,18 @@ export class Orchestrator {
   constructor(readonly pi: ExtensionAPI) {}
 
   safeSendUserMessage(text: string): void {
-    try {
+    const ctx = this.lastCtx;
+    if (!ctx || ctx.isIdle?.()) {
       this.pi.sendUserMessage(text);
-    } catch {
-      this.pi.sendUserMessage(text, { deliverAs: "followUp" });
+      return;
     }
+    const poll = setInterval(() => {
+      if (ctx.isIdle?.()) {
+        clearInterval(poll);
+        this.pi.sendUserMessage(text);
+      }
+    }, 500);
+    setTimeout(() => clearInterval(poll), 60_000);
   }
 
   truncateResult(result: string): string {
