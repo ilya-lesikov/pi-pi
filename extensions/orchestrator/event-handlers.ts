@@ -1182,10 +1182,10 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
         if (c.type === "thinking") console.error(`[pi-pi]   thinking: ${c.thinking?.slice(0, 100) || "(redacted)"}`);
       }
       orchestrator.errorRetryCount = (orchestrator.errorRetryCount ?? 0) + 1;
-      const retryDelays = [2000, 6000, 24000];
-      if (orchestrator.errorRetryCount <= retryDelays.length) {
-        const delay = retryDelays[orchestrator.errorRetryCount - 1];
-        ctx.ui.notify(`API error (attempt ${orchestrator.errorRetryCount}/${retryDelays.length}): ${errorMsg}. Retrying in ${delay / 1000}s...`, "warning");
+      const maxRetries = 5;
+      if (orchestrator.errorRetryCount <= maxRetries) {
+        const delay = 2000 * Math.pow(2, orchestrator.errorRetryCount - 1);
+        ctx.ui.notify(`API error (attempt ${orchestrator.errorRetryCount}/${maxRetries}): ${errorMsg}. Retrying in ${delay / 1000}s...`, "warning");
         const taskToken = orchestrator.activeTaskToken;
         if (orchestrator.pendingRetryTimer) clearTimeout(orchestrator.pendingRetryTimer);
         orchestrator.pendingRetryTimer = setTimeout(() => {
@@ -1194,7 +1194,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
           orchestrator.safeSendUserMessage(`[PI-PI] Previous request failed due to an API error. Continue working on the current phase (${phase}).`);
         }, delay);
       } else {
-        ctx.ui.notify(`API error persisted after 3 retries: ${errorMsg}. Stopping auto-retry.`, "error");
+        ctx.ui.notify(`API error persisted after ${maxRetries} retries: ${errorMsg}. Stopping auto-retry.`, "error");
         orchestrator.errorRetryCount = 0;
       }
       return;
