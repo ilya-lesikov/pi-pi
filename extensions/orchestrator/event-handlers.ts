@@ -545,6 +545,15 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     trackSubagentEvent(data, "first_turn");
   });
 
+  function markAllAgentsConsumed(): void {
+    const mgr = (globalThis as any)[Symbol.for("pi-subagents:manager")];
+    if (!mgr?.getRecord) return;
+    for (const id of orchestrator.agentDescriptions.keys()) {
+      const record = mgr.getRecord(id);
+      if (record) record.resultConsumed = true;
+    }
+  }
+
   function checkPlannerCompletion(): void {
     if (
       !orchestrator.active ||
@@ -637,6 +646,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     }
 
     orchestrator.failedPlannerVariants = [];
+    markAllAgentsConsumed();
     orchestrator.active.state.step = "synthesize";
     saveTask(orchestrator.active.dir, orchestrator.active.state);
     orchestrator.safeSendUserMessage("[PI-PI] All planners completed. Read their outputs and synthesize the plan.");
@@ -743,6 +753,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       return;
     }
 
+    markAllAgentsConsumed();
     tryCompleteReviewCycle(orchestrator);
   }
 
@@ -1231,6 +1242,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
               if (planFiles.length >= plannerCount) {
                 clearInterval(orchestrator.awaitPollTimer!);
                 orchestrator.awaitPollTimer = null;
+                markAllAgentsConsumed();
                 orchestrator.spawnedAgentIds.clear();
                 orchestrator.pendingSubagentSpawns = 0;
                 orchestrator.active.state.step = "synthesize";
@@ -1252,6 +1264,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
             if (outputs.length >= reviewerCount) {
               clearInterval(orchestrator.awaitPollTimer!);
               orchestrator.awaitPollTimer = null;
+              markAllAgentsConsumed();
               orchestrator.spawnedAgentIds.clear();
               orchestrator.pendingSubagentSpawns = 0;
 
