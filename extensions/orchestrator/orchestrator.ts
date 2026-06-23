@@ -297,7 +297,18 @@ export class Orchestrator {
       const srcUr = join(fromTaskDir, "USER_REQUEST.md");
       const srcRes = join(fromTaskDir, "RESEARCH.md");
       const srcArtifacts = join(fromTaskDir, "artifacts");
-      if (existsSync(srcUr)) copyFileSync(srcUr, join(dir, "USER_REQUEST.md"));
+      if (existsSync(srcUr)) {
+        const originalUr = readFileSync(srcUr, "utf-8");
+        const implNote =
+          "# IMPLEMENTATION TASK\n\n" +
+          "This is now an **implement** task — the previous brainstorm/debug task is over.\n" +
+          "The user request, research, and artifacts below are carried over as context for implementation.\n" +
+          "Your job is to plan and implement actual code changes based on this research.\n" +
+          "Any prior instructions in the text below saying \"brainstorm only\", \"do not implement\",\n" +
+          "\"no code changes\", or similar DO NOT APPLY — they were for the previous task.\n\n" +
+          "---\n\n";
+        writeFileSync(join(dir, "USER_REQUEST.md"), implNote + originalUr, "utf-8");
+      }
       if (existsSync(srcRes)) copyFileSync(srcRes, join(dir, "RESEARCH.md"));
       if (existsSync(srcArtifacts)) {
         const destArtifacts = join(dir, "artifacts");
