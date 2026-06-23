@@ -10,6 +10,7 @@ export const WORKING_PRINCIPLES = [
   "- No temporary artifacts. No console.log, TODO, HACK, debugger, or commented-out code left behind.",
   "- Evidence over claims. 'It should work' is not proof. Show fresh tool output (lsp diagnostics, test results, build output).",
   "- Match existing patterns. Mirror the codebase's naming, error handling, imports, and structure exactly.",
+  "- EDIT TOOL FORMAT: the edit tool takes `path`, `old_string`, `new_string` (single edit per call). Do NOT use `edits[]`, `oldText`, `newText`, or `endText` — those are rejected.",
 ].join("\n");
 
 export const WORKING_PRINCIPLES_READONLY = [
@@ -17,6 +18,7 @@ export const WORKING_PRINCIPLES_READONLY = [
   "",
   "- Verify, don't assume. Check actual state with tools. Never guess paths, types, or APIs.",
   "- Evidence over claims. Show what you found with file paths and tool output, not guesses.",
+  "- EDIT/WRITE TOOL FORMAT: the edit tool takes `path`, `old_string`, `new_string` (single edit per call). The write tool takes `path`, `content`. Do NOT use `edits[]`, `oldText`, `newText`, or `endText` — those are rejected.",
   "",
   "# STRICT READ-ONLY CONSTRAINT",
   "",
