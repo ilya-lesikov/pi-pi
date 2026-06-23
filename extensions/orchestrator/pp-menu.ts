@@ -361,10 +361,11 @@ function listCompletedFromTasks(cwd: string): TaskInfo[] {
   const paused = new Set<string>([
     ...listTasks(cwd, "brainstorm").map((t) => t.dir),
     ...listTasks(cwd, "debug").map((t) => t.dir),
+    ...listTasks(cwd, "review").map((t) => t.dir),
   ]);
   const results: TaskInfo[] = [];
 
-  for (const type of ["brainstorm", "debug"] as TaskType[]) {
+  for (const type of ["brainstorm", "debug", "review"] as TaskType[]) {
     const typeDir = join(cwd, ".pp", "state", type);
     if (!existsSync(typeDir)) continue;
     for (const entry of readdirSync(typeDir, { withFileTypes: true })) {
@@ -821,7 +822,7 @@ async function showFromMenu(orchestrator: Orchestrator, ctx: any): Promise<typeo
   while (true) {
     const tasks = listCompletedFromTasks(orchestrator.cwd);
     if (tasks.length === 0) {
-      ctx.ui.notify("No completed brainstorm/debug tasks with artifacts found.", "info");
+      ctx.ui.notify("No completed brainstorm/debug/review tasks with artifacts found.", "info");
       return BACK;
     }
 

@@ -301,11 +301,11 @@ export class Orchestrator {
         const originalUr = readFileSync(srcUr, "utf-8");
         const implNote =
           "# IMPLEMENTATION TASK\n\n" +
-          "This is now an **implement** task — the previous brainstorm/debug task is over.\n" +
+          "This is now an **implement** task — the previous brainstorm/debug/review task is over.\n" +
           "The user request, research, and artifacts below are carried over as context for implementation.\n" +
           "Your job is to plan and implement actual code changes based on this research.\n" +
-          "Any prior instructions in the text below saying \"brainstorm only\", \"do not implement\",\n" +
-          "\"no code changes\", or similar DO NOT APPLY — they were for the previous task.\n\n" +
+          "Any prior instructions in the text below saying \"brainstorm only\", \"review only\",\n" +
+          "\"do not implement\", \"no code changes\", or similar DO NOT APPLY — they were for the previous task.\n\n" +
           "---\n\n";
         writeFileSync(join(dir, "USER_REQUEST.md"), implNote + originalUr, "utf-8");
       }
