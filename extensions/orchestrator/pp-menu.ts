@@ -91,6 +91,7 @@ async function pauseTask(orchestrator: Orchestrator, ctx: any): Promise<string> 
   await ctx.waitForIdle?.();
 
   const name = orchestrator.active.description;
+  const type = orchestrator.active.type;
 
   saveTask(orchestrator.active.dir, orchestrator.active.state);
   unregisterAgentDefinitions(orchestrator.pi);
@@ -100,7 +101,11 @@ async function pauseTask(orchestrator: Orchestrator, ctx: any): Promise<string> 
   taskStore?.clearAll?.();
   taskStore?.refreshWidget?.(ctx.ui);
 
+  orchestrator.taskDoneCompactionPending = true;
+  orchestrator.taskDoneCompactionSummary = `Task "${name}" (${type}) paused.`;
+
   orchestrator.updateStatus(ctx);
+  ctx.compact?.();
   ctx.ui.notify(`Task "${name}" paused. Use /pp → Resume to continue.`, "info");
   return `Task "${name}" paused.`;
 }

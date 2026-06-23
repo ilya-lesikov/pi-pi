@@ -18,6 +18,7 @@ import { registerCbmTools } from "./cbm.js";
 import { registerExaTools } from "./exa.js";
 import { registerAstSearchTool } from "./ast-search.js";
 import { SUBAGENT_SESSION_KEY } from "./index.js";
+import { registerCommandHandlers } from "./command-handlers.js";
 import { setExtensionOnlyMode, unregisterAgentDefinitions } from "./agents/registry.js";
 import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
 import { spawnCodeReviewers } from "./phases/review.js";
@@ -206,9 +207,15 @@ export async function stopTask(orchestrator: Orchestrator): Promise<string> {
   orchestrator.abortAllSubagents();
   saveTask(orchestrator.active.dir, orchestrator.active.state);
   const desc = orchestrator.active.description;
+  const type = orchestrator.active.type;
   await orchestrator.cleanupActive();
   const taskStore = (globalThis as any)[Symbol.for("pi-tasks:store")];
   taskStore?.clearAll?.();
+
+  orchestrator.taskDoneCompactionPending = true;
+  orchestrator.taskDoneCompactionSummary = `Task "${desc}" (${type}) stopped/paused.`;
+  orchestrator.lastCtx?.compact?.();
+
   return `Task "${desc}" stopped. Use /pp → Resume to continue.`;
 }
 
@@ -884,6 +891,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       return;
     }
 
+    registerCommandHandlers(orchestrator);
     registerCbmTools(pi, orchestrator.cwd);
     registerExaTools(pi);
     registerAstSearchTool(pi, orchestrator.cwd);

@@ -277,6 +277,10 @@ export class Orchestrator {
       await this.cleanupActive();
     }
 
+    this.taskDoneCompactionPending = true;
+    this.taskDoneCompactionSummary = `Starting new ${type} task. Previous conversation discarded.`;
+    (ctx as any).compact?.();
+
     try {
       this.config = loadConfig(this.cwd);
     } catch (err: any) {
