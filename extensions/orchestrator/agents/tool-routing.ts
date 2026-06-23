@@ -10,7 +10,6 @@ export const WORKING_PRINCIPLES = [
   "- No temporary artifacts. No console.log, TODO, HACK, debugger, or commented-out code left behind.",
   "- Evidence over claims. 'It should work' is not proof. Show fresh tool output (lsp diagnostics, test results, build output).",
   "- Match existing patterns. Mirror the codebase's naming, error handling, imports, and structure exactly.",
-  "- EDIT TOOL FORMAT: the edit tool takes `path`, `old_string`, `new_string` (single edit per call). Do NOT use `edits[]`, `oldText`, `newText`, or `endText` — those are rejected.",
 ].join("\n");
 
 export const WORKING_PRINCIPLES_READONLY = [
@@ -18,7 +17,6 @@ export const WORKING_PRINCIPLES_READONLY = [
   "",
   "- Verify, don't assume. Check actual state with tools. Never guess paths, types, or APIs.",
   "- Evidence over claims. Show what you found with file paths and tool output, not guesses.",
-  "- EDIT/WRITE TOOL FORMAT: the edit tool takes `path`, `old_string`, `new_string` (single edit per call). The write tool takes `path`, `content`. Do NOT use `edits[]`, `oldText`, `newText`, or `endText` — those are rejected.",
   "",
   "# STRICT READ-ONLY CONSTRAINT",
   "",
@@ -92,4 +90,8 @@ export const TOOL_ROUTING = [
   "Web search:",
   "- exa_search: search the web for docs, guides, examples. Describe the ideal page, not keywords.",
   "- exa_fetch: read a URL's full content as clean markdown.",
+  "",
+  "Edit/write files:",
+  "- edit: takes `path`, `old_string`, `new_string` — ONE edit per call. Do NOT use `edits[]`, `oldText`, `newText`, or `endText` — those are REJECTED.",
+  "- write: takes `path`, `content` — overwrites the entire file.",
 ].join("\n");

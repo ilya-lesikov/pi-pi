@@ -13,7 +13,7 @@ import {
   loadCodeReviewOutputs,
   loadPlanReviewOutputs,
 } from "./context.js";
-import { WORKING_PRINCIPLES, COMMUNICATION } from "./agents/tool-routing.js";
+import { WORKING_PRINCIPLES, COMMUNICATION, TOOL_ROUTING } from "./agents/tool-routing.js";
 import { registerCbmTools } from "./cbm.js";
 import { registerExaTools } from "./exa.js";
 import { registerAstSearchTool } from "./ast-search.js";
@@ -951,7 +951,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     const systemContextFiles = loadContextFiles(orchestrator.cwd, "main", "system");
     const systemSnippets = systemContextFiles.map((f) => f.content).join("\n\n");
 
-    const fullAddition = [WORKING_PRINCIPLES, COMMUNICATION, systemSnippets, phasePrompt].filter(Boolean).join("\n\n");
+    const fullAddition = [WORKING_PRINCIPLES, COMMUNICATION, TOOL_ROUTING, systemSnippets, phasePrompt].filter(Boolean).join("\n\n");
     if (!fullAddition) return;
 
     return {
