@@ -214,11 +214,13 @@ export async function stopTask(orchestrator: Orchestrator): Promise<string> {
 
   orchestrator.taskDoneCompactionPending = true;
   orchestrator.taskDoneCompactionSummary = `Task "${desc}" (${type}) stopped/paused.`;
-  orchestrator.lastCtx?.compact?.({
-    onError: () => {
-      orchestrator.taskDoneCompactionPending = false;
-      orchestrator.taskDoneCompactionSummary = "";
-    },
+  await new Promise<void>((resolve) => {
+    const compact = orchestrator.lastCtx?.compact;
+    if (!compact) { orchestrator.taskDoneCompactionPending = false; orchestrator.taskDoneCompactionSummary = ""; resolve(); return; }
+    compact({
+      onComplete: () => { orchestrator.taskDoneCompactionPending = false; resolve(); },
+      onError: () => { orchestrator.taskDoneCompactionPending = false; orchestrator.taskDoneCompactionSummary = ""; resolve(); },
+    });
   });
 
   return `Task "${desc}" stopped. Use /pp → Resume to continue.`;

@@ -279,11 +279,13 @@ export class Orchestrator {
 
     this.taskDoneCompactionPending = true;
     this.taskDoneCompactionSummary = `Starting new ${type} task. Previous conversation discarded.`;
-    (ctx as any).compact?.({
-      onError: () => {
-        this.taskDoneCompactionPending = false;
-        this.taskDoneCompactionSummary = "";
-      },
+    await new Promise<void>((resolve) => {
+      const compact = (ctx as any).compact;
+      if (!compact) { this.taskDoneCompactionPending = false; this.taskDoneCompactionSummary = ""; resolve(); return; }
+      compact({
+        onComplete: () => { this.taskDoneCompactionPending = false; resolve(); },
+        onError: () => { this.taskDoneCompactionPending = false; this.taskDoneCompactionSummary = ""; resolve(); },
+      });
     });
 
     try {
