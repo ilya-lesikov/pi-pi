@@ -1224,7 +1224,7 @@ export async function showActiveTaskMenu(
     options.push(opt("Back", "Return to the prompt and keep working"));
 
     const headerLines = [`/pp\n\nTask: ${task.type}\nPhase: ${phase}`];
-    if (summary !== "/pp") headerLines.push(`\n${summary}`);
+    if (summary !== "/pp") headerLines.push(`\n\n${summary}`);
     const menuTitle = headerLines.join("");
     const choice = await selectOption(ctx, menuTitle, options);
     if (!choice || choice === "Back") {
