@@ -279,10 +279,12 @@ export class Orchestrator {
 
     this.taskDoneCompactionPending = true;
     this.taskDoneCompactionSummary = `Starting new ${type} task. Previous conversation discarded.`;
-    try { (ctx as any).compact?.(); } catch {
-      this.taskDoneCompactionPending = false;
-      this.taskDoneCompactionSummary = "";
-    }
+    (ctx as any).compact?.({
+      onError: () => {
+        this.taskDoneCompactionPending = false;
+        this.taskDoneCompactionSummary = "";
+      },
+    });
 
     try {
       this.config = loadConfig(this.cwd);

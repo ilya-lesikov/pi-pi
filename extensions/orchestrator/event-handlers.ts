@@ -214,10 +214,12 @@ export async function stopTask(orchestrator: Orchestrator): Promise<string> {
 
   orchestrator.taskDoneCompactionPending = true;
   orchestrator.taskDoneCompactionSummary = `Task "${desc}" (${type}) stopped/paused.`;
-  try { orchestrator.lastCtx?.compact?.(); } catch {
-    orchestrator.taskDoneCompactionPending = false;
-    orchestrator.taskDoneCompactionSummary = "";
-  }
+  orchestrator.lastCtx?.compact?.({
+    onError: () => {
+      orchestrator.taskDoneCompactionPending = false;
+      orchestrator.taskDoneCompactionSummary = "";
+    },
+  });
 
   return `Task "${desc}" stopped. Use /pp → Resume to continue.`;
 }

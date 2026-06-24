@@ -105,10 +105,12 @@ async function pauseTask(orchestrator: Orchestrator, ctx: any): Promise<string> 
   orchestrator.taskDoneCompactionSummary = `Task "${name}" (${type}) paused.`;
 
   orchestrator.updateStatus(ctx);
-  try { ctx.compact?.(); } catch {
-    orchestrator.taskDoneCompactionPending = false;
-    orchestrator.taskDoneCompactionSummary = "";
-  }
+  ctx.compact?.({
+    onError: () => {
+      orchestrator.taskDoneCompactionPending = false;
+      orchestrator.taskDoneCompactionSummary = "";
+    },
+  });
   ctx.ui.notify(`Task "${name}" paused. Use /pp → Resume to continue.`, "info");
   return `Task "${name}" paused.`;
 }
