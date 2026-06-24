@@ -266,6 +266,7 @@ export class Orchestrator {
     fromTaskDir?: string,
     skipBrainstorm?: boolean,
   ): Promise<void> {
+    const hadActive = !!this.active;
     if (this.active) {
       ctx.ui.notify(
         `Pausing previous task "${this.active.description}" (phase: ${this.active.state.phase})…`,
@@ -277,16 +278,18 @@ export class Orchestrator {
       await this.cleanupActive();
     }
 
-    this.taskDoneCompactionPending = true;
-    this.taskDoneCompactionSummary = `Starting new ${type} task. Previous conversation discarded.`;
-    await new Promise<void>((resolve) => {
-      const compact = (ctx as any).compact;
-      if (!compact) { this.taskDoneCompactionPending = false; this.taskDoneCompactionSummary = ""; resolve(); return; }
-      compact({
-        onComplete: () => { this.taskDoneCompactionPending = false; resolve(); },
-        onError: () => { this.taskDoneCompactionPending = false; this.taskDoneCompactionSummary = ""; resolve(); },
+    if (hadActive) {
+      this.taskDoneCompactionPending = true;
+      this.taskDoneCompactionSummary = `Starting new ${type} task. Previous conversation discarded.`;
+      await new Promise<void>((resolve) => {
+        const compact = (ctx as any).compact;
+        if (!compact) { this.taskDoneCompactionPending = false; this.taskDoneCompactionSummary = ""; resolve(); return; }
+        compact({
+          onComplete: () => { this.taskDoneCompactionPending = false; resolve(); },
+          onError: () => { this.taskDoneCompactionPending = false; this.taskDoneCompactionSummary = ""; resolve(); },
+        });
       });
-    });
+    }
 
     try {
       this.config = loadConfig(this.cwd);
