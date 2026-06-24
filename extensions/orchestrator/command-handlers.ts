@@ -9,6 +9,7 @@ import { saveTask } from "./state.js";
 export async function transitionToNextPhase(
   orchestrator: Orchestrator,
   ctx: any,
+  plannerPreset?: string,
 ): Promise<{ ok: boolean; error?: string }> {
   if (!orchestrator.active) return { ok: false, error: "No active task." };
 
@@ -47,7 +48,7 @@ export async function transitionToNextPhase(
     orchestrator.active.reviewPass = 0;
   }
   if (next === "plan") {
-    orchestrator.active.state.activePlannerPreset = orchestrator.config.defaultPresets.planners;
+    orchestrator.active.state.activePlannerPreset = plannerPreset ?? orchestrator.config.defaultPresets.planners;
     orchestrator.active.state.step = "spawn_planners";
   } else if (next === "implement") {
     orchestrator.active.state.step = "llm_work";
@@ -106,7 +107,7 @@ export async function transitionToNextPhase(
 
 export function registerCommandHandlers(orchestrator: Orchestrator): void {
   const pi = orchestrator.pi;
-  orchestrator.transitionToNextPhase = (ctx: any) => transitionToNextPhase(orchestrator, ctx);
+  orchestrator.transitionToNextPhase = (ctx: any, plannerPreset?: string) => transitionToNextPhase(orchestrator, ctx, plannerPreset);
 
   pi.registerCommand("pp", {
     description: "Open pi-pi task menu",

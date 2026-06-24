@@ -67,13 +67,14 @@ export async function selectOption(ctx: any, question: string, options: string[]
 function resolveReviewers(
   orchestrator: Orchestrator,
   phase: string,
-  kind: string,
   presetName?: string,
 ): Record<string, any> {
-  const effectivePresetName = presetName ?? (kind === "auto-deep" ? "deep" : undefined);
-  if (phase === "brainstorm") return resolvePreset(orchestrator.config, "brainstormReviewers", effectivePresetName);
-  if (phase === "plan") return resolvePreset(orchestrator.config, "planReviewers", effectivePresetName);
-  return resolvePreset(orchestrator.config, "codeReviewers", effectivePresetName);
+  const group = phase === "brainstorm"
+    ? "brainstormReviewers"
+    : phase === "plan"
+    ? "planReviewers"
+    : "codeReviewers";
+  return resolvePreset(orchestrator.config, group, presetName);
 }
 
 function getDefaultReviewPresetName(orchestrator: Orchestrator, phase: string): string {
@@ -117,14 +118,18 @@ function tryCompleteReviewCycle(orchestrator: Orchestrator): void {
   orchestrator.safeSendUserMessage("[PI-PI] Review cycle is ready for apply_feedback. Read reviewer outputs and proceed.");
 }
 
-export async function enterReviewCycle(orchestrator: Orchestrator, ctx: any, kind: "auto" | "auto-deep" | "plannotator") {
+export async function enterReviewCycle(
+  orchestrator: Orchestrator,
+  ctx: any,
+  kind: "plannotator" | string,
+): Promise<string> {
   if (!orchestrator.active) return "No active task.";
   const pi = orchestrator.pi;
   const pass = orchestrator.active.state.reviewPass + 1;
-  orchestrator.active.state.reviewCycle = { kind, step: "spawn_reviewers", pass };
-  saveTask(orchestrator.active.dir, orchestrator.active.state);
 
   if (kind === "plannotator") {
+    orchestrator.active.state.reviewCycle = { kind: "plannotator", step: "spawn_reviewers", pass };
+    saveTask(orchestrator.active.dir, orchestrator.active.state);
     const phase = orchestrator.active.state.phase;
     if (phase === "brainstorm") {
       orchestrator.active.state.reviewCycle = null;
@@ -180,11 +185,12 @@ export async function enterReviewCycle(orchestrator: Orchestrator, ctx: any, kin
   }
 
   const phase = orchestrator.active.state.phase;
-  const presetName = kind === "auto-deep" ? "deep" : getDefaultReviewPresetName(orchestrator, phase);
+  const presetName = kind || getDefaultReviewPresetName(orchestrator, phase);
+  orchestrator.active.state.reviewCycle = { kind: "auto", step: "spawn_reviewers", pass };
   orchestrator.active.state.activeReviewPreset = presetName;
   saveTask(orchestrator.active.dir, orchestrator.active.state);
 
-  const reviewers = resolveReviewers(orchestrator, phase, kind, presetName);
+  const reviewers = resolveReviewers(orchestrator, phase, presetName);
   const enabledCount = Object.values(reviewers).filter((v) => v.enabled).length;
   if (enabledCount === 0) {
     orchestrator.active.state.reviewCycle = null;
@@ -226,7 +232,7 @@ export async function enterReviewCycle(orchestrator: Orchestrator, ctx: any, kin
   orchestrator.active.state.reviewCycle.step = "await_reviewers";
   orchestrator.active.state.step = "await_reviewers";
   saveTask(orchestrator.active.dir, orchestrator.active.state);
-  return `Started review cycle pass ${pass} (${kind}). Awaiting reviewers.`;
+  return `Started review cycle pass ${pass} (auto, preset: ${presetName}). Awaiting reviewers.`;
 }
 
 export async function stopTask(orchestrator: Orchestrator): Promise<string> {
@@ -723,7 +729,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
               const pass = cycle.pass;
               const phase = orchestrator.active!.state.phase;
               const presetName = orchestrator.active!.state.activeReviewPreset;
-              const sourceReviewers = resolveReviewers(orchestrator, phase, cycle.kind, presetName);
+              const sourceReviewers = resolveReviewers(orchestrator, phase, presetName);
               const failedSet = new Set(failedReviewerVariants);
               const scopedReviewers: typeof sourceReviewers = {};
               for (const [name, cfg] of Object.entries(sourceReviewers)) {
@@ -1296,7 +1302,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
           } else if (orchestrator.active.state.step === "await_reviewers" && orchestrator.active.state.reviewCycle) {
             const cycle = orchestrator.active.state.reviewCycle;
             const phase = orchestrator.active.state.phase;
-            const reviewers = resolveReviewers(orchestrator, phase, cycle.kind, orchestrator.active.state.activeReviewPreset);
+            const reviewers = resolveReviewers(orchestrator, phase, orchestrator.active.state.activeReviewPreset);
             const reviewerCount = Object.values(reviewers).filter((v) => v.enabled).length;
             const outputs = loadPhaseReviewOutputs(taskDir, phase, cycle.pass);
             if (outputs.length >= reviewerCount) {

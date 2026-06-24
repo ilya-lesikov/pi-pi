@@ -2,7 +2,7 @@ import { existsSync, readdirSync, writeFileSync } from "fs";
 import { join, relative } from "path";
 import { askUser } from "../../3p/pi-ask-user/index.js";
 import { unregisterAgentDefinitions } from "./agents/registry.js";
-import { loadConfig, resolvePreset, type PiPiConfig } from "./config.js";
+import { loadConfig, resolvePreset, type PiPiConfig, type PresetGroup } from "./config.js";
 import {
   loadBrainstormReviewOutputs,
   loadCodeReviewOutputs,
@@ -14,6 +14,8 @@ import { cancelPendingPlannotatorWait } from "./plannotator.js";
 import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
 import { spawnCodeReviewers } from "./phases/review.js";
 import { spawnBrainstormReviewers } from "./phases/brainstorm.js";
+import { nextPhase } from "./phases/machine.js";
+import { getModelInfo } from "./model-registry.js";
 
 import {
   listTasks,
@@ -172,6 +174,44 @@ function getDefaultReviewPresetName(config: PiPiConfig, phase: string): string {
   return config.defaultPresets.codeReviewers;
 }
 
+function getReviewPresetGroup(phase: string): PresetGroup {
+  if (phase === "brainstorm") return "brainstormReviewers";
+  if (phase === "plan") return "planReviewers";
+  return "codeReviewers";
+}
+
+export async function pickPreset(
+  ctx: any,
+  orchestrator: Orchestrator,
+  group: PresetGroup,
+  title: string,
+): Promise<string | null> {
+  const presets = orchestrator.config.presets[group] ?? {};
+  const defaultPresetName = orchestrator.config.defaultPresets[group];
+
+  const options: OptionInput[] = [];
+  const byTitle = new Map<string, string>();
+
+  for (const [presetName, variants] of Object.entries(presets)) {
+    const enabledModels = Object.values(variants)
+      .filter((variant) => variant.enabled)
+      .map((variant) => {
+        const info = getModelInfo(variant.model);
+        return `${info.vendor}/${info.family} (${variant.thinking})`;
+      });
+    const description = enabledModels.length > 0 ? enabledModels.join(", ") : "No enabled models";
+    const optionTitle = presetName === defaultPresetName ? `${presetName} [default]` : presetName;
+    byTitle.set(optionTitle, presetName);
+    options.push({ title: optionTitle, description });
+  }
+
+  options.push({ title: "Back", description: "Return to the previous menu" });
+
+  const choice = await selectOption(ctx, title, options);
+  if (!choice || choice === "Back") return null;
+  return byTitle.get(choice) ?? null;
+}
+
 export async function resumeTask(
   orchestrator: Orchestrator,
   ctx: any,
@@ -276,7 +316,7 @@ export async function resumeTask(
     const cycle = orchestrator.active.state.reviewCycle;
     const phase = orchestrator.active.state.phase;
     const presetName = orchestrator.active.state.activeReviewPreset
-      ?? (cycle.kind === "auto-deep" ? "deep" : getDefaultReviewPresetName(orchestrator.config, phase));
+      ?? getDefaultReviewPresetName(orchestrator.config, phase);
     if (!orchestrator.active.state.activeReviewPreset) {
       orchestrator.active.state.activeReviewPreset = presetName;
       saveTask(orchestrator.active.dir, orchestrator.active.state);
@@ -288,7 +328,7 @@ export async function resumeTask(
       : resolvePreset(orchestrator.config, "codeReviewers", presetName);
     const reviewerCount = Object.values(reviewers).filter((v) => v.enabled).length;
 
-    if ((cycle.kind === "auto" || cycle.kind === "auto-deep") && (cycle.step === "spawn_reviewers" || cycle.step === "await_reviewers")) {
+    if (cycle.kind === "auto" && (cycle.step === "spawn_reviewers" || cycle.step === "await_reviewers")) {
       const outputs = loadPhaseReviewOutputs(orchestrator.active.dir, phase, cycle.pass);
       if (outputs.length >= reviewerCount) {
         cycle.step = "apply_feedback";
@@ -1188,24 +1228,18 @@ async function showNoActiveMenu(orchestrator: Orchestrator, ctx: any): Promise<s
   }
 }
 
-function getReviewLabels(orchestrator: Orchestrator): { autoLabel: string; deepLabel: string } {
+function getReviewLabels(orchestrator: Orchestrator): { autoLabel: string } {
   const byKind = orchestrator.active?.state.reviewPassByKind ?? {};
   const autoCount = byKind["auto"] ?? 0;
-  const deepCount = byKind["auto-deep"] ?? 0;
   const autoLabel = autoCount > 0 ? `Auto review (pass ${autoCount + 1})` : "Auto review";
-  const deepLabel = deepCount > 0 ? `Auto deep review (pass ${deepCount + 1})` : "Auto deep review";
-  return { autoLabel, deepLabel };
+  return { autoLabel };
 }
 
-function hasEnabledReviewers(orchestrator: Orchestrator, kind: "auto" | "auto-deep"): boolean {
+function hasEnabledReviewers(orchestrator: Orchestrator, presetName?: string): boolean {
   if (!orchestrator.active) return false;
   const phase = orchestrator.active.state.phase;
-  const presetName = kind === "auto-deep" ? "deep" : undefined;
-  const reviewers = phase === "brainstorm"
-    ? resolvePreset(orchestrator.config, "brainstormReviewers", presetName)
-    : phase === "plan"
-    ? resolvePreset(orchestrator.config, "planReviewers", presetName)
-    : resolvePreset(orchestrator.config, "codeReviewers", presetName);
+  const group = getReviewPresetGroup(phase);
+  const reviewers = resolvePreset(orchestrator.config, group, presetName);
   return Object.values(reviewers).some((v) => v.enabled);
 }
 
@@ -1233,7 +1267,7 @@ export async function showActiveTaskMenu(
     const step = task.state.step;
 
     const waiting = step === "await_planners" || step === "await_reviewers";
-    const { autoLabel, deepLabel } = getReviewLabels(orchestrator);
+    const { autoLabel } = getReviewLabels(orchestrator);
     const isReviewPhase = phase === "review";
     const hasPlannotator = phase === "plan" || phase === "implement" || isReviewPhase;
 
@@ -1290,8 +1324,15 @@ export async function showActiveTaskMenu(
         const text = await finishTask(orchestrator, ctx);
         return mode === "tool" ? text : "";
       }
+      const next = nextPhase(task.type, phase);
+      let plannerPreset: string | undefined;
+      if (next === "plan") {
+        const pickedPlannerPreset = await pickPreset(ctx, orchestrator, "planners", "Planner preset");
+        if (!pickedPlannerPreset) continue;
+        plannerPreset = pickedPlannerPreset;
+      }
       finalizeReviewCycle(task);
-      const result = await orchestrator.transitionToNextPhase(ctx);
+      const result = await orchestrator.transitionToNextPhase(ctx, plannerPreset);
       if (!result.ok) return `Transition blocked: ${result.error}`;
       if (orchestrator.phaseCompactionPending || orchestrator.taskDoneCompactionPending) return "";
       const curStep = orchestrator.active?.state.step;
@@ -1302,7 +1343,6 @@ export async function showActiveTaskMenu(
     if (choice === "Review") {
       const reviewOptions: OptionInput[] = [
         opt(autoLabel, "Run automated review with configured reviewers"),
-        opt(deepLabel, "Run automated review with higher thinking level"),
       ];
       if (hasPlannotator) {
         reviewOptions.push(opt("Review in Plannotator", phase === "plan" ? "Open plan review in browser" : "Open code diff review in browser"));
@@ -1385,14 +1425,15 @@ export async function showActiveTaskMenu(
         return continueMessage;
       }
 
+      const reviewPreset = await pickPreset(ctx, orchestrator, getReviewPresetGroup(phase), "Review preset");
+      if (!reviewPreset) continue;
       finalizeReviewCycle(task);
-      const kind = reviewChoice === autoLabel ? "auto" as const : "auto-deep" as const;
-      if (!hasEnabledReviewers(orchestrator, kind)) {
+      if (!hasEnabledReviewers(orchestrator, reviewPreset)) {
         const label = phase === "brainstorm" ? "brainstorm" : phase === "plan" ? "plan" : "code";
         ctx.ui.notify(`No ${label} reviewers enabled.`, "info");
         continue;
       }
-      const text = await enterReviewCycle(orchestrator, ctx, kind);
+      const text = await enterReviewCycle(orchestrator, ctx, reviewPreset);
       const curStep = orchestrator.active?.state.step;
       if (curStep === "await_reviewers") return "";
       const handled = handleReviewResult(ctx, text);

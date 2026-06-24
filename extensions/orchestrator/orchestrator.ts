@@ -85,7 +85,7 @@ export class Orchestrator {
   reviewerFailureDialogPending = false;
   plannotatorReject: ((reason: Error) => void) | null = null;
   plannotatorUnsub: (() => void) | null = null;
-  transitionToNextPhase: (ctx: any) => Promise<{ ok: boolean; error?: string }> = async () => ({ ok: false, error: "not initialized" });
+  transitionToNextPhase: (ctx: any, plannerPreset?: string) => Promise<{ ok: boolean; error?: string }> = async () => ({ ok: false, error: "not initialized" });
 
   constructor(readonly pi: ExtensionAPI) {}
 
@@ -188,7 +188,7 @@ export class Orchestrator {
         else if (step === "user_gate") detail = "review";
 
         if (reviewCycle) {
-          const kind = reviewCycle.kind === "plannotator" ? "plannotator" : reviewCycle.kind === "auto-deep" ? "deep review" : "review";
+          const kind = reviewCycle.kind === "plannotator" ? "plannotator" : "review";
           detail = `${kind} #${reviewCycle.pass}`;
         }
 
