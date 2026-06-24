@@ -279,7 +279,10 @@ export class Orchestrator {
 
     this.taskDoneCompactionPending = true;
     this.taskDoneCompactionSummary = `Starting new ${type} task. Previous conversation discarded.`;
-    (ctx as any).compact?.();
+    try { (ctx as any).compact?.(); } catch {
+      this.taskDoneCompactionPending = false;
+      this.taskDoneCompactionSummary = "";
+    }
 
     try {
       this.config = loadConfig(this.cwd);
@@ -379,7 +382,9 @@ export class Orchestrator {
     } else if (isWaitingForPlanners) {
       ctx.ui.notify("Entered plan phase. Waiting for planners to complete before synthesis.", "info");
     } else {
-      this.safeSendUserMessage(`[PI-PI] Entered ${this.active.state.phase} phase. Begin working.`);
+      const desc = this.active.description;
+      const descSuffix = !isGenericDescription ? `\n\nTask: ${desc}` : "";
+      this.safeSendUserMessage(`[PI-PI] Entered ${this.active.state.phase} phase. Begin working.${descSuffix}`);
     }
 
     if (this.active.state.phase === "plan" && this.active.state.step === "await_planners") {
