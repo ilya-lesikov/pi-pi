@@ -528,8 +528,7 @@ export class Orchestrator {
         this.phaseCompactionPending = false;
         finalize();
       },
-      onError: (err) => {
-        console.error(`[pi-pi] Phase compaction failed: ${err.message}`);
+      onError: () => {
         this.phaseCompactionPending = false;
         finalize();
       },
