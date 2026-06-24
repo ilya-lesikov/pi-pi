@@ -91,6 +91,10 @@ export function validateExitCriteria(
 ): { ok: true } | { ok: false; reason: string } {
   switch (phase) {
     case "brainstorm": {
+      if (taskType === "brainstorm") {
+        return { ok: true };
+      }
+
       const ur = join(taskDir, "USER_REQUEST.md");
       const res = join(taskDir, "RESEARCH.md");
       if (isMissingOrEmpty(ur)) {

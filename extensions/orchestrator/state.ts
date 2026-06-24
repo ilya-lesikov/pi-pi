@@ -82,6 +82,9 @@ export function loadTask(taskDir: string): TaskState {
   const raw = readFileSync(sp, "utf-8");
   try {
     const state = JSON.parse(raw) as TaskState;
+    if ((state as any).phase === "planning") {
+      state.phase = "plan";
+    }
     return state;
   } catch (err: any) {
     throw new Error(`Failed to parse ${sp}: ${err.message}`);

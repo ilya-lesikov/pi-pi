@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
-import { join } from "path";
+import { dirname, join } from "path";
 import { tmpdir } from "os";
 import { deepMerge, loadConfig, readRawConfig, removeConfigValue, resolvePreset, validateConfig, writeConfigValue } from "./config.js";
 
@@ -272,6 +272,7 @@ describe("config write helpers", () => {
 
   it("removeConfigValue removes nested key and keeps file", () => {
     const filePath = join(makeTempDir(), ".pp", "config.json");
+    mkdirSync(dirname(filePath), { recursive: true });
     writeFileSync(filePath, JSON.stringify({ presets: { planners: { regular: { a: { enabled: true } } } } }), "utf-8");
     removeConfigValue(filePath, ["presets", "planners", "regular", "a"]);
     const raw = JSON.parse(readFileSync(filePath, "utf-8"));

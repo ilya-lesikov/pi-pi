@@ -328,7 +328,7 @@ function ensureConfigDir(configPath: string): void {
 export function writeConfigValue(configPath: string, keyPath: string[], value: any): void {
   ensureConfigDir(configPath);
   if (!existsSync(configPath)) writeFileSync(configPath, "{}\n", "utf-8");
-  const release = lockfile.lockSync(configPath, { stale: 10000, retries: { retries: 5, minTimeout: 50, maxTimeout: 500 } });
+  const release = lockfile.lockSync(configPath, { stale: 10000 });
   try {
     if (keyPath.length === 0) {
       writeFileSync(configPath, JSON.stringify(value ?? {}, null, 2) + "\n", "utf-8");
@@ -359,7 +359,7 @@ export function writeConfigValue(configPath: string, keyPath: string[], value: a
 export function removeConfigValue(configPath: string, keyPath: string[]): void {
   ensureConfigDir(configPath);
   if (!existsSync(configPath)) writeFileSync(configPath, "{}\n", "utf-8");
-  const release = lockfile.lockSync(configPath, { stale: 10000, retries: { retries: 5, minTimeout: 50, maxTimeout: 500 } });
+  const release = lockfile.lockSync(configPath, { stale: 10000 });
   try {
     if (keyPath.length === 0) {
       writeFileSync(configPath, JSON.stringify({}, null, 2) + "\n", "utf-8");

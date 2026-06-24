@@ -63,14 +63,14 @@ describe("canTransition", () => {
   });
 
   it("handles debug transitions", () => {
-    expect(canTransition("debug", "debug", "done")).toBe(true);
-    expect(canTransition("debug", "debug", "plan")).toBe(false);
+    expect(canTransition("debug", "debug", "plan")).toBe(true);
+    expect(canTransition("debug", "debug", "done")).toBe(false);
     expect(canTransition("debug", "done", "debug")).toBe(false);
   });
 
   it("handles brainstorm transitions", () => {
-    expect(canTransition("brainstorm", "brainstorm", "done")).toBe(true);
-    expect(canTransition("brainstorm", "brainstorm", "plan")).toBe(false);
+    expect(canTransition("brainstorm", "brainstorm", "plan")).toBe(true);
+    expect(canTransition("brainstorm", "brainstorm", "done")).toBe(false);
     expect(canTransition("brainstorm", "done", "brainstorm")).toBe(false);
   });
 });
@@ -84,12 +84,12 @@ describe("nextPhase", () => {
   });
 
   it("returns debug next phase and terminal null", () => {
-    expect(nextPhase("debug", "debug")).toBe("done");
+    expect(nextPhase("debug", "debug")).toBe("plan");
     expect(nextPhase("debug", "done")).toBeNull();
   });
 
   it("returns brainstorm next phase and terminal null", () => {
-    expect(nextPhase("brainstorm", "brainstorm")).toBe("done");
+    expect(nextPhase("brainstorm", "brainstorm")).toBe("plan");
     expect(nextPhase("brainstorm", "done")).toBeNull();
   });
 });
@@ -100,11 +100,11 @@ describe("phasePipeline", () => {
   });
 
   it("returns debug pipeline", () => {
-    expect(phasePipeline("debug")).toEqual(["debug", "done"]);
+    expect(phasePipeline("debug")).toEqual(["debug", "plan", "implement", "done"]);
   });
 
   it("returns brainstorm pipeline", () => {
-    expect(phasePipeline("brainstorm")).toEqual(["brainstorm", "done"]);
+    expect(phasePipeline("brainstorm")).toEqual(["brainstorm", "plan", "implement", "done"]);
   });
 });
 
