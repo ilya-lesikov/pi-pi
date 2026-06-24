@@ -47,6 +47,7 @@ export async function transitionToNextPhase(
     orchestrator.active.reviewPass = 0;
   }
   if (next === "plan") {
+    orchestrator.active.state.activePlannerPreset = orchestrator.config.defaultPresets.planners;
     orchestrator.active.state.step = "spawn_planners";
   } else if (next === "implement") {
     orchestrator.active.state.step = "llm_work";
@@ -82,9 +83,10 @@ export async function transitionToNextPhase(
 
   const onReady = next === "plan" ? () => {
     if (!orchestrator.active) return;
-    orchestrator.pendingSubagentSpawns = Object.values(resolvePreset(orchestrator.config, "planners")).filter((v) => v.enabled).length;
+    const plannerVariants = resolvePreset(orchestrator.config, "planners", orchestrator.active.state.activePlannerPreset);
+    orchestrator.pendingSubagentSpawns = Object.values(plannerVariants).filter((v) => v.enabled).length;
     orchestrator.failedPlannerVariants = [];
-    spawnPlanners(orchestrator.pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, orchestrator.config).then((result) => {
+    spawnPlanners(orchestrator.pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, orchestrator.config, plannerVariants).then((result) => {
       orchestrator.failedPlannerVariants = result.failedVariants;
       if (result.spawned === 0) orchestrator.pendingSubagentSpawns = 0;
       for (const id of result.agentIds ?? []) {

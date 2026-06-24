@@ -20,6 +20,7 @@ import { registerAstSearchTool } from "./ast-search.js";
 import { SUBAGENT_SESSION_KEY } from "./index.js";
 import { registerCommandHandlers } from "./command-handlers.js";
 import { setExtensionOnlyMode, unregisterAgentDefinitions } from "./agents/registry.js";
+import { resolveModel } from "./model-registry.js";
 import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
 import { spawnCodeReviewers } from "./phases/review.js";
 import { spawnBrainstormReviewers } from "./phases/brainstorm.js";
@@ -67,11 +68,18 @@ function resolveReviewers(
   orchestrator: Orchestrator,
   phase: string,
   kind: string,
+  presetName?: string,
 ): Record<string, any> {
-  const presetName = kind === "auto-deep" ? "deep" : undefined;
-  if (phase === "brainstorm") return resolvePreset(orchestrator.config, "brainstormReviewers", presetName);
-  if (phase === "plan") return resolvePreset(orchestrator.config, "planReviewers", presetName);
-  return resolvePreset(orchestrator.config, "codeReviewers", presetName);
+  const effectivePresetName = presetName ?? (kind === "auto-deep" ? "deep" : undefined);
+  if (phase === "brainstorm") return resolvePreset(orchestrator.config, "brainstormReviewers", effectivePresetName);
+  if (phase === "plan") return resolvePreset(orchestrator.config, "planReviewers", effectivePresetName);
+  return resolvePreset(orchestrator.config, "codeReviewers", effectivePresetName);
+}
+
+function getDefaultReviewPresetName(orchestrator: Orchestrator, phase: string): string {
+  if (phase === "brainstorm") return orchestrator.config.defaultPresets.brainstormReviewers;
+  if (phase === "plan") return orchestrator.config.defaultPresets.planReviewers;
+  return orchestrator.config.defaultPresets.codeReviewers;
 }
 
 function tryCompleteReviewCycle(orchestrator: Orchestrator): void {
@@ -172,7 +180,11 @@ export async function enterReviewCycle(orchestrator: Orchestrator, ctx: any, kin
   }
 
   const phase = orchestrator.active.state.phase;
-  const reviewers = resolveReviewers(orchestrator, phase, kind);
+  const presetName = kind === "auto-deep" ? "deep" : getDefaultReviewPresetName(orchestrator, phase);
+  orchestrator.active.state.activeReviewPreset = presetName;
+  saveTask(orchestrator.active.dir, orchestrator.active.state);
+
+  const reviewers = resolveReviewers(orchestrator, phase, kind, presetName);
   const enabledCount = Object.values(reviewers).filter((v) => v.enabled).length;
   if (enabledCount === 0) {
     orchestrator.active.state.reviewCycle = null;
@@ -606,7 +618,8 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
 
           if (choice === "Retry failed planners") {
             const failedSet = new Set(failedPlannerVariants);
-            const planners = resolvePreset(orchestrator.config, "planners");
+            const presetName = orchestrator.active!.state.activePlannerPreset ?? orchestrator.config.defaultPresets.planners;
+            const planners = resolvePreset(orchestrator.config, "planners", presetName);
             const scopedPlanners: typeof planners = {};
             for (const [name, cfg] of Object.entries(planners)) {
               if (failedSet.has(name)) scopedPlanners[name] = cfg;
@@ -700,7 +713,8 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
             if (cycle) {
               const pass = cycle.pass;
               const phase = orchestrator.active!.state.phase;
-              const sourceReviewers = resolveReviewers(orchestrator, phase, cycle.kind);
+              const presetName = orchestrator.active!.state.activeReviewPreset;
+              const sourceReviewers = resolveReviewers(orchestrator, phase, cycle.kind, presetName);
               const failedSet = new Set(failedReviewerVariants);
               const scopedReviewers: typeof sourceReviewers = {};
               for (const [name, cfg] of Object.entries(sourceReviewers)) {
@@ -979,15 +993,15 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
 
       if (isExplore) {
         input.subagent_type = "explore";
-        input.model = orchestrator.config.agents.explore.model;
+        input.model = resolveModel(orchestrator.config.agents.explore.model);
         input.thinking = orchestrator.config.agents.explore.thinking;
       } else if (isLibrarian) {
         input.subagent_type = "librarian";
-        input.model = orchestrator.config.agents.librarian.model;
+        input.model = resolveModel(orchestrator.config.agents.librarian.model);
         input.thinking = orchestrator.config.agents.librarian.thinking;
       } else {
         input.subagent_type = "task";
-        input.model = orchestrator.config.agents.task.model;
+        input.model = resolveModel(orchestrator.config.agents.task.model);
         input.thinking = orchestrator.config.agents.task.thinking;
       }
     }
@@ -1244,7 +1258,8 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
           const taskDir = orchestrator.active.dir;
           if (orchestrator.active.state.step === "await_planners") {
             const plansDir = join(taskDir, "plans");
-            const plannerCount = Object.values(resolvePreset(orchestrator.config, "planners")).filter((v) => v.enabled).length;
+            const presetName = orchestrator.active.state.activePlannerPreset ?? orchestrator.config.defaultPresets.planners;
+            const plannerCount = Object.values(resolvePreset(orchestrator.config, "planners", presetName)).filter((v) => v.enabled).length;
             if (existsSync(plansDir)) {
               const planFiles = readdirSync(plansDir).filter((f) => f.endsWith(".md") && !f.includes("synthesized") && !f.includes("review_"));
               if (planFiles.length >= plannerCount) {
@@ -1261,7 +1276,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
           } else if (orchestrator.active.state.step === "await_reviewers" && orchestrator.active.state.reviewCycle) {
             const cycle = orchestrator.active.state.reviewCycle;
             const phase = orchestrator.active.state.phase;
-            const reviewers = resolveReviewers(orchestrator, phase, cycle.kind);
+            const reviewers = resolveReviewers(orchestrator, phase, cycle.kind, orchestrator.active.state.activeReviewPreset);
             const reviewerCount = Object.values(reviewers).filter((v) => v.enabled).length;
             const outputs = loadPhaseReviewOutputs(taskDir, phase, cycle.pass);
             if (outputs.length >= reviewerCount) {

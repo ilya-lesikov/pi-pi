@@ -32,6 +32,8 @@ export interface TaskState {
   from: string | null;
   description: string;
   startedAt: string;
+  activePlannerPreset?: string;
+  activeReviewPreset?: string;
 
 }
 

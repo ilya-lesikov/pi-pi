@@ -1,4 +1,5 @@
 import type { PiPiConfig } from "../config.js";
+import { resolveModel } from "../model-registry.js";
 import { COMMUNICATION } from "./tool-routing.js";
 
 export function createLibrarianAgent(config: PiPiConfig) {
@@ -6,7 +7,7 @@ export function createLibrarianAgent(config: PiPiConfig) {
     frontmatter: {
       description: "External docs researcher (pi-pi)",
       tools: "read, bash, grep, find, exa_search, exa_fetch",
-      model: config.agents.librarian.model,
+      model: resolveModel(config.agents.librarian.model),
       thinking: config.agents.librarian.thinking,
       max_turns: config.agents.librarian.maxTurns ?? 120,
       prompt_mode: "replace",

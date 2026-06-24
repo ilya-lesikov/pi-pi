@@ -1,4 +1,5 @@
 import type { PiPiConfig } from "../config.js";
+import { resolveModel } from "../model-registry.js";
 import { TOOL_ROUTING, ALL_CBM_TOOLS, EXA_TOOLS, WORKING_PRINCIPLES_READONLY, COMMUNICATION } from "./tool-routing.js";
 
 export function createExploreAgent(config: PiPiConfig) {
@@ -6,7 +7,7 @@ export function createExploreAgent(config: PiPiConfig) {
     frontmatter: {
       description: "Codebase explorer (pi-pi)",
       tools: `read, bash, grep, find, ls, lsp, ast_search, ${ALL_CBM_TOOLS}, ${EXA_TOOLS}`,
-      model: config.agents.explore.model,
+      model: resolveModel(config.agents.explore.model),
       thinking: config.agents.explore.thinking,
       max_turns: config.agents.explore.maxTurns ?? 170,
       prompt_mode: "replace",

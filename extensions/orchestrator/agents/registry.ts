@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { resolveModel } from "../model-registry.js";
 
 interface AgentFrontmatter {
   description: string;
@@ -26,7 +27,7 @@ export function registerAgentDefinitions(
       builtinToolNames: toolNames,
       extensions: true,
       skills: false,
-      model: agent.frontmatter.model,
+      model: resolveModel(agent.frontmatter.model),
       thinking: agent.frontmatter.thinking,
       maxTurns: agent.frontmatter.max_turns,
       systemPrompt: agent.prompt,

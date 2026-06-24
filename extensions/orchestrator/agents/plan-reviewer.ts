@@ -1,4 +1,5 @@
 import type { VariantConfig } from "../config.js";
+import { resolveModel } from "../model-registry.js";
 import { TOOL_ROUTING, ALL_CBM_TOOLS, EXA_TOOLS, WORKING_PRINCIPLES_READONLY, COMMUNICATION } from "./tool-routing.js";
 
 export function createPlanReviewerAgent(
@@ -16,7 +17,7 @@ export function createPlanReviewerAgent(
     frontmatter: {
       description: `Plan reviewer (${variant} variant, pi-pi)`,
       tools: `read, grep, find, bash, write, lsp, ast_search, ${ALL_CBM_TOOLS}, ${EXA_TOOLS}`,
-      model: variantConfig.model,
+      model: resolveModel(variantConfig.model),
       thinking: variantConfig.thinking,
       max_turns: variantConfig.maxTurns ?? 120,
       prompt_mode: "replace",

@@ -166,6 +166,12 @@ function loadPhaseReviewOutputs(taskDir: string, phase: string, pass: number): {
   return loadCodeReviewOutputs(taskDir, pass);
 }
 
+function getDefaultReviewPresetName(config: PiPiConfig, phase: string): string {
+  if (phase === "brainstorm") return config.defaultPresets.brainstormReviewers;
+  if (phase === "plan") return config.defaultPresets.planReviewers;
+  return config.defaultPresets.codeReviewers;
+}
+
 export async function resumeTask(
   orchestrator: Orchestrator,
   ctx: any,
@@ -227,7 +233,12 @@ export async function resumeTask(
 
   if (orchestrator.active.state.phase === "plan" && orchestrator.active.state.step === "await_planners") {
     const plansDir = join(orchestrator.active.dir, "plans");
-    const plannerVariants = resolvePreset(orchestrator.config, "planners");
+    const plannerPresetName = orchestrator.active.state.activePlannerPreset ?? orchestrator.config.defaultPresets.planners;
+    if (!orchestrator.active.state.activePlannerPreset) {
+      orchestrator.active.state.activePlannerPreset = plannerPresetName;
+      saveTask(orchestrator.active.dir, orchestrator.active.state);
+    }
+    const plannerVariants = resolvePreset(orchestrator.config, "planners", plannerPresetName);
     const enabledVariants = Object.entries(plannerVariants).filter(([, v]) => v.enabled);
     const planFiles = existsSync(plansDir)
       ? readdirSync(plansDir).filter((f) => f.endsWith(".md") && !f.includes("synthesized") && !f.includes("review_"))
@@ -264,7 +275,12 @@ export async function resumeTask(
   if (orchestrator.active.state.reviewCycle) {
     const cycle = orchestrator.active.state.reviewCycle;
     const phase = orchestrator.active.state.phase;
-    const presetName = cycle.kind === "auto-deep" ? "deep" : undefined;
+    const presetName = orchestrator.active.state.activeReviewPreset
+      ?? (cycle.kind === "auto-deep" ? "deep" : getDefaultReviewPresetName(orchestrator.config, phase));
+    if (!orchestrator.active.state.activeReviewPreset) {
+      orchestrator.active.state.activeReviewPreset = presetName;
+      saveTask(orchestrator.active.dir, orchestrator.active.state);
+    }
     const reviewers = phase === "brainstorm"
       ? resolvePreset(orchestrator.config, "brainstormReviewers", presetName)
       : phase === "plan"
@@ -310,6 +326,8 @@ export async function resumeTask(
         } else {
           const missingReviewerConfig: typeof reviewers = {};
           for (const [name, cfg] of missingVariants) missingReviewerConfig[name] = cfg;
+          orchestrator.active.state.activeReviewPreset = presetName;
+          saveTask(orchestrator.active.dir, orchestrator.active.state);
           orchestrator.pendingSubagentSpawns = missingVariants.length;
           const spawnFn = phase === "brainstorm"
             ? () => spawnBrainstormReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, orchestrator.config, cycle.pass, missingReviewerConfig)

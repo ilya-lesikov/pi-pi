@@ -23,6 +23,7 @@ import { registerAgentDefinitions, unregisterAgentDefinitions } from "./agents/r
 import { createExploreAgent } from "./agents/explore.js";
 import { createLibrarianAgent } from "./agents/librarian.js";
 import { createTaskAgent } from "./agents/task.js";
+import { resolveModel } from "./model-registry.js";
 
 const BUNDLED_TOOLS = new Set([
   "Agent", "get_subagent_result", "steer_subagent",
@@ -120,21 +121,25 @@ export class Orchestrator {
     const registry = ctx.modelRegistry;
     const allModels = registry.getAvailable();
 
-    const slashIdx = modelSpec.indexOf("/");
+    const requestedSpecs = [resolveModel(modelSpec), modelSpec].filter((value, index, arr) => arr.indexOf(value) === index);
     let resolved;
-    if (slashIdx !== -1) {
-      const provider = modelSpec.substring(0, slashIdx).trim().toLowerCase();
-      const modelId = modelSpec.substring(slashIdx + 1).trim().toLowerCase();
-      resolved = allModels.find(
-        (m) => m.provider.toLowerCase() === provider && m.id.toLowerCase() === modelId,
-      );
-    }
-    if (!resolved) {
-      const pattern = modelSpec.toLowerCase();
-      const matches = allModels.filter(
-        (m) => m.id.toLowerCase() === pattern || m.id.toLowerCase().includes(pattern),
-      );
-      if (matches.length === 1) resolved = matches[0];
+    for (const spec of requestedSpecs) {
+      const slashIdx = spec.indexOf("/");
+      if (slashIdx !== -1) {
+        const provider = spec.substring(0, slashIdx).trim().toLowerCase();
+        const modelId = spec.substring(slashIdx + 1).trim().toLowerCase();
+        resolved = allModels.find(
+          (m) => m.provider.toLowerCase() === provider && m.id.toLowerCase() === modelId,
+        );
+      }
+      if (!resolved) {
+        const pattern = spec.toLowerCase();
+        const matches = allModels.filter(
+          (m) => m.id.toLowerCase() === pattern || m.id.toLowerCase().includes(pattern),
+        );
+        if (matches.length === 1) resolved = matches[0];
+      }
+      if (resolved) break;
     }
 
     if (!resolved) return false;
@@ -209,9 +214,10 @@ export class Orchestrator {
     return remMin > 0 ? `${hr}h ${remMin}m` : `${hr}h`;
   }
 
-  getPlanStartState(taskDir: string): { step: string; shouldSpawnPlanners: boolean } {
+  getPlanStartState(taskDir: string, plannerPresetName?: string): { step: string; shouldSpawnPlanners: boolean } {
     const plansDir = join(taskDir, "plans");
-    const enabledPlannerCount = Object.values(resolvePreset(this.config, "planners")).filter((v) => v.enabled).length;
+    const presetName = plannerPresetName ?? this.config.defaultPresets.planners;
+    const enabledPlannerCount = Object.values(resolvePreset(this.config, "planners", presetName)).filter((v) => v.enabled).length;
     const plannerOutputs = existsSync(plansDir)
       ? readdirSync(plansDir).filter((f) => f.endsWith(".md") && !f.includes("synthesized") && !f.includes("review_"))
       : [];
@@ -330,7 +336,8 @@ export class Orchestrator {
       state.from = relative(join(this.cwd, ".pp", "state"), fromTaskDir);
       if (skipBrainstorm && type === "implement") {
         state.phase = "plan";
-        state.step = this.getPlanStartState(dir).step;
+        state.activePlannerPreset = this.config.defaultPresets.planners;
+        state.step = this.getPlanStartState(dir, state.activePlannerPreset).step;
       }
       saveTask(dir, state);
     }
@@ -395,9 +402,15 @@ export class Orchestrator {
     }
 
     if (this.active.state.phase === "plan" && this.active.state.step === "await_planners") {
-      this.pendingSubagentSpawns = Object.values(resolvePreset(this.config, "planners")).filter((v) => v.enabled).length;
+      const plannerPresetName = this.active.state.activePlannerPreset ?? this.config.defaultPresets.planners;
+      if (!this.active.state.activePlannerPreset) {
+        this.active.state.activePlannerPreset = plannerPresetName;
+        saveTask(this.active.dir, this.active.state);
+      }
+      const plannerVariants = resolvePreset(this.config, "planners", plannerPresetName);
+      this.pendingSubagentSpawns = Object.values(plannerVariants).filter((v) => v.enabled).length;
       this.failedPlannerVariants = [];
-      spawnPlanners(this.pi, this.cwd, this.active.dir, this.active.taskId, this.config).then((result) => {
+      spawnPlanners(this.pi, this.cwd, this.active.dir, this.active.taskId, this.config, plannerVariants).then((result) => {
         this.failedPlannerVariants = result.failedVariants;
         if (result.spawned === 0) this.pendingSubagentSpawns = 0;
         for (const id of result.agentIds ?? []) {
