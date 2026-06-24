@@ -1,7 +1,7 @@
 import { readFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs";
 import { join } from "path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { PiPiConfig } from "../config.js";
+import { resolvePreset, type PiPiConfig, type VariantConfig } from "../config.js";
 import { registerAgentDefinitions, spawnViaRpc, waitForCompletion } from "../agents/registry.js";
 import { createPlannerAgent } from "../agents/planner.js";
 import { createPlanReviewerAgent } from "../agents/plan-reviewer.js";
@@ -51,6 +51,7 @@ export async function spawnPlanners(
   taskDir: string,
   taskId: string,
   config: PiPiConfig,
+  variants?: Record<string, VariantConfig>,
 ): Promise<{ spawned: number; agentIds: string[]; failedVariants: string[] }> {
   const urPath = join(taskDir, "USER_REQUEST.md");
   const resPath = join(taskDir, "RESEARCH.md");
@@ -65,14 +66,15 @@ export async function spawnPlanners(
   }
 
   const timestamp = Math.floor(Date.now() / 1000);
-  const enabledVariants = Object.entries(config.planners).filter(([, v]) => v.enabled);
+  const plannerVariants = variants ?? resolvePreset(config, "planners");
+  const enabledVariants = Object.entries(plannerVariants).filter(([, v]) => v.enabled);
   const agentIds: string[] = [];
   const failedVariants: string[] = [];
   const results: Promise<void>[] = [];
 
   for (const [variant] of enabledVariants) {
     const outputPath = join(plansDir, `${timestamp}_${variant}.md`);
-    const agent = createPlannerAgent(variant, config, { userRequest, research }, outputPath);
+    const agent = createPlannerAgent(variant, plannerVariants, { userRequest, research }, outputPath);
 
     registerAgentDefinitions(pi, [{ type: "planner", variant, ...agent }]);
 
@@ -164,6 +166,7 @@ export async function spawnPlanReviewers(
   taskDir: string,
   taskId: string,
   config: PiPiConfig,
+  variants?: Record<string, VariantConfig>,
 ): Promise<{ spawned: number; files: string[]; agentIds: string[]; failedVariants: string[] }> {
   const urPath = join(taskDir, "USER_REQUEST.md");
   const resPath = join(taskDir, "RESEARCH.md");
@@ -180,7 +183,8 @@ export async function spawnPlanReviewers(
   }
 
   const timestamp = Math.floor(Date.now() / 1000);
-  const enabledVariants = Object.entries(config.planReviewers).filter(([, v]) => v.enabled);
+  const reviewerVariants = variants ?? resolvePreset(config, "planReviewers");
+  const enabledVariants = Object.entries(reviewerVariants).filter(([, v]) => v.enabled);
   const reviewFiles: string[] = [];
   const agentIds: string[] = [];
   const failedVariants: string[] = [];
@@ -190,7 +194,7 @@ export async function spawnPlanReviewers(
     const outputPath = join(planReviewsDir, `${timestamp}_${variant}.md`);
     reviewFiles.push(outputPath);
 
-    const agent = createPlanReviewerAgent(variant, config, { userRequest, research, synthesizedPlan }, outputPath);
+    const agent = createPlanReviewerAgent(variant, reviewerVariants, { userRequest, research, synthesizedPlan }, outputPath);
 
     registerAgentDefinitions(pi, [{ type: "plan_reviewer", variant, ...agent }]);
 

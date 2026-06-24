@@ -337,6 +337,15 @@ function makeVariant(modelId: string | null, fallbackModelId: string): { enabled
   return { enabled: true, model: modelSpec(modelId), thinking: "high" };
 }
 
+function makeVariantWithThinking(
+  modelId: string | null,
+  fallbackModelId: string,
+  thinking: string,
+): { enabled: boolean; model: string; thinking: string } {
+  if (!modelId) return { enabled: false, model: modelSpec(fallbackModelId), thinking };
+  return { enabled: true, model: modelSpec(modelId), thinking };
+}
+
 export function generateFlantConfig(models: string[]): Partial<PiPiConfig> {
   const uniqueModels = [...new Set(models)];
   if (uniqueModels.length === 0) return {};
@@ -364,25 +373,56 @@ export function generateFlantConfig(models: string[]): Partial<PiPiConfig> {
       brainstorm: { model: modelSpec(brainstormModel), thinking: "high" },
       review: { model: modelSpec(implementModel), thinking: "high" },
     },
-    planners: {
-      opus: makeVariant(latestOpus, fallback),
-      gpt: makeVariant(latestGpt, fallback),
-      gemini: makeVariant(latestGeminiPro, fallback),
+    presets: {
+      planners: {
+        regular: {
+          opus: makeVariant(latestOpus, fallback),
+          gpt: makeVariant(latestGpt, fallback),
+          gemini: makeVariant(latestGeminiPro, fallback),
+        },
+      },
+      planReviewers: {
+        regular: {
+          opus: makeVariant(latestOpus, fallback),
+          gpt: makeVariant(latestGpt, fallback),
+          gemini: makeVariantWithThinking(latestGeminiPro, fallback, "xhigh"),
+        },
+        deep: {
+          opus: makeVariantWithThinking(latestOpus, fallback, "xhigh"),
+          gpt: makeVariantWithThinking(latestGpt, fallback, "xhigh"),
+          gemini: makeVariantWithThinking(latestGeminiPro, fallback, "xhigh"),
+        },
+      },
+      codeReviewers: {
+        regular: {
+          opus: makeVariant(latestOpus, fallback),
+          gpt: makeVariant(latestGpt, fallback),
+          gemini: makeVariantWithThinking(latestGeminiPro, fallback, "xhigh"),
+        },
+        deep: {
+          opus: makeVariantWithThinking(latestOpus, fallback, "xhigh"),
+          gpt: makeVariantWithThinking(latestGpt, fallback, "xhigh"),
+          gemini: makeVariantWithThinking(latestGeminiPro, fallback, "xhigh"),
+        },
+      },
+      brainstormReviewers: {
+        regular: {
+          opus: makeVariant(latestOpus, fallback),
+          gpt: makeVariant(latestGpt, fallback),
+          gemini: makeVariantWithThinking(latestGeminiPro, fallback, "xhigh"),
+        },
+        deep: {
+          opus: makeVariantWithThinking(latestOpus, fallback, "xhigh"),
+          gpt: makeVariantWithThinking(latestGpt, fallback, "xhigh"),
+          gemini: makeVariantWithThinking(latestGeminiPro, fallback, "xhigh"),
+        },
+      },
     },
-    planReviewers: {
-      opus: makeVariant(latestOpus, fallback),
-      gpt: makeVariant(latestGpt, fallback),
-      gemini: makeVariant(latestGeminiPro, fallback),
-    },
-    codeReviewers: {
-      opus: makeVariant(latestOpus, fallback),
-      gpt: makeVariant(latestGpt, fallback),
-      gemini: makeVariant(latestGeminiPro, fallback),
-    },
-    brainstormReviewers: {
-      opus: makeVariant(latestOpus, fallback),
-      gpt: makeVariant(latestGpt, fallback),
-      gemini: makeVariant(latestGeminiPro, fallback),
+    defaultPresets: {
+      planners: "regular",
+      planReviewers: "regular",
+      codeReviewers: "regular",
+      brainstormReviewers: "regular",
     },
     agents: {
       explore: { model: modelSpec(fastModel), thinking: "low" },

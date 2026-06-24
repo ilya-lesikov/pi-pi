@@ -1,13 +1,13 @@
-import type { PiPiConfig } from "../config.js";
+import type { VariantConfig } from "../config.js";
 import { TOOL_ROUTING, ALL_CBM_TOOLS, EXA_TOOLS, WORKING_PRINCIPLES_READONLY, COMMUNICATION } from "./tool-routing.js";
 
 export function createBrainstormReviewerAgent(
   variant: string,
-  config: PiPiConfig,
+  variants: Record<string, VariantConfig>,
   taskArtifacts: { userRequest: string; research: string; artifacts?: { name: string; content: string }[] },
   outputPath: string,
 ) {
-  const variantConfig = config.brainstormReviewers[variant];
+  const variantConfig = variants[variant];
   if (!variantConfig) {
     throw new Error(`Unknown brainstorm-reviewer variant: ${variant}`);
   }

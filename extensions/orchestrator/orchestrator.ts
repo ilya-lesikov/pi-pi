@@ -1,7 +1,7 @@
 import { existsSync, copyFileSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from "fs";
 import { join, basename, relative } from "path";
 import type { ExtensionAPI, ExtensionContext, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { loadConfig, type PiPiConfig, type VariantConfig } from "./config.js";
+import { loadConfig, resolvePreset, type PiPiConfig } from "./config.js";
 import {
   createTask,
   loadTask,
@@ -211,7 +211,7 @@ export class Orchestrator {
 
   getPlanStartState(taskDir: string): { step: string; shouldSpawnPlanners: boolean } {
     const plansDir = join(taskDir, "plans");
-    const enabledPlannerCount = Object.values(this.config.planners).filter((v) => v.enabled).length;
+    const enabledPlannerCount = Object.values(resolvePreset(this.config, "planners")).filter((v) => v.enabled).length;
     const plannerOutputs = existsSync(plansDir)
       ? readdirSync(plansDir).filter((f) => f.endsWith(".md") && !f.includes("synthesized") && !f.includes("review_"))
       : [];
@@ -395,7 +395,7 @@ export class Orchestrator {
     }
 
     if (this.active.state.phase === "plan" && this.active.state.step === "await_planners") {
-      this.pendingSubagentSpawns = Object.values(this.config.planners).filter((v) => v.enabled).length;
+      this.pendingSubagentSpawns = Object.values(resolvePreset(this.config, "planners")).filter((v) => v.enabled).length;
       this.failedPlannerVariants = [];
       spawnPlanners(this.pi, this.cwd, this.active.dir, this.active.taskId, this.config).then((result) => {
         this.failedPlannerVariants = result.failedVariants;
@@ -545,23 +545,6 @@ export class Orchestrator {
     }
     return [...seen.entries()].filter(([, count]) => count > 1).map(([name]) => name);
   }
-}
-
-export function deepReviewConfig(config: PiPiConfig): PiPiConfig {
-  const THINKING_UPGRADE: Record<string, string> = { low: "medium", medium: "high", high: "xhigh" };
-  const upgrade = (reviewers: Record<string, VariantConfig>) => {
-    const upgraded: Record<string, VariantConfig> = {};
-    for (const [name, variant] of Object.entries(reviewers)) {
-      upgraded[name] = { ...variant, thinking: THINKING_UPGRADE[variant.thinking] ?? "high" };
-    }
-    return upgraded;
-  };
-  return {
-    ...config,
-    codeReviewers: upgrade(config.codeReviewers),
-    planReviewers: upgrade(config.planReviewers),
-    brainstormReviewers: upgrade(config.brainstormReviewers),
-  };
 }
 
 export function ensureGitignore(cwd: string): void {

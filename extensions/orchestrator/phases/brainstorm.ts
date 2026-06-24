@@ -1,7 +1,7 @@
 import { readFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs";
 import { join } from "path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { PiPiConfig } from "../config.js";
+import { resolvePreset, type PiPiConfig, type VariantConfig } from "../config.js";
 import { registerAgentDefinitions, spawnViaRpc, waitForCompletion } from "../agents/registry.js";
 import { createBrainstormReviewerAgent } from "../agents/brainstorm-reviewer.js";
 import type { TaskType } from "../state.js";
@@ -179,6 +179,7 @@ export async function spawnBrainstormReviewers(
   taskId: string,
   config: PiPiConfig,
   round: number,
+  variants?: Record<string, VariantConfig>,
 ): Promise<{ spawned: number; files: string[]; agentIds: string[]; failedVariants: string[] }> {
   const urPath = join(taskDir, "USER_REQUEST.md");
   const resPath = join(taskDir, "RESEARCH.md");
@@ -201,7 +202,8 @@ export async function spawnBrainstormReviewers(
   }
 
   const timestamp = Math.floor(Date.now() / 1000);
-  const enabledVariants = Object.entries(config.brainstormReviewers).filter(([, v]) => v.enabled);
+  const reviewerVariants = variants ?? resolvePreset(config, "brainstormReviewers");
+  const enabledVariants = Object.entries(reviewerVariants).filter(([, v]) => v.enabled);
   const reviewFiles: string[] = [];
   const agentIds: string[] = [];
   const failedVariants: string[] = [];
@@ -210,7 +212,7 @@ export async function spawnBrainstormReviewers(
   for (const [variant] of enabledVariants) {
     const outputPath = join(reviewsDir, `${timestamp}_${variant}_round-${round}.md`);
     reviewFiles.push(outputPath);
-    const agent = createBrainstormReviewerAgent(variant, config, { userRequest, research, artifacts: artifacts.length > 0 ? artifacts : undefined }, outputPath);
+    const agent = createBrainstormReviewerAgent(variant, reviewerVariants, { userRequest, research, artifacts: artifacts.length > 0 ? artifacts : undefined }, outputPath);
 
     registerAgentDefinitions(pi, [{ type: "brainstorm_reviewer", variant, ...agent }]);
 

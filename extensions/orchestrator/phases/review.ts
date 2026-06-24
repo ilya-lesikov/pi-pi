@@ -1,7 +1,7 @@
 import { readFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs";
 import { join } from "path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { PiPiConfig } from "../config.js";
+import { resolvePreset, type PiPiConfig, type VariantConfig } from "../config.js";
 import { registerAgentDefinitions, spawnViaRpc, waitForCompletion } from "../agents/registry.js";
 import { createCodeReviewerAgent } from "../agents/code-reviewer.js";
 import { getLatestSynthesizedPlan } from "../context.js";
@@ -88,6 +88,7 @@ export async function spawnCodeReviewers(
   taskId: string,
   config: PiPiConfig,
   round: number,
+  variants?: Record<string, VariantConfig>,
 ): Promise<{ spawned: number; agentIds: string[]; failedVariants: string[] }> {
   const urPath = join(taskDir, "USER_REQUEST.md");
   const resPath = join(taskDir, "RESEARCH.md");
@@ -116,14 +117,15 @@ export async function spawnCodeReviewers(
   }
 
   const timestamp = Math.floor(Date.now() / 1000);
-  const enabledVariants = Object.entries(config.codeReviewers).filter(([, v]) => v.enabled);
+  const reviewerVariants = variants ?? resolvePreset(config, "codeReviewers");
+  const enabledVariants = Object.entries(reviewerVariants).filter(([, v]) => v.enabled);
   const agentIds: string[] = [];
   const failedVariants: string[] = [];
   const results: Promise<void>[] = [];
 
   for (const [variant] of enabledVariants) {
     const outputPath = join(reviewsDir, `${timestamp}_${variant}_round-${round}.md`);
-    const agent = createCodeReviewerAgent(variant, config, { userRequest, research, synthesizedPlan }, outputPath);
+    const agent = createCodeReviewerAgent(variant, reviewerVariants, { userRequest, research, synthesizedPlan }, outputPath);
 
     registerAgentDefinitions(pi, [{ type: "code_reviewer", variant, ...agent }]);
 

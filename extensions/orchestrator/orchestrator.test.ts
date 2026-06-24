@@ -2,7 +2,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Orchestrator, deepReviewConfig, ensureGitignore, type ActiveTask } from "./orchestrator.js";
+import { Orchestrator, ensureGitignore, type ActiveTask } from "./orchestrator.js";
+import { resolvePreset } from "./config.js";
 
 const tempDirs: string[] = [];
 
@@ -91,8 +92,8 @@ describe("Orchestrator.taskIdFromDir", () => {
   });
 });
 
-describe("deepReviewConfig", () => {
-  it("upgrades reviewer thinking levels", () => {
+describe("resolvePreset", () => {
+  it("resolves deep reviewer preset", () => {
     const config = {
       mainModel: {
         implement: { model: "a/impl", thinking: "high" },
@@ -100,24 +101,44 @@ describe("deepReviewConfig", () => {
         brainstorm: { model: "a/brain", thinking: "high" },
         review: { model: "a/review", thinking: "high" },
       },
-      planners: {},
-      planReviewers: {
-        low: { enabled: true, model: "x/p1", thinking: "low" },
-        medium: { enabled: true, model: "x/p2", thinking: "medium" },
-        high: { enabled: true, model: "x/p3", thinking: "high" },
-        other: { enabled: true, model: "x/p4", thinking: "off" },
+      presets: {
+        planners: { regular: {} },
+        planReviewers: {
+          regular: {
+            low: { enabled: true, model: "x/p1", thinking: "low" },
+          },
+          deep: {
+            low: { enabled: true, model: "x/p1", thinking: "xhigh" },
+          },
+        },
+        brainstormReviewers: {
+          regular: {
+            low: { enabled: true, model: "x/b1", thinking: "low" },
+          },
+          deep: {
+            low: { enabled: true, model: "x/b1", thinking: "xhigh" },
+          },
+        },
+        codeReviewers: {
+          regular: {
+            low: { enabled: true, model: "x/1", thinking: "low" },
+            medium: { enabled: true, model: "x/2", thinking: "medium" },
+            high: { enabled: true, model: "x/3", thinking: "high" },
+            other: { enabled: true, model: "x/4", thinking: "off" },
+          },
+          deep: {
+            low: { enabled: true, model: "x/1", thinking: "xhigh" },
+            medium: { enabled: true, model: "x/2", thinking: "xhigh" },
+            high: { enabled: true, model: "x/3", thinking: "xhigh" },
+            other: { enabled: true, model: "x/4", thinking: "xhigh" },
+          },
+        },
       },
-      brainstormReviewers: {
-        low: { enabled: true, model: "x/b1", thinking: "low" },
-        medium: { enabled: true, model: "x/b2", thinking: "medium" },
-        high: { enabled: true, model: "x/b3", thinking: "high" },
-        other: { enabled: true, model: "x/b4", thinking: "off" },
-      },
-      codeReviewers: {
-        low: { enabled: true, model: "x/1", thinking: "low" },
-        medium: { enabled: true, model: "x/2", thinking: "medium" },
-        high: { enabled: true, model: "x/3", thinking: "high" },
-        other: { enabled: true, model: "x/4", thinking: "off" },
+      defaultPresets: {
+        planners: "regular",
+        planReviewers: "regular",
+        brainstormReviewers: "regular",
+        codeReviewers: "regular",
       },
       agents: {
         explore: { model: "x/e", thinking: "low" },
@@ -136,20 +157,12 @@ describe("deepReviewConfig", () => {
       autoCommit: true,
     };
 
-    const upgraded = deepReviewConfig(config as any);
+    const upgraded = resolvePreset(config as any, "codeReviewers", "deep");
 
-    expect(upgraded.codeReviewers.low.thinking).toBe("medium");
-    expect(upgraded.codeReviewers.medium.thinking).toBe("high");
-    expect(upgraded.codeReviewers.high.thinking).toBe("xhigh");
-    expect(upgraded.codeReviewers.other.thinking).toBe("high");
-    expect(upgraded.brainstormReviewers.low.thinking).toBe("medium");
-    expect(upgraded.brainstormReviewers.medium.thinking).toBe("high");
-    expect(upgraded.brainstormReviewers.high.thinking).toBe("xhigh");
-    expect(upgraded.brainstormReviewers.other.thinking).toBe("high");
-    expect(upgraded.planReviewers.low.thinking).toBe("medium");
-    expect(upgraded.planReviewers.medium.thinking).toBe("high");
-    expect(upgraded.planReviewers.high.thinking).toBe("xhigh");
-    expect(upgraded.planReviewers.other.thinking).toBe("high");
+    expect(upgraded.low.thinking).toBe("xhigh");
+    expect(upgraded.medium.thinking).toBe("xhigh");
+    expect(upgraded.high.thinking).toBe("xhigh");
+    expect(upgraded.other.thinking).toBe("xhigh");
   });
 });
 

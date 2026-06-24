@@ -2,14 +2,14 @@ import { existsSync, readdirSync, writeFileSync } from "fs";
 import { join, relative } from "path";
 import { askUser } from "../../3p/pi-ask-user/index.js";
 import { unregisterAgentDefinitions } from "./agents/registry.js";
-import { loadConfig, type PiPiConfig } from "./config.js";
+import { loadConfig, resolvePreset, type PiPiConfig } from "./config.js";
 import {
   loadBrainstormReviewOutputs,
   loadCodeReviewOutputs,
   loadPlanReviewOutputs,
 } from "./context.js";
 import { detectDefaultBranch, enterReviewCycle, finalizeReviewCycle } from "./event-handlers.js";
-import { Orchestrator, deepReviewConfig } from "./orchestrator.js";
+import { Orchestrator } from "./orchestrator.js";
 import { cancelPendingPlannotatorWait } from "./plannotator.js";
 import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
 import { spawnCodeReviewers } from "./phases/review.js";
@@ -227,7 +227,8 @@ export async function resumeTask(
 
   if (orchestrator.active.state.phase === "plan" && orchestrator.active.state.step === "await_planners") {
     const plansDir = join(orchestrator.active.dir, "plans");
-    const enabledVariants = Object.entries(orchestrator.config.planners).filter(([, v]) => v.enabled);
+    const plannerVariants = resolvePreset(orchestrator.config, "planners");
+    const enabledVariants = Object.entries(plannerVariants).filter(([, v]) => v.enabled);
     const planFiles = existsSync(plansDir)
       ? readdirSync(plansDir).filter((f) => f.endsWith(".md") && !f.includes("synthesized") && !f.includes("review_"))
       : [];
@@ -238,12 +239,11 @@ export async function resumeTask(
       const completedVariants = new Set(planFiles.map((f) => f.replace(/^\d+_/, "").replace(/\.md$/, "")));
       const missingVariants = enabledVariants.filter(([name]) => !completedVariants.has(name));
       if (missingVariants.length > 0) {
-        const missingConfig: Record<string, any> = {};
+        const missingConfig: typeof plannerVariants = {};
         for (const [name, cfg] of missingVariants) missingConfig[name] = cfg;
-        const partialConfig = { ...orchestrator.config, planners: missingConfig };
         orchestrator.pendingSubagentSpawns = missingVariants.length;
         orchestrator.failedPlannerVariants = [];
-        spawnPlanners(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, partialConfig).then((result) => {
+        spawnPlanners(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, orchestrator.config, missingConfig).then((result) => {
           orchestrator.failedPlannerVariants = result.failedVariants;
           if (result.spawned === 0) orchestrator.pendingSubagentSpawns = 0;
           for (const id of result.agentIds ?? []) {
@@ -263,13 +263,13 @@ export async function resumeTask(
 
   if (orchestrator.active.state.reviewCycle) {
     const cycle = orchestrator.active.state.reviewCycle;
-    const reviewConfig = cycle.kind === "auto-deep" ? deepReviewConfig(orchestrator.config) : orchestrator.config;
     const phase = orchestrator.active.state.phase;
+    const presetName = cycle.kind === "auto-deep" ? "deep" : undefined;
     const reviewers = phase === "brainstorm"
-      ? reviewConfig.brainstormReviewers
+      ? resolvePreset(orchestrator.config, "brainstormReviewers", presetName)
       : phase === "plan"
-      ? reviewConfig.planReviewers
-      : reviewConfig.codeReviewers;
+      ? resolvePreset(orchestrator.config, "planReviewers", presetName)
+      : resolvePreset(orchestrator.config, "codeReviewers", presetName);
     const reviewerCount = Object.values(reviewers).filter((v) => v.enabled).length;
 
     if ((cycle.kind === "auto" || cycle.kind === "auto-deep") && (cycle.step === "spawn_reviewers" || cycle.step === "await_reviewers")) {
@@ -308,19 +308,14 @@ export async function resumeTask(
             { deliverAs: "steer" },
           );
         } else {
-          const missingReviewerConfig: Record<string, any> = {};
+          const missingReviewerConfig: typeof reviewers = {};
           for (const [name, cfg] of missingVariants) missingReviewerConfig[name] = cfg;
-          const partialConfig = phase === "brainstorm"
-            ? { ...reviewConfig, brainstormReviewers: missingReviewerConfig }
-            : phase === "plan"
-            ? { ...reviewConfig, planReviewers: missingReviewerConfig }
-            : { ...reviewConfig, codeReviewers: missingReviewerConfig };
           orchestrator.pendingSubagentSpawns = missingVariants.length;
           const spawnFn = phase === "brainstorm"
-            ? () => spawnBrainstormReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, partialConfig, cycle.pass)
+            ? () => spawnBrainstormReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, orchestrator.config, cycle.pass, missingReviewerConfig)
             : phase === "plan"
-            ? () => spawnPlanReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, partialConfig)
-            : () => spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, partialConfig, cycle.pass);
+            ? () => spawnPlanReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, orchestrator.config, missingReviewerConfig)
+            : () => spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, orchestrator.config, cycle.pass, missingReviewerConfig);
           orchestrator.failedReviewerVariants = [];
           spawnFn().then((result) => {
             orchestrator.failedReviewerVariants = result.failedVariants;
@@ -454,18 +449,21 @@ function collectRoleAssignments(config: Partial<PiPiConfig> | null): string[] {
   add("mainModel.brainstorm", config.mainModel?.brainstorm?.model);
   add("mainModel.review", config.mainModel?.review?.model);
 
-  for (const [name, variant] of Object.entries(config.planners ?? {})) {
-    if (variant.enabled) add(`planners.${name}`, variant.model);
-  }
-  for (const [name, variant] of Object.entries(config.planReviewers ?? {})) {
-    if (variant.enabled) add(`planReviewers.${name}`, variant.model);
-  }
-  for (const [name, variant] of Object.entries(config.codeReviewers ?? {})) {
-    if (variant.enabled) add(`codeReviewers.${name}`, variant.model);
-  }
-  for (const [name, variant] of Object.entries(config.brainstormReviewers ?? {})) {
-    if (variant.enabled) add(`brainstormReviewers.${name}`, variant.model);
-  }
+  const addPresetAssignments = (group: "planners" | "planReviewers" | "codeReviewers" | "brainstormReviewers") => {
+    const presets = config.presets?.[group];
+    if (!presets || typeof presets !== "object") return;
+    for (const [presetName, variants] of Object.entries(presets)) {
+      if (!variants || typeof variants !== "object") continue;
+      for (const [name, variant] of Object.entries(variants as Record<string, any>)) {
+        if (variant?.enabled) add(`presets.${group}.${presetName}.${name}`, variant.model);
+      }
+    }
+  };
+
+  addPresetAssignments("planners");
+  addPresetAssignments("planReviewers");
+  addPresetAssignments("codeReviewers");
+  addPresetAssignments("brainstormReviewers");
 
   add("agents.explore", config.agents?.explore?.model);
   add("agents.librarian", config.agents?.librarian?.model);
@@ -1175,12 +1173,12 @@ function getReviewLabels(orchestrator: Orchestrator): { autoLabel: string; deepL
 function hasEnabledReviewers(orchestrator: Orchestrator, kind: "auto" | "auto-deep"): boolean {
   if (!orchestrator.active) return false;
   const phase = orchestrator.active.state.phase;
-  const config = kind === "auto-deep" ? deepReviewConfig(orchestrator.config) : orchestrator.config;
+  const presetName = kind === "auto-deep" ? "deep" : undefined;
   const reviewers = phase === "brainstorm"
-    ? config.brainstormReviewers
+    ? resolvePreset(orchestrator.config, "brainstormReviewers", presetName)
     : phase === "plan"
-    ? config.planReviewers
-    : config.codeReviewers;
+    ? resolvePreset(orchestrator.config, "planReviewers", presetName)
+    : resolvePreset(orchestrator.config, "codeReviewers", presetName);
   return Object.values(reviewers).some((v) => v.enabled);
 }
 

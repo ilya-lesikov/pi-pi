@@ -1,5 +1,6 @@
 import { unregisterAgentDefinitions } from "./agents/registry.js";
 import { runAfterImplement } from "./commands.js";
+import { resolvePreset } from "./config.js";
 import { nextPhase, validateExitCriteria } from "./phases/machine.js";
 import { spawnPlanners } from "./phases/planning.js";
 import { Orchestrator } from "./orchestrator.js";
@@ -81,7 +82,7 @@ export async function transitionToNextPhase(
 
   const onReady = next === "plan" ? () => {
     if (!orchestrator.active) return;
-    orchestrator.pendingSubagentSpawns = Object.values(orchestrator.config.planners).filter((v) => v.enabled).length;
+    orchestrator.pendingSubagentSpawns = Object.values(resolvePreset(orchestrator.config, "planners")).filter((v) => v.enabled).length;
     orchestrator.failedPlannerVariants = [];
     spawnPlanners(orchestrator.pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, orchestrator.config).then((result) => {
       orchestrator.failedPlannerVariants = result.failedVariants;

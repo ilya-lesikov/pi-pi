@@ -36,10 +36,18 @@ function makeConfig() {
       brainstorm: { model: "a/b", thinking: "high" },
       review: { model: "a/b", thinking: "high" },
     },
-    planners: {},
-    planReviewers: {},
-    codeReviewers: {},
-    brainstormReviewers: {},
+    presets: {
+      planners: { regular: {} },
+      planReviewers: { regular: {} },
+      codeReviewers: { regular: {} },
+      brainstormReviewers: { regular: {} },
+    },
+    defaultPresets: {
+      planners: "regular",
+      planReviewers: "regular",
+      codeReviewers: "regular",
+      brainstormReviewers: "regular",
+    },
     agents: {
       explore: { model: "x/e", thinking: "low" },
       librarian: { model: "x/l", thinking: "medium" },

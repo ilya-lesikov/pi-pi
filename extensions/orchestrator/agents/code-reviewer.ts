@@ -1,13 +1,13 @@
-import type { PiPiConfig } from "../config.js";
+import type { VariantConfig } from "../config.js";
 import { TOOL_ROUTING, ALL_CBM_TOOLS, EXA_TOOLS, WORKING_PRINCIPLES_READONLY, COMMUNICATION } from "./tool-routing.js";
 
 export function createCodeReviewerAgent(
   variant: string,
-  config: PiPiConfig,
+  variants: Record<string, VariantConfig>,
   taskArtifacts: { userRequest: string; research: string; synthesizedPlan: string },
   outputPath: string,
 ) {
-  const variantConfig = config.codeReviewers[variant];
+  const variantConfig = variants[variant];
   if (!variantConfig) {
     throw new Error(`Unknown code-reviewer variant: ${variant}`);
   }

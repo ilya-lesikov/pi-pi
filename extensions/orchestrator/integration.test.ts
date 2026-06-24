@@ -27,10 +27,18 @@ vi.mock("./config.js", async (importOriginal) => {
       brainstorm: { model: "test/model", thinking: "high" },
       review: { model: "test/model", thinking: "high" },
     },
-    planners: { test: { enabled: true, model: "test/planner", thinking: "low" } },
-    planReviewers: {},
-    brainstormReviewers: { test: { enabled: true, model: "test/reviewer", thinking: "low" } },
-    codeReviewers: { test: { enabled: true, model: "test/reviewer", thinking: "low" } },
+    presets: {
+      planners: { regular: { test: { enabled: true, model: "test/planner", thinking: "low" } } },
+      planReviewers: { regular: { test: { enabled: true, model: "test/reviewer", thinking: "low" } } },
+      brainstormReviewers: { regular: { test: { enabled: true, model: "test/reviewer", thinking: "low" } } },
+      codeReviewers: { regular: { test: { enabled: true, model: "test/reviewer", thinking: "low" } } },
+    },
+    defaultPresets: {
+      planners: "regular",
+      planReviewers: "regular",
+      brainstormReviewers: "regular",
+      codeReviewers: "regular",
+    },
     agents: {
       explore: { model: "test/explore", thinking: "low" },
       librarian: { model: "test/librarian", thinking: "medium" },
@@ -145,15 +153,17 @@ function makeConfig() {
       brainstorm: { model: "test/model", thinking: "high" },
       review: { model: "test/model", thinking: "high" },
     },
-    planners: {
-      test: { enabled: true, model: "test/planner", thinking: "low" },
+    presets: {
+      planners: { regular: { test: { enabled: true, model: "test/planner", thinking: "low" } } },
+      planReviewers: { regular: { test: { enabled: true, model: "test/reviewer", thinking: "low" } } },
+      brainstormReviewers: { regular: { test: { enabled: true, model: "test/reviewer", thinking: "low" } } },
+      codeReviewers: { regular: { test: { enabled: true, model: "test/reviewer", thinking: "low" } } },
     },
-    planReviewers: {},
-    brainstormReviewers: {
-      test: { enabled: true, model: "test/reviewer", thinking: "low" },
-    },
-    codeReviewers: {
-      test: { enabled: true, model: "test/reviewer", thinking: "low" },
+    defaultPresets: {
+      planners: "regular",
+      planReviewers: "regular",
+      brainstormReviewers: "regular",
+      codeReviewers: "regular",
     },
     agents: {
       explore: { model: "test/explore", thinking: "low" },
@@ -497,7 +507,13 @@ describe("review cycle lifecycle", () => {
     const ctx = makeCtx();
 
     await orchestrator.startTask(ctx as any, "implement", "Test no reviewers");
-    orchestrator.config = { ...orchestrator.config, codeReviewers: {} } as any;
+    orchestrator.config = {
+      ...orchestrator.config,
+      presets: {
+        ...orchestrator.config.presets,
+        codeReviewers: { regular: {} },
+      },
+    } as any;
     const taskDir = orchestrator.active!.dir;
 
     writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
