@@ -423,6 +423,11 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
           ctx.abort?.();
           return { content: [{ type: "text" as const, text: "" }], details: {} };
         }
+        const curStep = orchestrator.active?.state.step;
+        if (curStep === "await_planners" || curStep === "await_reviewers") {
+          ctx.abort?.();
+          return { content: [{ type: "text" as const, text: `Waiting for ${curStep === "await_planners" ? "planners" : "reviewers"} to complete. Do NOT proceed until notified.` }], details: {} };
+        }
         if (!text) {
           return { content: [{ type: "text" as const, text: "User dismissed the menu. Wait for the user's next message. When you resume work, update USER_REQUEST.md and RESEARCH.md with any new findings before calling pp_phase_complete." }], details: {} };
         }
