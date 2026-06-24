@@ -23,7 +23,7 @@ import { registerAgentDefinitions, unregisterAgentDefinitions } from "./agents/r
 import { createExploreAgent } from "./agents/explore.js";
 import { createLibrarianAgent } from "./agents/librarian.js";
 import { createTaskAgent } from "./agents/task.js";
-import { resolveModel } from "./model-registry.js";
+import { resolveModel, getModelInfo } from "./model-registry.js";
 
 const BUNDLED_TOOLS = new Set([
   "Agent", "get_subagent_result", "steer_subagent",
@@ -503,7 +503,21 @@ export class Orchestrator {
   }
 
   injectContextAndArtifacts(taskDir: string, phase: Phase): void {
-    const contextFiles = loadContextFiles(this.cwd, "main", "context");
+    const modelSpec =
+      phase === "debug" && this.active?.type === "debug"
+        ? this.config.mainModel.debug.model
+        : phase === "brainstorm" && this.active?.type === "brainstorm"
+        ? this.config.mainModel.brainstorm.model
+        : phase === "review" && this.active?.type === "review"
+        ? this.config.mainModel.review.model
+        : this.config.mainModel.implement.model;
+    const contextFiles = loadContextFiles(
+      this.cwd,
+      "main",
+      "context",
+      phase,
+      getModelInfo(this.lastCtx?.model?.id ?? modelSpec),
+    );
     for (const cf of contextFiles) {
       this.pi.sendMessage(
         { customType: "pp-context", content: cf.content, display: false },

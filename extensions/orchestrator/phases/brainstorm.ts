@@ -212,7 +212,14 @@ export async function spawnBrainstormReviewers(
   for (const [variant] of enabledVariants) {
     const outputPath = join(reviewsDir, `${timestamp}_${variant}_round-${round}.md`);
     reviewFiles.push(outputPath);
-    const agent = createBrainstormReviewerAgent(variant, reviewerVariants, { userRequest, research, artifacts: artifacts.length > 0 ? artifacts : undefined }, outputPath);
+    const agent = createBrainstormReviewerAgent(
+      variant,
+      reviewerVariants,
+      { userRequest, research, artifacts: artifacts.length > 0 ? artifacts : undefined },
+      outputPath,
+      cwd,
+      "brainstorm",
+    );
 
     registerAgentDefinitions(pi, [{ type: "brainstorm_reviewer", variant, ...agent }]);
 

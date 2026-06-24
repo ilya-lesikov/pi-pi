@@ -333,7 +333,16 @@ export async function resumeTask(
             ? () => spawnBrainstormReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, orchestrator.config, cycle.pass, missingReviewerConfig)
             : phase === "plan"
             ? () => spawnPlanReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, orchestrator.config, missingReviewerConfig)
-            : () => spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, orchestrator.config, cycle.pass, missingReviewerConfig);
+            : () => spawnCodeReviewers(
+              pi,
+              orchestrator.cwd,
+              orchestrator.active!.dir,
+              orchestrator.active!.taskId,
+              orchestrator.config,
+              cycle.pass,
+              phase,
+              missingReviewerConfig,
+            );
           orchestrator.failedReviewerVariants = [];
           spawnFn().then((result) => {
             orchestrator.failedReviewerVariants = result.failedVariants;

@@ -88,6 +88,7 @@ export async function spawnCodeReviewers(
   taskId: string,
   config: PiPiConfig,
   round: number,
+  phase: string,
   variants?: Record<string, VariantConfig>,
 ): Promise<{ spawned: number; agentIds: string[]; failedVariants: string[] }> {
   const urPath = join(taskDir, "USER_REQUEST.md");
@@ -125,7 +126,15 @@ export async function spawnCodeReviewers(
 
   for (const [variant] of enabledVariants) {
     const outputPath = join(reviewsDir, `${timestamp}_${variant}_round-${round}.md`);
-    const agent = createCodeReviewerAgent(variant, reviewerVariants, { userRequest, research, synthesizedPlan }, outputPath);
+    const reviewerPhase = phase === "review" ? "review" : "implement";
+    const agent = createCodeReviewerAgent(
+      variant,
+      reviewerVariants,
+      { userRequest, research, synthesizedPlan },
+      outputPath,
+      cwd,
+      reviewerPhase,
+    );
 
     registerAgentDefinitions(pi, [{ type: "code_reviewer", variant, ...agent }]);
 

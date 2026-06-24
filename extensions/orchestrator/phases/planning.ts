@@ -74,7 +74,7 @@ export async function spawnPlanners(
 
   for (const [variant] of enabledVariants) {
     const outputPath = join(plansDir, `${timestamp}_${variant}.md`);
-    const agent = createPlannerAgent(variant, plannerVariants, { userRequest, research }, outputPath);
+    const agent = createPlannerAgent(variant, plannerVariants, { userRequest, research }, outputPath, cwd, "plan");
 
     registerAgentDefinitions(pi, [{ type: "planner", variant, ...agent }]);
 
@@ -194,7 +194,14 @@ export async function spawnPlanReviewers(
     const outputPath = join(planReviewsDir, `${timestamp}_${variant}.md`);
     reviewFiles.push(outputPath);
 
-    const agent = createPlanReviewerAgent(variant, reviewerVariants, { userRequest, research, synthesizedPlan }, outputPath);
+    const agent = createPlanReviewerAgent(
+      variant,
+      reviewerVariants,
+      { userRequest, research, synthesizedPlan },
+      outputPath,
+      cwd,
+      "plan",
+    );
 
     registerAgentDefinitions(pi, [{ type: "plan_reviewer", variant, ...agent }]);
 

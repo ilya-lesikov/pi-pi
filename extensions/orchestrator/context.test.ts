@@ -125,6 +125,95 @@ describe("loadContextFiles", () => {
     expect(loadContextFiles(cwd, "explore")).toEqual([]);
   });
 
+  it("supports brainstormReviewer agent type", () => {
+    const cwd = makeTempDir();
+    const contextDir = join(cwd, ".pp", "context");
+    mkdirSync(contextDir, { recursive: true });
+
+    writeFileSync(
+      join(contextDir, "brainstorm-reviewer.md"),
+      "---\nagents: brainstormReviewer\n---\nbrainstorm reviewer only\n",
+      "utf-8",
+    );
+
+    expect(loadContextFiles(cwd, "brainstormReviewer")).toEqual([{ mode: "context", content: "brainstorm reviewer only" }]);
+    expect(loadContextFiles(cwd, "codeReviewer")).toEqual([]);
+  });
+
+  it("parses phase/vendor/family/tier filters and matches when all filters pass", () => {
+    const cwd = makeTempDir();
+    const contextDir = join(cwd, ".pp", "context");
+    mkdirSync(contextDir, { recursive: true });
+
+    writeFileSync(
+      join(contextDir, "filtered.md"),
+      "---\ninject: system\nagents: ['planner']\nphases: ['plan']\nvendors: ['anthropic']\nfamilies: ['sonnet']\ntiers: ['regular']\n---\nfiltered\n",
+      "utf-8",
+    );
+
+    expect(
+      loadContextFiles(cwd, "planner", "system", "plan", { vendor: "anthropic", family: "sonnet", tier: "regular" }),
+    ).toEqual([{ mode: "system", content: "filtered" }]);
+  });
+
+  it("uses AND between filters and OR inside each filter", () => {
+    const cwd = makeTempDir();
+    const contextDir = join(cwd, ".pp", "context");
+    mkdirSync(contextDir, { recursive: true });
+
+    writeFileSync(
+      join(contextDir, "or-and.md"),
+      "---\nagents: [codeReviewer]\nphases: [implement, review]\nvendors: [openai, anthropic]\nfamilies: [gpt, gpt-mini]\ntiers: [regular, stupid]\n---\nmatched\n",
+      "utf-8",
+    );
+
+    expect(
+      loadContextFiles(cwd, "codeReviewer", "context", "review", { vendor: "openai", family: "gpt-mini", tier: "stupid" }),
+    ).toEqual([{ mode: "context", content: "matched" }]);
+
+    expect(
+      loadContextFiles(cwd, "codeReviewer", "context", "review", { vendor: "google", family: "gpt-mini", tier: "stupid" }),
+    ).toEqual([]);
+    expect(
+      loadContextFiles(cwd, "codeReviewer", "context", "debug", { vendor: "openai", family: "gpt-mini", tier: "stupid" }),
+    ).toEqual([]);
+  });
+
+  it("treats empty filter arrays as match-all", () => {
+    const cwd = makeTempDir();
+    const contextDir = join(cwd, ".pp", "context");
+    mkdirSync(contextDir, { recursive: true });
+
+    writeFileSync(
+      join(contextDir, "empty-filters.md"),
+      "---\nagents: [planner]\nphases: []\nvendors: []\nfamilies: []\ntiers: []\n---\nno restrictions\n",
+      "utf-8",
+    );
+
+    expect(
+      loadContextFiles(cwd, "planner", "context", "plan", { vendor: "unknown", family: "unknown", tier: "unknown" }),
+    ).toEqual([{ mode: "context", content: "no restrictions" }]);
+    expect(loadContextFiles(cwd, "planner", "context")).toEqual([{ mode: "context", content: "no restrictions" }]);
+  });
+
+  it("applies filter restrictions only when phase/model info are provided", () => {
+    const cwd = makeTempDir();
+    const contextDir = join(cwd, ".pp", "context");
+    mkdirSync(contextDir, { recursive: true });
+
+    writeFileSync(
+      join(contextDir, "requires-filters.md"),
+      "---\nagents: [planner]\nphases: [plan]\nvendors: [anthropic]\nfamilies: [sonnet]\ntiers: [regular]\n---\nrestricted\n",
+      "utf-8",
+    );
+
+    expect(loadContextFiles(cwd, "planner", "context")).toEqual([{ mode: "context", content: "restricted" }]);
+    expect(loadContextFiles(cwd, "planner", "context", "plan")).toEqual([{ mode: "context", content: "restricted" }]);
+    expect(
+      loadContextFiles(cwd, "planner", "context", "plan", { vendor: "openai", family: "gpt", tier: "regular" }),
+    ).toEqual([]);
+  });
+
   it("skips non-markdown files", () => {
     const cwd = makeTempDir();
     const contextDir = join(cwd, ".pp", "context");

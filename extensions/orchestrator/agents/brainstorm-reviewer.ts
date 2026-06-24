@@ -1,5 +1,6 @@
 import type { VariantConfig } from "../config.js";
-import { resolveModel } from "../model-registry.js";
+import { loadContextFiles } from "../context.js";
+import { resolveModel, getModelInfo } from "../model-registry.js";
 import { TOOL_ROUTING, ALL_CBM_TOOLS, EXA_TOOLS, WORKING_PRINCIPLES_READONLY, COMMUNICATION } from "./tool-routing.js";
 
 export function createBrainstormReviewerAgent(
@@ -7,11 +8,15 @@ export function createBrainstormReviewerAgent(
   variants: Record<string, VariantConfig>,
   taskArtifacts: { userRequest: string; research: string; artifacts?: { name: string; content: string }[] },
   outputPath: string,
+  cwd: string,
+  phase?: string,
 ) {
   const variantConfig = variants[variant];
   if (!variantConfig) {
     throw new Error(`Unknown brainstorm-reviewer variant: ${variant}`);
   }
+  const contextFiles = loadContextFiles(cwd, "brainstormReviewer", "system", phase, getModelInfo(variantConfig.model));
+  const contextBlock = contextFiles.map((f) => f.content).join("\n\n");
 
   return {
     frontmatter: {
@@ -23,6 +28,7 @@ export function createBrainstormReviewerAgent(
       prompt_mode: "replace",
     },
     prompt: [
+      ...(contextBlock ? ["# Project Context", "", contextBlock, ""] : []),
       "You are a research reviewer. Your job is to verify the thoroughness and accuracy of brainstorm research artifacts.",
       "",
       "You are a GAP-FINDER, not a perfectionist.",

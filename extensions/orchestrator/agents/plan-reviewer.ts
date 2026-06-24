@@ -1,5 +1,6 @@
 import type { VariantConfig } from "../config.js";
-import { resolveModel } from "../model-registry.js";
+import { loadContextFiles } from "../context.js";
+import { resolveModel, getModelInfo } from "../model-registry.js";
 import { TOOL_ROUTING, ALL_CBM_TOOLS, EXA_TOOLS, WORKING_PRINCIPLES_READONLY, COMMUNICATION } from "./tool-routing.js";
 
 export function createPlanReviewerAgent(
@@ -7,11 +8,15 @@ export function createPlanReviewerAgent(
   variants: Record<string, VariantConfig>,
   taskArtifacts: { userRequest: string; research: string; synthesizedPlan: string },
   outputPath: string,
+  cwd: string,
+  phase?: string,
 ) {
   const variantConfig = variants[variant];
   if (!variantConfig) {
     throw new Error(`Unknown plan-reviewer variant: ${variant}`);
   }
+  const contextFiles = loadContextFiles(cwd, "planReviewer", "system", phase, getModelInfo(variantConfig.model));
+  const contextBlock = contextFiles.map((f) => f.content).join("\n\n");
 
   return {
     frontmatter: {
@@ -23,6 +28,7 @@ export function createPlanReviewerAgent(
       prompt_mode: "replace",
     },
     prompt: [
+      ...(contextBlock ? ["# Project Context", "", contextBlock, ""] : []),
       // --- static prefix (cacheable) ---
       "You are a plan reviewer. Your job is to validate the implementation plan for executability and completeness.",
       "",

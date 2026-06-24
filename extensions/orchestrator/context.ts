@@ -2,9 +2,13 @@ import { readFileSync, existsSync, readdirSync } from "fs";
 import { join } from "path";
 import type { Phase } from "./state.js";
 
-type AgentType = "main" | "explore" | "librarian" | "planner" | "planReviewer" | "task" | "codeReviewer";
+type AgentType = "main" | "explore" | "librarian" | "planner" | "planReviewer" | "task" | "codeReviewer" | "brainstormReviewer";
 type AgentGroup = "all" | "subagents";
 type InjectMode = "system" | "context";
+type PhaseFilter = "brainstorm" | "debug" | "plan" | "implement" | "review";
+type VendorFilter = "anthropic" | "openai" | "google" | "unknown";
+type FamilyFilter = "opus" | "sonnet" | "haiku" | "gpt" | "gpt-mini" | "gemini-pro" | "gemini-flash" | "unknown";
+type TierFilter = "stupid" | "regular" | "smart" | "xsmart" | "unknown";
 
 interface ContextFile {
   mode: InjectMode;
@@ -15,17 +19,33 @@ interface Frontmatter {
   inject: InjectMode;
   agents: AgentType[];
   agentGroups: AgentGroup[];
+  phases: PhaseFilter[];
+  vendors: VendorFilter[];
+  families: FamilyFilter[];
+  tiers: TierFilter[];
 }
 
 const VALID_INJECT_MODES: readonly string[] = ["system", "context"];
-const VALID_AGENTS: readonly string[] = ["main", "explore", "librarian", "planner", "planReviewer", "task", "codeReviewer"];
+const VALID_AGENTS: readonly string[] = ["main", "explore", "librarian", "planner", "planReviewer", "task", "codeReviewer", "brainstormReviewer"];
 const VALID_AGENT_GROUPS: readonly string[] = ["all", "subagents"];
+const VALID_PHASES: readonly string[] = ["brainstorm", "debug", "plan", "implement", "review"];
+const VALID_VENDORS: readonly string[] = ["anthropic", "openai", "google", "unknown"];
+const VALID_FAMILIES: readonly string[] = ["opus", "sonnet", "haiku", "gpt", "gpt-mini", "gemini-pro", "gemini-flash", "unknown"];
+const VALID_TIERS: readonly string[] = ["stupid", "regular", "smart", "xsmart", "unknown"];
 
 function parseFrontmatter(raw: string): { frontmatter: Frontmatter; body: string } {
   const match = raw.match(/^---[^\S\n]*\n([\s\S]*?)\n---[^\S\n]*\n([\s\S]*)$/);
   if (!match) {
     return {
-      frontmatter: { inject: "context", agents: ["main"], agentGroups: [] },
+      frontmatter: {
+        inject: "context",
+        agents: ["main"],
+        agentGroups: [],
+        phases: [],
+        vendors: [],
+        families: [],
+        tiers: [],
+      },
       body: raw,
     };
   }
@@ -36,6 +56,10 @@ function parseFrontmatter(raw: string): { frontmatter: Frontmatter; body: string
   let inject: InjectMode = "context";
   let agents: AgentType[] = [];
   let agentGroups: AgentGroup[] = [];
+  let phases: PhaseFilter[] = [];
+  let vendors: VendorFilter[] = [];
+  let families: FamilyFilter[] = [];
+  let tiers: TierFilter[] = [];
 
   for (const line of yamlBlock.split("\n")) {
     const trimmed = line.trim();
@@ -56,6 +80,14 @@ function parseFrontmatter(raw: string): { frontmatter: Frontmatter; body: string
       agents = parseArray(val).filter((v): v is AgentType => VALID_AGENTS.includes(v));
     } else if (key === "agentGroups") {
       agentGroups = parseArray(val).filter((v): v is AgentGroup => VALID_AGENT_GROUPS.includes(v));
+    } else if (key === "phases") {
+      phases = parseArray(val).filter((v): v is PhaseFilter => VALID_PHASES.includes(v));
+    } else if (key === "vendors") {
+      vendors = parseArray(val).filter((v): v is VendorFilter => VALID_VENDORS.includes(v));
+    } else if (key === "families") {
+      families = parseArray(val).filter((v): v is FamilyFilter => VALID_FAMILIES.includes(v));
+    } else if (key === "tiers") {
+      tiers = parseArray(val).filter((v): v is TierFilter => VALID_TIERS.includes(v));
     }
   }
 
@@ -63,7 +95,10 @@ function parseFrontmatter(raw: string): { frontmatter: Frontmatter; body: string
     agents = ["main"];
   }
 
-  return { frontmatter: { inject, agents, agentGroups }, body };
+  return {
+    frontmatter: { inject, agents, agentGroups, phases, vendors, families, tiers },
+    body,
+  };
 }
 
 function stripQuotes(val: string): string {
@@ -99,7 +134,29 @@ function matchesAgent(fm: Frontmatter, agentType: AgentType): boolean {
   return fm.agents.includes(agentType);
 }
 
-export function loadContextFiles(cwd: string, agentType: AgentType, injectMode?: InjectMode): ContextFile[] {
+function matchesFilters(
+  fm: Frontmatter,
+  agentType: AgentType,
+  phase?: string,
+  modelInfo?: { vendor: string; family: string; tier: string },
+): boolean {
+  if (!matchesAgent(fm, agentType)) return false;
+  if (fm.phases.length > 0 && phase && !fm.phases.includes(phase as PhaseFilter)) return false;
+  if (modelInfo) {
+    if (fm.vendors.length > 0 && !fm.vendors.includes(modelInfo.vendor as VendorFilter)) return false;
+    if (fm.families.length > 0 && !fm.families.includes(modelInfo.family as FamilyFilter)) return false;
+    if (fm.tiers.length > 0 && !fm.tiers.includes(modelInfo.tier as TierFilter)) return false;
+  }
+  return true;
+}
+
+export function loadContextFiles(
+  cwd: string,
+  agentType: AgentType,
+  injectMode?: InjectMode,
+  phase?: string,
+  modelInfo?: { vendor: string; family: string; tier: string },
+): ContextFile[] {
   const contextDir = join(cwd, ".pp", "context");
   if (!existsSync(contextDir)) return [];
 
@@ -116,7 +173,7 @@ export function loadContextFiles(cwd: string, agentType: AgentType, injectMode?:
     }
     const { frontmatter, body } = parseFrontmatter(raw);
 
-    if (!matchesAgent(frontmatter, agentType)) continue;
+    if (!matchesFilters(frontmatter, agentType, phase, modelInfo)) continue;
     if (injectMode && frontmatter.inject !== injectMode) continue;
 
     results.push({ mode: frontmatter.inject, content: body.trim() });

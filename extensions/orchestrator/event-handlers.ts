@@ -20,7 +20,7 @@ import { registerAstSearchTool } from "./ast-search.js";
 import { SUBAGENT_SESSION_KEY } from "./index.js";
 import { registerCommandHandlers } from "./command-handlers.js";
 import { setExtensionOnlyMode, unregisterAgentDefinitions } from "./agents/registry.js";
-import { resolveModel } from "./model-registry.js";
+import { resolveModel, getModelInfo } from "./model-registry.js";
 import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
 import { spawnCodeReviewers } from "./phases/review.js";
 import { spawnBrainstormReviewers } from "./phases/brainstorm.js";
@@ -199,7 +199,16 @@ export async function enterReviewCycle(orchestrator: Orchestrator, ctx: any, kin
     ? () => spawnBrainstormReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, orchestrator.config, pass, reviewers)
     : phase === "plan"
     ? () => spawnPlanReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, orchestrator.config, reviewers)
-    : () => spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, orchestrator.config, pass, reviewers);
+    : () => spawnCodeReviewers(
+      pi,
+      orchestrator.cwd,
+      orchestrator.active!.dir,
+      orchestrator.active!.taskId,
+      orchestrator.config,
+      pass,
+      phase,
+      reviewers,
+    );
   spawnFn().then((result) => {
     orchestrator.failedReviewerVariants = result.failedVariants;
     if (result.spawned === 0) orchestrator.pendingSubagentSpawns = 0;
@@ -726,7 +735,16 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
                   ? () => spawnBrainstormReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, orchestrator.config, pass, scopedReviewers)
                   : phase === "plan"
                   ? () => spawnPlanReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, orchestrator.config, scopedReviewers)
-                  : () => spawnCodeReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, orchestrator.config, pass, scopedReviewers);
+                  : () => spawnCodeReviewers(
+                    pi,
+                    orchestrator.cwd,
+                    orchestrator.active!.dir,
+                    orchestrator.active!.taskId,
+                    orchestrator.config,
+                    pass,
+                    phase,
+                    scopedReviewers,
+                  );
                 orchestrator.failedReviewerVariants = [];
                 orchestrator.pendingSubagentSpawns = retryCount;
                 cycle.step = "await_reviewers";
@@ -970,7 +988,9 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     orchestrator.updateStatus(ctx);
 
     const phasePrompt = orchestrator.getPhasePrompt(ctx);
-    const systemContextFiles = loadContextFiles(orchestrator.cwd, "main", "system");
+    const phase = orchestrator.active?.state.phase;
+    const modelInfo = getModelInfo(ctx.model?.id ?? "");
+    const systemContextFiles = loadContextFiles(orchestrator.cwd, "main", "system", phase, modelInfo);
     const systemSnippets = systemContextFiles.map((f) => f.content).join("\n\n");
 
     const fullAddition = [WORKING_PRINCIPLES, COMMUNICATION, TOOL_ROUTING, systemSnippets, phasePrompt].filter(Boolean).join("\n\n");
