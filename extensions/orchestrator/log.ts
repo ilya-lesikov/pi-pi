@@ -128,6 +128,18 @@ function cleanOldSessionLogs(logsDir: string, maxAgeDays: number): void {
   } catch {}
 }
 
+export function resetLogger(): void {
+  removeTaskDestination();
+  if (ms && sessionStreamId >= 0) {
+    ms.remove(sessionStreamId);
+    safeEndStream(sessionStreamRef);
+  }
+  sessionStreamId = -1;
+  sessionStreamRef = null;
+  ms = null;
+  logger = pino({ level: "silent" });
+}
+
 export function getLogger(): pino.Logger {
   return logger;
 }

@@ -38,6 +38,9 @@ import { Orchestrator } from "./orchestrator.js";
 import { registerCommandHandlers } from "./command-handlers.js";
 import { registerEventHandlers } from "./event-handlers.js";
 import { createTask, loadTask, saveTask } from "./state.js";
+import { registerAgentDefinitions } from "./agents/registry.js";
+import * as commandsModule from "./commands.js";
+import * as usageTrackerModule from "./usage-tracker.js";
 
 vi.mock("./cbm.js", () => ({ registerCbmTools: vi.fn() }));
 vi.mock("./exa.js", () => ({ registerExaTools: vi.fn() }));
@@ -137,8 +140,10 @@ function makeTempDir(): string {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   askUserResponses.length = 0;
   askUserCalls.length = 0;
+  delete (globalThis as any)[Symbol.for("pi-pi:usage-tracker")];
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -297,6 +302,43 @@ function emitSubagentCompleted(pi: ReturnType<typeof makePi>, id: string, descri
 
 function emitSubagentFailed(pi: ReturnType<typeof makePi>, id: string, error: string) {
   pi.events.emit("subagents:failed", { id, error });
+}
+
+async function moveTaskToImplementPhase(
+  pi: ReturnType<typeof makePi>,
+  orchestrator: Orchestrator,
+  ctx: ReturnType<typeof makeCtx>,
+  firstCallId: string,
+  secondCallId: string,
+) {
+  const taskDir = orchestrator.active!.dir;
+  writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+  writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+
+  queueDefaultResponses(["Next", "Continue to plan & implement", "regular [default]"]);
+  const ppPhaseComplete = getTool(pi, "pp_phase_complete");
+  await ppPhaseComplete.execute(firstCallId, { summary: "phase complete" }, undefined, undefined, ctx);
+  await new Promise((r) => setTimeout(r, 10));
+
+  const plansDir = join(taskDir, "plans");
+  mkdirSync(plansDir, { recursive: true });
+  emitSubagentCreated(pi, `${firstCallId}-planner`, "Planner (test)");
+  writeFileSync(
+    join(plansDir, `${Math.floor(Date.now() / 1000)}_test.md`),
+    makeValidPlan(["- [ ] P1. Planner output item — Done when: planner output exists"]),
+    "utf-8",
+  );
+  emitSubagentCompleted(pi, `${firstCallId}-planner`, "Planner (test)");
+
+  writeFileSync(
+    join(plansDir, `${Math.floor(Date.now() / 1000) + 1}_synthesized.md`),
+    makeValidPlan(["- [x] P1. Ready to implement — Done when: item is checked"]),
+    "utf-8",
+  );
+
+  queueDefaultResponses(["Next", "Continue to implement"]);
+  await ppPhaseComplete.execute(secondCallId, { summary: "plan complete" }, undefined, undefined, ctx);
+  await new Promise((r) => setTimeout(r, 10));
 }
 
 describe("implement pipeline: brainstorm → plan → implement → done", () => {
@@ -1630,5 +1672,603 @@ describe("task modes and quick task", () => {
 
     expect(orchestrator.active).not.toBeNull();
     expect(orchestrator.active!.state.mode).toBe("autonomous");
+  });
+
+  it("autonomous mode skips planner preset picker during transition", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "implement", undefined, undefined, "autonomous");
+    const taskDir = orchestrator.active!.dir;
+    orchestrator.active!.state.autonomousConfig = {
+      phases: {
+        brainstorm: { reviewPreset: "regular", maxReviewPasses: 0 },
+        plan: { plannerPreset: "regular", reviewPreset: "regular", maxReviewPasses: 0 },
+        implement: { reviewPreset: "regular", maxReviewPasses: 0 },
+      },
+    };
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+
+    const ppPhaseComplete = getTool(pi, "pp_phase_complete");
+    await ppPhaseComplete.execute("call-autonomous-skip-planner", { summary: "done" }, undefined, undefined, ctx);
+    await new Promise((r) => setTimeout(r, 10));
+
+    const plannerPrompt = askUserCalls.find((call) => call.question.includes("Planner preset"));
+    expect(plannerPrompt).toBeUndefined();
+  });
+
+  it("autonomous first review triggers automatically and second step proceeds after reviewer output", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "implement", undefined, undefined, "autonomous");
+    const taskDir = orchestrator.active!.dir;
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "llm_work";
+    orchestrator.active!.state.autonomousConfig = {
+      phases: {
+        implement: { reviewPreset: "regular", maxReviewPasses: 2 },
+      },
+    };
+    mkdirSync(join(taskDir, "plans"), { recursive: true });
+    writeFileSync(
+      join(taskDir, "plans", "1_synthesized.md"),
+      makeValidPlan(["- [x] P1. Done item — Done when: synthesized plan is fully checked"]),
+      "utf-8",
+    );
+
+    const ppPhaseComplete = getTool(pi, "pp_phase_complete");
+    const first = await ppPhaseComplete.execute("call-autonomous-review-1", { summary: "done" }, undefined, undefined, ctx);
+    expect(first.content[0].text).toMatch(/Autonomous mode: reviews running|Started review cycle pass/);
+    expect(orchestrator.active!.state.reviewCycle).not.toBeNull();
+    expect(orchestrator.active!.state.reviewCycle?.pass).toBe(1);
+    expect(["await_reviewers", "apply_feedback"]).toContain(orchestrator.active!.state.reviewCycle?.step);
+
+    const reviewsDir = join(taskDir, "code-reviews");
+    mkdirSync(reviewsDir, { recursive: true });
+    writeFileSync(join(reviewsDir, `${Math.floor(Date.now() / 1000)}_test_round-1.md`), "looks good", "utf-8");
+    emitSubagentCreated(pi, "reviewer-auto-1", "Code reviewer (test)");
+    emitSubagentCompleted(pi, "reviewer-auto-1", "Code reviewer (test)");
+
+    const second = await ppPhaseComplete.execute("call-autonomous-review-2", { summary: "applied" }, undefined, undefined, ctx);
+    expect(second.content[0].text).toBe("");
+    expect(orchestrator.active).toBeNull();
+  });
+
+  it("switching to guided during await_reviewers shows reviewer failure dialog", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "implement", undefined, undefined, "autonomous");
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "await_reviewers";
+    orchestrator.active!.state.reviewCycle = { kind: "auto", step: "await_reviewers", pass: 1 };
+    orchestrator.active!.state.effectiveMode = "guided";
+    orchestrator.failedReviewerVariants = ["test"];
+    orchestrator.pendingSubagentSpawns = 0;
+    saveTask(orchestrator.active!.dir, orchestrator.active!.state);
+
+    queueAskUserResponse("Continue without review", /Some reviewers failed:/);
+    emitSubagentCompleted(pi, "reviewer-guided-switch", "Code reviewer (test)");
+    await new Promise((r) => setTimeout(r, 10));
+
+    const failureDialog = askUserCalls.find((call) => call.question.includes("Some reviewers failed:"));
+    expect(failureDialog).toBeDefined();
+  });
+
+  it("review task autonomous defaults to deep preset for review phase", async () => {
+    const cwd = makeTempDir();
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi as any);
+    registerEventHandlers(orchestrator);
+    registerCommandHandlers(orchestrator);
+    const ctx = makeCtx({ cwd });
+
+    const sessionStartHandler = pi._handlers.get("session_start")!;
+    await sessionStartHandler({}, ctx);
+
+    queueDefaultResponses(["Task", "Review", "Describe", "Autonomous", "Start"]);
+    ctx.ui.input.mockResolvedValueOnce("Review current branch changes");
+    const pp = getCommand(pi, "pp");
+    await pp(undefined, ctx);
+
+    expect(orchestrator.active!.type).toBe("review");
+    expect(orchestrator.active!.state.autonomousConfig?.phases.review?.reviewPreset).toBe("deep");
+  });
+
+  it("quick task does not track modified files", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+
+    await orchestrator.startTask(makeCtx() as any, "quick", "quick");
+    const toolResult = pi._handlers.get("tool_result")!;
+    await toolResult({ toolName: "write", input: { path: "src/quick.ts" }, isError: false, content: [] }, {});
+
+    expect(orchestrator.active!.modifiedFiles.size).toBe(0);
+    expect(orchestrator.active!.state.modifiedFiles ?? []).toEqual([]);
+  });
+
+  it("quick task does not run afterEdit", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const runAfterEditSpy = vi.spyOn(commandsModule, "runAfterEdit");
+
+    await orchestrator.startTask(makeCtx() as any, "quick", "quick");
+    const toolResult = pi._handlers.get("tool_result")!;
+    await toolResult({ toolName: "write", input: { path: "src/quick.ts" }, isError: false, content: [] }, {});
+
+    expect(runAfterEditSpy).not.toHaveBeenCalled();
+  });
+
+  it("autonomous ask_user blocked in plan but allowed in brainstorm for same task", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+
+    await orchestrator.startTask({ ...makeCtx(), cwd } as any, "implement", "implement", undefined, undefined, "autonomous");
+    const toolCall = pi._handlers.get("tool_call")!;
+
+    orchestrator.active!.state.phase = "brainstorm";
+    const brainstormResult = await toolCall({ toolName: "ask_user", input: {} }, {});
+    expect(brainstormResult).toBeUndefined();
+
+    orchestrator.active!.state.phase = "plan";
+    const planResult = await toolCall({ toolName: "ask_user", input: {} }, {});
+    expect(planResult).toEqual({ block: true, reason: "Autonomous mode — make your best judgment based on available context." });
+  });
+});
+
+describe("review task lifecycle", () => {
+  it("review task starts in review phase", async () => {
+    const cwd = makeTempDir();
+    const { orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "review", "Review changes");
+
+    expect(orchestrator.active!.type).toBe("review");
+    expect(orchestrator.active!.state.phase).toBe("review");
+    expect(orchestrator.active!.state.step).toBe("llm_work");
+  });
+
+  it("review task transitions review to plan to implement to done", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "review", "Review flow");
+    const taskDir = orchestrator.active!.dir;
+
+    await moveTaskToImplementPhase(pi, orchestrator, ctx, "call-review-to-plan", "call-plan-to-implement");
+    expect(orchestrator.active!.state.phase).toBe("implement");
+
+    queueDefaultResponses(["Next", "Complete"]);
+    const ppPhaseComplete = getTool(pi, "pp_phase_complete");
+    await ppPhaseComplete.execute("call-implement-to-done", { summary: "done" }, undefined, undefined, ctx);
+
+    expect(orchestrator.active).toBeNull();
+    expect(loadTask(taskDir).phase).toBe("done");
+  });
+
+  it("review phase exit criteria requires USER_REQUEST and RESEARCH", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "review", "Review validation");
+
+    queueDefaultResponses(["Next", "Continue to plan & implement", "regular [default]"]);
+    const ppPhaseComplete = getTool(pi, "pp_phase_complete");
+    const result = await ppPhaseComplete.execute("call-review-validation", { summary: "done" }, undefined, undefined, ctx);
+
+    expect(result.content[0].text).toContain("Transition blocked");
+    expect(result.content[0].text).toContain("USER_REQUEST.md");
+    expect(orchestrator.active!.state.phase).toBe("review");
+  });
+});
+
+describe("debug task lifecycle", () => {
+  it("debug task starts in debug phase", async () => {
+    const cwd = makeTempDir();
+    const { orchestrator } = await setupOrchestrator(cwd);
+
+    await orchestrator.startTask(makeCtx() as any, "debug", "Debug issue");
+
+    expect(orchestrator.active!.type).toBe("debug");
+    expect(orchestrator.active!.state.phase).toBe("debug");
+  });
+
+  it("debug task transitions debug to plan to implement to done", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "debug", "Debug flow");
+    const taskDir = orchestrator.active!.dir;
+
+    await moveTaskToImplementPhase(pi, orchestrator, ctx, "call-debug-to-plan", "call-debug-plan-to-implement");
+    expect(orchestrator.active!.state.phase).toBe("implement");
+
+    queueDefaultResponses(["Next", "Complete"]);
+    const ppPhaseComplete = getTool(pi, "pp_phase_complete");
+    await ppPhaseComplete.execute("call-debug-implement-to-done", { summary: "done" }, undefined, undefined, ctx);
+
+    expect(orchestrator.active).toBeNull();
+    expect(loadTask(taskDir).phase).toBe("done");
+  });
+});
+
+describe("modified file tracking", () => {
+  it("tool_result tracks write and edit in implement phase", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "Track writes");
+    await moveTaskToImplementPhase(pi, orchestrator, ctx, "call-track-brainstorm", "call-track-plan");
+
+    const toolResult = pi._handlers.get("tool_result")!;
+    await toolResult({ toolName: "write", input: { path: "src/a.ts" }, isError: false, content: [] }, {});
+    await toolResult({ toolName: "edit", input: { path: "src/b.ts" }, isError: false, content: [] }, {});
+
+    expect(orchestrator.active!.modifiedFiles.has(join(cwd, "src", "a.ts"))).toBe(true);
+    expect(orchestrator.active!.modifiedFiles.has(join(cwd, "src", "b.ts"))).toBe(true);
+  });
+
+  it("tool_result ignores writes inside .pp directory", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+
+    await orchestrator.startTask(makeCtx() as any, "implement", "Ignore .pp writes");
+    orchestrator.active!.state.phase = "implement";
+    const toolResult = pi._handlers.get("tool_result")!;
+    await toolResult({ toolName: "write", input: { path: ".pp/state/implement/x/note.md" }, isError: false, content: [] }, {});
+
+    expect(orchestrator.active!.modifiedFiles.size).toBe(0);
+  });
+
+  it("tool_result ignores writes outside implement phase", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+
+    await orchestrator.startTask(makeCtx() as any, "implement", "Ignore non-implement writes");
+    orchestrator.active!.state.phase = "brainstorm";
+    const toolResult = pi._handlers.get("tool_result")!;
+    await toolResult({ toolName: "write", input: { path: "src/not-tracked.ts" }, isError: false, content: [] }, {});
+
+    expect(orchestrator.active!.modifiedFiles.size).toBe(0);
+  });
+
+  it("afterEdit runs for root repo files only", async () => {
+    const cwd = makeTempDir();
+    const extraRepo = join(cwd, "extra-repo");
+    mkdirSync(extraRepo, { recursive: true });
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const runAfterEditSpy = vi.spyOn(commandsModule, "runAfterEdit");
+
+    await orchestrator.startTask(makeCtx() as any, "implement", "afterEdit root only");
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.repos = [
+      { path: cwd, isRoot: true },
+      { path: extraRepo, isRoot: false },
+    ];
+    saveTask(orchestrator.active!.dir, orchestrator.active!.state);
+
+    const toolResult = pi._handlers.get("tool_result")!;
+    await toolResult({ toolName: "write", input: { path: "src/root.ts" }, isError: false, content: [] }, {});
+    await toolResult({ toolName: "write", input: { path: "extra-repo/src/extra.ts" }, isError: false, content: [] }, {});
+
+    expect(runAfterEditSpy).toHaveBeenCalledTimes(1);
+    expect(runAfterEditSpy.mock.calls[0]?.[0]).toBe("src/root.ts");
+  });
+
+  it("modified files are cleared after pp_commit", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const autoCommitSpy = vi.spyOn(commandsModule, "autoCommit").mockReturnValue({ ok: true, commitHash: "abc123" });
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "commit clear");
+    orchestrator.config = { ...orchestrator.config, autoCommit: true } as any;
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.modifiedFiles.add(join(cwd, "src", "tracked.ts"));
+    orchestrator.active!.state.modifiedFiles = [...orchestrator.active!.modifiedFiles];
+    saveTask(orchestrator.active!.dir, orchestrator.active!.state);
+
+    pi.exec.mockResolvedValueOnce({
+      code: 0,
+      stdout: " M src/tracked.ts\n",
+      stderr: "",
+    });
+
+    const ppCommit = getTool(pi, "pp_commit");
+    const result = await ppCommit.execute("call-pp-commit", { message: "commit files" });
+
+    expect(result.content[0].text).toContain("Committed 1 file");
+    expect(orchestrator.active!.modifiedFiles.size).toBe(0);
+    expect(orchestrator.active!.state.modifiedFiles).toEqual([]);
+    expect(autoCommitSpy).toHaveBeenCalled();
+  });
+});
+
+describe("tool blocking", () => {
+  it("blocks write to .pp/state.json", async () => {
+    const cwd = makeTempDir();
+    const { pi } = await setupOrchestrator(cwd);
+    const toolCall = pi._handlers.get("tool_call")!;
+
+    const result = await toolCall({ toolName: "write", input: { path: ".pp/state.json" } }, {});
+    expect(result).toEqual({ block: true, reason: "state.json is managed by the extension" });
+  });
+
+  it("blocks write to .pp/config.json", async () => {
+    const cwd = makeTempDir();
+    const { pi } = await setupOrchestrator(cwd);
+    const toolCall = pi._handlers.get("tool_call")!;
+
+    const result = await toolCall({ toolName: "edit", input: { path: ".pp/config.json" } }, {});
+    expect(result).toEqual({ block: true, reason: "config.json is managed by the user, not the LLM" });
+  });
+
+  it("allows markdown writes in .pp/state", async () => {
+    const cwd = makeTempDir();
+    const { pi } = await setupOrchestrator(cwd);
+    const toolCall = pi._handlers.get("tool_call")!;
+
+    const result = await toolCall({ toolName: "write", input: { path: ".pp/state/implement/123/notes.md" } }, {});
+    expect(result).toBeUndefined();
+  });
+
+  it("blocks non-markdown writes in .pp/state", async () => {
+    const cwd = makeTempDir();
+    const { pi } = await setupOrchestrator(cwd);
+    const toolCall = pi._handlers.get("tool_call")!;
+
+    const result = await toolCall({ toolName: "write", input: { path: ".pp/state/implement/123/data.json" } }, {});
+    expect(result).toEqual({ block: true, reason: "Cannot write non-.md files in .pp/state/" });
+  });
+});
+
+describe("error retry", () => {
+  it("turn_end with error retries with exponential backoff", async () => {
+    vi.useFakeTimers();
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "retry test");
+    const turnEnd = pi._handlers.get("turn_end")!;
+
+    await turnEnd({ message: { stopReason: "error", errorMessage: "rate limited", content: [] } }, ctx);
+
+    expect(orchestrator.errorRetryCount).toBe(1);
+    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Retrying in 2s"), "warning");
+
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(pi.sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("Previous request failed"));
+    vi.useRealTimers();
+  });
+
+  it("turn_end stops retrying after max retries", async () => {
+    vi.useFakeTimers();
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "retry max test");
+    const turnEnd = pi._handlers.get("turn_end")!;
+
+    for (let i = 0; i < 6; i++) {
+      await turnEnd({ message: { stopReason: "error", errorMessage: "api down", content: [] } }, ctx);
+    }
+
+    expect(orchestrator.errorRetryCount).toBe(0);
+    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Stopping auto-retry"), "error");
+    vi.useRealTimers();
+  });
+
+  it("successful turn resets error count", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "retry reset test");
+    const turnEnd = pi._handlers.get("turn_end")!;
+
+    await turnEnd({ message: { stopReason: "error", errorMessage: "once", content: [] } }, ctx);
+    expect(orchestrator.errorRetryCount).toBe(1);
+
+    await turnEnd({ message: { stopReason: "stop", content: [] } }, ctx);
+    expect(orchestrator.errorRetryCount).toBe(0);
+  });
+});
+
+describe("compaction", () => {
+  it("compactAndTransition calls ctx.compact for phase transition", async () => {
+    const cwd = makeTempDir();
+    const { orchestrator } = await setupOrchestrator(cwd);
+    const compactSpy = vi.fn((opts?: any) => {
+      if (opts?.onComplete) opts.onComplete();
+    });
+    const ctx = makeCtx({ compact: compactSpy });
+
+    await orchestrator.startTask(ctx as any, "implement", "compaction");
+    orchestrator.compactAndTransition(ctx as any, orchestrator.active!.dir, "plan");
+
+    expect(compactSpy).toHaveBeenCalledWith(expect.objectContaining({ customInstructions: expect.stringContaining("Phase transition") }));
+  });
+
+  it("session_before_compact returns phase summary when pending", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    await orchestrator.startTask(makeCtx() as any, "implement", "phase compact test");
+
+    orchestrator.phaseCompactionPending = true;
+    orchestrator.phaseCompactionSummary = "Phase summary text";
+    const beforeCompact = pi._handlers.get("session_before_compact")!;
+    const result = await beforeCompact({ preparation: { firstKeptEntryId: "e1", tokensBefore: 123 } }, {});
+
+    expect(result.compaction.summary).toBe("Phase summary text");
+  });
+
+  it("session_before_compact returns task done summary when pending", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+
+    orchestrator.taskDoneCompactionPending = true;
+    orchestrator.taskDoneCompactionSummary = "Task done summary";
+    const beforeCompact = pi._handlers.get("session_before_compact")!;
+    const result = await beforeCompact({ preparation: { firstKeptEntryId: "e2", tokensBefore: 456 } }, {});
+
+    expect(result.compaction.summary).toBe("Task done summary");
+  });
+
+  it("session_before_compact re-injects artifacts after natural compaction", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "reinject artifacts");
+    writeFileSync(join(orchestrator.active!.dir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(orchestrator.active!.dir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+
+    const beforeCompact = pi._handlers.get("session_before_compact")!;
+    const result = await beforeCompact({ preparation: { firstKeptEntryId: "e3", tokensBefore: 789 } }, {});
+
+    expect(result).toBeUndefined();
+    expect(pi.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ customType: "pp-artifact-reinject", content: expect.stringContaining("USER_REQUEST.md") }),
+      { deliverAs: "steer" },
+    );
+  });
+});
+
+describe("input blocking during await", () => {
+  it("blocks user input during await_planners", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "await planners");
+    orchestrator.active!.state.step = "await_planners";
+    const inputHandler = pi._handlers.get("input")!;
+
+    const result = await inputHandler({ source: "interactive" }, ctx);
+    expect(result).toEqual({ action: "handled" });
+  });
+
+  it("blocks user input during await_reviewers", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "await reviewers");
+    orchestrator.active!.state.step = "await_reviewers";
+    const inputHandler = pi._handlers.get("input")!;
+
+    const result = await inputHandler({ source: "interactive" }, ctx);
+    expect(result).toEqual({ action: "handled" });
+  });
+});
+
+describe("context injection", () => {
+  it("injectContextAndArtifacts sends context files as steer messages", async () => {
+    const cwd = makeTempDir();
+    mkdirSync(join(cwd, ".pp", "context"), { recursive: true });
+    writeFileSync(join(cwd, ".pp", "context", "main.md"), "---\ninject: context\nagents: [main]\n---\nContext body", "utf-8");
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx({ cwd });
+
+    await orchestrator.startTask(ctx as any, "implement", "inject context");
+    pi.sendMessage.mockClear();
+    orchestrator.injectContextAndArtifacts(orchestrator.active!.dir, orchestrator.active!.state.phase);
+
+    expect(pi.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ customType: "pp-context", content: expect.stringContaining("Context body") }),
+      { deliverAs: "steer" },
+    );
+  });
+
+  it("injectContextAndArtifacts sends phase artifacts", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "inject artifacts");
+    writeFileSync(join(orchestrator.active!.dir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(orchestrator.active!.dir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+    pi.sendMessage.mockClear();
+    orchestrator.injectContextAndArtifacts(orchestrator.active!.dir, orchestrator.active!.state.phase);
+
+    const artifactCalls = pi.sendMessage.mock.calls.filter((c: any[]) => c[0]?.customType === "pp-artifact");
+    expect(artifactCalls.length).toBeGreaterThan(0);
+    expect(artifactCalls.some((c: any[]) => String(c[0].content).includes("USER_REQUEST.md"))).toBe(true);
+  });
+
+  it("registerAgents appends context to agent prompts", async () => {
+    const cwd = makeTempDir();
+    mkdirSync(join(cwd, ".pp", "context"), { recursive: true });
+    writeFileSync(join(cwd, ".pp", "context", "explore-system.md"), "---\ninject: system\nagents: [explore]\n---\nExplore context", "utf-8");
+    const { orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx({ cwd });
+
+    await orchestrator.startTask(ctx as any, "implement", "register agents");
+    (registerAgentDefinitions as any).mockClear();
+    orchestrator.registerAgents();
+
+    const defs = (registerAgentDefinitions as any).mock.calls[0][1] as Array<{ type: string; prompt: string }>;
+    const explore = defs.find((d) => d.type === "explore");
+    expect(explore?.prompt).toContain("Explore context");
+  });
+});
+
+describe("session lifecycle", () => {
+  it("session_start registers tools and commands", async () => {
+    const cwd = makeTempDir();
+    const { pi } = await setupOrchestrator(cwd);
+
+    expect(pi.registerCommand).toHaveBeenCalledWith("pp", expect.anything());
+    const toolNames = [...pi._tools.keys()];
+    expect(toolNames).toContain("pp_phase_complete");
+    expect(toolNames).toContain("pp_commit");
+    expect(toolNames).toContain("pp_register_repo");
+  });
+
+  it("session_start detects paused tasks and notifies", async () => {
+    const cwd = makeTempDir();
+    createTask(cwd, "implement", "Paused task");
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi as any);
+    registerEventHandlers(orchestrator);
+    registerCommandHandlers(orchestrator);
+    const ctx = makeCtx({ cwd });
+
+    const sessionStart = pi._handlers.get("session_start")!;
+    await sessionStart({}, ctx);
+
+    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Paused task"), "info");
+  });
+
+  it("session_start loads config", async () => {
+    const cwd = makeTempDir();
+    const { orchestrator } = await setupOrchestrator(cwd);
+
+    expect(orchestrator.config).toBeDefined();
+    expect(orchestrator.config.mainModel.implement.model).toBe("test/model");
+  });
+
+  it("session_shutdown dumps usage summary", async () => {
+    const cwd = makeTempDir();
+    const { pi } = await setupOrchestrator(cwd);
+    const dumpSpy = vi.spyOn(usageTrackerModule, "dumpUsageSummary").mockImplementation(() => undefined);
+    const shutdown = pi._handlers.get("session_shutdown")!;
+
+    await shutdown({}, { sessionManager: { getSessionId: () => "session-id-1" } });
+
+    expect(dumpSpy).toHaveBeenCalledTimes(1);
+    expect(dumpSpy).toHaveBeenCalledWith(expect.anything(), "session-id-1");
   });
 });
