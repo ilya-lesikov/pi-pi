@@ -511,12 +511,15 @@ export class Orchestrator {
         : phase === "review" && this.active?.type === "review"
         ? this.config.mainModel.review.model
         : this.config.mainModel.implement.model;
+    const activeModelSpec = this.lastCtx?.model
+      ? `${this.lastCtx.model.provider}/${this.lastCtx.model.id}`
+      : modelSpec;
     const contextFiles = loadContextFiles(
       this.cwd,
       "main",
       "context",
       phase,
-      getModelInfo(this.lastCtx?.model?.id ?? modelSpec),
+      getModelInfo(activeModelSpec),
     );
     for (const cf of contextFiles) {
       this.pi.sendMessage(
@@ -535,11 +538,11 @@ export class Orchestrator {
 
   compactAndTransition(ctx: ExtensionContext, taskDir: string, phase: Phase, onReady?: () => void): void {
     this.phaseCompactionPending = true;
-    const finalize = () => {
+    const finalize = async () => {
       this.phaseStartTime = Date.now();
       if (this.active && (phase === "plan" || phase === "implement")) {
         const modelConfig = this.config.mainModel.implement;
-        this.switchModel(ctx, modelConfig.model, modelConfig.thinking).catch(() => {});
+        await this.switchModel(ctx, modelConfig.model, modelConfig.thinking);
       }
       this.injectContextAndArtifacts(taskDir, phase);
       onReady?.();
@@ -553,11 +556,11 @@ export class Orchestrator {
       customInstructions: "Phase transition — discard all prior conversation. Produce a one-line summary: 'Previous phase completed.'",
       onComplete: () => {
         this.phaseCompactionPending = false;
-        finalize();
+        void finalize();
       },
       onError: () => {
         this.phaseCompactionPending = false;
-        finalize();
+        void finalize();
       },
     });
   }

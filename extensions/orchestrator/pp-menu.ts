@@ -25,7 +25,7 @@ import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
 import { spawnCodeReviewers } from "./phases/review.js";
 import { spawnBrainstormReviewers } from "./phases/brainstorm.js";
 import { nextPhase } from "./phases/machine.js";
-import { getAllAliases, getModelFamilies, getModelInfo } from "./model-registry.js";
+import { getAllAliases, getModelFamilies, getModelInfo, updateRegistryFromAvailableModels } from "./model-registry.js";
 
 import {
   listTasks,
@@ -1042,6 +1042,17 @@ function refreshSubagentDefinitions(orchestrator: Orchestrator, keyPath: string[
 function applyConfigChange(orchestrator: Orchestrator, scope: Scope, keyPath: string[], value: any): void {
   writeConfigValue(getScopeConfigPath(orchestrator, scope), keyPath, value);
   orchestrator.config = loadConfig(orchestrator.cwd);
+  const available = (orchestrator.lastCtx as any)?.modelRegistry?.getAvailable?.();
+  if (Array.isArray(available)) {
+    const modelIds = available
+      .map((m: any) => {
+        const provider = typeof m?.provider === "string" ? m.provider.trim() : "";
+        const id = typeof m?.id === "string" ? m.id.trim() : "";
+        return provider && id ? `${provider}/${id}` : "";
+      })
+      .filter((id: string) => id.length > 0);
+    updateRegistryFromAvailableModels(modelIds);
+  }
   refreshSubagentDefinitions(orchestrator, keyPath);
 }
 

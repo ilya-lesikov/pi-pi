@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 import type { PiPiConfig } from "./config.js";
+import { updateRegistryFromAvailableModels } from "./model-registry.js";
 
 export interface OpenRouterModelData {
   name: string;
@@ -301,6 +302,11 @@ export function registerFlantProviders(
     apiKey: "$FLANT_API_KEY",
     models: openaiModels.map((m) => buildProviderModelConfig(m, metadata)),
   });
+
+  updateRegistryFromAvailableModels([
+    ...anthropicModels.map((id) => `pp-flant-anthropic/${id}`),
+    ...openaiModels.map((id) => `pp-flant-openai/${id}`),
+  ]);
 }
 
 function compareModelVersion(a: string, b: string): number {

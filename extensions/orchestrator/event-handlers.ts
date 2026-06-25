@@ -20,7 +20,7 @@ import { registerAstSearchTool } from "./ast-search.js";
 import { SUBAGENT_SESSION_KEY } from "./index.js";
 import { registerCommandHandlers } from "./command-handlers.js";
 import { setExtensionOnlyMode, unregisterAgentDefinitions } from "./agents/registry.js";
-import { resolveModel, getModelInfo } from "./model-registry.js";
+import { resolveModel, getModelInfo, updateRegistryFromAvailableModels } from "./model-registry.js";
 import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
 import { spawnCodeReviewers } from "./phases/review.js";
 import { spawnBrainstormReviewers } from "./phases/brainstorm.js";
@@ -901,6 +901,18 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     orchestrator.lastCtx = ctx;
     orchestrator.cwd = ctx.cwd;
 
+    const available = (ctx as any).modelRegistry?.getAvailable?.();
+    if (Array.isArray(available)) {
+      const modelIds = available
+        .map((m: any) => {
+          const provider = typeof m?.provider === "string" ? m.provider.trim() : "";
+          const id = typeof m?.id === "string" ? m.id.trim() : "";
+          return provider && id ? `${provider}/${id}` : "";
+        })
+        .filter((id: string) => id.length > 0);
+      updateRegistryFromAvailableModels(modelIds);
+    }
+
     if (!(globalThis as any)[SUBAGENT_SESSION_KEY]) {
       const tracker = createUsageTracker();
       const sessionId = ctx.sessionManager?.getSessionId?.() || "";
@@ -995,7 +1007,8 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
 
     const phasePrompt = orchestrator.getPhasePrompt(ctx);
     const phase = orchestrator.active?.state.phase;
-    const modelInfo = getModelInfo(ctx.model?.id ?? "");
+    const modelSpec = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "";
+    const modelInfo = getModelInfo(modelSpec);
     const systemContextFiles = loadContextFiles(orchestrator.cwd, "main", "system", phase, modelInfo);
     const systemSnippets = systemContextFiles.map((f) => f.content).join("\n\n");
 
