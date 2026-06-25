@@ -1,7 +1,8 @@
 import { execSync, execFileSync } from "child_process";
-import { dirname } from "path";
+import { existsSync, readFileSync } from "fs";
+import { dirname, join } from "path";
 import { minimatch } from "minimatch";
-import type { PiPiConfig, AfterEditCommand } from "./config.js";
+import type { AfterEditCommand, AfterImplementCommand } from "./config.js";
 
 interface CommandResult {
   ok: boolean;
@@ -22,11 +23,10 @@ function substituteVars(command: string, file?: string): string {
   return result;
 }
 
-export function runAfterEdit(file: string, config: PiPiConfig, cwd: string): CommandResult[] {
+export function runAfterEdit(file: string, commands: AfterEditCommand[], timeout: number, cwd: string): CommandResult[] {
   const results: CommandResult[] = [];
-  const timeout = config.timeouts.afterEdit;
 
-  for (const cmd of config.commands.afterEdit) {
+  for (const cmd of commands) {
     const matches = !cmd.glob || cmd.glob.length === 0 || cmd.glob.some((g) => minimatch(file, g, { matchBase: true }));
     if (!matches) continue;
 
@@ -42,11 +42,10 @@ export function runAfterEdit(file: string, config: PiPiConfig, cwd: string): Com
   return results;
 }
 
-export function runAfterImplement(config: PiPiConfig, cwd: string): CommandResult[] {
+export function runAfterImplement(commands: AfterImplementCommand[], timeout: number, cwd: string): CommandResult[] {
   const results: CommandResult[] = [];
-  const timeout = config.timeouts.afterImplement;
 
-  for (const cmd of config.commands.afterImplement) {
+  for (const cmd of commands) {
     const command = substituteVars(cmd.run);
     try {
       const output = execSync(command, { cwd, encoding: "utf-8", timeout, stdio: "pipe" });
@@ -57,6 +56,51 @@ export function runAfterImplement(config: PiPiConfig, cwd: string): CommandResul
   }
 
   return results;
+}
+
+function loadRepoConfig(repoPath: string): Record<string, any> | null {
+  const configPath = join(repoPath, ".pp", "config.json");
+  if (!existsSync(configPath)) return null;
+  try {
+    const raw = JSON.parse(readFileSync(configPath, "utf-8"));
+    return raw && typeof raw === "object" ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+export function loadRepoAfterEditCommands(repoPath: string): AfterEditCommand[] | null {
+  const raw = loadRepoConfig(repoPath);
+  if (!raw) return null;
+  const commands = raw?.commands?.afterEdit;
+  if (!Array.isArray(commands)) return null;
+
+  const valid: AfterEditCommand[] = [];
+  for (const cmd of commands) {
+    if (!cmd || typeof cmd !== "object") continue;
+    const run = (cmd as any).run;
+    if (typeof run !== "string" || run.length === 0) continue;
+    const globRaw = (cmd as any).glob;
+    const glob = Array.isArray(globRaw) ? globRaw.filter((g): g is string => typeof g === "string") : [];
+    valid.push({ run, glob });
+  }
+  return valid;
+}
+
+export function loadRepoAfterImplementCommands(repoPath: string): AfterImplementCommand[] | null {
+  const raw = loadRepoConfig(repoPath);
+  if (!raw) return null;
+  const commands = raw?.commands?.afterImplement;
+  if (!Array.isArray(commands)) return null;
+
+  const valid: AfterImplementCommand[] = [];
+  for (const cmd of commands) {
+    if (!cmd || typeof cmd !== "object") continue;
+    const run = (cmd as any).run;
+    if (typeof run !== "string" || run.length === 0) continue;
+    valid.push({ run });
+  }
+  return valid;
 }
 
 export function autoCommit(files: string[], message: string, cwd: string): { ok: boolean; commitHash?: string; error?: string } {

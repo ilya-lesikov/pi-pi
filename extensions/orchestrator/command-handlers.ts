@@ -1,9 +1,10 @@
 import { unregisterAgentDefinitions } from "./agents/registry.js";
-import { runAfterImplement } from "./commands.js";
+import { loadRepoAfterImplementCommands, runAfterImplement } from "./commands.js";
 import { resolvePreset } from "./config.js";
 import { nextPhase, validateExitCriteria } from "./phases/machine.js";
 import { spawnPlanners } from "./phases/planning.js";
 import { Orchestrator } from "./orchestrator.js";
+import { groupFilesByRepo } from "./repo-utils.js";
 import { saveTask } from "./state.js";
 
 export async function transitionToNextPhase(
@@ -32,7 +33,26 @@ export async function transitionToNextPhase(
   if (!next) return { ok: false, error: "No next phase available." };
 
   if (currentPhase === "implement") {
-    const afterResults = runAfterImplement(orchestrator.config, orchestrator.cwd);
+    const repos = orchestrator.active.state.repos ?? [];
+    const grouped = groupFilesByRepo(repos, [...orchestrator.active.modifiedFiles]);
+    const afterResults: Array<{ ok: boolean; command: string; output: string }> = [];
+    for (const [repoPath] of grouped) {
+      if (!repoPath) continue;
+      const repo = repos.find((r) => r.path === repoPath);
+      if (!repo) continue;
+      if (repo.isRoot) {
+        afterResults.push(...runAfterImplement(
+          orchestrator.config.commands.afterImplement,
+          orchestrator.config.timeouts.afterImplement,
+          orchestrator.cwd,
+        ));
+        continue;
+      }
+      if (orchestrator.config.ignoreExtraRepoConfigs) continue;
+      const extraCommands = loadRepoAfterImplementCommands(repoPath);
+      if (!extraCommands || extraCommands.length === 0) continue;
+      afterResults.push(...runAfterImplement(extraCommands, orchestrator.config.timeouts.afterImplement, repoPath));
+    }
     const failures = afterResults.filter((r) => !r.ok);
     if (failures.length > 0) {
       const failureText = failures.map((f) => `${f.command}: ${f.output}`).join("\n");

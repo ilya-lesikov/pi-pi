@@ -161,7 +161,7 @@ describe("tool_result implementation tracking", () => {
       { toolName: "write", input: { path: "src/index.ts" }, isError: false, content: [] },
       {},
     );
-    expect(orchestrator.active.modifiedFiles.has("src/index.ts")).toBe(true);
+    expect(orchestrator.active.modifiedFiles.has("/project/src/index.ts")).toBe(true);
   });
 
   it("skips .pp/ paths in modified-file tracking", async () => {
@@ -194,6 +194,6 @@ describe("tool_result implementation tracking", () => {
       { toolName: "edit", input: { file_path: "src/bar.ts" }, isError: false, content: [] },
       {},
     );
-    expect(orchestrator.active.modifiedFiles.has("src/bar.ts")).toBe(true);
+    expect(orchestrator.active.modifiedFiles.has("/project/src/bar.ts")).toBe(true);
   });
 });

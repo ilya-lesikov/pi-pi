@@ -1,9 +1,9 @@
 import { existsSync, readdirSync, readFileSync } from "fs";
-import { resolve, basename, join } from "path";
+import { resolve, basename, join, relative } from "path";
 import { validateUserRequest, validateResearch, validateArtifact } from "./validate-artifacts.js";
 import { Type } from "@sinclair/typebox";
 import { loadConfig, resolvePreset } from "./config.js";
-import { runAfterEdit, autoCommit } from "./commands.js";
+import { runAfterEdit, autoCommit, loadRepoAfterEditCommands } from "./commands.js";
 import { taskName, getActiveTask, saveTask, appendTaskLog } from "./state.js";
 import {
   loadContextFiles,
@@ -30,7 +30,7 @@ import { createCustomFooter, setFooterContext, setFooterTracker } from "./custom
 import { createUsageTracker, dumpUsageSummary, loadUsageSummary, type UsageTracker } from "./usage-tracker.js";
 import { askUser } from "../../3p/pi-ask-user/index.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { getBaseBranchForRepo, normalizeRepoPath, type RepoInfo } from "./repo-utils.js";
+import { findRootRepo, getBaseBranchForRepo, normalizeRepoPath, resolveRepoForFile, type RepoInfo } from "./repo-utils.js";
 
 const USAGE_TRACKER_KEY = Symbol.for("pi-pi:usage-tracker");
 
@@ -371,6 +371,7 @@ function registerRepoTool(orchestrator: Orchestrator): void {
 
       const normalizedRepo = normalizeRepoPath(gitRoot);
       const normalizedRoot = normalizeRepoPath(orchestrator.cwd);
+      const hadRepos = Array.isArray(orchestrator.active.state.repos);
       const repos = orchestrator.active.state.repos ?? [{ path: normalizedRoot, isRoot: true }];
       const baseBranch = typeof params.baseBranch === "string" && params.baseBranch.trim().length > 0
         ? params.baseBranch.trim()
@@ -378,29 +379,38 @@ function registerRepoTool(orchestrator: Orchestrator): void {
       const isRoot = normalizedRepo === normalizedRoot;
 
       let added = false;
-      let changed = false;
+      let changed = !hadRepos;
 
-      const existingByPathIdx = repos.findIndex((repo) => repo.path === normalizedRepo);
-      if (existingByPathIdx >= 0) {
-        const existing = repos[existingByPathIdx];
-        if (isRoot && !existing.isRoot) {
-          existing.isRoot = true;
-          changed = true;
-        }
-        if (baseBranch && existing.baseBranch !== baseBranch) {
-          existing.baseBranch = baseBranch;
-          changed = true;
-        }
-      } else if (isRoot) {
+      if (isRoot) {
         const existingRootIdx = repos.findIndex((repo) => repo.isRoot);
+        const existingByPathIdx = repos.findIndex((repo) => repo.path === normalizedRepo);
+
         if (existingRootIdx >= 0) {
           const existingRoot = repos[existingRootIdx];
           if (existingRoot.path !== normalizedRepo) {
             existingRoot.path = normalizedRepo;
             changed = true;
           }
+          if (!existingRoot.isRoot) {
+            existingRoot.isRoot = true;
+            changed = true;
+          }
           if (baseBranch && existingRoot.baseBranch !== baseBranch) {
             existingRoot.baseBranch = baseBranch;
+            changed = true;
+          }
+          if (existingByPathIdx >= 0 && existingByPathIdx !== existingRootIdx) {
+            repos.splice(existingByPathIdx, 1);
+            changed = true;
+          }
+        } else if (existingByPathIdx >= 0) {
+          const existing = repos[existingByPathIdx];
+          if (!existing.isRoot) {
+            existing.isRoot = true;
+            changed = true;
+          }
+          if (baseBranch && existing.baseBranch !== baseBranch) {
+            existing.baseBranch = baseBranch;
             changed = true;
           }
         } else {
@@ -409,9 +419,18 @@ function registerRepoTool(orchestrator: Orchestrator): void {
           changed = true;
         }
       } else {
-        repos.push({ path: normalizedRepo, isRoot: false, ...(baseBranch ? { baseBranch } : {}) });
-        added = true;
-        changed = true;
+        const existingByPathIdx = repos.findIndex((repo) => repo.path === normalizedRepo);
+        if (existingByPathIdx >= 0) {
+          const existing = repos[existingByPathIdx];
+          if (baseBranch && existing.baseBranch !== baseBranch) {
+            existing.baseBranch = baseBranch;
+            changed = true;
+          }
+        } else {
+          repos.push({ path: normalizedRepo, isRoot: false, ...(baseBranch ? { baseBranch } : {}) });
+          added = true;
+          changed = true;
+        }
       }
 
       orchestrator.active.state.repos = repos;
@@ -554,6 +573,7 @@ function registerCommitTool(orchestrator: Orchestrator): void {
       "The message should describe WHAT changed and WHY, not list files.",
     parameters: Type.Object({
       message: Type.String({ description: "Commit message describing the change (max 72 chars for first line)" }),
+      repo: Type.Optional(Type.String({ description: "Absolute path to the repo to commit in. Defaults to root." })),
     }),
     async execute(_toolCallId, params: any) {
       if (!orchestrator.active) {
@@ -562,13 +582,27 @@ function registerCommitTool(orchestrator: Orchestrator): void {
       if (!orchestrator.config.autoCommit) {
         return { content: [{ type: "text" as const, text: "autoCommit is disabled in config." }], details: {} };
       }
+
+      const repos = orchestrator.active.state.repos ?? [];
+      const rootRepo = findRootRepo(repos);
+      const defaultRepoPath = rootRepo?.path ?? orchestrator.cwd;
+      let commitRepoPath = defaultRepoPath;
+      if (typeof params.repo === "string" && params.repo.trim().length > 0) {
+        const normalized = normalizeRepoPath(params.repo);
+        const registered = repos.find((repo) => repo.path === normalized);
+        if (!registered) {
+          return { content: [{ type: "text" as const, text: `Repository is not registered: ${params.repo}` }], isError: true as const, details: {} };
+        }
+        commitRepoPath = registered.path;
+      }
+
       const files: string[] = [];
       try {
-        const gitResult = await pi.exec("git", ["diff", "--name-only"], { cwd: orchestrator.cwd, timeout: 5000 });
+        const gitResult = await pi.exec("git", ["diff", "--name-only"], { cwd: commitRepoPath, timeout: 5000 });
         if (gitResult.code === 0 && gitResult.stdout.trim()) {
           files.push(...gitResult.stdout.trim().split("\n").filter(Boolean));
         }
-        const stagedResult = await pi.exec("git", ["diff", "--name-only", "--cached"], { cwd: orchestrator.cwd, timeout: 5000 });
+        const stagedResult = await pi.exec("git", ["diff", "--name-only", "--cached"], { cwd: commitRepoPath, timeout: 5000 });
         if (stagedResult.code === 0 && stagedResult.stdout.trim()) {
           for (const f of stagedResult.stdout.trim().split("\n").filter(Boolean)) {
             if (!files.includes(f)) files.push(f);
@@ -578,10 +612,16 @@ function registerCommitTool(orchestrator: Orchestrator): void {
       if (files.length === 0) {
         return { content: [{ type: "text" as const, text: "No modified files to commit." }], details: {} };
       }
-      const result = autoCommit(files, params.message, orchestrator.cwd);
+      const result = autoCommit(files, params.message, commitRepoPath);
       if (result.ok) {
-        orchestrator.active.modifiedFiles.clear();
+        const remaining = [...orchestrator.active.modifiedFiles].filter((file) => {
+          const absoluteFile = resolve(orchestrator.cwd, file);
+          const repo = resolveRepoForFile(repos, absoluteFile);
+          return repo?.path !== commitRepoPath;
+        });
+        orchestrator.active.modifiedFiles = new Set(remaining);
         orchestrator.active.state.modifiedFiles = [];
+        orchestrator.active.state.modifiedFiles = [...orchestrator.active.modifiedFiles];
         saveTask(orchestrator.active.dir, orchestrator.active.state);
         orchestrator.commitReminderSent = false;
         return { content: [{ type: "text" as const, text: `Committed ${files.length} file(s): ${result.commitHash ?? "ok"}` }], details: {} };
@@ -1314,11 +1354,32 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
 
       if (orchestrator.active.state.phase !== "implement") return;
 
-      orchestrator.active.modifiedFiles.add(filePath);
+      orchestrator.active.modifiedFiles.add(resolvedWrite);
       orchestrator.active.state.modifiedFiles = [...orchestrator.active.modifiedFiles];
       try { saveTask(orchestrator.active.dir, orchestrator.active.state); } catch {}
 
-      const afterEditResults = runAfterEdit(filePath, orchestrator.config, orchestrator.cwd);
+      const repos = orchestrator.active.state.repos ?? [];
+      const repo = resolveRepoForFile(repos, resolvedWrite);
+      const afterEditResults: Array<{ ok: boolean; command: string; output: string }> = [];
+      if (repo) {
+        if (repo.isRoot) {
+          const fileInRepo = relative(orchestrator.cwd, resolvedWrite);
+          afterEditResults.push(
+            ...runAfterEdit(
+              fileInRepo,
+              orchestrator.config.commands.afterEdit,
+              orchestrator.config.timeouts.afterEdit,
+              orchestrator.cwd,
+            ),
+          );
+        } else if (!orchestrator.config.ignoreExtraRepoConfigs) {
+          const repoCommands = loadRepoAfterEditCommands(repo.path);
+          if (repoCommands && repoCommands.length > 0) {
+            const fileInRepo = relative(repo.path, resolvedWrite);
+            afterEditResults.push(...runAfterEdit(fileInRepo, repoCommands, orchestrator.config.timeouts.afterEdit, repo.path));
+          }
+        }
+      }
       const failures = afterEditResults.filter((r) => !r.ok);
 
       if (failures.length > 0) {
