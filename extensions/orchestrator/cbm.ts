@@ -200,10 +200,12 @@ export function registerCbmTools(pi: ExtensionAPI, cwd: string): boolean {
       semantic_query: Type.Optional(Type.Array(Type.String(), { description: "Array of keywords for vector similarity search" })),
       label: Type.Optional(Type.String({ description: "Filter by node type: Function, Method, Interface, Class, Type, Route" })),
       limit: Type.Optional(Type.Number({ description: "Max results (default: 20)" })),
+      project_path: Type.Optional(Type.String({ description: "Absolute path to the repo to search. Defaults to root project." })),
     }),
     async execute(_toolCallId, params: any) {
       try {
-        const project = await daemon.ensureIndexed(cwd);
+        const targetCwd = params.project_path ?? cwd;
+        const project = await daemon.ensureIndexed(targetCwd);
         const p: Record<string, unknown> = { project, limit: params.limit ?? 20 };
         if (params.query) p.query = params.query;
         if (params.name_pattern) p.name_pattern = params.name_pattern;
@@ -228,10 +230,12 @@ export function registerCbmTools(pi: ExtensionAPI, cwd: string): boolean {
       file_pattern: Type.Optional(Type.String({ description: "Glob filter (e.g. '*.go', '*.ts')" })),
       path_filter: Type.Optional(Type.String({ description: "Regex filter on file paths (e.g. '^pkg/')" })),
       limit: Type.Optional(Type.Number({ description: "Max results (default: 20)" })),
+      project_path: Type.Optional(Type.String({ description: "Absolute path to the repo to search. Defaults to root project." })),
     }),
     async execute(_toolCallId, params: any) {
       try {
-        const project = await daemon.ensureIndexed(cwd);
+        const targetCwd = params.project_path ?? cwd;
+        const project = await daemon.ensureIndexed(targetCwd);
         const p: Record<string, unknown> = { project, pattern: params.pattern, limit: params.limit ?? 20 };
         if (params.file_pattern) p.file_pattern = params.file_pattern;
         if (params.path_filter) p.path_filter = params.path_filter;
@@ -252,10 +256,12 @@ export function registerCbmTools(pi: ExtensionAPI, cwd: string): boolean {
       function_name: Type.String({ description: "Function name to trace" }),
       direction: Type.Optional(Type.String({ description: "inbound, outbound, or both (default: both)" })),
       depth: Type.Optional(Type.Number({ description: "Max traversal depth (default: 3)" })),
+      project_path: Type.Optional(Type.String({ description: "Absolute path to the repo to search. Defaults to root project." })),
     }),
     async execute(_toolCallId, params: any) {
       try {
-        const project = await daemon.ensureIndexed(cwd);
+        const targetCwd = params.project_path ?? cwd;
+        const project = await daemon.ensureIndexed(targetCwd);
         const p: Record<string, unknown> = {
           project,
           function_name: params.function_name,
@@ -278,10 +284,12 @@ export function registerCbmTools(pi: ExtensionAPI, cwd: string): boolean {
     parameters: Type.Object({
       base_branch: Type.Optional(Type.String({ description: "Compare against this branch (default: main)" })),
       since: Type.Optional(Type.String({ description: "Git ref or date (e.g. HEAD~5, v0.5.0)" })),
+      project_path: Type.Optional(Type.String({ description: "Absolute path to the repo to search. Defaults to root project." })),
     }),
     async execute(_toolCallId, params: any) {
       try {
-        const project = await daemon.ensureIndexed(cwd);
+        const targetCwd = params.project_path ?? cwd;
+        const project = await daemon.ensureIndexed(targetCwd);
         const p: Record<string, unknown> = { project };
         if (params.base_branch) p.base_branch = params.base_branch;
         if (params.since) p.since = params.since;

@@ -58,6 +58,7 @@ export const TOOL_ROUTING = [
     "before doing any work.",
   "",
   "Find code by concept or behavior:",
+  "- Multi-repo: cbm_search, cbm_search_code, cbm_trace, cbm_changes accept optional project_path (absolute repo path). If omitted, they use the root project.",
   "- cbm_search: natural-language search (query='deploy release chart')",
   "- cbm_search with semantic_query: vector similarity (['deploy','install','upgrade'])",
   "- cbm_search_code: graph-augmented grep — deduplicates into containing functions",
