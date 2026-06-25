@@ -97,6 +97,7 @@ describe("saveTask", () => {
     const taskDir = createTask(cwd, "implement", "Initial");
     const state: TaskState = {
       phase: "implement",
+      initialPhase: "implement",
       step: "user_gate",
       reviewCycle: { kind: "auto", step: "await_reviewers", pass: 2 },
       reviewPass: 1,
@@ -104,6 +105,8 @@ describe("saveTask", () => {
       from: "implement/some-task",
       description: "Updated",
       startedAt: "2026-04-20T00:00:00.000Z",
+      plannerFailureAutoRetried: false,
+      reviewerFailureAutoRetried: false,
     };
 
     saveTask(taskDir, state);

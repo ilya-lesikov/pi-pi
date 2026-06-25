@@ -2267,7 +2267,7 @@ async function pickModeForTaskStart(
 ): Promise<{ mode: TaskMode; autonomousConfig?: AutonomousConfig } | null> {
   while (true) {
     const mode = await showTaskModePicker(ctx);
-    if (mode === "back") return { mode: "guided" };
+    if (mode === "back") return null;
     if (mode === "guided") return { mode: "guided" };
     const autonomousConfig = await showAutonomousSettings(orchestrator, ctx, type, includeFirstPhase);
     if (!autonomousConfig) continue;
@@ -2929,7 +2929,7 @@ export async function showActiveTaskMenu(
         next === "plan" &&
         task.type === "brainstorm"
       ) {
-        const modeSelection = await pickModeForTaskStart(orchestrator, ctx, task.type, false);
+        const modeSelection = await pickModeForTaskStart(orchestrator, ctx, "implement", false);
         if (!modeSelection) continue;
         task.state.mode = modeSelection.mode;
         task.state.effectiveMode = undefined;

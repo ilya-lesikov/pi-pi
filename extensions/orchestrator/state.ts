@@ -38,6 +38,7 @@ export type Phase = ImplementPhase | DebugPhase | BrainstormPhase | ReviewPhase 
 
 export interface TaskState {
   phase: Phase;
+  initialPhase?: string;
   step: string | null;
   reviewCycle: { kind: string; step: string; pass: number } | null;
   reviewPass: number;
@@ -52,6 +53,8 @@ export interface TaskState {
   mode?: TaskMode;
   effectiveMode?: TaskMode;
   autonomousConfig?: AutonomousConfig;
+  plannerFailureAutoRetried?: boolean;
+  reviewerFailureAutoRetried?: boolean;
 }
 
 export interface TaskInfo {
@@ -94,6 +97,7 @@ export function createTask(cwd: string, type: TaskType, description: string, mod
 
   const state: TaskState = {
     phase: getFirstPhase(type),
+    initialPhase: getFirstPhase(type),
     step: "llm_work",
     reviewCycle: null,
     reviewPass: 0,
@@ -102,6 +106,8 @@ export function createTask(cwd: string, type: TaskType, description: string, mod
     description,
     startedAt: new Date().toISOString(),
     mode,
+    plannerFailureAutoRetried: false,
+    reviewerFailureAutoRetried: false,
   };
 
   writeFileSync(taskStatePath(taskDir), JSON.stringify(state, null, 2) + "\n", "utf-8");
@@ -116,6 +122,15 @@ export function loadTask(taskDir: string): TaskState {
     const state = JSON.parse(raw) as TaskState;
     if ((state as any).phase === "planning") {
       state.phase = "plan";
+    }
+    if (!state.initialPhase) {
+      state.initialPhase = state.phase;
+    }
+    if (state.plannerFailureAutoRetried === undefined) {
+      state.plannerFailureAutoRetried = false;
+    }
+    if (state.reviewerFailureAutoRetried === undefined) {
+      state.reviewerFailureAutoRetried = false;
     }
     if ((state as any).repoCwd && (!state.repos || state.repos.length === 0)) {
       state.repos = [{ path: (state as any).repoCwd, isRoot: false }];
@@ -271,4 +286,3 @@ export function taskAge(state: TaskState): string {
   if (hours < 24) return `${hours}h`;
   return `${Math.floor(hours / 24)}d`;
 }
-

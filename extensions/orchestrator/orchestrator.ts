@@ -85,8 +85,6 @@ export class Orchestrator {
   failedReviewerVariants: string[] = [];
   plannerFailureDialogPending = false;
   reviewerFailureDialogPending = false;
-  plannerFailureAutoRetried = false;
-  reviewerFailureAutoRetried = new Set<string>();
   plannotatorReject: ((reason: Error) => void) | null = null;
   plannotatorUnsub: (() => void) | null = null;
   transitionToNextPhase: (ctx: any, plannerPreset?: string) => Promise<{ ok: boolean; error?: string }> = async () => ({ ok: false, error: "not initialized" });
@@ -367,6 +365,7 @@ export class Orchestrator {
       state.from = relative(join(this.cwd, ".pp", "state"), fromTaskDir);
       if (skipBrainstorm && type === "implement") {
         state.phase = "plan";
+        state.initialPhase = "plan";
         state.activePlannerPreset = this.config.defaultPresets.planners;
         state.step = this.getPlanStartState(dir, state.activePlannerPreset).step;
       }
@@ -509,8 +508,6 @@ export class Orchestrator {
     this.failedReviewerVariants = [];
     this.plannerFailureDialogPending = false;
     this.reviewerFailureDialogPending = false;
-    this.plannerFailureAutoRetried = false;
-    this.reviewerFailureAutoRetried.clear();
     if (this.awaitPollTimer) {
       clearInterval(this.awaitPollTimer);
       this.awaitPollTimer = null;

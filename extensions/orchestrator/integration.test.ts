@@ -1434,16 +1434,135 @@ describe("task modes and quick task", () => {
     emitSubagentCompleted(pi, "reviewer-1", "Code reviewer (test)");
 
     const second = await ppPhaseComplete.execute("call-2", { summary: "applied" }, undefined, undefined, ctx);
-    expect(second.content[0].text).toMatch(/Autonomous mode: reviews running|Started review cycle pass/);
-
-    writeFileSync(join(reviewsDir, `${Math.floor(Date.now() / 1000)}_test_round-2.md`), "pass2", "utf-8");
-    emitSubagentCreated(pi, "reviewer-2", "Code reviewer (test)");
-    emitSubagentCompleted(pi, "reviewer-2", "Code reviewer (test)");
-
-    const third = await ppPhaseComplete.execute("call-3", { summary: "applied2" }, undefined, undefined, ctx);
-    expect(third.content[0].text).toBe("");
+    expect(second.content[0].text).toBe("");
     expect(orchestrator.active).toBeNull();
     expect(loadTask(taskDir).phase).toBe("done");
+  });
+
+  it("autonomous planner retries failed variants once even with partial outputs", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+
+    await orchestrator.startTask({ ...makeCtx(), cwd } as any, "implement", "implement", undefined, undefined, "autonomous");
+    const taskDir = orchestrator.active!.dir;
+    orchestrator.active!.state.phase = "plan";
+    orchestrator.active!.state.step = "await_planners";
+    orchestrator.active!.state.plannerFailureAutoRetried = false;
+    saveTask(taskDir, orchestrator.active!.state);
+    const plansDir = join(taskDir, "plans");
+    mkdirSync(plansDir, { recursive: true });
+    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000)}_test.md`), "draft", "utf-8");
+
+    orchestrator.failedPlannerVariants = ["test"];
+    orchestrator.pendingSubagentSpawns = 0;
+    emitSubagentCompleted(pi, "planner-1", "Planner (test)");
+
+    expect(orchestrator.active!.state.plannerFailureAutoRetried).toBe(true);
+  });
+
+  it("autonomous reviewer retries failed variants once even with partial outputs", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+
+    await orchestrator.startTask({ ...makeCtx(), cwd } as any, "implement", "implement", undefined, undefined, "autonomous");
+    const taskDir = orchestrator.active!.dir;
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "await_reviewers";
+    orchestrator.active!.state.reviewCycle = { kind: "auto", step: "await_reviewers", pass: 1 };
+    orchestrator.active!.state.reviewerFailureAutoRetried = false;
+    saveTask(taskDir, orchestrator.active!.state);
+    const reviewsDir = join(taskDir, "code-reviews");
+    mkdirSync(reviewsDir, { recursive: true });
+    writeFileSync(join(reviewsDir, `${Math.floor(Date.now() / 1000)}_test_round-1.md`), "partial", "utf-8");
+
+    orchestrator.failedReviewerVariants = ["test"];
+    orchestrator.pendingSubagentSpawns = 0;
+    emitSubagentCompleted(pi, "reviewer-1", "Code reviewer (test)");
+
+    expect(orchestrator.active!.state.reviewerFailureAutoRetried).toBe(true);
+  });
+
+  it("mode picker Back returns to previous menu and does not start guided task", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    queueDefaultResponses(["Task", "Implement", "New", "Back", "Resume", "Back", "Back", "Back"]);
+    const pp = getCommand(pi, "pp");
+    await pp(undefined, ctx);
+
+    expect(orchestrator.active).toBeNull();
+  });
+
+  it("brainstorm continue uses implement autonomous phase defaults", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "brainstorm", "brainstorm");
+    const taskDir = orchestrator.active!.dir;
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+
+    queueDefaultResponses(["Next", "Continue to plan & implement", "Autonomous", "Start"]);
+    const ppPhaseComplete = getTool(pi, "pp_phase_complete");
+    await ppPhaseComplete.execute("call-1", { summary: "Conclusions ready" }, undefined, undefined, ctx);
+
+    expect(orchestrator.active!.state.autonomousConfig?.phases.plan).toBeDefined();
+    expect(orchestrator.active!.state.autonomousConfig?.phases.implement).toBeDefined();
+    expect(orchestrator.active!.state.autonomousConfig?.phases.brainstorm).toBeUndefined();
+  });
+
+  it("from-task implement sets initialPhase plan and ask_user remains allowed in plan", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+
+    await orchestrator.startTask({ ...makeCtx(), cwd } as any, "debug", "Find bug");
+    const debugDir = orchestrator.active!.dir;
+    writeFileSync(join(debugDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(debugDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+
+    await orchestrator.startTask({ ...makeCtx(), cwd } as any, "implement", "implement", debugDir, true, "autonomous");
+    expect(orchestrator.active!.state.initialPhase).toBe("plan");
+    expect(orchestrator.active!.state.phase).toBe("plan");
+
+    const toolCall = pi._handlers.get("tool_call")!;
+    const result = await toolCall({ toolName: "ask_user", input: {} }, {});
+    expect(result).toBeUndefined();
+  });
+
+  it("autonomous prompt injection uses initialPhase for from-task implement", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask({ ...ctx, cwd } as any, "debug", "Find bug");
+    const debugDir = orchestrator.active!.dir;
+    writeFileSync(join(debugDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(debugDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+    await orchestrator.startTask({ ...ctx, cwd } as any, "implement", "implement", debugDir, true, "autonomous");
+    orchestrator.active!.state.step = "llm_work";
+
+    const beforeStart = pi._handlers.get("before_agent_start")!;
+    const resultAtInitial = await beforeStart({ systemPrompt: "base" }, ctx);
+    expect(resultAtInitial?.systemPrompt ?? "").not.toContain("You are in autonomous mode");
+
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "llm_work";
+    const resultAfter = await beforeStart({ systemPrompt: "base" }, ctx);
+    expect(resultAfter?.systemPrompt ?? "").toContain("You are in autonomous mode");
+  });
+
+  it("persists retry bookkeeping flags in task state", async () => {
+    const cwd = makeTempDir();
+    const { orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "implement", undefined, undefined, "autonomous");
+    const taskDir = orchestrator.active!.dir;
+    const state = loadTask(taskDir);
+    expect(state.plannerFailureAutoRetried).toBe(false);
+    expect(state.reviewerFailureAutoRetried).toBe(false);
   });
 
   it("blocks ask_user in autonomous mode after first phase", async () => {
