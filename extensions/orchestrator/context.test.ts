@@ -366,17 +366,19 @@ describe("context regressions", () => {
     ]);
   });
 
-  it("loads all plan review outputs regardless of pass", () => {
+  it("filters plan review outputs by pass", () => {
     const taskDir = makeTempDir();
     const planReviewsDir = join(taskDir, "plan-reviews");
     mkdirSync(planReviewsDir, { recursive: true });
 
-    writeFileSync(join(planReviewsDir, "001_alpha.md"), "a", "utf-8");
-    writeFileSync(join(planReviewsDir, "002_beta.md"), "b", "utf-8");
+    writeFileSync(join(planReviewsDir, "001_alpha_round-1.md"), "a", "utf-8");
+    writeFileSync(join(planReviewsDir, "002_beta_round-2.md"), "b", "utf-8");
 
-    expect(loadPlanReviewOutputs(taskDir).map((r) => r.name)).toEqual([
-      "001_alpha.md",
-      "002_beta.md",
+    expect(loadPlanReviewOutputs(taskDir, 1).map((r) => r.name)).toEqual([
+      "001_alpha_round-1.md",
+    ]);
+    expect(loadPlanReviewOutputs(taskDir, 2).map((r) => r.name)).toEqual([
+      "002_beta_round-2.md",
     ]);
   });
 });

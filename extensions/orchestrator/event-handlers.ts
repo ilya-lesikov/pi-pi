@@ -204,7 +204,7 @@ export async function enterReviewCycle(
   const spawnFn = phase === "brainstorm"
     ? () => spawnBrainstormReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, orchestrator.config, pass, reviewers)
     : phase === "plan"
-    ? () => spawnPlanReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, orchestrator.config, reviewers)
+    ? () => spawnPlanReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, orchestrator.config, pass, reviewers)
     : () => spawnCodeReviewers(
       pi,
       orchestrator.cwd,
@@ -373,7 +373,7 @@ function registerSpecifyReviewsTool(orchestrator: Orchestrator): void {
 
 function loadPhaseReviewOutputs(taskDir: string, phase: string, pass: number): { name: string; content: string }[] {
   if (phase === "brainstorm") return loadBrainstormReviewOutputs(taskDir, pass);
-  if (phase === "plan") return loadPlanReviewOutputs(taskDir);
+  if (phase === "plan") return loadPlanReviewOutputs(taskDir, pass);
   return loadCodeReviewOutputs(taskDir, pass);
 }
 
@@ -740,7 +740,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
                 const spawnFn = phase === "brainstorm"
                   ? () => spawnBrainstormReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, orchestrator.config, pass, scopedReviewers)
                   : phase === "plan"
-                  ? () => spawnPlanReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, orchestrator.config, scopedReviewers)
+                  ? () => spawnPlanReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, orchestrator.config, pass, scopedReviewers)
                   : () => spawnCodeReviewers(
                     pi,
                     orchestrator.cwd,

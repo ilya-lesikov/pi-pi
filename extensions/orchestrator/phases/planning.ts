@@ -166,6 +166,7 @@ export async function spawnPlanReviewers(
   taskDir: string,
   taskId: string,
   config: PiPiConfig,
+  pass: number,
   variants?: Record<string, VariantConfig>,
 ): Promise<{ spawned: number; files: string[]; agentIds: string[]; failedVariants: string[] }> {
   const urPath = join(taskDir, "USER_REQUEST.md");
@@ -191,7 +192,7 @@ export async function spawnPlanReviewers(
 
   const results: Promise<void>[] = [];
   for (const [variant] of enabledVariants) {
-    const outputPath = join(planReviewsDir, `${timestamp}_${variant}.md`);
+    const outputPath = join(planReviewsDir, `${timestamp}_${variant}_round-${pass}.md`);
     reviewFiles.push(outputPath);
 
     const agent = createPlanReviewerAgent(
@@ -236,7 +237,7 @@ export async function spawnPlanReviewers(
   await Promise.allSettled(results);
 
   const actualReviewFiles = existsSync(planReviewsDir)
-    ? readdirSync(planReviewsDir).filter((f) => f.startsWith(`${timestamp}`) && f.endsWith(".md"))
+    ? readdirSync(planReviewsDir).filter((f) => f.startsWith(`${timestamp}`) && f.includes(`round-${pass}`) && f.endsWith(".md"))
     : [];
 
   if (actualReviewFiles.length > 0) {

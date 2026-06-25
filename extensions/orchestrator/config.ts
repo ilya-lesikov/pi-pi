@@ -239,11 +239,6 @@ export function validateConfig(config: Record<string, any>): void {
       if (!VALID_NAME_RE.test(presetName)) {
         throw new Error(`config.defaultPresets.${group} has invalid name`);
       }
-
-      const presetsInGroup = config.presets?.[group] as Record<string, unknown> | undefined;
-      if (presetsInGroup && !(presetName in presetsInGroup)) {
-        throw new Error(`config.defaultPresets.${group} references missing preset '${presetName}'`);
-      }
     }
   }
 
@@ -298,6 +293,44 @@ function loadJsonFile(path: string): Record<string, any> | null {
 }
 
 export const GLOBAL_CONFIG_PATH = join(getAgentDir(), "extensions", "pp", "config.json");
+
+export function validateMergedDefaultPresets(config: Record<string, any>): void {
+  for (const group of PRESET_GROUPS) {
+    const presetName = config.defaultPresets?.[group];
+    if (!presetName) continue;
+    const presetsInGroup = config.presets?.[group] as Record<string, unknown> | undefined;
+    if (presetsInGroup && !Object.prototype.hasOwnProperty.call(presetsInGroup, presetName)) {
+      throw new Error(`config.defaultPresets.${group} "${presetName}" does not exist in merged presets`);
+    }
+  }
+}
+
+export function mergeConfigLayers(
+  globalConfig: Record<string, any> | null,
+  projectConfig: Record<string, any> | null,
+): PiPiConfig {
+  let merged = { ...DEFAULT_CONFIG } as Record<string, any>;
+
+  const getFlantConfig = (globalThis as any)[Symbol.for("pi-pi:flant-config")] as (() => Partial<PiPiConfig> | null) | undefined;
+  const flantConfig = getFlantConfig?.();
+  if (flantConfig) {
+    merged = deepMerge(merged, flantConfig as Record<string, any>);
+  }
+
+  if (globalConfig) {
+    validateConfig(globalConfig);
+    merged = deepMerge(merged, globalConfig);
+  }
+
+  if (projectConfig) {
+    validateConfig(projectConfig);
+    merged = deepMerge(merged, projectConfig);
+  }
+
+  validateConfig(merged);
+  validateMergedDefaultPresets(merged);
+  return merged as unknown as PiPiConfig;
+}
 
 export function resolvePreset(
   config: PiPiConfig,
@@ -397,25 +430,5 @@ export function loadConfig(cwd: string, globalConfigPath = GLOBAL_CONFIG_PATH): 
 
   const globalConfig = loadJsonFile(globalConfigPath);
   const projectConfig = loadJsonFile(projectConfigPath);
-
-  let merged = { ...DEFAULT_CONFIG } as Record<string, any>;
-
-  const getFlantConfig = (globalThis as any)[Symbol.for("pi-pi:flant-config")] as (() => Partial<PiPiConfig> | null) | undefined;
-  const flantConfig = getFlantConfig?.();
-  if (flantConfig) {
-    merged = deepMerge(merged, flantConfig as Record<string, any>);
-  }
-
-  if (globalConfig) {
-    validateConfig(globalConfig);
-    merged = deepMerge(merged, globalConfig);
-  }
-  if (projectConfig) {
-    validateConfig(projectConfig);
-    merged = deepMerge(merged, projectConfig);
-  }
-
-  validateConfig(merged);
-
-  return merged as unknown as PiPiConfig;
+  return mergeConfigLayers(globalConfig, projectConfig);
 }

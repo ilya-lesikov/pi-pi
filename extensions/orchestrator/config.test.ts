@@ -70,7 +70,7 @@ describe("validateConfig", () => {
     );
   });
 
-  it("throws when default preset points to missing preset", () => {
+  it("allows default preset name format without checking local preset existence", () => {
     expect(() =>
       validateConfig({
         presets: {
@@ -78,7 +78,7 @@ describe("validateConfig", () => {
         },
         defaultPresets: { planners: "missing" },
       })
-    ).toThrow("config.defaultPresets.planners references missing preset 'missing'");
+    ).not.toThrow();
   });
 
   it("throws when commands.afterEdit is not an array", () => {
@@ -216,6 +216,61 @@ describe("loadConfig", () => {
     writeFileSync(configPath, JSON.stringify({ timeouts: { afterEdit: -1 } }), "utf-8");
 
     expect(() => loadConfig(cwd, "/nonexistent/global/config.json")).toThrow("config.timeouts.afterEdit must be a non-negative number");
+  });
+
+  it("allows project default preset that exists in global presets", () => {
+    const cwd = makeTempDir();
+    const ppDir = join(cwd, ".pp");
+    const projectConfigPath = join(ppDir, "config.json");
+    const globalConfigPath = join(cwd, "global-config.json");
+
+    mkdirSync(ppDir, { recursive: true });
+    writeFileSync(
+      globalConfigPath,
+      JSON.stringify({
+        presets: {
+          planners: {
+            deep: {
+              custom: { enabled: true, model: "provider/model-deep" },
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+    writeFileSync(projectConfigPath, JSON.stringify({ defaultPresets: { planners: "deep" } }), "utf-8");
+
+    const config = loadConfig(cwd, globalConfigPath);
+
+    expect(config.defaultPresets.planners).toBe("deep");
+    expect(resolvePreset(config, "planners")).toEqual(config.presets.planners.deep);
+  });
+
+  it("throws when merged default preset points to missing preset", () => {
+    const cwd = makeTempDir();
+    const ppDir = join(cwd, ".pp");
+    const projectConfigPath = join(ppDir, "config.json");
+    const globalConfigPath = join(cwd, "global-config.json");
+
+    mkdirSync(ppDir, { recursive: true });
+    writeFileSync(
+      globalConfigPath,
+      JSON.stringify({
+        presets: {
+          planners: {
+            regular: {
+              custom: { enabled: true, model: "provider/model-regular" },
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+    writeFileSync(projectConfigPath, JSON.stringify({ defaultPresets: { planners: "missing" } }), "utf-8");
+
+    expect(() => loadConfig(cwd, globalConfigPath)).toThrow(
+      'config.defaultPresets.planners "missing" does not exist in merged presets',
+    );
   });
 });
 

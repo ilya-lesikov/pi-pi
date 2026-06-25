@@ -253,11 +253,11 @@ export function loadCodeReviewOutputs(taskDir: string, pass: number): { name: st
     .map((name) => ({ name, content: readFileSync(join(dir, name), "utf-8") }));
 }
 
-export function loadPlanReviewOutputs(taskDir: string): { name: string; content: string }[] {
+export function loadPlanReviewOutputs(taskDir: string, pass: number): { name: string; content: string }[] {
   const dir = join(taskDir, "plan-reviews");
   if (!existsSync(dir)) return [];
   return readdirSync(dir)
-    .filter((f) => f.endsWith(".md"))
+    .filter((f) => f.includes(`round-${pass}`) && f.endsWith(".md"))
     .sort()
     .map((name) => ({ name, content: readFileSync(join(dir, name), "utf-8") }));
 }

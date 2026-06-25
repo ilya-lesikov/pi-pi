@@ -3,8 +3,11 @@ import { join, relative } from "path";
 import { askUser } from "../../3p/pi-ask-user/index.js";
 import { unregisterAgentDefinitions } from "./agents/registry.js";
 import {
+  type AfterEditCommand,
+  type AfterImplementCommand,
   GLOBAL_CONFIG_PATH,
   loadConfig,
+  mergeConfigLayers,
   readRawConfig,
   removeConfigValue,
   resolvePreset,
@@ -178,7 +181,7 @@ async function finishTask(orchestrator: Orchestrator, ctx: any): Promise<string>
 
 function loadPhaseReviewOutputs(taskDir: string, phase: string, pass: number): { name: string; content: string }[] {
   if (phase === "brainstorm") return loadBrainstormReviewOutputs(taskDir, pass);
-  if (phase === "plan") return loadPlanReviewOutputs(taskDir);
+  if (phase === "plan") return loadPlanReviewOutputs(taskDir, pass);
   return loadCodeReviewOutputs(taskDir, pass);
 }
 
@@ -386,7 +389,7 @@ export async function resumeTask(
           const spawnFn = phase === "brainstorm"
             ? () => spawnBrainstormReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, orchestrator.config, cycle.pass, missingReviewerConfig)
             : phase === "plan"
-            ? () => spawnPlanReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, orchestrator.config, missingReviewerConfig)
+            ? () => spawnPlanReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, orchestrator.config, cycle.pass, missingReviewerConfig)
             : () => spawnCodeReviewers(
               pi,
               orchestrator.cwd,
@@ -862,6 +865,77 @@ function hasNestedKey(obj: unknown, keyPath: string[]): boolean {
   return true;
 }
 
+function getNestedValue(obj: unknown, keyPath: string[]): any {
+  let cursor: any = obj;
+  for (const key of keyPath) {
+    if (!cursor || typeof cursor !== "object") return undefined;
+    if (!Object.prototype.hasOwnProperty.call(cursor, key)) return undefined;
+    cursor = cursor[key];
+  }
+  return cursor;
+}
+
+function setNestedValue(obj: Record<string, any>, keyPath: string[], value: any): void {
+  if (keyPath.length === 0) return;
+  let cursor: Record<string, any> = obj;
+  for (let i = 0; i < keyPath.length - 1; i++) {
+    const key = keyPath[i];
+    const current = cursor[key];
+    if (!current || typeof current !== "object" || Array.isArray(current)) {
+      cursor[key] = {};
+    }
+    cursor = cursor[key] as Record<string, any>;
+  }
+  cursor[keyPath[keyPath.length - 1]] = value;
+}
+
+function deleteNestedValue(obj: Record<string, any>, keyPath: string[]): void {
+  if (keyPath.length === 0) return;
+  let cursor: Record<string, any> = obj;
+  for (let i = 0; i < keyPath.length - 1; i++) {
+    const key = keyPath[i];
+    const current = cursor[key];
+    if (!current || typeof current !== "object" || Array.isArray(current)) return;
+    cursor = current;
+  }
+  delete cursor[keyPath[keyPath.length - 1]];
+}
+
+function getRawScopeValue(orchestrator: Orchestrator, scope: Scope, keyPath: string[]): any {
+  const raw = readRawConfig(getScopeConfigPath(orchestrator, scope));
+  return getNestedValue(raw, keyPath);
+}
+
+function tryApplyConfigChange(orchestrator: Orchestrator, scope: Scope, keyPath: string[], value: any): { ok: boolean; error?: string } {
+  try {
+    const nextGlobal = structuredClone(readRawConfig(GLOBAL_CONFIG_PATH));
+    const nextProject = structuredClone(readRawConfig(getProjectConfigPath(orchestrator.cwd)));
+    const target = scope === "global" ? nextGlobal : nextProject;
+    setNestedValue(target, keyPath, value);
+    mergeConfigLayers(nextGlobal, nextProject);
+    writeConfigValue(getScopeConfigPath(orchestrator, scope), keyPath, value);
+    orchestrator.config = loadConfig(orchestrator.cwd);
+    return { ok: true };
+  } catch (err: any) {
+    return { ok: false, error: err?.message ?? String(err) };
+  }
+}
+
+function tryClearConfigOverride(orchestrator: Orchestrator, scope: Scope, keyPath: string[]): { ok: boolean; error?: string } {
+  try {
+    const nextGlobal = structuredClone(readRawConfig(GLOBAL_CONFIG_PATH));
+    const nextProject = structuredClone(readRawConfig(getProjectConfigPath(orchestrator.cwd)));
+    const target = scope === "global" ? nextGlobal : nextProject;
+    deleteNestedValue(target, keyPath);
+    mergeConfigLayers(nextGlobal, nextProject);
+    removeConfigValue(getScopeConfigPath(orchestrator, scope), keyPath);
+    orchestrator.config = loadConfig(orchestrator.cwd);
+    return { ok: true };
+  } catch (err: any) {
+    return { ok: false, error: err?.message ?? String(err) };
+  }
+}
+
 function getConfigSource(globalConfig: Record<string, any>, projectConfig: Record<string, any>, keyPath: string[]): ConfigSource {
   if (hasNestedKey(projectConfig, keyPath)) return "(project)";
   if (hasNestedKey(globalConfig, keyPath)) return "(global)";
@@ -1040,8 +1114,11 @@ function refreshSubagentDefinitions(orchestrator: Orchestrator, keyPath: string[
 }
 
 function applyConfigChange(orchestrator: Orchestrator, scope: Scope, keyPath: string[], value: any): void {
-  writeConfigValue(getScopeConfigPath(orchestrator, scope), keyPath, value);
-  orchestrator.config = loadConfig(orchestrator.cwd);
+  const result = tryApplyConfigChange(orchestrator, scope, keyPath, value);
+  if (!result.ok) {
+    orchestrator.lastCtx?.ui?.notify(`Config update rejected: ${result.error}`, "error");
+    return;
+  }
   const available = (orchestrator.lastCtx as any)?.modelRegistry?.getAvailable?.();
   if (Array.isArray(available)) {
     const modelIds = available
@@ -1057,8 +1134,11 @@ function applyConfigChange(orchestrator: Orchestrator, scope: Scope, keyPath: st
 }
 
 function clearConfigOverride(orchestrator: Orchestrator, scope: Scope, keyPath: string[]): void {
-  removeConfigValue(getScopeConfigPath(orchestrator, scope), keyPath);
-  orchestrator.config = loadConfig(orchestrator.cwd);
+  const result = tryClearConfigOverride(orchestrator, scope, keyPath);
+  if (!result.ok) {
+    orchestrator.lastCtx?.ui?.notify(`Config update rejected: ${result.error}`, "error");
+    return;
+  }
   refreshSubagentDefinitions(orchestrator, keyPath);
 }
 
@@ -1242,7 +1322,23 @@ async function removePresetVariant(
   const scope = await pickScope(ctx, orchestrator);
   if (!scope) return;
 
-  const nextPreset = structuredClone(orchestrator.config.presets[group]?.[presetName] ?? {});
+  const rawPresetValue = getRawScopeValue(orchestrator, scope, ["presets", group, presetName]);
+  if (!rawPresetValue || typeof rawPresetValue !== "object" || Array.isArray(rawPresetValue)) {
+    ctx.ui.notify(`No '${presetName}' preset override in selected scope.`, "info");
+    return;
+  }
+
+  const rawPreset = rawPresetValue as Record<string, VariantConfig>;
+  if (!Object.prototype.hasOwnProperty.call(rawPreset, picked)) {
+    ctx.ui.notify(`Variant '${picked}' is inherited and cannot be removed from selected scope.`, "info");
+    return;
+  }
+  if (Object.keys(rawPreset).length <= 1) {
+    ctx.ui.notify("Preset must contain at least one variant in this scope.", "warning");
+    return;
+  }
+
+  const nextPreset = structuredClone(rawPreset);
   delete nextPreset[picked];
   applyConfigChange(orchestrator, scope, ["presets", group, presetName], nextPreset);
 }
@@ -1435,17 +1531,25 @@ async function showSubagentSettings(orchestrator: Orchestrator, ctx: any): Promi
 }
 
 async function editAfterEditCommand(orchestrator: Orchestrator, ctx: any, index: number): Promise<void> {
-  const commands = orchestrator.config.commands.afterEdit;
-  const current = commands[index];
-  if (!current) return;
+  const scope = await pickScope(ctx, orchestrator);
+  if (!scope) return;
+
+  const rawCommandsValue = getRawScopeValue(orchestrator, scope, ["commands", "afterEdit"]);
+  if (!Array.isArray(rawCommandsValue)) {
+    ctx.ui.notify("No afterEdit commands configured in selected scope.", "info");
+    return;
+  }
+  const commands = structuredClone(rawCommandsValue) as AfterEditCommand[];
+  if (!commands[index]) {
+    ctx.ui.notify("Selected command is inherited and cannot be edited in selected scope.", "info");
+    return;
+  }
 
   const run = await promptRequiredInput(ctx, "Command to run");
   if (!run) return;
   const globRaw = await promptRequiredInput(ctx, "Glob patterns (comma-separated)");
   if (globRaw === null) return;
   const glob = parseCommaSeparated(globRaw);
-  const scope = await pickScope(ctx, orchestrator);
-  if (!scope) return;
 
   const next = commands.map((cmd, idx) => (idx === index ? { run, glob } : cmd));
   applyConfigChange(orchestrator, scope, ["commands", "afterEdit"], next);
@@ -1480,24 +1584,28 @@ async function showAfterEditCommands(orchestrator: Orchestrator, ctx: any): Prom
       const glob = parseCommaSeparated(globRaw);
       const scope = await pickScope(ctx, orchestrator);
       if (!scope) continue;
-      applyConfigChange(orchestrator, scope, ["commands", "afterEdit"], [...commands, { run, glob }]);
+      const rawCommandsValue = getRawScopeValue(orchestrator, scope, ["commands", "afterEdit"]);
+      const rawCommands = Array.isArray(rawCommandsValue) ? (structuredClone(rawCommandsValue) as AfterEditCommand[]) : [];
+      applyConfigChange(orchestrator, scope, ["commands", "afterEdit"], [...rawCommands, { run, glob }]);
       continue;
     }
 
     if (choice === "Remove command") {
-      if (commands.length === 0) {
-        ctx.ui.notify("No afterEdit commands configured.", "info");
+      const scope = await pickScope(ctx, orchestrator);
+      if (!scope) continue;
+      const rawCommandsValue = getRawScopeValue(orchestrator, scope, ["commands", "afterEdit"]);
+      if (!Array.isArray(rawCommandsValue) || rawCommandsValue.length === 0) {
+        ctx.ui.notify("No afterEdit commands configured in selected scope.", "info");
         continue;
       }
-      const removeOptions: OptionInput[] = commands.map((cmd, index) => opt(`#${index + 1}`, `${cmd.run}`));
+      const scopedCommands = structuredClone(rawCommandsValue) as AfterEditCommand[];
+      const removeOptions: OptionInput[] = scopedCommands.map((cmd, index) => opt(`#${index + 1}`, `${cmd.run}`));
       removeOptions.push(opt("Back", "Return to the previous menu"));
       const picked = await selectOption(ctx, "Remove afterEdit command", removeOptions);
       if (!picked || picked === "Back") continue;
       const index = Number(picked.replace(/^#/, "")) - 1;
-      if (!Number.isInteger(index) || index < 0 || index >= commands.length) continue;
-      const scope = await pickScope(ctx, orchestrator);
-      if (!scope) continue;
-      applyConfigChange(orchestrator, scope, ["commands", "afterEdit"], commands.filter((_, idx) => idx !== index));
+      if (!Number.isInteger(index) || index < 0 || index >= scopedCommands.length) continue;
+      applyConfigChange(orchestrator, scope, ["commands", "afterEdit"], scopedCommands.filter((_, idx) => idx !== index));
       continue;
     }
 
@@ -1508,14 +1616,22 @@ async function showAfterEditCommands(orchestrator: Orchestrator, ctx: any): Prom
 }
 
 async function editAfterImplementCommand(orchestrator: Orchestrator, ctx: any, index: number): Promise<void> {
-  const commands = orchestrator.config.commands.afterImplement;
-  const current = commands[index];
-  if (!current) return;
+  const scope = await pickScope(ctx, orchestrator);
+  if (!scope) return;
+
+  const rawCommandsValue = getRawScopeValue(orchestrator, scope, ["commands", "afterImplement"]);
+  if (!Array.isArray(rawCommandsValue)) {
+    ctx.ui.notify("No afterImplement commands configured in selected scope.", "info");
+    return;
+  }
+  const commands = structuredClone(rawCommandsValue) as AfterImplementCommand[];
+  if (!commands[index]) {
+    ctx.ui.notify("Selected command is inherited and cannot be edited in selected scope.", "info");
+    return;
+  }
 
   const run = await promptRequiredInput(ctx, "Command to run");
   if (!run) return;
-  const scope = await pickScope(ctx, orchestrator);
-  if (!scope) return;
 
   const next = commands.map((cmd, idx) => (idx === index ? { run } : cmd));
   applyConfigChange(orchestrator, scope, ["commands", "afterImplement"], next);
@@ -1547,24 +1663,28 @@ async function showAfterImplementCommands(orchestrator: Orchestrator, ctx: any):
       if (!run) continue;
       const scope = await pickScope(ctx, orchestrator);
       if (!scope) continue;
-      applyConfigChange(orchestrator, scope, ["commands", "afterImplement"], [...commands, { run }]);
+      const rawCommandsValue = getRawScopeValue(orchestrator, scope, ["commands", "afterImplement"]);
+      const rawCommands = Array.isArray(rawCommandsValue) ? (structuredClone(rawCommandsValue) as AfterImplementCommand[]) : [];
+      applyConfigChange(orchestrator, scope, ["commands", "afterImplement"], [...rawCommands, { run }]);
       continue;
     }
 
     if (choice === "Remove command") {
-      if (commands.length === 0) {
-        ctx.ui.notify("No afterImplement commands configured.", "info");
+      const scope = await pickScope(ctx, orchestrator);
+      if (!scope) continue;
+      const rawCommandsValue = getRawScopeValue(orchestrator, scope, ["commands", "afterImplement"]);
+      if (!Array.isArray(rawCommandsValue) || rawCommandsValue.length === 0) {
+        ctx.ui.notify("No afterImplement commands configured in selected scope.", "info");
         continue;
       }
-      const removeOptions: OptionInput[] = commands.map((cmd, index) => opt(`#${index + 1}`, cmd.run));
+      const scopedCommands = structuredClone(rawCommandsValue) as AfterImplementCommand[];
+      const removeOptions: OptionInput[] = scopedCommands.map((cmd, index) => opt(`#${index + 1}`, cmd.run));
       removeOptions.push(opt("Back", "Return to the previous menu"));
       const picked = await selectOption(ctx, "Remove afterImplement command", removeOptions);
       if (!picked || picked === "Back") continue;
       const index = Number(picked.replace(/^#/, "")) - 1;
-      if (!Number.isInteger(index) || index < 0 || index >= commands.length) continue;
-      const scope = await pickScope(ctx, orchestrator);
-      if (!scope) continue;
-      applyConfigChange(orchestrator, scope, ["commands", "afterImplement"], commands.filter((_, idx) => idx !== index));
+      if (!Number.isInteger(index) || index < 0 || index >= scopedCommands.length) continue;
+      applyConfigChange(orchestrator, scope, ["commands", "afterImplement"], scopedCommands.filter((_, idx) => idx !== index));
       continue;
     }
 
