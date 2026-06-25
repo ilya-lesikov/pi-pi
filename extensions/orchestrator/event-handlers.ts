@@ -83,6 +83,53 @@ function getDefaultReviewPresetName(orchestrator: Orchestrator, phase: string): 
   return orchestrator.config.defaultPresets.codeReviewers;
 }
 
+function normalizeStoredPlannerPresetName(orchestrator: Orchestrator): string {
+  const requestedName = orchestrator.active?.state.activePlannerPreset ?? orchestrator.config.defaultPresets.planners;
+  const plannerPresets = orchestrator.config.presets.planners ?? {};
+  const exists = Object.prototype.hasOwnProperty.call(plannerPresets, requestedName);
+  const resolvedName = exists ? requestedName : (Object.keys(plannerPresets)[0] ?? requestedName);
+
+  if (orchestrator.active && orchestrator.active.state.activePlannerPreset !== resolvedName) {
+    orchestrator.active.state.activePlannerPreset = resolvedName;
+    saveTask(orchestrator.active.dir, orchestrator.active.state);
+  }
+
+  if (!exists && resolvedName !== requestedName) {
+    orchestrator.lastCtx?.ui?.notify(
+      `Planner preset "${requestedName}" not found. Falling back to "${resolvedName}".`,
+      "warning",
+    );
+  }
+
+  return resolvedName;
+}
+
+function normalizeStoredReviewPresetName(orchestrator: Orchestrator, phase: string): string {
+  const group = phase === "brainstorm"
+    ? "brainstormReviewers"
+    : phase === "plan"
+    ? "planReviewers"
+    : "codeReviewers";
+  const requestedName = orchestrator.active?.state.activeReviewPreset ?? getDefaultReviewPresetName(orchestrator, phase);
+  const reviewPresets = orchestrator.config.presets[group] ?? {};
+  const exists = Object.prototype.hasOwnProperty.call(reviewPresets, requestedName);
+  const resolvedName = exists ? requestedName : (Object.keys(reviewPresets)[0] ?? requestedName);
+
+  if (orchestrator.active && orchestrator.active.state.activeReviewPreset !== resolvedName) {
+    orchestrator.active.state.activeReviewPreset = resolvedName;
+    saveTask(orchestrator.active.dir, orchestrator.active.state);
+  }
+
+  if (!exists && resolvedName !== requestedName) {
+    orchestrator.lastCtx?.ui?.notify(
+      `Review preset "${requestedName}" not found. Falling back to "${resolvedName}".`,
+      "warning",
+    );
+  }
+
+  return resolvedName;
+}
+
 function tryCompleteReviewCycle(orchestrator: Orchestrator): void {
   if (
     !orchestrator.active?.state.reviewCycle ||
@@ -633,7 +680,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
 
           if (choice === "Retry failed planners") {
             const failedSet = new Set(failedPlannerVariants);
-            const presetName = orchestrator.active!.state.activePlannerPreset ?? orchestrator.config.defaultPresets.planners;
+            const presetName = normalizeStoredPlannerPresetName(orchestrator);
             const planners = resolvePreset(orchestrator.config, "planners", presetName);
             const scopedPlanners: typeof planners = {};
             for (const [name, cfg] of Object.entries(planners)) {
@@ -728,7 +775,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
             if (cycle) {
               const pass = cycle.pass;
               const phase = orchestrator.active!.state.phase;
-              const presetName = orchestrator.active!.state.activeReviewPreset;
+              const presetName = normalizeStoredReviewPresetName(orchestrator, phase);
               const sourceReviewers = resolveReviewers(orchestrator, phase, presetName);
               const failedSet = new Set(failedReviewerVariants);
               const scopedReviewers: typeof sourceReviewers = {};
@@ -1297,11 +1344,16 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
           const taskDir = orchestrator.active.dir;
           if (orchestrator.active.state.step === "await_planners") {
             const plansDir = join(taskDir, "plans");
-            const presetName = orchestrator.active.state.activePlannerPreset ?? orchestrator.config.defaultPresets.planners;
-            const plannerCount = Object.values(resolvePreset(orchestrator.config, "planners", presetName)).filter((v) => v.enabled).length;
+            const presetName = normalizeStoredPlannerPresetName(orchestrator);
+            const plannerVariants = resolvePreset(orchestrator.config, "planners", presetName);
+            const enabledVariantNames = Object.entries(plannerVariants)
+              .filter(([, v]) => v.enabled)
+              .map(([name]) => name);
             if (existsSync(plansDir)) {
               const planFiles = readdirSync(plansDir).filter((f) => f.endsWith(".md") && !f.includes("synthesized") && !f.includes("review_"));
-              if (planFiles.length >= plannerCount) {
+              const completedVariants = new Set(planFiles.map((f) => f.replace(/^\d+_/, "").replace(/\.md$/, "")));
+              const hasAllEnabledVariants = enabledVariantNames.every((name) => completedVariants.has(name));
+              if (hasAllEnabledVariants) {
                 clearInterval(orchestrator.awaitPollTimer!);
                 orchestrator.awaitPollTimer = null;
                 markAllAgentsConsumed();
@@ -1315,7 +1367,8 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
           } else if (orchestrator.active.state.step === "await_reviewers" && orchestrator.active.state.reviewCycle) {
             const cycle = orchestrator.active.state.reviewCycle;
             const phase = orchestrator.active.state.phase;
-            const reviewers = resolveReviewers(orchestrator, phase, orchestrator.active.state.activeReviewPreset);
+            const presetName = normalizeStoredReviewPresetName(orchestrator, phase);
+            const reviewers = resolveReviewers(orchestrator, phase, presetName);
             const reviewerCount = Object.values(reviewers).filter((v) => v.enabled).length;
             const outputs = loadPhaseReviewOutputs(taskDir, phase, cycle.pass);
             if (outputs.length >= reviewerCount) {

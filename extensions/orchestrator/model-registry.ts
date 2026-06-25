@@ -1,5 +1,5 @@
-export type Vendor = "anthropic" | "openai" | "google" | "unknown";
-export type Family = "opus" | "sonnet" | "haiku" | "gpt" | "gpt-mini" | "gemini-pro" | "gemini-flash" | "unknown";
+export type Vendor = "anthropic" | "openai" | "google" | "deepseek" | "xai" | "qwen" | "unknown";
+export type Family = "opus" | "sonnet" | "haiku" | "gpt" | "gpt-mini" | "gemini-pro" | "gemini-flash" | "deepseek" | "grok" | "qwen" | "unknown";
 export type Tier = "stupid" | "regular" | "smart" | "xsmart" | "unknown";
 
 export interface ModelInfo {
@@ -9,9 +9,9 @@ export interface ModelInfo {
   displayName: string;
 }
 
-type ProviderPrefix = "anthropic" | "openai" | "google" | "pp-flant-anthropic" | "pp-flant-openai";
-type KnownVendor = "anthropic" | "openai" | "google";
-type KnownFamily = "opus" | "sonnet" | "haiku" | "gpt" | "gpt-mini" | "gemini-pro" | "gemini-flash";
+type ProviderPrefix = "anthropic" | "openai" | "google" | "deepseek" | "x-ai" | "qwen" | "pp-flant-anthropic" | "pp-flant-openai";
+type KnownVendor = "anthropic" | "openai" | "google" | "deepseek" | "xai" | "qwen";
+type KnownFamily = "opus" | "sonnet" | "haiku" | "gpt" | "gpt-mini" | "gemini-pro" | "gemini-flash" | "deepseek" | "grok" | "qwen";
 type KnownTier = "stupid" | "regular" | "smart" | "xsmart";
 
 export interface ModelFamilyDefinition {
@@ -106,6 +106,33 @@ export const MODEL_FAMILIES: ModelFamilyDefinition[] = [
     aliasTemplate: "gemini-flash-latest",
     providers: ["google", "pp-flant-openai"],
   },
+  {
+    vendor: "deepseek",
+    family: "deepseek",
+    tier: "regular",
+    displayName: "DeepSeek",
+    patterns: [/^(deepseek|pp-flant-openai)\/deepseek-/],
+    aliasTemplate: "deepseek-latest",
+    providers: ["deepseek", "pp-flant-openai"],
+  },
+  {
+    vendor: "xai",
+    family: "grok",
+    tier: "regular",
+    displayName: "Grok",
+    patterns: [/^(x-ai|pp-flant-openai)\/grok-/],
+    aliasTemplate: "grok-latest",
+    providers: ["x-ai", "pp-flant-openai"],
+  },
+  {
+    vendor: "qwen",
+    family: "qwen",
+    tier: "regular",
+    displayName: "Qwen",
+    patterns: [/^(qwen|pp-flant-openai)\/qwen-/],
+    aliasTemplate: "qwen-latest",
+    providers: ["qwen", "pp-flant-openai"],
+  },
 ];
 
 const DEFAULT_ALIAS_MAP: Record<string, string> = {
@@ -116,6 +143,9 @@ const DEFAULT_ALIAS_MAP: Record<string, string> = {
   "openai/gpt-mini-latest": "openai/gpt-5.4-mini",
   "google/gemini-pro-latest": "google/gemini-3.1-pro",
   "google/gemini-flash-latest": "google/gemini-3.1-flash",
+  "deepseek/deepseek-latest": "deepseek/deepseek-v3",
+  "x-ai/grok-latest": "x-ai/grok-4",
+  "qwen/qwen-latest": "qwen/qwen3-coder",
   "pp-flant-anthropic/claude-opus-latest": "pp-flant-anthropic/claude-opus-4-6",
   "pp-flant-anthropic/claude-sonnet-latest": "pp-flant-anthropic/claude-sonnet-4-6",
   "pp-flant-anthropic/claude-haiku-latest": "pp-flant-anthropic/claude-haiku-3-5",
@@ -123,6 +153,9 @@ const DEFAULT_ALIAS_MAP: Record<string, string> = {
   "pp-flant-openai/gpt-mini-latest": "pp-flant-openai/gpt-5.4-mini",
   "pp-flant-openai/gemini-pro-latest": "pp-flant-openai/gemini-3.1-pro",
   "pp-flant-openai/gemini-flash-latest": "pp-flant-openai/gemini-3.1-flash",
+  "pp-flant-openai/deepseek-latest": "pp-flant-openai/deepseek-v3",
+  "pp-flant-openai/grok-latest": "pp-flant-openai/grok-4",
+  "pp-flant-openai/qwen-latest": "pp-flant-openai/qwen3-coder",
 };
 
 let aliasMap: Record<string, string> = { ...DEFAULT_ALIAS_MAP };
@@ -155,7 +188,15 @@ function normalizeAvailableModelIds(modelId: string): string[] {
   if (!value) return [];
   if (value.includes("/")) return [value];
   if (value.startsWith("claude-")) return [`pp-flant-anthropic/${value}`];
-  if (value.startsWith("gpt-") || value.startsWith("gemini-")) return [`pp-flant-openai/${value}`];
+  if (
+    value.startsWith("gpt-") ||
+    value.startsWith("gemini-") ||
+    value.startsWith("deepseek-") ||
+    value.startsWith("grok-") ||
+    value.startsWith("qwen")
+  ) {
+    return [`pp-flant-openai/${value}`];
+  }
   return [];
 }
 

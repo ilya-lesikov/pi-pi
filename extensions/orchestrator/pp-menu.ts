@@ -290,21 +290,32 @@ export async function resumeTask(
 
   if (orchestrator.active.state.phase === "plan" && orchestrator.active.state.step === "await_planners") {
     const plansDir = join(orchestrator.active.dir, "plans");
-    const plannerPresetName = orchestrator.active.state.activePlannerPreset ?? orchestrator.config.defaultPresets.planners;
-    if (!orchestrator.active.state.activePlannerPreset) {
+    const requestedPlannerPresetName = orchestrator.active.state.activePlannerPreset ?? orchestrator.config.defaultPresets.planners;
+    const plannerPresetExists = Object.prototype.hasOwnProperty.call(orchestrator.config.presets.planners ?? {}, requestedPlannerPresetName);
+    const plannerPresetName = plannerPresetExists
+      ? requestedPlannerPresetName
+      : (Object.keys(orchestrator.config.presets.planners ?? {})[0] ?? requestedPlannerPresetName);
+    if (orchestrator.active.state.activePlannerPreset !== plannerPresetName) {
       orchestrator.active.state.activePlannerPreset = plannerPresetName;
       saveTask(orchestrator.active.dir, orchestrator.active.state);
+    }
+    if (!plannerPresetExists && plannerPresetName !== requestedPlannerPresetName) {
+      ctx.ui.notify(
+        `Planner preset "${requestedPlannerPresetName}" not found. Falling back to "${plannerPresetName}".`,
+        "warning",
+      );
     }
     const plannerVariants = resolvePreset(orchestrator.config, "planners", plannerPresetName);
     const enabledVariants = Object.entries(plannerVariants).filter(([, v]) => v.enabled);
     const planFiles = existsSync(plansDir)
       ? readdirSync(plansDir).filter((f) => f.endsWith(".md") && !f.includes("synthesized") && !f.includes("review_"))
       : [];
-    if (planFiles.length >= enabledVariants.length) {
+    const completedVariants = new Set(planFiles.map((f) => f.replace(/^\d+_/, "").replace(/\.md$/, "")));
+    const hasAllEnabledVariants = enabledVariants.every(([name]) => completedVariants.has(name));
+    if (hasAllEnabledVariants) {
       orchestrator.active.state.step = "synthesize";
       saveTask(orchestrator.active.dir, orchestrator.active.state);
     } else {
-      const completedVariants = new Set(planFiles.map((f) => f.replace(/^\d+_/, "").replace(/\.md$/, "")));
       const missingVariants = enabledVariants.filter(([name]) => !completedVariants.has(name));
       if (missingVariants.length > 0) {
         const missingConfig: typeof plannerVariants = {};
@@ -332,11 +343,22 @@ export async function resumeTask(
   if (orchestrator.active.state.reviewCycle) {
     const cycle = orchestrator.active.state.reviewCycle;
     const phase = orchestrator.active.state.phase;
-    const presetName = orchestrator.active.state.activeReviewPreset
+    const requestedReviewPresetName = orchestrator.active.state.activeReviewPreset
       ?? getDefaultReviewPresetName(orchestrator.config, phase);
-    if (!orchestrator.active.state.activeReviewPreset) {
+    const group = getReviewPresetGroup(phase);
+    const reviewPresetExists = Object.prototype.hasOwnProperty.call(orchestrator.config.presets[group] ?? {}, requestedReviewPresetName);
+    const presetName = reviewPresetExists
+      ? requestedReviewPresetName
+      : (Object.keys(orchestrator.config.presets[group] ?? {})[0] ?? requestedReviewPresetName);
+    if (orchestrator.active.state.activeReviewPreset !== presetName) {
       orchestrator.active.state.activeReviewPreset = presetName;
       saveTask(orchestrator.active.dir, orchestrator.active.state);
+    }
+    if (!reviewPresetExists && presetName !== requestedReviewPresetName) {
+      ctx.ui.notify(
+        `Review preset "${requestedReviewPresetName}" not found. Falling back to "${presetName}".`,
+        "warning",
+      );
     }
     const reviewers = phase === "brainstorm"
       ? resolvePreset(orchestrator.config, "brainstormReviewers", presetName)
@@ -981,6 +1003,9 @@ function normalizeProviderLabel(provider: string): string {
   if (provider === "anthropic") return "Anthropic";
   if (provider === "openai") return "OpenAI";
   if (provider === "google") return "Google";
+  if (provider === "deepseek") return "DeepSeek";
+  if (provider === "x-ai") return "xAI";
+  if (provider === "qwen") return "Qwen";
   if (provider === "pp-flant-anthropic") return "Flant Anthropic";
   if (provider === "pp-flant-openai") return "Flant OpenAI";
   return provider;
@@ -990,8 +1015,11 @@ function providerOrder(provider: string): number {
   if (provider === "anthropic") return 0;
   if (provider === "openai") return 1;
   if (provider === "google") return 2;
-  if (provider === "pp-flant-anthropic") return 3;
-  if (provider === "pp-flant-openai") return 4;
+  if (provider === "deepseek") return 3;
+  if (provider === "x-ai") return 4;
+  if (provider === "qwen") return 5;
+  if (provider === "pp-flant-anthropic") return 6;
+  if (provider === "pp-flant-openai") return 7;
   return 99;
 }
 
@@ -1040,6 +1068,14 @@ async function pickModel(ctx: any, currentModel?: string): Promise<string | null
   const families = getModelFamilies();
   const availableModels = listAvailableModels(ctx);
   const availableSpecs = new Set(availableModels.map((m) => m.spec));
+  const visibleAliases = new Set(
+    Object.entries(aliasMap)
+      .filter(([, resolved]) => availableSpecs.has(resolved))
+      .map(([alias]) => alias),
+  );
+  if (currentModel && currentModel in aliasMap) {
+    visibleAliases.add(currentModel);
+  }
   const options: OptionInput[] = [];
   const selectionToModel = new Map<string, string>();
   const usedTitles = new Set<string>();
@@ -1053,7 +1089,7 @@ async function pickModel(ctx: any, currentModel?: string): Promise<string | null
   const aliasEntries: Array<{ provider: string; displayName: string; alias: string }> = [];
   for (const family of families) {
     for (const alias of family.aliases) {
-      if (!(alias in aliasMap)) continue;
+      if (!visibleAliases.has(alias)) continue;
       aliasEntries.push({
         provider: alias.split("/")[0] ?? "",
         displayName: family.displayName,

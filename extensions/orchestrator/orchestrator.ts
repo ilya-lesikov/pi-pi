@@ -217,12 +217,19 @@ export class Orchestrator {
   getPlanStartState(taskDir: string, plannerPresetName?: string): { step: string; shouldSpawnPlanners: boolean } {
     const plansDir = join(taskDir, "plans");
     const presetName = plannerPresetName ?? this.config.defaultPresets.planners;
-    const enabledPlannerCount = Object.values(resolvePreset(this.config, "planners", presetName)).filter((v) => v.enabled).length;
+    const plannerVariants = resolvePreset(this.config, "planners", presetName);
+    const enabledPlannerVariants = Object.entries(plannerVariants)
+      .filter(([, v]) => v.enabled)
+      .map(([name]) => name);
     const plannerOutputs = existsSync(plansDir)
       ? readdirSync(plansDir).filter((f) => f.endsWith(".md") && !f.includes("synthesized") && !f.includes("review_"))
       : [];
+    const completedVariants = new Set(
+      plannerOutputs.map((f) => f.replace(/^\d+_/, "").replace(/\.md$/, "")),
+    );
+    const hasAllEnabledVariants = enabledPlannerVariants.every((name) => completedVariants.has(name));
 
-    if (enabledPlannerCount === 0 || plannerOutputs.length >= enabledPlannerCount || getLatestSynthesizedPlan(taskDir)) {
+    if (enabledPlannerVariants.length === 0 || hasAllEnabledVariants || getLatestSynthesizedPlan(taskDir)) {
       return { step: "synthesize", shouldSpawnPlanners: false };
     }
 
@@ -234,8 +241,7 @@ export class Orchestrator {
 
     if (this.active.state.reviewCycle?.step === "apply_feedback") {
       const pass = this.active.state.reviewCycle.pass;
-      const manualReview = this.active.state.reviewCycle.kind === "manual";
-      return reviewCycleSystemPrompt(this.active.dir, pass, manualReview, this.active.state.phase);
+      return reviewCycleSystemPrompt(this.active.dir, pass, this.active.state.phase);
     }
 
     switch (this.active.state.phase) {
@@ -402,10 +408,20 @@ export class Orchestrator {
     }
 
     if (this.active.state.phase === "plan" && this.active.state.step === "await_planners") {
-      const plannerPresetName = this.active.state.activePlannerPreset ?? this.config.defaultPresets.planners;
-      if (!this.active.state.activePlannerPreset) {
+      const requestedPlannerPresetName = this.active.state.activePlannerPreset ?? this.config.defaultPresets.planners;
+      const plannerPresetExists = Object.prototype.hasOwnProperty.call(this.config.presets.planners ?? {}, requestedPlannerPresetName);
+      const plannerPresetName = plannerPresetExists
+        ? requestedPlannerPresetName
+        : (Object.keys(this.config.presets.planners ?? {})[0] ?? requestedPlannerPresetName);
+      if (this.active.state.activePlannerPreset !== plannerPresetName) {
         this.active.state.activePlannerPreset = plannerPresetName;
         saveTask(this.active.dir, this.active.state);
+      }
+      if (!plannerPresetExists && plannerPresetName !== requestedPlannerPresetName) {
+        ctx.ui.notify(
+          `Planner preset "${requestedPlannerPresetName}" not found. Falling back to "${plannerPresetName}".`,
+          "warning",
+        );
       }
       const plannerVariants = resolvePreset(this.config, "planners", plannerPresetName);
       this.pendingSubagentSpawns = Object.values(plannerVariants).filter((v) => v.enabled).length;
@@ -487,18 +503,34 @@ export class Orchestrator {
     const explore = createExploreAgent(this.config);
     const librarian = createLibrarianAgent(this.config);
     const taskAgent = createTaskAgent(this.config, "{{subtask}}", { userRequest: "", synthesizedPlan: "" });
+    const phase = this.active?.state.phase;
 
-    const appendContext = (agentType: string, prompt: string): string => {
-      const contextFiles = loadContextFiles(this.cwd, agentType as any, "system");
+    const appendContext = (agentType: string, prompt: string, modelInfo: { vendor: string; family: string; tier: string }): string => {
+      const contextFiles = loadContextFiles(this.cwd, agentType as any, "system", phase, modelInfo);
       if (contextFiles.length === 0) return prompt;
       const contextBlock = contextFiles.map((f) => f.content).join("\n\n");
       return prompt + "\n\n# Project Context\n\n" + contextBlock;
     };
 
     registerAgentDefinitions(this.pi, [
-      { type: "explore", variant: null, ...explore, prompt: appendContext("explore", explore.prompt) },
-      { type: "librarian", variant: null, ...librarian, prompt: appendContext("librarian", librarian.prompt) },
-      { type: "task", variant: null, ...taskAgent, prompt: appendContext("task", taskAgent.prompt) },
+      {
+        type: "explore",
+        variant: null,
+        ...explore,
+        prompt: appendContext("explore", explore.prompt, getModelInfo(resolveModel(this.config.agents.explore.model))),
+      },
+      {
+        type: "librarian",
+        variant: null,
+        ...librarian,
+        prompt: appendContext("librarian", librarian.prompt, getModelInfo(resolveModel(this.config.agents.librarian.model))),
+      },
+      {
+        type: "task",
+        variant: null,
+        ...taskAgent,
+        prompt: appendContext("task", taskAgent.prompt, getModelInfo(resolveModel(this.config.agents.task.model))),
+      },
     ]);
   }
 

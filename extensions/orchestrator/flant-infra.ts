@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import lockfile from "proper-lockfile";
 import type { ExtensionAPI, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 import type { PiPiConfig } from "./config.js";
 import { updateRegistryFromAvailableModels } from "./model-registry.js";
@@ -118,7 +119,13 @@ export function loadFlantSettings(): FlantSettings {
 
 export function saveFlantSettings(settings: FlantSettings): void {
   ensureSettingsDir();
-  writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2) + "\n", "utf-8");
+  if (!existsSync(SETTINGS_PATH)) writeFileSync(SETTINGS_PATH, "{}\n", "utf-8");
+  const release = lockfile.lockSync(SETTINGS_PATH, { stale: 10000 });
+  try {
+    writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2) + "\n", "utf-8");
+  } finally {
+    release();
+  }
 }
 
 function toTitleCase(token: string): string {

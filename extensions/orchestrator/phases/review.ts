@@ -6,7 +6,7 @@ import { registerAgentDefinitions, spawnViaRpc, waitForCompletion } from "../age
 import { createCodeReviewerAgent } from "../agents/code-reviewer.js";
 import { getLatestSynthesizedPlan } from "../context.js";
 
-export function reviewSystemPrompt(taskDir: string, pass: number, manualReview = false, phase?: string): string {
+export function reviewSystemPrompt(taskDir: string, pass: number, phase?: string): string {
   const reviewsDir = phase === "brainstorm" ? join(taskDir, "brainstorm-reviews") : join(taskDir, "code-reviews");
   const plansDir = join(taskDir, "plans");
 
@@ -35,23 +35,6 @@ export function reviewSystemPrompt(taskDir: string, pass: number, manualReview =
       "Any other sections will fail validation.",
       "",
       "When done (or no changes needed), call pp_phase_complete with a brief summary.",
-    ].join("\n");
-  }
-
-  if (manualReview) {
-    return [
-      `[PI-PI — REVIEW CYCLE (pass ${pass}, manual)]`,
-      "",
-      "Review the implementation yourself using the available tools.",
-      "",
-      `Write your review to ${reviewsDir}/<timestamp>_final_pass-${pass}.md`,
-      "",
-      "If changes are needed:",
-      `1. Create a fix plan at ${plansDir}/<timestamp>_<description>.md`,
-      "2. Implement the fixes",
-      "3. Run afterImplement commands",
-      "",
-    "When done, call pp_phase_complete with a brief summary.",
     ].join("\n");
   }
 
