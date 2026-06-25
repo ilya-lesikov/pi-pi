@@ -49,6 +49,7 @@ import {
   updateFlantInfra,
   type FlantSettings,
 } from "./flant-infra.js";
+import { normalizeRepoPath, type RepoInfo } from "./repo-utils.js";
 
 type MenuMode = "command" | "tool";
 
@@ -70,6 +71,66 @@ async function selectOption(ctx: any, question: string, options: OptionInput[]):
 
 function opt(title: string, description: string): OptionInput {
   return { title, description };
+}
+
+function getRegisteredRepos(orchestrator: Orchestrator): RepoInfo[] {
+  const repos = orchestrator.active?.state.repos ?? [];
+  if (repos.length > 0) return repos;
+  return [{ path: normalizeRepoPath(orchestrator.cwd), isRoot: true }];
+}
+
+function formatRepoLabel(repo: RepoInfo): string {
+  return `${repo.path}${repo.isRoot ? " (root)" : ""}`;
+}
+
+function formatRepoList(repos: RepoInfo[]): string {
+  return repos
+    .map((repo) => {
+      const base = repo.baseBranch ? `, base: ${repo.baseBranch}` : "";
+      return `- ${formatRepoLabel(repo)}${base}`;
+    })
+    .join("\n");
+}
+
+function appendSection(content: string, heading: string, body: string): string {
+  const normalized = content.trimEnd();
+  if (normalized.includes(`${heading}\n`)) return normalized + "\n";
+  return `${normalized}\n\n${heading}\n${body}\n`;
+}
+
+async function pickCommitForRepo(orchestrator: Orchestrator, ctx: any, repo: RepoInfo): Promise<string | null> {
+  let commits: Array<{ hash: string; message: string; age: string }> = [];
+  try {
+    const logResult = await orchestrator.pi.exec(
+      "git", ["log", "--oneline", "--format=%h\t%s\t%cr", "-30"],
+      { cwd: repo.path, timeout: 5000 },
+    );
+    if (logResult.code === 0 && logResult.stdout.trim()) {
+      commits = logResult.stdout.trim().split("\n").map((line) => {
+        const [hash, message, age] = line.split("\t");
+        return { hash: hash || "", message: message || "", age: age || "" };
+      }).filter((c) => c.hash);
+    }
+  } catch {}
+  if (commits.length === 0) {
+    ctx.ui.notify(`No commits found in ${repo.path}.`, "info");
+    return null;
+  }
+  const commitOptions: OptionInput[] = commits.map((c) => ({
+    title: `${c.hash} ${c.message}`,
+    description: c.age,
+  }));
+  commitOptions.push({ title: "Back", description: "Return to the previous menu" });
+  const picked = await selectOption(ctx, `Review changes since (${repo.path}):`, commitOptions);
+  if (!picked || picked === "Back") return null;
+  const pickedHash = picked.split(" ")[0];
+  return pickedHash || null;
+}
+
+interface RepoPrContext {
+  repoPath: string;
+  prUrl: string | null;
+  prContext: string | null;
 }
 
 function setStep(orchestrator: Orchestrator, step: string): void {
@@ -2037,46 +2098,54 @@ function buildPrContext(parsed: any): { prUrl: string | null; prContext: string 
   return { prUrl, prContext: parts.length > 0 ? parts.join("\n\n") : null };
 }
 
-async function detectCurrentPrContext(orchestrator: Orchestrator): Promise<{ prUrl: string | null; prContext: string | null }> {
-  try {
-    const prResult = await orchestrator.pi.exec("gh", ["pr", "view", "--json", "url,title,body,comments"], {
-      cwd: orchestrator.cwd,
-      timeout: 10000,
-    });
-    if (prResult.code !== 0) return { prUrl: null, prContext: null };
-    const parsed = JSON.parse(prResult.stdout);
-    return buildPrContext(parsed);
-  } catch {
-    return { prUrl: null, prContext: null };
+async function detectCurrentPrContext(orchestrator: Orchestrator, repos: RepoInfo[]): Promise<RepoPrContext[]> {
+  const results: RepoPrContext[] = [];
+  for (const repo of repos) {
+    try {
+      const prResult = await orchestrator.pi.exec("gh", ["pr", "view", "--json", "url,title,body,comments"], {
+        cwd: repo.path,
+        timeout: 10000,
+      });
+      if (prResult.code !== 0) continue;
+      const parsed = JSON.parse(prResult.stdout);
+      const pr = buildPrContext(parsed);
+      if (pr.prUrl || pr.prContext) {
+        results.push({ repoPath: repo.path, prUrl: pr.prUrl, prContext: pr.prContext });
+      }
+    } catch {}
   }
+  return results;
 }
 
-async function openCodeReviewInPlannotator(orchestrator: Orchestrator, diffType?: string, defaultBranch?: string): Promise<string> {
-  const payload: Record<string, unknown> = { cwd: orchestrator.cwd };
-  if (diffType) payload.diffType = diffType;
-  if (defaultBranch) payload.defaultBranch = defaultBranch;
+async function openCodeReviewInPlannotator(
+  orchestrator: Orchestrator,
+  payload: { cwd: string; diffType?: string; defaultBranch?: string },
+): Promise<{ status: "approved" | "needs_changes" | "error"; feedback?: string; error?: string }> {
+  const requestPayload: Record<string, unknown> = { cwd: payload.cwd };
+  if (payload.diffType) requestPayload.diffType = payload.diffType;
+  if (payload.defaultBranch) requestPayload.defaultBranch = payload.defaultBranch;
 
   return await new Promise((resolve) => {
     let handled = false;
     orchestrator.pi.events.emit("plannotator:request", {
       requestId: crypto.randomUUID(),
       action: "code-review",
-      payload,
+      payload: requestPayload,
       respond: (response: any) => {
         handled = true;
         if (response?.status !== "handled") {
-          resolve(`Plannotator is not available${response?.error ? `: ${response.error}` : "."}`);
+          resolve({ status: "error", error: response?.error || "Plannotator is not available." });
           return;
         }
         const approved = !!response?.result?.approved;
         const feedback = typeof response?.result?.feedback === "string" && response.result.feedback.trim().length > 0
-          ? `\n\nFeedback:\n${response.result.feedback}`
-          : "";
-        resolve(approved ? "Plannotator approved the review." : `Plannotator requested changes.${feedback}`);
+          ? response.result.feedback
+          : undefined;
+        resolve({ status: approved ? "approved" : "needs_changes", feedback });
       },
     });
     setTimeout(() => {
-      if (!handled) resolve("Plannotator is not available.");
+      if (!handled) resolve({ status: "error", error: "Plannotator is not available." });
     }, 30000);
   });
 }
@@ -2090,9 +2159,13 @@ async function startReviewTask(
 ): Promise<"started" | typeof BACK> {
   await orchestrator.startTask(ctx, "review", description);
   if (!orchestrator.active || orchestrator.active.type !== "review") return BACK;
-  writeFileSync(join(orchestrator.active.dir, "USER_REQUEST.md"), userRequestContent, "utf-8");
+  const repos = getRegisteredRepos(orchestrator);
+  const repoSection = formatRepoList(repos);
+  const userRequestWithRepos = appendSection(userRequestContent, "## Registered repositories", repoSection);
+  writeFileSync(join(orchestrator.active.dir, "USER_REQUEST.md"), userRequestWithRepos, "utf-8");
   if (researchContent) {
-    writeFileSync(join(orchestrator.active.dir, "RESEARCH.md"), researchContent, "utf-8");
+    const researchWithRepos = appendSection(researchContent, "## Registered repositories", repoSection);
+    writeFileSync(join(orchestrator.active.dir, "RESEARCH.md"), researchWithRepos, "utf-8");
   }
   return "started";
 }
@@ -2118,21 +2191,31 @@ async function showReviewMenu(orchestrator: Orchestrator, ctx: any): Promise<typ
     }
 
     if (choice === "Current branch") {
-      const base = await detectDefaultBranch(
-        orchestrator.pi,
-        orchestrator.active?.state.repos ?? [{ path: orchestrator.cwd, isRoot: true }],
-        orchestrator.cwd,
-      );
-      const pr = await detectCurrentPrContext(orchestrator);
+      const repos = getRegisteredRepos(orchestrator);
+      const repoRanges = repos.map((repo) => `- ${formatRepoLabel(repo)}: ${detectDefaultBranch(repos, repo.path)}..HEAD`);
+      const prContexts = await detectCurrentPrContext(orchestrator, repos);
 
-      const urLines = [`# User Request\nReview current branch changes (${base}..HEAD)`];
-      if (pr.prUrl) urLines.push(`PR: ${pr.prUrl}`);
+      const urLines = ["# User Request", "Review current branch changes across registered repositories", "", "## Diff ranges", ...repoRanges];
+      const prUrls = prContexts
+        .filter((pr) => pr.prUrl)
+        .map((pr) => `- ${pr.repoPath}: ${pr.prUrl}`);
+      if (prUrls.length > 0) {
+        urLines.push("", "## Open PRs", ...prUrls);
+      }
       urLines.push("", "## Problem", "Review and identify issues in the code changes.", "", "## Constraints", "Focus on correctness, edge cases, style, missing tests, potential bugs.");
       const urContent = urLines.join("\n") + "\n";
 
       let resContent: string | null = null;
-      if (pr.prContext) {
-        resContent = ["## PR Context", pr.prContext, "", "## Affected Code", "(to be filled during review)", "", "## Architecture Context", "(to be filled during review)"].join("\n") + "\n";
+      if (prContexts.length > 0) {
+        const prContextBlocks = prContexts
+          .map((pr) => {
+            const lines = [`### ${pr.repoPath}`];
+            if (pr.prUrl) lines.push(`URL: ${pr.prUrl}`);
+            if (pr.prContext) lines.push(pr.prContext);
+            return lines.join("\n");
+          })
+          .join("\n\n");
+        resContent = ["## PR Context", prContextBlocks, "", "## Affected Code", "(to be filled during review)", "", "## Architecture Context", "(to be filled during review)"].join("\n") + "\n";
       }
 
       const description = await promptDescription(ctx, "Describe the review (optional)", "review");
@@ -2141,48 +2224,72 @@ async function showReviewMenu(orchestrator: Orchestrator, ctx: any): Promise<typ
     }
 
     if (choice === "Last commit") {
-      const urContent = "# User Request\nReview last commit changes\n\n## Problem\nReview and identify issues in the most recent commit.\n\n## Constraints\nFocus on correctness, edge cases, style, missing tests, potential bugs.\n";
+      const repos = getRegisteredRepos(orchestrator);
+      const urContent = [
+        "# User Request",
+        "Review last commit changes across registered repositories",
+        "",
+        "## Problem",
+        "Review and identify issues in the most recent commit.",
+        "",
+        "## Constraints",
+        "Focus on correctness, edge cases, style, missing tests, potential bugs.",
+        "",
+        "## Repositories",
+        formatRepoList(repos),
+        "",
+      ].join("\n");
       const description = await promptDescription(ctx, "Describe the review (optional)", "review");
       if (!description) continue;
       return startReviewTask(orchestrator, ctx, urContent, null, description);
     }
 
     if (choice === "Since commit") {
-      let commits: Array<{ hash: string; message: string; age: string }> = [];
-      try {
-        const logResult = await orchestrator.pi.exec(
-          "git", ["log", "--oneline", "--format=%h\t%s\t%cr", "-30"],
-          { cwd: orchestrator.cwd, timeout: 5000 },
-        );
-        if (logResult.code === 0 && logResult.stdout.trim()) {
-          commits = logResult.stdout.trim().split("\n").map((line) => {
-            const [hash, message, age] = line.split("\t");
-            return { hash: hash || "", message: message || "", age: age || "" };
-          }).filter((c) => c.hash);
-        }
-      } catch {}
-      if (commits.length === 0) {
-        ctx.ui.notify("No commits found.", "info");
-        continue;
-      }
-      const commitOptions: OptionInput[] = commits.map((c) => ({
-        title: `${c.hash} ${c.message}`,
-        description: c.age,
+      const repos = getRegisteredRepos(orchestrator);
+      const repoOptions: OptionInput[] = repos.map((repo) => ({
+        title: formatRepoLabel(repo),
+        description: "Choose repository for commit range",
       }));
-      commitOptions.push({ title: "Back", description: "Return to the previous menu" });
-      const picked = await selectOption(ctx, "Review changes since:", commitOptions);
-      if (!picked || picked === "Back") continue;
-      const pickedHash = picked.split(" ")[0];
+      repoOptions.push({ title: "Back", description: "Return to the previous menu" });
+      const repoChoice = await selectOption(ctx, "Select repository", repoOptions);
+      if (!repoChoice || repoChoice === "Back") continue;
+      const selectedRepo = repos.find((repo) => formatRepoLabel(repo) === repoChoice);
+      if (!selectedRepo) continue;
+      const pickedHash = await pickCommitForRepo(orchestrator, ctx, selectedRepo);
       if (!pickedHash) continue;
 
-      const urContent = `# User Request\nReview changes since commit ${pickedHash}\n\n## Problem\nReview and identify issues in all changes since ${pickedHash}.\n\n## Constraints\nFocus on correctness, edge cases, style, missing tests, potential bugs.\n`;
+      const urContent = [
+        "# User Request",
+        `Review changes in ${selectedRepo.path} since commit ${pickedHash}`,
+        "",
+        "## Problem",
+        `Review and identify issues in all changes in ${selectedRepo.path} since ${pickedHash}.`,
+        "",
+        "## Constraints",
+        "Focus on correctness, edge cases, style, missing tests, potential bugs.",
+        "",
+      ].join("\n");
       const description = await promptDescription(ctx, "Describe the review (optional)", "review");
       if (!description) continue;
       return startReviewTask(orchestrator, ctx, urContent, null, description);
     }
 
     if (choice === "Uncommitted changes") {
-      const urContent = "# User Request\nReview uncommitted changes\n\n## Problem\nReview and identify issues in uncommitted working directory changes.\n\n## Constraints\nFocus on correctness, edge cases, style, missing tests, potential bugs.\n";
+      const repos = getRegisteredRepos(orchestrator);
+      const urContent = [
+        "# User Request",
+        "Review uncommitted changes across registered repositories",
+        "",
+        "## Problem",
+        "Review and identify issues in uncommitted working directory changes.",
+        "",
+        "## Constraints",
+        "Focus on correctness, edge cases, style, missing tests, potential bugs.",
+        "",
+        "## Repositories",
+        formatRepoList(repos),
+        "",
+      ].join("\n");
       const description = await promptDescription(ctx, "Describe the review (optional)", "review");
       if (!description) continue;
       return startReviewTask(orchestrator, ctx, urContent, null, description);
@@ -2428,56 +2535,70 @@ export async function showActiveTaskMenu(
           if (handled.continueLoop) continue;
           return handled.text ?? text;
         }
-        const diffChoice = await selectOption(ctx, "Review in Plannotator", [
-          opt("All branch changes", "Committed changes vs base branch"),
-          opt("Last commit", "Changes in the most recent commit"),
-          opt("Since commit", "Review all changes since a specific commit"),
-          opt("Uncommitted changes", "Working directory changes"),
-          opt("Back", "Return to the previous menu"),
-        ]);
-        if (!diffChoice || diffChoice === "Back") continue;
+        const repos = getRegisteredRepos(orchestrator);
+        const summaries: string[] = [];
+        let stopReviewing = false;
 
-        let diffType: string | undefined;
-        let defaultBranch: string | undefined;
-        if (diffChoice === "All branch changes") {
-          diffType = "branch";
-        } else if (diffChoice === "Last commit") {
-          diffType = "last-commit";
-        } else if (diffChoice === "Since commit") {
-          let commits: Array<{ hash: string; message: string; age: string }> = [];
-          try {
-            const logResult = await orchestrator.pi.exec(
-              "git", ["log", "--oneline", "--format=%h\t%s\t%cr", "-30"],
-              { cwd: orchestrator.cwd, timeout: 5000 },
-            );
-            if (logResult.code === 0 && logResult.stdout.trim()) {
-              commits = logResult.stdout.trim().split("\n").map((line) => {
-                const [hash, message, age] = line.split("\t");
-                return { hash: hash || "", message: message || "", age: age || "" };
-              }).filter((c) => c.hash);
+        for (const repo of repos) {
+          if (stopReviewing) break;
+
+          while (true) {
+            const diffChoice = await selectOption(ctx, `Review: ${formatRepoLabel(repo)}`, [
+              opt("All branch changes", "Committed changes vs base branch"),
+              opt("Last commit", "Changes in the most recent commit"),
+              opt("Since commit", "Review all changes since a specific commit"),
+              opt("Uncommitted changes", "Working directory changes"),
+              opt("Skip this repo", "Move to the next repository"),
+              opt("Done (stop reviewing)", "Stop iterating repositories"),
+            ]);
+
+            if (!diffChoice || diffChoice === "Done (stop reviewing)") {
+              stopReviewing = true;
+              break;
             }
-          } catch {}
-          if (commits.length === 0) {
-            ctx.ui.notify("No commits found.", "info");
-            continue;
+            if (diffChoice === "Skip this repo") {
+              summaries.push(`${formatRepoLabel(repo)}: SKIPPED`);
+              break;
+            }
+
+            let diffType: string | undefined;
+            let defaultBranch: string | undefined;
+
+            if (diffChoice === "All branch changes") {
+              diffType = "branch";
+              defaultBranch = detectDefaultBranch(repos, repo.path);
+            } else if (diffChoice === "Last commit") {
+              diffType = "last-commit";
+            } else if (diffChoice === "Since commit") {
+              const pickedHash = await pickCommitForRepo(orchestrator, ctx, repo);
+              if (!pickedHash) continue;
+              diffType = "branch";
+              defaultBranch = pickedHash;
+            } else {
+              diffType = "uncommitted";
+            }
+
+            const result = await openCodeReviewInPlannotator(orchestrator, {
+              cwd: repo.path,
+              diffType,
+              defaultBranch,
+            });
+            if (result.status === "error") {
+              summaries.push(`${formatRepoLabel(repo)}: ERROR${result.error ? ` — ${result.error}` : ""}`);
+            } else if (result.status === "approved") {
+              summaries.push(`${formatRepoLabel(repo)}: APPROVED`);
+            } else {
+              summaries.push(`${formatRepoLabel(repo)}: NEEDS_CHANGES${result.feedback ? `\nFeedback: ${result.feedback}` : ""}`);
+            }
+            break;
           }
-          const commitOptions: OptionInput[] = commits.map((c) => ({
-            title: `${c.hash} ${c.message}`,
-            description: c.age,
-          }));
-          commitOptions.push(opt("Back", "Return to the previous menu"));
-          const picked = await selectOption(ctx, "Review changes since:", commitOptions);
-          if (!picked || picked === "Back") continue;
-          const pickedHash = picked.split(" ")[0];
-          if (!pickedHash) continue;
-          diffType = "branch";
-          defaultBranch = pickedHash;
-        } else {
-          diffType = "uncommitted";
         }
 
-        const text = await openCodeReviewInPlannotator(orchestrator, diffType, defaultBranch);
-        ctx.ui.notify(text, "info");
+        if (summaries.length > 0) {
+          ctx.ui.notify(`Plannotator review summary:\n\n${summaries.join("\n\n")}`, "info");
+        } else {
+          ctx.ui.notify("No repositories were reviewed in Plannotator.", "info");
+        }
         continue;
       }
 

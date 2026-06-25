@@ -1,4 +1,5 @@
-import { existsSync, readdirSync, readFileSync } from "fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "fs";
+import { tmpdir } from "os";
 import { resolve, basename, join, relative } from "path";
 import { validateUserRequest, validateResearch, validateArtifact } from "./validate-artifacts.js";
 import { Type } from "@sinclair/typebox";
@@ -31,12 +32,15 @@ import { createCustomFooter, setFooterContext, setFooterTracker } from "./custom
 import { createUsageTracker, dumpUsageSummary, loadUsageSummary, type UsageTracker } from "./usage-tracker.js";
 import { askUser } from "../../3p/pi-ask-user/index.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { findRootRepo, getBaseBranchForRepo, normalizeRepoPath, resolveRepoForFile, type RepoInfo } from "./repo-utils.js";
+import { findRootRepo, normalizeRepoPath, resolveRepoForFile, type RepoInfo } from "./repo-utils.js";
 
 const USAGE_TRACKER_KEY = Symbol.for("pi-pi:usage-tracker");
 
-export async function detectDefaultBranch(_pi: ExtensionAPI, repos: RepoInfo[], repoPath: string): Promise<string> {
-  return getBaseBranchForRepo(repos, repoPath) ?? "origin/main";
+export function detectDefaultBranch(repos: RepoInfo[], repoPath: string): string {
+  const normalizedPath = normalizeRepoPath(repoPath);
+  const repo = repos.find((r) => r.path === normalizedPath);
+  if (repo?.baseBranch) return repo.baseBranch;
+  return "origin/main";
 }
 
 export async function selectOption(ctx: any, question: string, options: string[]): Promise<string | undefined> {
@@ -491,7 +495,8 @@ function registerSpecifyReviewsTool(orchestrator: Orchestrator): void {
     description:
       "Specify which repositories and commit ranges to open in Plannotator for code review. " +
       "Called when the user requests a Plannotator code review. " +
-      "Plannotator will open sequentially for each entry. Results are returned after all reviews complete.",
+      "Plannotator will open sequentially for each entry. Results are returned after all reviews complete. " +
+      "Range supports both 'base..HEAD' and 'base..target' (non-HEAD target is reviewed via temporary worktree checkout).",
     parameters: Type.Object({
       reviews: Type.Array(Type.Object({
         cwd: Type.String({ description: "Absolute path to the git repository" }),
@@ -507,12 +512,89 @@ function registerSpecifyReviewsTool(orchestrator: Orchestrator): void {
       let hasNeedsChanges = false;
       for (const review of params.reviews) {
         ctx.ui?.setWorkingMessage?.(`Waiting for Plannotator review: ${review.range}…`);
-        const rangeBase = review.range.includes("..") ? review.range.split("..")[0] : review.range;
+        const range = String(review.range ?? "").trim();
+        let compareBase = range;
+        let compareTarget = "HEAD";
+        const rangeSeparatorIdx = range.indexOf("..");
+        if (rangeSeparatorIdx >= 0) {
+          compareBase = range.slice(0, rangeSeparatorIdx).trim();
+          compareTarget = range.slice(rangeSeparatorIdx + 2).trim() || "HEAD";
+        }
+
+        if (!compareBase) {
+          results.push(`${review.cwd} (${review.range}): Invalid range (missing base).`);
+          continue;
+        }
+
+        let reviewCwd = review.cwd;
+        let tempWorktreePath: string | null = null;
+        let tempWorktreeParent: string | null = null;
+        let setupError: string | null = null;
+
+        if (compareTarget !== "HEAD") {
+          tempWorktreeParent = mkdtempSync(join(tmpdir(), "pi-pi-review-worktree-"));
+          tempWorktreePath = join(tempWorktreeParent, "checkout");
+          try {
+            const addResult = await pi.exec("git", ["worktree", "add", "--detach", tempWorktreePath, compareTarget], {
+              cwd: review.cwd,
+              timeout: 20000,
+            });
+            if (addResult.code !== 0) {
+              setupError = addResult.stderr?.trim() || addResult.stdout?.trim() || "Failed to prepare temporary worktree";
+            } else {
+              reviewCwd = tempWorktreePath;
+            }
+          } catch (error: any) {
+            setupError = error?.message ?? String(error);
+          }
+        }
+
+        if (setupError) {
+          results.push(`${review.cwd} (${review.range}): ${setupError}`);
+          if (tempWorktreePath) {
+            try {
+              await pi.exec("git", ["worktree", "remove", "--force", tempWorktreePath], {
+                cwd: review.cwd,
+                timeout: 20000,
+              });
+            } catch {}
+          }
+          if (tempWorktreePath) {
+            try {
+              rmSync(tempWorktreePath, { recursive: true, force: true });
+            } catch {}
+          }
+          if (tempWorktreeParent) {
+            try {
+              rmSync(tempWorktreeParent, { recursive: true, force: true });
+            } catch {}
+          }
+          continue;
+        }
+
         const result = await openCodeReviewDirect(pi, {
-          cwd: review.cwd,
+          cwd: reviewCwd,
           diffType: "branch",
-          defaultBranch: rangeBase,
+          defaultBranch: compareBase,
         });
+
+        if (tempWorktreePath) {
+          try {
+            await pi.exec("git", ["worktree", "remove", "--force", tempWorktreePath], {
+              cwd: review.cwd,
+              timeout: 20000,
+            });
+          } catch {}
+          try {
+            rmSync(tempWorktreePath, { recursive: true, force: true });
+          } catch {}
+          if (tempWorktreeParent) {
+            try {
+              rmSync(tempWorktreeParent, { recursive: true, force: true });
+            } catch {}
+          }
+        }
+
         if ("error" in result) {
           results.push(`${review.cwd} (${review.range}): ${result.error}`);
         } else {
