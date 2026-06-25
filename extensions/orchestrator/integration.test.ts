@@ -37,7 +37,7 @@ vi.mock("../../3p/pi-ask-user/index.js", () => {
 import { Orchestrator } from "./orchestrator.js";
 import { registerCommandHandlers } from "./command-handlers.js";
 import { registerEventHandlers } from "./event-handlers.js";
-import { createTask, loadTask, saveTask } from "./state.js";
+import { createTask, getActiveTask, loadTask, saveTask } from "./state.js";
 import { registerAgentDefinitions } from "./agents/registry.js";
 import * as commandsModule from "./commands.js";
 import * as usageTrackerModule from "./usage-tracker.js";
@@ -472,13 +472,12 @@ describe("implement pipeline: brainstorm → plan → implement → done", () =>
 
     expect(orchestrator.active!.state.phase).toBe("implement");
 
-    queueDefaultResponses(["Next", "Complete"]);
-    const result = await ppPhaseComplete.execute("call-3", { summary: "done" }, undefined, undefined, ctx);
-    expect(result.content[0].text).toBe("");
-    expect(orchestrator.active).toBeNull();
+    const transition = await orchestrator.transitionToNextPhase(ctx as any);
 
-    const finalState = loadTask(taskDir);
-    expect(finalState.phase).toBe("done");
+    expect(transition.ok).toBe(false);
+    expect(transition.error).toContain("plan items still unchecked");
+    expect(orchestrator.active).not.toBeNull();
+    expect(orchestrator.active!.state.phase).toBe("implement");
   });
 });
 
@@ -966,6 +965,91 @@ describe("pp:done cancellation", () => {
 });
 
 describe("edge cases and regressions", () => {
+  it("pp_register_repo returns error for non-git path", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "register non git");
+
+    const ppRegisterRepo = getTool(pi, "pp_register_repo");
+    const result = await ppRegisterRepo.execute("call-non-git", { path: join(cwd, "not-a-repo") });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("Not a git repository");
+  });
+
+  it("pp_register_repo resolves nested path to git root", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+    const repoDir = join(cwd, "extra-repo");
+    const nestedPath = join(repoDir, "src", "index.ts");
+    mkdirSync(join(repoDir, "src"), { recursive: true });
+    writeFileSync(nestedPath, "export const nested = true;\n", "utf-8");
+
+    await orchestrator.startTask(ctx as any, "implement", "register nested");
+
+    pi.exec.mockImplementation(async (command?: string, args?: string[]) => {
+      if (command === "git" && args?.[0] === "rev-parse" && args?.[1] === "--show-toplevel") {
+        return { code: 0, stdout: `${repoDir}\n`, stderr: "" };
+      }
+      return { code: 1, stdout: "", stderr: "unsupported" };
+    });
+
+    const ppRegisterRepo = getTool(pi, "pp_register_repo");
+    const result = await ppRegisterRepo.execute("call-nested", { path: nestedPath });
+
+    expect(result.content[0].text).toContain(`Registered repository: ${repoDir}`);
+    expect(orchestrator.active!.state.repos?.some((repo) => repo.path === repoDir)).toBe(true);
+  });
+
+  it("pp_register_repo updates root baseBranch", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "register root");
+
+    pi.exec.mockImplementation(async (command?: string, args?: string[]) => {
+      if (command === "git" && args?.[0] === "rev-parse" && args?.[1] === "--show-toplevel") {
+        return { code: 0, stdout: `${cwd}\n`, stderr: "" };
+      }
+      return { code: 1, stdout: "", stderr: "unsupported" };
+    });
+
+    const ppRegisterRepo = getTool(pi, "pp_register_repo");
+    const result = await ppRegisterRepo.execute("call-root", { path: cwd, baseBranch: "origin/main" });
+
+    expect(result.content[0].text).toContain("Updated repository");
+    expect(orchestrator.active!.state.repos?.find((repo) => repo.isRoot)?.baseBranch).toBe("origin/main");
+  });
+
+  it("pp_register_repo adds extra repo and does not duplicate on repeat", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+    const repoDir = join(cwd, "extra-repo");
+    mkdirSync(repoDir, { recursive: true });
+
+    await orchestrator.startTask(ctx as any, "implement", "register dedupe");
+
+    pi.exec.mockImplementation(async (command?: string, args?: string[]) => {
+      if (command === "git" && args?.[0] === "rev-parse" && args?.[1] === "--show-toplevel") {
+        return { code: 0, stdout: `${repoDir}\n`, stderr: "" };
+      }
+      return { code: 1, stdout: "", stderr: "unsupported" };
+    });
+
+    const ppRegisterRepo = getTool(pi, "pp_register_repo");
+    await ppRegisterRepo.execute("call-extra-1", { path: repoDir, baseBranch: "origin/main" });
+    const second = await ppRegisterRepo.execute("call-extra-2", { path: repoDir, baseBranch: "origin/main" });
+
+    const repos = orchestrator.active!.state.repos ?? [];
+    expect(repos.filter((repo) => repo.path === repoDir)).toHaveLength(1);
+    expect(second.content[0].text).toContain("Already registered repository");
+  });
+
   it("pp_register_repo deduplicates entries and updates baseBranch", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);
@@ -1674,6 +1758,37 @@ describe("task modes and quick task", () => {
     expect(orchestrator.active!.state.mode).toBe("autonomous");
   });
 
+  it("resume preserves autonomousConfig", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "resume autonomous config", undefined, undefined, "autonomous");
+    const taskDir = orchestrator.active!.dir;
+    orchestrator.active!.state.autonomousConfig = {
+      phases: {
+        brainstorm: { reviewPreset: "regular", maxReviewPasses: 1 },
+        plan: { plannerPreset: "regular", reviewPreset: "regular", maxReviewPasses: 2 },
+        implement: { reviewPreset: "regular", maxReviewPasses: 3 },
+      },
+    };
+    saveTask(taskDir, orchestrator.active!.state);
+    await orchestrator.cleanupActive();
+
+    const pp = getCommand(pi, "pp");
+    queueDefaultResponses(["Task", "Resume", "resume autonomous config"]);
+    await pp(undefined, ctx);
+
+    expect(orchestrator.active).not.toBeNull();
+    expect(orchestrator.active!.state.autonomousConfig).toEqual({
+      phases: {
+        brainstorm: { reviewPreset: "regular", maxReviewPasses: 1 },
+        plan: { plannerPreset: "regular", reviewPreset: "regular", maxReviewPasses: 2 },
+        implement: { reviewPreset: "regular", maxReviewPasses: 3 },
+      },
+    });
+  });
+
   it("autonomous mode skips planner preset picker during transition", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);
@@ -1921,6 +2036,7 @@ describe("modified file tracking", () => {
   it("tool_result ignores writes inside .pp directory", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const runAfterEditSpy = vi.spyOn(commandsModule, "runAfterEdit");
 
     await orchestrator.startTask(makeCtx() as any, "implement", "Ignore .pp writes");
     orchestrator.active!.state.phase = "implement";
@@ -1928,11 +2044,13 @@ describe("modified file tracking", () => {
     await toolResult({ toolName: "write", input: { path: ".pp/state/implement/x/note.md" }, isError: false, content: [] }, {});
 
     expect(orchestrator.active!.modifiedFiles.size).toBe(0);
+    expect(runAfterEditSpy).not.toHaveBeenCalled();
   });
 
   it("tool_result ignores writes outside implement phase", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const runAfterEditSpy = vi.spyOn(commandsModule, "runAfterEdit");
 
     await orchestrator.startTask(makeCtx() as any, "implement", "Ignore non-implement writes");
     orchestrator.active!.state.phase = "brainstorm";
@@ -1940,16 +2058,40 @@ describe("modified file tracking", () => {
     await toolResult({ toolName: "write", input: { path: "src/not-tracked.ts" }, isError: false, content: [] }, {});
 
     expect(orchestrator.active!.modifiedFiles.size).toBe(0);
+    expect(runAfterEditSpy).not.toHaveBeenCalled();
   });
 
-  it("afterEdit runs for root repo files only", async () => {
+  it("root repo edits trigger root afterEdit commands", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const runAfterEditSpy = vi.spyOn(commandsModule, "runAfterEdit");
+    const loadRepoAfterEditCommandsSpy = vi.spyOn(commandsModule, "loadRepoAfterEditCommands");
+
+    await orchestrator.startTask(makeCtx() as any, "implement", "afterEdit root");
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.repos = [{ path: cwd, isRoot: true }];
+    saveTask(orchestrator.active!.dir, orchestrator.active!.state);
+
+    const toolResult = pi._handlers.get("tool_result")!;
+    await toolResult({ toolName: "write", input: { path: "src/root.ts" }, isError: false, content: [] }, {});
+
+    expect(runAfterEditSpy).toHaveBeenCalledTimes(1);
+    expect(runAfterEditSpy.mock.calls[0]?.[0]).toBe("src/root.ts");
+    expect(loadRepoAfterEditCommandsSpy).not.toHaveBeenCalled();
+  });
+
+  it("extra repo edits trigger extra repo afterEdit when extra configs are enabled", async () => {
     const cwd = makeTempDir();
     const extraRepo = join(cwd, "extra-repo");
     mkdirSync(extraRepo, { recursive: true });
     const { pi, orchestrator } = await setupOrchestrator(cwd);
     const runAfterEditSpy = vi.spyOn(commandsModule, "runAfterEdit");
+    const loadRepoAfterEditCommandsSpy = vi
+      .spyOn(commandsModule, "loadRepoAfterEditCommands")
+      .mockReturnValue([{ run: "npm run lint", glob: ["**/*.ts"] }]);
 
-    await orchestrator.startTask(makeCtx() as any, "implement", "afterEdit root only");
+    await orchestrator.startTask(makeCtx() as any, "implement", "afterEdit extra");
+    orchestrator.config = { ...orchestrator.config, ignoreExtraRepoConfigs: false } as any;
     orchestrator.active!.state.phase = "implement";
     orchestrator.active!.state.repos = [
       { path: cwd, isRoot: true },
@@ -1958,14 +2100,87 @@ describe("modified file tracking", () => {
     saveTask(orchestrator.active!.dir, orchestrator.active!.state);
 
     const toolResult = pi._handlers.get("tool_result")!;
-    await toolResult({ toolName: "write", input: { path: "src/root.ts" }, isError: false, content: [] }, {});
     await toolResult({ toolName: "write", input: { path: "extra-repo/src/extra.ts" }, isError: false, content: [] }, {});
 
+    expect(loadRepoAfterEditCommandsSpy).toHaveBeenCalledWith(extraRepo);
     expect(runAfterEditSpy).toHaveBeenCalledTimes(1);
-    expect(runAfterEditSpy.mock.calls[0]?.[0]).toBe("src/root.ts");
+    expect(runAfterEditSpy).toHaveBeenCalledWith(
+      "src/extra.ts",
+      [{ run: "npm run lint", glob: ["**/*.ts"] }],
+      orchestrator.config.timeouts.afterEdit,
+      extraRepo,
+    );
   });
 
-  it("modified files are cleared after pp_commit", async () => {
+  it("extra repo edits are skipped when ignoreExtraRepoConfigs is true", async () => {
+    const cwd = makeTempDir();
+    const extraRepo = join(cwd, "extra-repo");
+    mkdirSync(extraRepo, { recursive: true });
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const runAfterEditSpy = vi.spyOn(commandsModule, "runAfterEdit");
+    const loadRepoAfterEditCommandsSpy = vi.spyOn(commandsModule, "loadRepoAfterEditCommands");
+
+    await orchestrator.startTask(makeCtx() as any, "implement", "afterEdit extra skipped");
+    orchestrator.config = { ...orchestrator.config, ignoreExtraRepoConfigs: true } as any;
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.repos = [
+      { path: cwd, isRoot: true },
+      { path: extraRepo, isRoot: false },
+    ];
+    saveTask(orchestrator.active!.dir, orchestrator.active!.state);
+
+    const toolResult = pi._handlers.get("tool_result")!;
+    await toolResult({ toolName: "write", input: { path: "extra-repo/src/extra.ts" }, isError: false, content: [] }, {});
+
+    expect(loadRepoAfterEditCommandsSpy).not.toHaveBeenCalled();
+    expect(runAfterEditSpy).not.toHaveBeenCalled();
+  });
+
+  it("pp_commit with autoCommit disabled returns message", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+
+    await orchestrator.startTask(makeCtx() as any, "implement", "commit disabled");
+    orchestrator.config = { ...orchestrator.config, autoCommit: false } as any;
+
+    const ppCommit = getTool(pi, "pp_commit");
+    const result = await ppCommit.execute("call-commit-disabled", { message: "msg" });
+
+    expect(result.content[0].text).toContain("autoCommit is disabled");
+  });
+
+  it("pp_commit with no modified files returns message", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+
+    await orchestrator.startTask(makeCtx() as any, "implement", "commit empty");
+    orchestrator.config = { ...orchestrator.config, autoCommit: true } as any;
+    pi.exec.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+
+    const ppCommit = getTool(pi, "pp_commit");
+    const result = await ppCommit.execute("call-commit-empty", { message: "msg" });
+
+    expect(result.content[0].text).toContain("No modified files to commit");
+  });
+
+  it("pp_commit with unregistered repo returns error", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+
+    await orchestrator.startTask(makeCtx() as any, "implement", "commit invalid repo");
+    orchestrator.config = { ...orchestrator.config, autoCommit: true } as any;
+
+    const ppCommit = getTool(pi, "pp_commit");
+    const result = await ppCommit.execute("call-commit-unregistered", {
+      message: "msg",
+      repo: join(cwd, "unregistered"),
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("Repository is not registered");
+  });
+
+  it("pp_commit clears modified files after success", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);
     const autoCommitSpy = vi.spyOn(commandsModule, "autoCommit").mockReturnValue({ ok: true, commitHash: "abc123" });
@@ -1991,6 +2206,181 @@ describe("modified file tracking", () => {
     expect(orchestrator.active!.modifiedFiles.size).toBe(0);
     expect(orchestrator.active!.state.modifiedFiles).toEqual([]);
     expect(autoCommitSpy).toHaveBeenCalled();
+  });
+
+  it("pp_commit parses renamed files and stages new path", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const autoCommitSpy = vi.spyOn(commandsModule, "autoCommit").mockReturnValue({ ok: true, commitHash: "abc123" });
+
+    await orchestrator.startTask(makeCtx() as any, "implement", "commit rename parse");
+    orchestrator.config = { ...orchestrator.config, autoCommit: true } as any;
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.repos = [{ path: cwd, isRoot: true }];
+    saveTask(orchestrator.active!.dir, orchestrator.active!.state);
+
+    pi.exec.mockResolvedValueOnce({
+      code: 0,
+      stdout: "R  src/old.ts -> src/new.ts\n",
+      stderr: "",
+    });
+
+    const ppCommit = getTool(pi, "pp_commit");
+    const result = await ppCommit.execute("call-pp-commit-rename", { message: "rename file" });
+
+    expect(result.content[0].text).toContain("Committed 1 file");
+    expect(autoCommitSpy).toHaveBeenCalledWith(["src/new.ts"], "rename file", cwd);
+  });
+});
+
+describe("resume and recovery", () => {
+  it("resume paused task restores task phase and step", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "resume phase state");
+    const taskDir = orchestrator.active!.dir;
+    orchestrator.active!.state.phase = "plan";
+    orchestrator.active!.state.step = "synthesize";
+    orchestrator.active!.state.modifiedFiles = [join(cwd, "src", "restored.ts")];
+    saveTask(taskDir, orchestrator.active!.state);
+    await orchestrator.cleanupActive();
+
+    const pp = getCommand(pi, "pp");
+    queueDefaultResponses(["Task", "Resume", "resume phase state"]);
+    await pp(undefined, ctx);
+
+    expect(orchestrator.active).not.toBeNull();
+    expect(orchestrator.active!.state.phase).toBe("plan");
+    expect(orchestrator.active!.state.step).toBe("synthesize");
+    expect(orchestrator.active!.modifiedFiles.has(join(cwd, "src", "restored.ts"))).toBe(true);
+  });
+
+  it("resume prunes stale repos that no longer exist", async () => {
+    const cwd = makeTempDir();
+    mkdirSync(join(cwd, ".git"), { recursive: true });
+    const staleRepo = join(cwd, "missing-repo");
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "resume stale repos");
+    const taskDir = orchestrator.active!.dir;
+    orchestrator.active!.state.repos = [
+      { path: cwd, isRoot: true },
+      { path: staleRepo, isRoot: false },
+    ];
+    saveTask(taskDir, orchestrator.active!.state);
+    await orchestrator.cleanupActive();
+
+    const pp = getCommand(pi, "pp");
+    queueDefaultResponses(["Task", "Resume", "resume stale repos"]);
+    await pp(undefined, ctx);
+
+    expect(orchestrator.active!.state.repos).toEqual([{ path: cwd, isRoot: true }]);
+    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Pruned 1 stale repo"), "warning");
+  });
+
+  it("getActiveTask returns null when multiple unlocked tasks exist", () => {
+    const cwd = makeTempDir();
+    createTask(cwd, "implement", "first unlocked");
+    createTask(cwd, "debug", "second unlocked");
+
+    const active = getActiveTask(cwd);
+
+    expect(active).toBeNull();
+  });
+
+  it("getActiveTask returns the single unlocked task", () => {
+    const cwd = makeTempDir();
+    const taskDir = createTask(cwd, "implement", "single unlocked");
+
+    const active = getActiveTask(cwd);
+
+    expect(active?.dir).toBe(taskDir);
+  });
+});
+
+describe("artifact validation enforcement", () => {
+  it("writing invalid USER_REQUEST.md appends validation-error", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+
+    await orchestrator.startTask(makeCtx() as any, "implement", "validate ur");
+    writeFileSync(join(orchestrator.active!.dir, "USER_REQUEST.md"), "# Wrong\n\n## Nope\n", "utf-8");
+
+    const toolResult = pi._handlers.get("tool_result")!;
+    const result = await toolResult({
+      toolName: "write",
+      input: { path: join(orchestrator.active!.dir, "USER_REQUEST.md") },
+      isError: false,
+      content: [{ type: "text", text: "written" }],
+    }, {});
+
+    const last = result.content[result.content.length - 1];
+    expect(last.text).toContain("<validation-error>");
+    expect(last.text).toContain("USER_REQUEST.md structure is invalid");
+  });
+
+  it("writing invalid RESEARCH.md appends validation-error", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+
+    await orchestrator.startTask(makeCtx() as any, "implement", "validate research");
+    writeFileSync(join(orchestrator.active!.dir, "RESEARCH.md"), "## Affected Code\n\n", "utf-8");
+
+    const toolResult = pi._handlers.get("tool_result")!;
+    const result = await toolResult({
+      toolName: "write",
+      input: { path: join(orchestrator.active!.dir, "RESEARCH.md") },
+      isError: false,
+      content: [{ type: "text", text: "written" }],
+    }, {});
+
+    const last = result.content[result.content.length - 1];
+    expect(last.text).toContain("<validation-error>");
+    expect(last.text).toContain("RESEARCH.md structure is invalid");
+  });
+
+  it("writing valid USER_REQUEST.md does not append validation error", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+
+    await orchestrator.startTask(makeCtx() as any, "implement", "validate ur valid");
+    writeFileSync(join(orchestrator.active!.dir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+
+    const toolResult = pi._handlers.get("tool_result")!;
+    const result = await toolResult({
+      toolName: "write",
+      input: { path: join(orchestrator.active!.dir, "USER_REQUEST.md") },
+      isError: false,
+      content: [{ type: "text", text: "written" }],
+    }, {});
+
+    expect(result).toBeUndefined();
+  });
+
+  it("writing invalid artifact markdown appends validation-error", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+
+    await orchestrator.startTask(makeCtx() as any, "implement", "validate artifact");
+    const artifactDir = join(orchestrator.active!.dir, "artifacts");
+    mkdirSync(artifactDir, { recursive: true });
+    const artifactPath = join(artifactDir, "note.md");
+    writeFileSync(artifactPath, "## Heading only\n", "utf-8");
+
+    const toolResult = pi._handlers.get("tool_result")!;
+    const result = await toolResult({
+      toolName: "write",
+      input: { path: artifactPath },
+      isError: false,
+      content: [{ type: "text", text: "written" }],
+    }, {});
+
+    const last = result.content[result.content.length - 1];
+    expect(last.text).toContain("<validation-error>");
+    expect(last.text).toContain("Artifact structure is invalid");
   });
 });
 
@@ -2083,6 +2473,41 @@ describe("error retry", () => {
 
     await turnEnd({ message: { stopReason: "stop", content: [] } }, ctx);
     expect(orchestrator.errorRetryCount).toBe(0);
+  });
+
+  it("empty turn triggers continuation nudge", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "nudge test");
+    const turnEnd = pi._handlers.get("turn_end")!;
+
+    await turnEnd({ message: { stopReason: "stop", content: [] }, toolResults: [] }, ctx);
+
+    expect(orchestrator.nudgeTimestamps.length).toBe(1);
+    expect(pi.sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("previous response was interrupted"));
+  });
+
+  it("nudge halts after repeated interruptions", async () => {
+    vi.useFakeTimers();
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "nudge halt");
+    const turnEnd = pi._handlers.get("turn_end")!;
+
+    for (let i = 0; i < 25; i += 1) {
+      await turnEnd({ message: { stopReason: "stop", content: [] }, toolResults: [] }, ctx);
+    }
+
+    expect(orchestrator.nudgeHalted).toBe(true);
+    expect(pi.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ customType: "pp-continuation-halted" }),
+      { deliverAs: "steer" },
+    );
+    vi.useRealTimers();
   });
 });
 

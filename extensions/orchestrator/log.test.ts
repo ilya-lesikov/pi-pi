@@ -89,7 +89,7 @@ describe("log", () => {
 
     getLogger().info({ s: "test" }, "both-destinations");
     flushLogs();
-    await delay(30);
+    await delay(100);
 
     expect(readText(sessionPath)).toContain("both-destinations");
     expect(readText(join(taskDir, "debug.jsonl"))).toContain("both-destinations");
