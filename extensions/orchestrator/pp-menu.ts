@@ -109,10 +109,36 @@ function appendSection(content: string, heading: string, body: string): string {
   return `${normalized}\n\n${heading}\n${body}\n`;
 }
 
+function appendToSection(content: string, heading: string, body: string): string {
+  const normalized = content.trimEnd();
+  if (normalized.includes(body)) return normalized + "\n";
+
+  const lines = normalized.split("\n");
+  const sectionIndex = lines.findIndex((line) => line.trim() === heading);
+  if (sectionIndex === -1) {
+    return appendSection(normalized, heading, body);
+  }
+
+  let insertIndex = lines.length;
+  for (let i = sectionIndex + 1; i < lines.length; i += 1) {
+    if (lines[i]?.startsWith("## ")) {
+      insertIndex = i;
+      break;
+    }
+  }
+
+  const insertLines = body.split("\n");
+  if (insertIndex > sectionIndex + 1 && lines[insertIndex - 1]?.trim() !== "") {
+    insertLines.unshift("");
+  }
+  lines.splice(insertIndex, 0, ...insertLines);
+  return lines.join("\n") + "\n";
+}
+
 function appendRepoContext(content: string, repos: RepoInfo[]): string {
   if (repos.length === 0) return content;
   const lines = repos.map((repo) => `- ${formatRepoLabel(repo)}${repo.baseBranch ? ` (base: ${repo.baseBranch})` : ""}`);
-  return appendSection(content, "## Constraints", `Registered repositories:\n${lines.join("\n")}`);
+  return appendToSection(content, "## Constraints", `Registered repositories:\n${lines.join("\n")}`);
 }
 
 function appendResearchOpenQuestions(content: string, text: string): string {
@@ -2270,12 +2296,10 @@ async function startReviewTask(
   await orchestrator.startTask(ctx, "review", description);
   if (!orchestrator.active || orchestrator.active.type !== "review") return BACK;
   const repos = getRegisteredRepos(orchestrator);
-  const repoSection = formatRepoList(repos);
-  const userRequestWithRepos = appendSection(userRequestContent, "## Registered repositories", repoSection);
+  const userRequestWithRepos = appendRepoContext(userRequestContent, repos);
   writeFileSync(join(orchestrator.active.dir, "USER_REQUEST.md"), userRequestWithRepos, "utf-8");
   if (researchContent) {
-    const researchWithRepos = appendSection(researchContent, "## Registered repositories", repoSection);
-    writeFileSync(join(orchestrator.active.dir, "RESEARCH.md"), researchWithRepos, "utf-8");
+    writeFileSync(join(orchestrator.active.dir, "RESEARCH.md"), researchContent, "utf-8");
   }
   return "started";
 }
@@ -2302,30 +2326,48 @@ async function showReviewMenu(orchestrator: Orchestrator, ctx: any): Promise<typ
 
     if (choice === "Current branch") {
       const repos = getRegisteredRepos(orchestrator);
-      const repoRanges = repos.map((repo) => `- ${formatRepoLabel(repo)}: ${detectDefaultBranch(repos, repo.path)}..HEAD`);
+      const repoRanges = await Promise.all(
+        repos.map(async (repo) => `- ${formatRepoLabel(repo)}: ${await detectDefaultBranch(orchestrator, repos, repo.path)}..HEAD`),
+      );
       const prContexts = await detectCurrentPrContext(orchestrator, repos);
 
-      const urLines = ["# User Request", "Review current branch changes across registered repositories", "", "## Diff ranges", ...repoRanges];
+      const urLines = [
+        "# User Request",
+        "Review current branch changes across registered repositories.",
+        "",
+        "Diff ranges:",
+        ...repoRanges,
+      ];
       const prUrls = prContexts
         .filter((pr) => pr.prUrl)
         .map((pr) => `- ${pr.repoPath}: ${pr.prUrl}`);
       if (prUrls.length > 0) {
-        urLines.push("", "## Open PRs", ...prUrls);
+        urLines.push("", "Open PRs:", ...prUrls);
       }
       urLines.push("", "## Problem", "Review and identify issues in the code changes.", "", "## Constraints", "Focus on correctness, edge cases, style, missing tests, potential bugs.");
       const urContent = urLines.join("\n") + "\n";
 
-      let resContent: string | null = null;
+      let resContent = [
+        "## Affected Code",
+        "(to be filled during review)",
+        "",
+        "## Architecture Context",
+        "(to be filled during review)",
+        "",
+        "## Constraints & Edge Cases",
+        "- MUST: Review all changed code across the registered repositories",
+        "- RISK: Issues can span repository boundaries",
+      ].join("\n") + "\n";
       if (prContexts.length > 0) {
         const prContextBlocks = prContexts
           .map((pr) => {
-            const lines = [`### ${pr.repoPath}`];
+            const lines = [`${pr.repoPath}`];
             if (pr.prUrl) lines.push(`URL: ${pr.prUrl}`);
             if (pr.prContext) lines.push(pr.prContext);
             return lines.join("\n");
           })
           .join("\n\n");
-        resContent = ["## PR Context", prContextBlocks, "", "## Affected Code", "(to be filled during review)", "", "## Architecture Context", "(to be filled during review)"].join("\n") + "\n";
+        resContent = appendResearchOpenQuestions(resContent, `PR context:\n${prContextBlocks}`);
       }
 
       const description = await promptDescription(ctx, "Describe the review (optional)", "review");
@@ -2344,9 +2386,6 @@ async function showReviewMenu(orchestrator: Orchestrator, ctx: any): Promise<typ
         "",
         "## Constraints",
         "Focus on correctness, edge cases, style, missing tests, potential bugs.",
-        "",
-        "## Repositories",
-        formatRepoList(repos),
         "",
       ].join("\n");
       const description = await promptDescription(ctx, "Describe the review (optional)", "review");
@@ -2395,9 +2434,6 @@ async function showReviewMenu(orchestrator: Orchestrator, ctx: any): Promise<typ
         "",
         "## Constraints",
         "Focus on correctness, edge cases, style, missing tests, potential bugs.",
-        "",
-        "## Repositories",
-        formatRepoList(repos),
         "",
       ].join("\n");
       const description = await promptDescription(ctx, "Describe the review (optional)", "review");
@@ -2676,7 +2712,7 @@ export async function showActiveTaskMenu(
 
             if (diffChoice === "All branch changes") {
               diffType = "branch";
-              defaultBranch = detectDefaultBranch(repos, repo.path);
+              defaultBranch = await detectDefaultBranch(orchestrator, repos, repo.path);
             } else if (diffChoice === "Last commit") {
               diffType = "last-commit";
             } else if (diffChoice === "Since commit") {

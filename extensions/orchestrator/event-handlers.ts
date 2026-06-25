@@ -1,6 +1,6 @@
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "fs";
 import { tmpdir } from "os";
-import { resolve, basename, join, relative } from "path";
+import { resolve, basename, join, relative, dirname, isAbsolute, sep } from "path";
 import { validateUserRequest, validateResearch, validateArtifact } from "./validate-artifacts.js";
 import { Type } from "@sinclair/typebox";
 import { loadConfig, resolvePreset } from "./config.js";
@@ -36,10 +36,45 @@ import { findRootRepo, normalizeRepoPath, resolveRepoForFile, type RepoInfo } fr
 
 const USAGE_TRACKER_KEY = Symbol.for("pi-pi:usage-tracker");
 
-export function detectDefaultBranch(repos: RepoInfo[], repoPath: string): string {
+function isPathInside(basePath: string, targetPath: string): boolean {
+  const rel = relative(basePath, targetPath);
+  return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel));
+}
+
+export async function detectDefaultBranch(orchestrator: Orchestrator, repos: RepoInfo[], repoPath: string): Promise<string> {
   const normalizedPath = normalizeRepoPath(repoPath);
   const repo = repos.find((r) => r.path === normalizedPath);
   if (repo?.baseBranch) return repo.baseBranch;
+
+  try {
+    const headRef = await orchestrator.pi.exec("git", ["symbolic-ref", "refs/remotes/origin/HEAD"], {
+      cwd: normalizedPath,
+      timeout: 5000,
+    });
+    if (headRef.code === 0) {
+      const value = headRef.stdout.trim();
+      if (value.startsWith("refs/remotes/")) {
+        return value.slice("refs/remotes/".length);
+      }
+    }
+  } catch {}
+
+  try {
+    const mainRef = await orchestrator.pi.exec("git", ["show-ref", "--verify", "--quiet", "refs/remotes/origin/main"], {
+      cwd: normalizedPath,
+      timeout: 5000,
+    });
+    if (mainRef.code === 0) return "origin/main";
+  } catch {}
+
+  try {
+    const masterRef = await orchestrator.pi.exec("git", ["show-ref", "--verify", "--quiet", "refs/remotes/origin/master"], {
+      cwd: normalizedPath,
+      timeout: 5000,
+    });
+    if (masterRef.code === 0) return "origin/master";
+  } catch {}
+
   return "origin/main";
 }
 
@@ -359,9 +394,17 @@ function registerRepoTool(orchestrator: Orchestrator): void {
         return { content: [{ type: "text" as const, text: "Missing path." }], isError: true as const, details: {} };
       }
 
+      const normalizedInputPath = normalizeRepoPath(pathInput);
+      let gitCwd = normalizedInputPath;
+      try {
+        gitCwd = statSync(normalizedInputPath).isDirectory() ? normalizedInputPath : dirname(normalizedInputPath);
+      } catch {
+        gitCwd = dirname(normalizedInputPath);
+      }
+
       let gitRoot = "";
       try {
-        const result = await pi.exec("git", ["rev-parse", "--show-toplevel"], { cwd: pathInput, timeout: 5000 });
+        const result = await pi.exec("git", ["rev-parse", "--show-toplevel"], { cwd: gitCwd, timeout: 5000 });
         if (result.code !== 0) {
           return { content: [{ type: "text" as const, text: "Not a git repository." }], isError: true as const, details: {} };
         }
@@ -446,7 +489,6 @@ function registerRepoTool(orchestrator: Orchestrator): void {
       if (added) {
         unregisterAgentDefinitions(orchestrator.pi);
         orchestrator.registerAgents();
-        registerCbmTools(pi, normalizedRepo);
       }
 
       const registered = repos.find((repo) => repo.path === normalizedRepo) ?? {
@@ -681,14 +723,17 @@ function registerCommitTool(orchestrator: Orchestrator): void {
 
       const files: string[] = [];
       try {
-        const gitResult = await pi.exec("git", ["diff", "--name-only"], { cwd: commitRepoPath, timeout: 5000 });
-        if (gitResult.code === 0 && gitResult.stdout.trim()) {
-          files.push(...gitResult.stdout.trim().split("\n").filter(Boolean));
-        }
-        const stagedResult = await pi.exec("git", ["diff", "--name-only", "--cached"], { cwd: commitRepoPath, timeout: 5000 });
-        if (stagedResult.code === 0 && stagedResult.stdout.trim()) {
-          for (const f of stagedResult.stdout.trim().split("\n").filter(Boolean)) {
-            if (!files.includes(f)) files.push(f);
+        const statusResult = await pi.exec("git", ["status", "--porcelain"], { cwd: commitRepoPath, timeout: 5000 });
+        if (statusResult.code === 0 && statusResult.stdout.trim()) {
+          for (const rawLine of statusResult.stdout.split("\n")) {
+            const line = rawLine.trimEnd();
+            if (!line) continue;
+            const pathPart = line.slice(3);
+            if (!pathPart) continue;
+            const finalPath = pathPart.includes(" -> ") ? pathPart.split(" -> ").at(-1)! : pathPart;
+            if (!files.includes(finalPath)) {
+              files.push(finalPath);
+            }
           }
         }
       } catch {}
@@ -1369,18 +1414,18 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       const ppStateDir = resolve(orchestrator.cwd, ".pp", "state");
       const ppDir = resolve(orchestrator.cwd, ".pp");
 
-      if (resolvedPath.startsWith(ppStateDir + "/") || resolvedPath === ppStateDir) {
+      if (isPathInside(ppStateDir, resolvedPath)) {
         if (!resolvedPath.endsWith(".md")) {
           return { block: true, reason: "Cannot write non-.md files in .pp/state/" };
         }
       }
 
       const fileName = basename(resolvedPath);
-      if (fileName === "state.json" && (resolvedPath.startsWith(ppDir + "/") || resolvedPath === ppDir)) {
+      if (fileName === "state.json" && isPathInside(ppDir, resolvedPath)) {
         return { block: true, reason: "state.json is managed by the extension" };
       }
 
-      if (fileName === "config.json" && (resolvedPath.startsWith(ppDir + "/") || resolvedPath === ppDir)) {
+      if (fileName === "config.json" && isPathInside(ppDir, resolvedPath)) {
         return { block: true, reason: "config.json is managed by the user, not the LLM" };
       }
     }
@@ -1422,7 +1467,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
         }
       }
       const artifactsDir = join(taskDir, "artifacts");
-      if (resolvedWrite.startsWith(artifactsDir + "/") && resolvedWrite.endsWith(".md")) {
+      if (isPathInside(artifactsDir, resolvedWrite) && resolvedWrite.endsWith(".md")) {
         const content = readFileSync(resolvedWrite, "utf-8");
         const result = validateArtifact(content);
         if (!result.ok) {
@@ -1435,7 +1480,8 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
         }
       }
 
-      if (filePath.includes(".pp/")) return;
+      const ppDir = resolve(orchestrator.cwd, ".pp");
+      if (isPathInside(ppDir, resolvedWrite)) return;
 
       if (orchestrator.active.state.phase !== "implement") return;
 

@@ -176,6 +176,7 @@ function makePi() {
     setModel: vi.fn().mockResolvedValue(true),
     setThinkingLevel: vi.fn(),
     setSessionName: vi.fn(),
+    exec: vi.fn(async (_command?: string, _args?: string[], _options?: { cwd?: string; timeout?: number }) => ({ code: 1, stdout: "", stderr: "" })),
     _handlers: handlers,
     _eventHandlers: eventHandlers,
     _commands: commands,
@@ -917,6 +918,42 @@ describe("pp:done cancellation", () => {
 });
 
 describe("edge cases and regressions", () => {
+  it("pp_register_repo deduplicates entries and updates baseBranch", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "Repo registration test");
+
+    const repoDir = join(cwd, "extra-repo");
+    mkdirSync(join(repoDir, "src"), { recursive: true });
+    writeFileSync(join(repoDir, "src", "index.ts"), "export const x = 1;\n", "utf-8");
+
+    pi.exec.mockImplementation(async (command?: string, args?: string[], options?: { cwd?: string }) => {
+      if (!command || !args) {
+        return { code: 1, stdout: "", stderr: "unsupported" };
+      }
+      if (command === "git" && args[0] === "rev-parse" && args[1] === "--show-toplevel") {
+        return { code: 0, stdout: `${repoDir}\n`, stderr: "" };
+      }
+      return { code: 1, stdout: "", stderr: "unsupported" };
+    });
+
+    const { registerCbmTools } = await import("./cbm.js");
+    const cbmCallsBefore = (registerCbmTools as any).mock.calls.length;
+
+    const ppRegisterRepo = getTool(pi, "pp_register_repo");
+    await ppRegisterRepo.execute("call-1", { path: repoDir, baseBranch: "origin/main" });
+    await ppRegisterRepo.execute("call-2", { path: join(repoDir, "src", "index.ts"), baseBranch: "origin/develop" });
+
+    const repos = orchestrator.active!.state.repos ?? [];
+    const extraRepos = repos.filter((repo) => repo.path === repoDir);
+
+    expect(extraRepos).toHaveLength(1);
+    expect(extraRepos[0]?.baseBranch).toBe("origin/develop");
+    expect((registerCbmTools as any).mock.calls.length).toBe(cbmCallsBefore);
+  });
+
   it("starting new task while another is active finishes the old one", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);

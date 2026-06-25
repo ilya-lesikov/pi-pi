@@ -308,10 +308,12 @@ export function registerCbmTools(pi: ExtensionAPI, cwd: string): boolean {
       "Example: MATCH (f:Function)-[:CALLS]->(g:Function) WHERE f.name = 'main' RETURN g.name, g.file_path LIMIT 10",
     parameters: Type.Object({
       query: Type.String({ description: "Cypher query string" }),
+      project_path: Type.Optional(Type.String({ description: "Absolute path to the repo to search. Defaults to root project." })),
     }),
     async execute(_toolCallId, params: any) {
       try {
-        const project = await daemon.ensureIndexed(cwd);
+        const targetCwd = params.project_path ?? cwd;
+        const project = await daemon.ensureIndexed(targetCwd);
         return ok(JSON.stringify(await daemon.callTool("query_graph", { project, query: params.query }), null, 2));
       } catch (e: any) {
         return fail(`cbm_query error: ${e.message}`);
@@ -323,10 +325,13 @@ export function registerCbmTools(pi: ExtensionAPI, cwd: string): boolean {
     name: "cbm_architecture",
     label: "CBM",
     description: "Get high-level architecture overview of the indexed codebase — node/edge counts, schema, structure.",
-    parameters: Type.Object({}),
-    async execute() {
+    parameters: Type.Object({
+      project_path: Type.Optional(Type.String({ description: "Absolute path to the repo to inspect. Defaults to root project." })),
+    }),
+    async execute(_toolCallId, params: any) {
       try {
-        const project = await daemon.ensureIndexed(cwd);
+        const targetCwd = params.project_path ?? cwd;
+        const project = await daemon.ensureIndexed(targetCwd);
         return ok(JSON.stringify(await daemon.callTool("get_architecture", { project }), null, 2));
       } catch (e: any) {
         return fail(`cbm_architecture error: ${e.message}`);
