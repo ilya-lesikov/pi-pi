@@ -79,6 +79,16 @@ function getRegisteredRepos(orchestrator: Orchestrator): RepoInfo[] {
   return [{ path: normalizeRepoPath(orchestrator.cwd), isRoot: true }];
 }
 
+function validateRepos(repos: RepoInfo[]): RepoInfo[] {
+  return repos.filter((repo) => {
+    try {
+      return existsSync(repo.path);
+    } catch {
+      return false;
+    }
+  });
+}
+
 function formatRepoLabel(repo: RepoInfo): string {
   return `${repo.path}${repo.isRoot ? " (root)" : ""}`;
 }
@@ -320,6 +330,27 @@ export async function resumeTask(
   orchestrator.resetTaskScopedState();
   orchestrator.activeTaskToken++;
 
+  const normalizedRoot = normalizeRepoPath(orchestrator.cwd);
+  if (!task.state.repos || task.state.repos.length === 0) {
+    task.state.repos = [{ path: normalizedRoot, isRoot: true }];
+    saveTask(task.dir, task.state);
+  }
+
+  const validRepos = validateRepos(task.state.repos ?? []);
+  if ((task.state.repos?.length ?? 0) !== validRepos.length) {
+    const pruned = (task.state.repos?.length ?? 0) - validRepos.length;
+    task.state.repos = validRepos;
+    saveTask(task.dir, task.state);
+    ctx.ui.notify(`Pruned ${pruned} stale repo(s) that no longer exist.`, "warning");
+  }
+
+  if (!task.state.repos || task.state.repos.length === 0) {
+    task.state.repos = [{ path: normalizedRoot, isRoot: true }];
+    saveTask(task.dir, task.state);
+  }
+
+  const needsRepoRegistrationPrompt = task.state.repos.every((repo) => !repo.baseBranch);
+
   orchestrator.active = {
     dir: task.dir,
     type: task.type,
@@ -548,6 +579,12 @@ export async function resumeTask(
     orchestrator.safeSendUserMessage(`[PI-PI] Resumed ${orchestrator.active.state.phase} phase. Read reviewer outputs and apply feedback.`);
   } else {
     orchestrator.safeSendUserMessage(`[PI-PI] Resumed ${orchestrator.active.state.phase} phase. Continue working.`);
+  }
+
+  if (needsRepoRegistrationPrompt) {
+    orchestrator.safeSendUserMessage(
+      "[PI-PI] Register your repos using pp_register_repo (including the root) before continuing.",
+    );
   }
 
   return { ok: true };
@@ -1924,6 +1961,50 @@ async function showGeneralSettings(orchestrator: Orchestrator, ctx: any): Promis
   }
 }
 
+async function showReposSettings(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
+  while (true) {
+    if (!orchestrator.active) {
+      ctx.ui.notify("No active task. Start a task first.", "info");
+      return BACK;
+    }
+
+    const repos = orchestrator.active.state.repos ?? [];
+    if (repos.length === 0) {
+      ctx.ui.notify("No repos registered yet. The agent will register repos when it starts working.", "info");
+      return BACK;
+    }
+
+    const options: OptionInput[] = repos.map((repo) => ({
+      title: repo.path,
+      description: `base: ${repo.baseBranch ?? "(not set)"}${repo.isRoot ? " (root)" : ""}`,
+    }));
+    options.push(opt("Back", "Return to Settings"));
+
+    const choice = await selectOption(ctx, "Repos", options);
+    if (!choice || choice === "Back") return BACK;
+
+    const repo = repos.find((item) => item.path === choice);
+    if (!repo) continue;
+
+    const repoOptions: OptionInput[] = [
+      opt("Change base branch", `currently: ${repo.baseBranch ?? "(not set)"}`),
+      opt("Back", "Return to repo list"),
+    ];
+    const repoChoice = await selectOption(ctx, `${repo.path}${repo.isRoot ? " (root)" : ""}`, repoOptions);
+    if (!repoChoice || repoChoice === "Back") continue;
+
+    if (repoChoice === "Change base branch") {
+      const value = await ctx.ui.input("Base branch (e.g. origin/main):");
+      if (value === undefined || value === null) continue;
+      repo.baseBranch = String(value).trim() || undefined;
+      saveTask(orchestrator.active.dir, orchestrator.active.state);
+      unregisterAgentDefinitions(orchestrator.pi);
+      orchestrator.registerAgents();
+      ctx.ui.notify(`Base branch set to: ${repo.baseBranch ?? "(cleared)"}`, "info");
+    }
+  }
+}
+
 async function showSettingsMenu(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
   while (true) {
     const options: OptionInput[] = [
@@ -1936,6 +2017,7 @@ async function showSettingsMenu(orchestrator: Orchestrator, ctx: any): Promise<t
       opt("Commands", "afterEdit and afterImplement commands"),
       opt("Timeouts", "Timeout configuration"),
       opt("General", "autoCommit, ignoreExtraRepoConfigs"),
+      opt("Repos", "Registered repositories and base branches"),
       opt("Flant AI Infrastructure", "Configure corporate AI model provider"),
       opt("Back", "Return to the previous menu"),
     ];
@@ -1952,6 +2034,7 @@ async function showSettingsMenu(orchestrator: Orchestrator, ctx: any): Promise<t
     else if (choice === "Commands") await showCommandsSettings(orchestrator, ctx);
     else if (choice === "Timeouts") await showTimeoutsSettings(orchestrator, ctx);
     else if (choice === "General") await showGeneralSettings(orchestrator, ctx);
+    else if (choice === "Repos") await showReposSettings(orchestrator, ctx);
     else if (choice === "Flant AI Infrastructure") await showFlantInfraMenu(orchestrator, ctx);
   }
 }
