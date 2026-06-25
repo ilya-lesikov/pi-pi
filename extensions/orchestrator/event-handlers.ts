@@ -5,7 +5,7 @@ import { validateUserRequest, validateResearch, validateArtifact } from "./valid
 import { Type } from "@sinclair/typebox";
 import { loadConfig, resolvePreset } from "./config.js";
 import { runAfterEdit, autoCommit, loadRepoAfterEditCommands } from "./commands.js";
-import { taskName, getActiveTask, saveTask } from "./state.js";
+import { taskName, getActiveTask, getEffectiveMode, getFirstPhase, saveTask } from "./state.js";
 import { getLogger, initSessionLogger, addTaskDestination, setLogLevel, flushLogs } from "./log.js";
 import {
   getContextDirs,
@@ -361,6 +361,22 @@ export function finalizeReviewCycle(task: ActiveTask): void {
   task.state.reviewPassByKind[kind] = (task.state.reviewPassByKind[kind] ?? 0) + 1;
   task.state.reviewCycle = null;
   task.state.step = "user_gate";
+  saveTask(task.dir, task.state);
+}
+
+export function finalizeReviewCycleAutonomous(task: ActiveTask): void {
+  if (!task.state.reviewCycle) return;
+  const kind = task.state.reviewCycle.kind;
+  task.state.reviewPass = task.state.reviewCycle.pass;
+  task.reviewPass = task.state.reviewPass;
+  if (!task.state.reviewPassByKind) task.state.reviewPassByKind = {};
+  task.state.reviewPassByKind[kind] = (task.state.reviewPassByKind[kind] ?? 0) + 1;
+  task.state.reviewCycle = null;
+  if (task.state.phase === "plan") {
+    task.state.step = "synthesize";
+  } else {
+    task.state.step = "llm_work";
+  }
   saveTask(task.dir, task.state);
 }
 
@@ -785,6 +801,37 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
         const count = orchestrator.spawnedAgentIds.size + orchestrator.pendingSubagentSpawns;
         return { content: [{ type: "text" as const, text: `${count} subagent(s) still running. Wait for them to complete before calling pp_phase_complete.` }], isError: true as const, details: {} };
       }
+      const effectiveMode = getEffectiveMode(orchestrator.active.state);
+      if (effectiveMode === "autonomous") {
+        if (orchestrator.active.state.reviewCycle?.step === "apply_feedback") {
+          finalizeReviewCycleAutonomous(orchestrator.active);
+        }
+        const phase = orchestrator.active.state.phase;
+        const phaseConfig = orchestrator.active.state.autonomousConfig?.phases?.[phase];
+        const reviewPreset = phaseConfig?.reviewPreset;
+        const maxReviewPasses = phaseConfig?.maxReviewPasses ?? 0;
+        const completedAutoPasses = orchestrator.active.state.reviewPassByKind?.auto ?? 0;
+
+        if (reviewPreset && maxReviewPasses > 0 && completedAutoPasses < maxReviewPasses) {
+          const reviewText = await enterReviewCycle(orchestrator, ctx, reviewPreset);
+          if (orchestrator.active?.state.step === "await_reviewers") {
+            return {
+              content: [{ type: "text" as const, text: `Autonomous mode: reviews running (${reviewPreset}, pass ${completedAutoPasses + 1}/${maxReviewPasses >= 999 ? "∞" : maxReviewPasses}).` }],
+              details: {},
+            };
+          }
+          if (!reviewText.includes("No") || !reviewText.includes("reviewers enabled")) {
+            return { content: [{ type: "text" as const, text: reviewText }], details: {} };
+          }
+        }
+
+        const plannerPreset = orchestrator.active.state.autonomousConfig?.phases?.plan?.plannerPreset;
+        const result = await orchestrator.transitionToNextPhase(ctx, plannerPreset);
+        if (!result.ok) {
+          return { content: [{ type: "text" as const, text: `Transition blocked: ${result.error}` }], details: {} };
+        }
+        return { content: [{ type: "text" as const, text: "" }], details: {} };
+      }
       ctx.ui.setWorkingMessage?.("Waiting for user approval…");
       try {
         const { showActiveTaskMenu } = await import("./pp-menu.js");
@@ -949,8 +996,69 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       readdirSync(plansDir).some((f) => f.endsWith(".md") && !f.includes("synthesized") && !f.includes("review_"));
 
     const failedPlannerVariants = [...orchestrator.failedPlannerVariants];
+    const effectiveMode = getEffectiveMode(orchestrator.active.state);
+    if (effectiveMode === "autonomous" && failedPlannerVariants.length > 0) {
+      if (!hasPlanFiles) {
+        if (!orchestrator.plannerFailureAutoRetried) {
+          const failedSet = new Set(failedPlannerVariants);
+          const presetName = normalizeStoredPlannerPresetName(orchestrator);
+          const planners = resolvePreset(orchestrator.config, "planners", presetName);
+          const scopedPlanners: typeof planners = {};
+          for (const [name, cfg] of Object.entries(planners)) {
+            if (failedSet.has(name)) scopedPlanners[name] = cfg;
+          }
+          const retryCount = Object.keys(scopedPlanners).length;
+          if (retryCount > 0) {
+            orchestrator.plannerFailureAutoRetried = true;
+            orchestrator.failedPlannerVariants = [];
+            orchestrator.pendingSubagentSpawns = retryCount;
+            spawnPlanners(
+              pi,
+              orchestrator.cwd,
+              orchestrator.active!.dir,
+              orchestrator.active!.taskId,
+              orchestrator.config,
+              scopedPlanners,
+              orchestrator.active?.state.repos ?? [],
+            ).then((result) => {
+              orchestrator.failedPlannerVariants = result.failedVariants;
+              if (result.spawned === 0) orchestrator.pendingSubagentSpawns = 0;
+              for (const id of result.agentIds ?? []) {
+                orchestrator.spawnedAgentIds.delete(id);
+              }
+              orchestrator.pendingSubagentSpawns = 0;
+              checkPlannerCompletion();
+            }).catch((err) => {
+              orchestrator.pendingSubagentSpawns = 0;
+              getLogger().error({ s: "planner", err: err.message }, "retry spawnPlanners failed");
+              checkPlannerCompletion();
+            });
+            orchestrator.safeSendUserMessage(`[PI-PI] Retrying failed planners once: ${failedPlannerVariants.join(", ")}.`);
+            return;
+          }
+        }
+        orchestrator.failedPlannerVariants = [];
+        orchestrator.plannerFailureAutoRetried = false;
+        pi.sendMessage(
+          {
+            customType: "pp-planners-error",
+            content: "All planner subagents failed. Continue without planner outputs and synthesize the plan yourself.",
+            display: true,
+          },
+          { deliverAs: "followUp" },
+        );
+        orchestrator.active.state.step = "synthesize";
+        saveTask(orchestrator.active.dir, orchestrator.active.state);
+        return;
+      }
+      orchestrator.failedPlannerVariants = [];
+      orchestrator.plannerFailureAutoRetried = false;
+      orchestrator.safeSendUserMessage("[PI-PI] Some planners failed. Continue with available planner outputs.");
+    }
+
     if (
       failedPlannerVariants.length > 0 &&
+      effectiveMode !== "autonomous" &&
       !orchestrator.plannerFailureDialogPending &&
       orchestrator.lastCtx
     ) {
@@ -1035,6 +1143,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     }
 
     orchestrator.failedPlannerVariants = [];
+    orchestrator.plannerFailureAutoRetried = false;
     markAllAgentsConsumed();
     orchestrator.active.state.step = "synthesize";
     saveTask(orchestrator.active.dir, orchestrator.active.state);
@@ -1051,8 +1160,95 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     ) return;
 
     const failedReviewerVariants = [...orchestrator.failedReviewerVariants];
+    const effectiveMode = getEffectiveMode(orchestrator.active.state);
+    if (effectiveMode === "autonomous" && failedReviewerVariants.length > 0) {
+      const cycle = orchestrator.active.state.reviewCycle;
+      const phase = orchestrator.active.state.phase;
+      const outputs = loadPhaseReviewOutputs(orchestrator.active.dir, phase, cycle.pass);
+      const retryKey = `${phase}:${cycle.pass}`;
+      if (outputs.length === 0) {
+        if (!orchestrator.reviewerFailureAutoRetried.has(retryKey)) {
+          const presetName = normalizeStoredReviewPresetName(orchestrator, phase);
+          const sourceReviewers = resolveReviewers(orchestrator, phase, presetName);
+          const failedSet = new Set(failedReviewerVariants);
+          const scopedReviewers: typeof sourceReviewers = {};
+          for (const [name, cfg] of Object.entries(sourceReviewers)) {
+            if (failedSet.has(name)) scopedReviewers[name] = cfg;
+          }
+          const retryCount = Object.keys(scopedReviewers).length;
+          if (retryCount > 0) {
+            const spawnFn = phase === "brainstorm"
+              ? () => spawnBrainstormReviewers(
+                pi,
+                orchestrator.cwd,
+                orchestrator.active!.dir,
+                orchestrator.active!.taskId,
+                orchestrator.config,
+                cycle.pass,
+                scopedReviewers,
+                orchestrator.active?.state.repos ?? [],
+              )
+              : phase === "plan"
+              ? () => spawnPlanReviewers(
+                pi,
+                orchestrator.cwd,
+                orchestrator.active!.dir,
+                orchestrator.active!.taskId,
+                orchestrator.config,
+                cycle.pass,
+                scopedReviewers,
+                orchestrator.active?.state.repos ?? [],
+              )
+              : () => spawnCodeReviewers(
+                pi,
+                orchestrator.cwd,
+                orchestrator.active!.dir,
+                orchestrator.active!.taskId,
+                orchestrator.config,
+                cycle.pass,
+                phase,
+                scopedReviewers,
+                orchestrator.active?.state.repos ?? [],
+              );
+            orchestrator.reviewerFailureAutoRetried.add(retryKey);
+            orchestrator.failedReviewerVariants = [];
+            orchestrator.pendingSubagentSpawns = retryCount;
+            cycle.step = "await_reviewers";
+            orchestrator.active.state.step = "await_reviewers";
+            saveTask(orchestrator.active.dir, orchestrator.active.state);
+            spawnFn().then((result) => {
+              orchestrator.failedReviewerVariants = result.failedVariants;
+              if (result.spawned === 0) orchestrator.pendingSubagentSpawns = 0;
+              for (const id of result.agentIds ?? []) {
+                orchestrator.spawnedAgentIds.delete(id);
+              }
+              orchestrator.pendingSubagentSpawns = 0;
+              checkReviewCycleCompletion();
+            }).catch((err) => {
+              orchestrator.pendingSubagentSpawns = 0;
+              getLogger().error({ s: "review", phase, err: err.message }, "retry spawn reviewers failed");
+              checkReviewCycleCompletion();
+            });
+            orchestrator.safeSendUserMessage(`[PI-PI] Retrying failed reviewers once: ${failedReviewerVariants.join(", ")}.`);
+            return;
+          }
+        }
+
+        orchestrator.failedReviewerVariants = [];
+        orchestrator.reviewerFailureAutoRetried.delete(retryKey);
+        finalizeReviewCycleAutonomous(orchestrator.active);
+        orchestrator.safeSendUserMessage("[PI-PI] All reviewers failed twice. Continue without reviewer outputs and proceed with best judgment.");
+        return;
+      }
+
+      orchestrator.failedReviewerVariants = [];
+      orchestrator.reviewerFailureAutoRetried.delete(retryKey);
+      orchestrator.safeSendUserMessage("[PI-PI] Some reviewers failed. Continue with available reviewer outputs.");
+    }
+
     if (
       failedReviewerVariants.length > 0 &&
+      effectiveMode !== "autonomous" &&
       !orchestrator.reviewerFailureDialogPending &&
       orchestrator.lastCtx
     ) {
@@ -1400,8 +1596,14 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     const contextDirs = getContextDirs(orchestrator.cwd, repos, orchestrator.config.ignoreExtraRepoConfigs);
     const systemContextFiles = loadAllContextFiles(contextDirs, "main", "system", phase, modelInfo);
     const systemSnippets = systemContextFiles.map((f) => f.content).join("\n\n");
+    const effectiveMode = getEffectiveMode(orchestrator.active.state);
+    const firstPhase = getFirstPhase(orchestrator.active.type);
+    const autonomousPrompt =
+      effectiveMode === "autonomous" && orchestrator.active.state.phase !== firstPhase
+        ? "You are in autonomous mode. Do not ask the user questions — make decisions based on available context. When you complete your current work, call pp_phase_complete immediately."
+        : "";
 
-    const fullAddition = [WORKING_PRINCIPLES, COMMUNICATION, TOOL_ROUTING, systemSnippets, phasePrompt].filter(Boolean).join("\n\n");
+    const fullAddition = [WORKING_PRINCIPLES, COMMUNICATION, TOOL_ROUTING, systemSnippets, phasePrompt, autonomousPrompt].filter(Boolean).join("\n\n");
     if (!fullAddition) return;
 
     return {
@@ -1411,6 +1613,14 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
 
   pi.on("tool_call", async (event, _ctx) => {
     getLogger().debug({ s: "hook", hook: "tool_call", tool: event.toolName }, "tool call");
+    if (event.toolName === "ask_user" && orchestrator.active) {
+      const effective = getEffectiveMode(orchestrator.active.state);
+      const firstPhase = getFirstPhase(orchestrator.active.type);
+      if (effective === "autonomous" && orchestrator.active.state.phase !== firstPhase) {
+        return { block: true, reason: "Autonomous mode — make your best judgment based on available context." };
+      }
+    }
+
     if (event.toolName === "Agent" && orchestrator.active) {
       const input = event.input as Record<string, unknown>;
       const requestedType = ((input.subagent_type as string) || "").toLowerCase();

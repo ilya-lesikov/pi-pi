@@ -73,6 +73,11 @@ describe("canTransition", () => {
     expect(canTransition("brainstorm", "brainstorm", "done")).toBe(false);
     expect(canTransition("brainstorm", "done", "brainstorm")).toBe(false);
   });
+
+  it("handles quick transitions", () => {
+    expect(canTransition("quick", "quick", "done")).toBe(true);
+    expect(canTransition("quick", "quick", "implement")).toBe(false);
+  });
 });
 
 describe("nextPhase", () => {
@@ -92,6 +97,11 @@ describe("nextPhase", () => {
     expect(nextPhase("brainstorm", "brainstorm")).toBe("plan");
     expect(nextPhase("brainstorm", "done")).toBeNull();
   });
+
+  it("returns quick next phase and terminal null", () => {
+    expect(nextPhase("quick", "quick")).toBe("done");
+    expect(nextPhase("quick", "done")).toBeNull();
+  });
 });
 
 describe("phasePipeline", () => {
@@ -105,6 +115,10 @@ describe("phasePipeline", () => {
 
   it("returns brainstorm pipeline", () => {
     expect(phasePipeline("brainstorm")).toEqual(["brainstorm", "plan", "implement", "done"]);
+  });
+
+  it("returns quick pipeline", () => {
+    expect(phasePipeline("quick")).toEqual(["quick", "done"]);
   });
 });
 
@@ -289,5 +303,10 @@ Fix bug.
       ok: false,
       reason: "Unknown phase: done",
     });
+  });
+
+  it("always passes quick phase validation", () => {
+    const dir = makeTempDir();
+    expect(validateExitCriteria(dir, "quick", "quick")).toEqual({ ok: true });
   });
 });

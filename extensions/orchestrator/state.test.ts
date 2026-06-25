@@ -57,6 +57,21 @@ describe("createTask", () => {
     expect(state.reviewCycle).toBeNull();
     expect(state.reviewPass).toBe(0);
   });
+
+  it("uses quick as initial phase for quick tasks", () => {
+    const cwd = makeCwd();
+    const taskDir = createTask(cwd, "quick", "Quick fix");
+    const state = loadTask(taskDir);
+    expect(state.phase).toBe("quick");
+    expect(state.step).toBe("llm_work");
+  });
+
+  it("stores task mode when provided", () => {
+    const cwd = makeCwd();
+    const taskDir = createTask(cwd, "implement", "Build New Feature", "autonomous");
+    const state = loadTask(taskDir);
+    expect(state.mode).toBe("autonomous");
+  });
 });
 
 describe("loadTask", () => {

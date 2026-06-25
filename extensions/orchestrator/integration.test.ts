@@ -4,12 +4,14 @@ import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const askUserResponses: Array<{ pattern?: RegExp; response: string }> = [];
+const askUserCalls: Array<{ question: string; options: string[] }> = [];
 
 vi.mock("../../3p/pi-ask-user/index.js", () => {
   return {
     askUser: async (_ctx: any, opts: any) => {
       const options = opts.options || [];
       const optionTitles = options.map((o: any) => (typeof o === "string" ? o : o.title));
+      askUserCalls.push({ question: String(opts.question || ""), options: optionTitles });
 
       if (askUserResponses.length > 0) {
         const item = askUserResponses[0];
@@ -136,6 +138,7 @@ function makeTempDir(): string {
 
 afterEach(() => {
   askUserResponses.length = 0;
+  askUserCalls.length = 0;
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -230,6 +233,7 @@ function makeCtx(overrides: Record<string, any> = {}) {
       notify: vi.fn(),
       setStatus: vi.fn(),
       setFooter: vi.fn(),
+      input: vi.fn(),
     },
     abort: vi.fn(),
     waitForIdle: vi.fn().mockResolvedValue(undefined),
@@ -1316,5 +1320,196 @@ describe("edge cases and regressions", () => {
     const normalized = loadTask(taskDir);
 
     expect(normalized.phase).toBe("plan");
+  });
+});
+
+describe("task modes and quick task", () => {
+  it("quick task lifecycle completes via pp_phase_complete menu", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "quick", "quick");
+    const taskDir = orchestrator.active!.dir;
+
+    queueDefaultResponses(["Complete"]);
+    const ppPhaseComplete = getTool(pi, "pp_phase_complete");
+    const result = await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
+
+    expect(result.content[0].text).toBeDefined();
+    expect(orchestrator.active).toBeNull();
+    expect(loadTask(taskDir).phase).toBe("done");
+  });
+
+  it("quick task /pp menu shows quick options", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "quick", "quick");
+    queueDefaultResponses(["Back"]);
+    const pp = getCommand(pi, "pp");
+    await pp(undefined, ctx);
+
+    const menuCall = askUserCalls.find((call) => call.question.includes("Task: quick"));
+    expect(menuCall?.options).toContain("Complete");
+    expect(menuCall?.options).toContain("Pause");
+    expect(menuCall?.options).not.toContain("Next");
+    expect(menuCall?.options).not.toContain("Review");
+  });
+
+  it("mode picker stores autonomous mode in task state", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    queueDefaultResponses(["Task", "Implement", "New", "Autonomous", "Start"]);
+    const pp = getCommand(pi, "pp");
+    await pp(undefined, ctx);
+
+    expect(orchestrator.active).not.toBeNull();
+    expect(orchestrator.active!.state.mode).toBe("autonomous");
+    expect(orchestrator.active!.state.autonomousConfig).toBeDefined();
+  });
+
+  it("autonomous pp_phase_complete auto-advances without opening menu", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "implement", undefined, undefined, "autonomous");
+    const taskDir = orchestrator.active!.dir;
+    orchestrator.active!.state.autonomousConfig = {
+      phases: {
+        brainstorm: { reviewPreset: "regular", maxReviewPasses: 0 },
+        plan: { plannerPreset: "regular", reviewPreset: "regular", maxReviewPasses: 0 },
+        implement: { reviewPreset: "regular", maxReviewPasses: 0 },
+      },
+    };
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+
+    const ppPhaseComplete = getTool(pi, "pp_phase_complete");
+    const result = await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(result.content[0].text).toBe("");
+    expect(orchestrator.active!.state.phase).toBe("plan");
+    const gateMenuCall = askUserCalls.find((call) => call.question.startsWith("/pp"));
+    expect(gateMenuCall).toBeUndefined();
+  });
+
+  it("autonomous review loop re-runs until cap then advances", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "implement", undefined, undefined, "autonomous");
+    const taskDir = orchestrator.active!.dir;
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "llm_work";
+    orchestrator.active!.state.reviewPass = 0;
+    orchestrator.active!.state.reviewPassByKind = {};
+    orchestrator.active!.state.autonomousConfig = {
+      phases: {
+        implement: { reviewPreset: "regular", maxReviewPasses: 2 },
+      },
+    };
+    const plansDir = join(taskDir, "plans");
+    mkdirSync(plansDir, { recursive: true });
+    writeFileSync(
+      join(plansDir, "1_synthesized.md"),
+      makeValidPlan(["- [x] P1. Done item — Done when: synthesized plan is fully checked"]),
+      "utf-8",
+    );
+
+    const ppPhaseComplete = getTool(pi, "pp_phase_complete");
+    const first = await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
+    expect(first.content[0].text).toMatch(/Autonomous mode: reviews running|Started review cycle pass/);
+
+    const reviewsDir = join(taskDir, "code-reviews");
+    mkdirSync(reviewsDir, { recursive: true });
+    writeFileSync(join(reviewsDir, `${Math.floor(Date.now() / 1000)}_test_round-1.md`), "pass1", "utf-8");
+    emitSubagentCreated(pi, "reviewer-1", "Code reviewer (test)");
+    emitSubagentCompleted(pi, "reviewer-1", "Code reviewer (test)");
+
+    const second = await ppPhaseComplete.execute("call-2", { summary: "applied" }, undefined, undefined, ctx);
+    expect(second.content[0].text).toMatch(/Autonomous mode: reviews running|Started review cycle pass/);
+
+    writeFileSync(join(reviewsDir, `${Math.floor(Date.now() / 1000)}_test_round-2.md`), "pass2", "utf-8");
+    emitSubagentCreated(pi, "reviewer-2", "Code reviewer (test)");
+    emitSubagentCompleted(pi, "reviewer-2", "Code reviewer (test)");
+
+    const third = await ppPhaseComplete.execute("call-3", { summary: "applied2" }, undefined, undefined, ctx);
+    expect(third.content[0].text).toBe("");
+    expect(orchestrator.active).toBeNull();
+    expect(loadTask(taskDir).phase).toBe("done");
+  });
+
+  it("blocks ask_user in autonomous mode after first phase", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+
+    await orchestrator.startTask({ ...makeCtx(), cwd } as any, "implement", "implement", undefined, undefined, "autonomous");
+    orchestrator.active!.state.phase = "plan";
+    const toolCall = pi._handlers.get("tool_call")!;
+
+    const result = await toolCall({ toolName: "ask_user", input: {} }, {});
+    expect(result).toEqual({ block: true, reason: "Autonomous mode — make your best judgment based on available context." });
+  });
+
+  it("allows ask_user in autonomous mode first phase", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+
+    await orchestrator.startTask({ ...makeCtx(), cwd } as any, "implement", "implement", undefined, undefined, "autonomous");
+    orchestrator.active!.state.phase = "brainstorm";
+    const toolCall = pi._handlers.get("tool_call")!;
+
+    const result = await toolCall({ toolName: "ask_user", input: {} }, {});
+    expect(result).toBeUndefined();
+  });
+
+  it("switches guided to autonomous and back", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "implement", undefined, undefined, "guided");
+    orchestrator.active!.state.autonomousConfig = {
+      phases: {
+        brainstorm: { reviewPreset: "regular", maxReviewPasses: 1 },
+        plan: { plannerPreset: "regular", reviewPreset: "regular", maxReviewPasses: 1 },
+        implement: { reviewPreset: "regular", maxReviewPasses: 1 },
+      },
+    };
+
+    const pp = getCommand(pi, "pp");
+    queueDefaultResponses(["Switch to Autonomous", "Back"]);
+    await pp(undefined, ctx);
+    expect(orchestrator.active!.state.effectiveMode).toBe("autonomous");
+
+    queueDefaultResponses(["Switch to Guided", "Back"]);
+    await pp(undefined, ctx);
+    expect(orchestrator.active!.state.effectiveMode).toBe("guided");
+  });
+
+  it("resume preserves autonomous mode", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "implement", undefined, undefined, "autonomous");
+    const taskDir = orchestrator.active!.dir;
+    saveTask(taskDir, orchestrator.active!.state);
+    await orchestrator.cleanupActive();
+
+    const title = "implement";
+    const pp = getCommand(pi, "pp");
+    queueDefaultResponses(["Task", "Resume", title]);
+    await pp(undefined, ctx);
+
+    expect(orchestrator.active).not.toBeNull();
+    expect(orchestrator.active!.state.mode).toBe("autonomous");
   });
 });

@@ -5,7 +5,7 @@ import { nextPhase, validateExitCriteria } from "./phases/machine.js";
 import { spawnPlanners } from "./phases/planning.js";
 import { Orchestrator } from "./orchestrator.js";
 import { groupFilesByRepo } from "./repo-utils.js";
-import { saveTask } from "./state.js";
+import { getEffectiveMode, saveTask } from "./state.js";
 import { getLogger } from "./log.js";
 
 export async function transitionToNextPhase(
@@ -70,7 +70,12 @@ export async function transitionToNextPhase(
     orchestrator.active.reviewPass = 0;
   }
   if (next === "plan") {
-    orchestrator.active.state.activePlannerPreset = plannerPreset ?? orchestrator.config.defaultPresets.planners;
+    const autonomousPlannerPreset =
+      getEffectiveMode(orchestrator.active.state) === "autonomous"
+        ? orchestrator.active.state.autonomousConfig?.phases.plan?.plannerPreset
+        : undefined;
+    orchestrator.active.state.activePlannerPreset =
+      plannerPreset ?? autonomousPlannerPreset ?? orchestrator.config.defaultPresets.planners;
     orchestrator.active.state.step = "spawn_planners";
   } else if (next === "implement") {
     orchestrator.active.state.step = "llm_work";

@@ -8,6 +8,7 @@ import {
   saveTask,
   lockTask,
   type TaskType,
+  type TaskMode,
   type TaskState,
   type Phase,
 } from "./state.js";
@@ -84,6 +85,8 @@ export class Orchestrator {
   failedReviewerVariants: string[] = [];
   plannerFailureDialogPending = false;
   reviewerFailureDialogPending = false;
+  plannerFailureAutoRetried = false;
+  reviewerFailureAutoRetried = new Set<string>();
   plannotatorReject: ((reason: Error) => void) | null = null;
   plannotatorUnsub: (() => void) | null = null;
   transitionToNextPhase: (ctx: any, plannerPreset?: string) => Promise<{ ok: boolean; error?: string }> = async () => ({ ok: false, error: "not initialized" });
@@ -172,11 +175,13 @@ export class Orchestrator {
     const phase = this.active.state.phase;
     const step = this.active.state.step;
     const reviewCycle = this.active.state.reviewCycle;
+    const effectiveMode = this.active.state.effectiveMode ?? this.active.state.mode;
+    const modeLabel = effectiveMode === "autonomous" ? " [autonomous]" : "";
 
-    if (type === "debug" || type === "brainstorm") {
+    if (type === "debug" || type === "brainstorm" || type === "quick") {
       const elapsed = this.phaseStartTime > 0 ? this.formatElapsed(this.phaseStartTime) : "";
       const suffix = elapsed ? ` (${elapsed})` : "";
-      ctx.ui.setStatus("pp-phase", `pp: ${type}${suffix}`);
+      ctx.ui.setStatus("pp-phase", `pp: ${type}${modeLabel}${suffix}`);
       return;
     }
 
@@ -209,7 +214,7 @@ export class Orchestrator {
       }
     }
 
-    ctx.ui.setStatus("pp-phase", `pp: ${parts.join(" → ")}`);
+    ctx.ui.setStatus("pp-phase", `pp: ${parts.join(" → ")}${modeLabel}`);
   }
 
   private formatElapsed(startTime: number): string {
@@ -264,6 +269,13 @@ export class Orchestrator {
         return implementationSystemPrompt(this.active.dir, this.cwd);
       case "review":
         return reviewTaskSystemPrompt(this.active.dir, this.cwd);
+      case "quick":
+        return [
+          "You are in a quick task.",
+          "Work on the user's request directly.",
+          "No phases, no planning, no reviews.",
+          "When you are done, call pp_phase_complete.",
+        ].join("\n");
       default:
         return "";
     }
@@ -286,9 +298,10 @@ export class Orchestrator {
     description: string,
     fromTaskDir?: string,
     skipBrainstorm?: boolean,
+    mode?: TaskMode,
   ): Promise<void> {
     const log = getLogger();
-    log.info({ s: "task", type, description, fromTaskDir: fromTaskDir ?? null, skipBrainstorm: skipBrainstorm ?? false }, "startTask");
+    log.info({ s: "task", type, description, fromTaskDir: fromTaskDir ?? null, skipBrainstorm: skipBrainstorm ?? false, mode: mode ?? null }, "startTask");
     const hadActive = !!this.active;
     if (this.active) {
       ctx.ui.notify(
@@ -324,7 +337,7 @@ export class Orchestrator {
     setLogLevel(this.config.logLevel);
     ensureGitignore(this.cwd);
 
-    const dir = createTask(this.cwd, type, description);
+    const dir = createTask(this.cwd, type, description, mode);
     const state = loadTask(dir);
 
     if (fromTaskDir) {
@@ -410,9 +423,10 @@ export class Orchestrator {
 
     this.phaseStartTime = Date.now();
     const isGenericDescription = ["implement", "debug", "brainstorm", "review"].includes(this.active.description);
+    const isGenericQuickDescription = this.active.description === "quick";
     const hasInheritedTaskContext = Boolean(fromTaskDir && type === "implement");
     const isWaitingForPlanners = this.active.state.phase === "plan" && this.active.state.step === "await_planners";
-    if (isGenericDescription && !hasInheritedTaskContext) {
+    if ((isGenericDescription || isGenericQuickDescription) && !hasInheritedTaskContext) {
       ctx.ui.notify("Task created. Describe what you'd like to do.", "info");
     } else if (isWaitingForPlanners) {
       ctx.ui.notify("Entered plan phase. Waiting for planners to complete before synthesis.", "info");
@@ -495,6 +509,8 @@ export class Orchestrator {
     this.failedReviewerVariants = [];
     this.plannerFailureDialogPending = false;
     this.reviewerFailureDialogPending = false;
+    this.plannerFailureAutoRetried = false;
+    this.reviewerFailureAutoRetried.clear();
     if (this.awaitPollTimer) {
       clearInterval(this.awaitPollTimer);
       this.awaitPollTimer = null;

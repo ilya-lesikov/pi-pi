@@ -72,6 +72,9 @@ const TRANSITIONS: Record<TaskType, Record<string, string[]>> = {
     plan: ["implement"],
     implement: ["done"],
   },
+  quick: {
+    quick: ["done"],
+  },
 };
 
 export function canTransition(taskType: TaskType, from: Phase, to: Phase): boolean {
@@ -232,6 +235,10 @@ export function validateExitCriteria(
       return { ok: true };
     }
 
+    case "quick": {
+      return { ok: true };
+    }
+
     default:
       return { ok: false, reason: `Unknown phase: ${phase}` };
   }
@@ -247,5 +254,7 @@ export function phasePipeline(taskType: TaskType): Phase[] {
       return ["brainstorm", "plan", "implement", "done"];
     case "review":
       return ["review", "plan", "implement", "done"];
+    case "quick":
+      return ["quick", "done"];
   }
 }

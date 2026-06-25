@@ -15,13 +15,26 @@ function getLockfileFs(): typeof import("fs") | undefined {
 }
 import type { TimeoutConfig } from "./config.js";
 
-export type TaskType = "implement" | "debug" | "brainstorm" | "review";
+export type TaskMode = "guided" | "autonomous";
+
+export interface AutonomousPhaseConfig {
+  plannerPreset?: string;
+  reviewPreset?: string;
+  maxReviewPasses: number;
+}
+
+export interface AutonomousConfig {
+  phases: Record<string, AutonomousPhaseConfig>;
+}
+
+export type TaskType = "implement" | "debug" | "brainstorm" | "review" | "quick";
 
 export type ImplementPhase = "brainstorm" | "plan" | "implement" | "done";
 export type DebugPhase = "debug" | "plan" | "implement" | "done";
 export type BrainstormPhase = "brainstorm" | "plan" | "implement" | "done";
 export type ReviewPhase = "review" | "plan" | "implement" | "done";
-export type Phase = ImplementPhase | DebugPhase | BrainstormPhase | ReviewPhase;
+export type QuickPhase = "quick";
+export type Phase = ImplementPhase | DebugPhase | BrainstormPhase | ReviewPhase | QuickPhase;
 
 export interface TaskState {
   phase: Phase;
@@ -36,7 +49,9 @@ export interface TaskState {
   startedAt: string;
   activePlannerPreset?: string;
   activeReviewPreset?: string;
-
+  mode?: TaskMode;
+  effectiveMode?: TaskMode;
+  autonomousConfig?: AutonomousConfig;
 }
 
 export interface TaskInfo {
@@ -53,7 +68,18 @@ function taskStatePath(taskDir: string): string {
   return join(taskDir, "state.json");
 }
 
-export function createTask(cwd: string, type: TaskType, description: string): string {
+export function getFirstPhase(type: TaskType): Exclude<Phase, "done"> {
+  if (type === "implement" || type === "brainstorm") return "brainstorm";
+  if (type === "debug") return "debug";
+  if (type === "review") return "review";
+  return "quick";
+}
+
+export function getEffectiveMode(state: TaskState): TaskMode | undefined {
+  return state.effectiveMode ?? state.mode;
+}
+
+export function createTask(cwd: string, type: TaskType, description: string, mode?: TaskMode): string {
   const log = getLogger();
   const id = crypto.randomUUID().slice(0, 12);
   const safeName = description
@@ -67,7 +93,7 @@ export function createTask(cwd: string, type: TaskType, description: string): st
   mkdirSync(taskDir, { recursive: true });
 
   const state: TaskState = {
-    phase: type === "implement" ? "brainstorm" : type === "debug" ? "debug" : type === "review" ? "review" : "brainstorm",
+    phase: getFirstPhase(type),
     step: "llm_work",
     reviewCycle: null,
     reviewPass: 0,
@@ -75,6 +101,7 @@ export function createTask(cwd: string, type: TaskType, description: string): st
     from: null,
     description,
     startedAt: new Date().toISOString(),
+    mode,
   };
 
   writeFileSync(taskStatePath(taskDir), JSON.stringify(state, null, 2) + "\n", "utf-8");
@@ -110,7 +137,7 @@ export function listTasks(cwd: string, type?: TaskType): TaskInfo[] {
   const base = stateDir(cwd);
   if (!existsSync(base)) return [];
 
-  const types: TaskType[] = type ? [type] : ["implement", "debug", "brainstorm", "review"];
+  const types: TaskType[] = type ? [type] : ["implement", "debug", "brainstorm", "review", "quick"];
   const results: TaskInfo[] = [];
 
   for (const t of types) {
@@ -212,7 +239,7 @@ export function taskName(taskDir: string): string {
     const state = loadTask(taskDir);
     let desc = state.description ?? "";
 
-    if (["implement", "debug", "brainstorm", "review"].includes(desc)) {
+    if (["implement", "debug", "brainstorm", "review", "quick"].includes(desc)) {
       const urPath = join(taskDir, "USER_REQUEST.md");
       if (existsSync(urPath)) {
         const content = readFileSync(urPath, "utf-8");
@@ -244,5 +271,4 @@ export function taskAge(state: TaskState): string {
   if (hours < 24) return `${hours}h`;
   return `${Math.floor(hours / 24)}d`;
 }
-
 
