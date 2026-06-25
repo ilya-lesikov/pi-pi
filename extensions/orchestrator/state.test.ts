@@ -127,12 +127,10 @@ describe("listTasks", () => {
     const corrupt = createTask(cwd, "implement", "Broken task");
     writeFileSync(join(corrupt, "state.json"), "{ nope", "utf-8");
 
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const tasks = listTasks(cwd, "implement");
 
     expect(tasks).toHaveLength(1);
     expect(tasks[0].state.description).toBe("Healthy task");
-    expect(errorSpy).toHaveBeenCalled();
   });
 });
 
@@ -204,9 +202,7 @@ describe("taskName", () => {
     const taskDir = join(cwd, ".pp", "state", "implement", "123456789012_my-fallback-name");
     mkdirSync(taskDir, { recursive: true });
 
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     expect(taskName(taskDir)).toBe("my fallback name");
-    expect(errorSpy).toHaveBeenCalled();
   });
 });
 

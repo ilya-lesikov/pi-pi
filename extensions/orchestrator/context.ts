@@ -3,6 +3,7 @@ import { join } from "path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { RepoInfo } from "./repo-utils.js";
 import type { Phase } from "./state.js";
+import { getLogger } from "./log.js";
 
 type AgentType = "main" | "explore" | "librarian" | "planner" | "planReviewer" | "task" | "codeReviewer" | "brainstormReviewer";
 type AgentGroup = "all" | "subagents";
@@ -180,7 +181,7 @@ export function loadContextFilesFromDir(
     try {
       raw = readFileSync(filePath, "utf-8");
     } catch (err: any) {
-      console.error(`[pi-pi] Failed to read context file ${filePath}: ${err.message}`);
+      getLogger().warn({ s: "context", filePath, err: err.message }, "failed to read context file");
       continue;
     }
     const { frontmatter, body } = parseFrontmatter(raw);
@@ -205,6 +206,7 @@ export function loadAllContextFiles(
   for (const contextDir of contextDirs) {
     results.push(...loadContextFilesFromDir(contextDir, agentType, injectMode, phase, modelInfo));
   }
+  getLogger().debug({ s: "context", agentType, injectMode, phase, dirs: contextDirs.length, files: results.length }, "loaded context files");
   return results;
 }
 

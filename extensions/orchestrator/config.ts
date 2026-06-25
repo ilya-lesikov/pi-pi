@@ -3,6 +3,7 @@ import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { isValidLogLevel, getLogger, type LogLevel } from "./log.js";
 
 export interface ModelConfig {
   model: string;
@@ -64,6 +65,7 @@ export interface PiPiConfig {
   timeouts: TimeoutConfig;
   autoCommit: boolean;
   ignoreExtraRepoConfigs: boolean;
+  logLevel: LogLevel;
 }
 
 export const PRESET_GROUPS = ["planners", "codeReviewers", "planReviewers", "brainstormReviewers"] as const;
@@ -147,6 +149,7 @@ const DEFAULT_CONFIG: PiPiConfig = {
   },
   autoCommit: true,
   ignoreExtraRepoConfigs: false,
+  logLevel: "info",
 };
 
 const DANGEROUS_KEYS = new Set(["__proto__", "constructor", "prototype"]);
@@ -273,6 +276,10 @@ export function validateConfig(config: Record<string, any>): void {
     }
   }
 
+  if (config.logLevel !== undefined && !isValidLogLevel(config.logLevel)) {
+    throw new Error(`config.logLevel must be one of: debug, info, warn, error`);
+  }
+
   if (config.agents) {
     for (const [name, agent] of Object.entries(config.agents)) {
       const a = agent as Record<string, any>;
@@ -310,26 +317,31 @@ export function mergeConfigLayers(
   globalConfig: Record<string, any> | null,
   projectConfig: Record<string, any> | null,
 ): PiPiConfig {
+  const log = getLogger();
   let merged = { ...DEFAULT_CONFIG } as Record<string, any>;
 
   const getFlantConfig = (globalThis as any)[Symbol.for("pi-pi:flant-config")] as (() => Partial<PiPiConfig> | null) | undefined;
   const flantConfig = getFlantConfig?.();
   if (flantConfig) {
     merged = deepMerge(merged, flantConfig as Record<string, any>);
+    log.debug({ s: "config", layer: "flant" }, "merged flant config layer");
   }
 
   if (globalConfig) {
     validateConfig(globalConfig);
     merged = deepMerge(merged, globalConfig);
+    log.debug({ s: "config", layer: "global" }, "merged global config layer");
   }
 
   if (projectConfig) {
     validateConfig(projectConfig);
     merged = deepMerge(merged, projectConfig);
+    log.debug({ s: "config", layer: "project" }, "merged project config layer");
   }
 
   validateConfig(merged);
   validateMergedDefaultPresets(merged);
+  log.debug({ s: "config", logLevel: merged.logLevel, autoCommit: merged.autoCommit }, "config merge complete");
   return merged as unknown as PiPiConfig;
 }
 
@@ -338,13 +350,16 @@ export function resolvePreset(
   group: PresetGroup,
   presetName?: string,
 ): Record<string, VariantConfig> {
+  const log = getLogger();
   const name = presetName ?? config.defaultPresets[group];
   const preset = config.presets[group]?.[name];
   if (!preset) {
     const presets = config.presets[group] ?? {};
     const firstKey = Object.keys(presets)[0];
+    log.debug({ s: "preset", group, requested: name, resolved: firstKey ?? null, fallback: true }, "preset fallback");
     return firstKey ? presets[firstKey] : {};
   }
+  log.debug({ s: "preset", group, name, variants: Object.keys(preset) }, "preset resolved");
   return preset;
 }
 
@@ -360,6 +375,7 @@ function ensureConfigDir(configPath: string): void {
 }
 
 export function writeConfigValue(configPath: string, keyPath: string[], value: any): void {
+  getLogger().debug({ s: "config", configPath, keyPath, value }, "writeConfigValue");
   ensureConfigDir(configPath);
   if (!existsSync(configPath)) writeFileSync(configPath, "{}\n", "utf-8");
   const release = lockfile.lockSync(configPath, { stale: 10000 });

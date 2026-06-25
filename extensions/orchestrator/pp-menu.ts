@@ -50,6 +50,7 @@ import {
   type FlantSettings,
 } from "./flant-infra.js";
 import { normalizeRepoPath, type RepoInfo } from "./repo-utils.js";
+import { getLogger } from "./log.js";
 
 type MenuMode = "command" | "tool";
 
@@ -484,7 +485,7 @@ export async function resumeTask(
           orchestrator.pendingSubagentSpawns = 0;
         }).catch((err: any) => {
           orchestrator.pendingSubagentSpawns = 0;
-          console.error(`[pi-pi] spawnPlanners failed: ${err.message}`);
+          getLogger().error({ s: "planner", err: err.message }, "spawnPlanners failed");
         });
       } else {
         orchestrator.active.state.step = "synthesize";
@@ -604,7 +605,7 @@ export async function resumeTask(
             orchestrator.pendingSubagentSpawns = 0;
           }).catch((err: any) => {
             orchestrator.pendingSubagentSpawns = 0;
-            console.error(`[pi-pi] spawn reviewers failed: ${err.message}`);
+            getLogger().error({ s: "review", err: err.message }, "spawn reviewers failed");
           });
           cycle.step = "await_reviewers";
           orchestrator.active.state.step = "await_reviewers";
@@ -1971,6 +1972,7 @@ async function showGeneralSettings(orchestrator: Orchestrator, ctx: any): Promis
     const options: OptionInput[] = [
       opt("autoCommit", `${orchestrator.config.autoCommit} ${getConfigSource(globalConfig, projectConfig, ["autoCommit"])}`),
       opt("ignoreExtraRepoConfigs", `${orchestrator.config.ignoreExtraRepoConfigs} ${getConfigSource(globalConfig, projectConfig, ["ignoreExtraRepoConfigs"])}`),
+      opt("logLevel", `${orchestrator.config.logLevel} ${getConfigSource(globalConfig, projectConfig, ["logLevel"])}`),
       opt("Back", "Return to the previous menu"),
     ];
 
@@ -1993,24 +1995,48 @@ async function showGeneralSettings(orchestrator: Orchestrator, ctx: any): Promis
       continue;
     }
 
-    const action = await selectOption(ctx, "General → ignoreExtraRepoConfigs", [
-      opt("Set true", "Ignore extra repo config files"),
-      opt("Set false", "Load extra repo config files"),
-      opt("Clear override", "Remove override in selected scope"),
-      opt("Back", "Return to the previous menu"),
-    ]);
-    if (!action || action === "Back") continue;
-
-    if (action === "Set true" || action === "Set false") {
+    if (choice === "logLevel") {
+      const action = await selectOption(ctx, "General → logLevel", [
+        opt("debug", "All messages including debug traces"),
+        opt("info", "Info, warnings, and errors (default)"),
+        opt("warn", "Warnings and errors only"),
+        opt("error", "Errors only"),
+        opt("Clear override", "Remove override in selected scope"),
+        opt("Back", "Return to the previous menu"),
+      ]);
+      if (!action || action === "Back") continue;
       const scope = await pickScope(ctx, orchestrator);
       if (!scope) continue;
-      applyConfigChange(orchestrator, scope, ["ignoreExtraRepoConfigs"], action === "Set true");
+      if (action === "Clear override") {
+        clearConfigOverride(orchestrator, scope, ["logLevel"]);
+      } else {
+        applyConfigChange(orchestrator, scope, ["logLevel"], action);
+        const { setLogLevel } = await import("./log.js");
+        setLogLevel(orchestrator.config.logLevel);
+      }
       continue;
     }
 
-    const scope = await pickScope(ctx, orchestrator);
-    if (!scope) continue;
-    clearConfigOverride(orchestrator, scope, ["ignoreExtraRepoConfigs"]);
+    if (choice === "ignoreExtraRepoConfigs") {
+      const action = await selectOption(ctx, "General → ignoreExtraRepoConfigs", [
+        opt("Set true", "Ignore extra repo config files"),
+        opt("Set false", "Load extra repo config files"),
+        opt("Clear override", "Remove override in selected scope"),
+        opt("Back", "Return to the previous menu"),
+      ]);
+      if (!action || action === "Back") continue;
+
+      if (action === "Set true" || action === "Set false") {
+        const scope = await pickScope(ctx, orchestrator);
+        if (!scope) continue;
+        applyConfigChange(orchestrator, scope, ["ignoreExtraRepoConfigs"], action === "Set true");
+        continue;
+      }
+
+      const scope = await pickScope(ctx, orchestrator);
+      if (!scope) continue;
+      clearConfigOverride(orchestrator, scope, ["ignoreExtraRepoConfigs"]);
+    }
   }
 }
 
@@ -2069,7 +2095,7 @@ async function showSettingsMenu(orchestrator: Orchestrator, ctx: any): Promise<t
       opt("Subagents", "Explore, librarian, task agent models"),
       opt("Commands", "afterEdit and afterImplement commands"),
       opt("Timeouts", "Timeout configuration"),
-      opt("General", "autoCommit, ignoreExtraRepoConfigs"),
+      opt("General", "autoCommit, ignoreExtraRepoConfigs, logLevel"),
       opt("Repos", "Registered repositories and base branches"),
       opt("Flant AI Infrastructure", "Configure corporate AI model provider"),
       opt("Back", "Return to the previous menu"),

@@ -5,6 +5,7 @@ import lockfile from "proper-lockfile";
 import type { ExtensionAPI, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 import type { PiPiConfig } from "./config.js";
 import { updateRegistryFromAvailableModels } from "./model-registry.js";
+import { getLogger } from "./log.js";
 
 export interface OpenRouterModelData {
   name: string;
@@ -292,9 +293,11 @@ export function registerFlantProviders(
   models: string[],
   metadata: Record<string, OpenRouterModelData>,
 ): void {
+  const log = getLogger();
   const uniqueModels = [...new Set(models)];
   const anthropicModels = uniqueModels.filter((m) => m.startsWith("claude-"));
   const openaiModels = uniqueModels.filter((m) => !m.startsWith("claude-"));
+  log.debug({ s: "flant", total: uniqueModels.length, anthropic: anthropicModels.length, openai: openaiModels.length }, "registering flant providers");
 
   pi.registerProvider("pp-flant-anthropic", {
     api: "anthropic-messages",
@@ -522,7 +525,9 @@ export async function updateFlantInfra(
 export function initFlantSync(pi: ExtensionAPI): void {
   setPI(pi);
   const settings = loadFlantSettings();
+  const log = getLogger();
   if (!settings.enabled) {
+    log.debug({ s: "flant" }, "flant disabled");
     generatedFlantConfig = null;
     return;
   }

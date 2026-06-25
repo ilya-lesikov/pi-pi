@@ -222,8 +222,14 @@ function findFamily(modelId: string): ModelFamilyDefinition | null {
   return null;
 }
 
+import { getLogger } from "./log.js";
+
 export function resolveModel(aliasOrId: string): string {
-  return aliasMap[aliasOrId] ?? aliasOrId;
+  const resolved = aliasMap[aliasOrId] ?? aliasOrId;
+  if (resolved !== aliasOrId) {
+    getLogger().debug({ s: "model", alias: aliasOrId, resolved }, "resolved model alias");
+  }
+  return resolved;
 }
 
 export function getModelInfo(modelId: string): ModelInfo {
@@ -246,9 +252,11 @@ export function getModelInfo(modelId: string): ModelInfo {
 }
 
 export function updateRegistryFromAvailableModels(availableModels: string[]): void {
+  const log = getLogger();
   const normalizedModels = collectNormalizedModels(availableModels).filter((modelId) => !modelId.endsWith("-latest"));
   const nextAliasMap: Record<string, string> = { ...DEFAULT_ALIAS_MAP };
 
+  let updatedCount = 0;
   for (const family of MODEL_FAMILIES) {
     for (const provider of family.providers) {
       const alias = toAlias(provider, family.aliasTemplate);
@@ -259,11 +267,13 @@ export function updateRegistryFromAvailableModels(availableModels: string[]): vo
       const latest = pickLatest(candidates);
       if (latest) {
         nextAliasMap[alias] = latest;
+        if (latest !== DEFAULT_ALIAS_MAP[alias]) updatedCount++;
       }
     }
   }
 
   aliasMap = nextAliasMap;
+  log.debug({ s: "model", availableCount: availableModels.length, normalizedCount: normalizedModels.length, updatedAliases: updatedCount }, "registry updated from available models");
 }
 
 export function getAllAliases(): Record<string, string> {

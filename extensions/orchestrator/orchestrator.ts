@@ -7,7 +7,6 @@ import {
   loadTask,
   saveTask,
   lockTask,
-  appendTaskLog,
   type TaskType,
   type TaskState,
   type Phase,
@@ -25,6 +24,7 @@ import { createLibrarianAgent } from "./agents/librarian.js";
 import { createTaskAgent } from "./agents/task.js";
 import { resolveModel, getModelInfo } from "./model-registry.js";
 import { buildRepoContext } from "./agents/repo-context.js";
+import { getLogger, addTaskDestination, removeTaskDestination } from "./log.js";
 
 const BUNDLED_TOOLS = new Set([
   "Agent", "get_subagent_result", "steer_subagent",
@@ -91,18 +91,17 @@ export class Orchestrator {
   constructor(readonly pi: ExtensionAPI) {}
 
   safeSendUserMessage(text: string): void {
-    const log = (event: string, extra?: Record<string, unknown>) => {
-      if (this.active) appendTaskLog(this.active.dir, "debug.jsonl", { timestamp: new Date().toISOString(), event, text: text.slice(0, 200), ...extra });
-    };
+    const log = getLogger();
     const attempt = (retries: number) => {
       try {
         this.pi.sendUserMessage(text);
-        log("safeSend_sent", { retries });
+        log.debug({ s: "orchestrator", retries, text: text.slice(0, 200) }, "safeSend sent");
       } catch (err: any) {
         if (retries < 30) {
+          log.debug({ s: "orchestrator", retries, err: err?.message }, "safeSend retry");
           setTimeout(() => attempt(retries + 1), 1000);
         } else {
-          log("safeSend_failed", { error: err?.message ?? String(err), retries });
+          log.error({ s: "orchestrator", retries, err: err?.message ?? String(err), text: text.slice(0, 200) }, "safeSend failed after max retries");
         }
       }
     };
@@ -119,10 +118,12 @@ export class Orchestrator {
   }
 
   async switchModel(ctx: ExtensionContext, modelSpec: string, thinking: string): Promise<boolean> {
+    const log = getLogger();
     const registry = ctx.modelRegistry;
     const allModels = registry.getAvailable();
 
     const requestedSpecs = [resolveModel(modelSpec), modelSpec].filter((value, index, arr) => arr.indexOf(value) === index);
+    log.debug({ s: "model", requestedSpecs, thinking, availableCount: allModels.length }, "switchModel");
     let resolved;
     for (const spec of requestedSpecs) {
       const slashIdx = spec.indexOf("/");
@@ -143,14 +144,21 @@ export class Orchestrator {
       if (resolved) break;
     }
 
-    if (!resolved) return false;
+    if (!resolved) {
+      log.warn({ s: "model", requestedSpecs }, "model not found");
+      return false;
+    }
 
     const ok = await this.pi.setModel(resolved);
-    if (!ok) return false;
+    if (!ok) {
+      log.warn({ s: "model", resolved: `${resolved.provider}/${resolved.id}` }, "setModel returned false");
+      return false;
+    }
 
     const VALID_THINKING = new Set(["off", "low", "medium", "high"]);
     const thinkingLevel = (VALID_THINKING.has(thinking) ? thinking : "high") as "off" | "low" | "medium" | "high";
     this.pi.setThinkingLevel(thinkingLevel);
+    log.debug({ s: "model", model: `${resolved.provider}/${resolved.id}`, thinking: thinkingLevel }, "model switched");
     return true;
   }
 
@@ -279,6 +287,8 @@ export class Orchestrator {
     fromTaskDir?: string,
     skipBrainstorm?: boolean,
   ): Promise<void> {
+    const log = getLogger();
+    log.info({ s: "task", type, description, fromTaskDir: fromTaskDir ?? null, skipBrainstorm: skipBrainstorm ?? false }, "startTask");
     const hadActive = !!this.active;
     if (this.active) {
       ctx.ui.notify(
@@ -356,7 +366,7 @@ export class Orchestrator {
       try {
         rmSync(dir, { recursive: true, force: true });
       } catch {
-        console.error(`[pi-pi] Failed to clean up orphaned task dir: ${dir}`);
+        log.warn({ s: "task", dir }, "failed to clean up orphaned task dir");
       }
       ctx.ui.notify(`Failed to lock task: ${err.message}`, "error");
       return;
@@ -375,6 +385,9 @@ export class Orchestrator {
       reviewPass: state.reviewPass,
       description: state.description,
     };
+
+    addTaskDestination(dir);
+    log.info({ s: "task", dir, taskId: this.active.taskId, phase: state.phase, step: state.step }, "task activated");
 
     const modelConfig = this.config.mainModel[
       type === "debug" ? "debug"
@@ -444,7 +457,7 @@ export class Orchestrator {
         this.pendingSubagentSpawns = 0;
       }).catch((err) => {
         this.pendingSubagentSpawns = 0;
-        console.error(`[pi-pi] spawnPlanners failed: ${err.message}`);
+        getLogger().error({ s: "planner", err: err.message }, "spawnPlanners failed");
       });
     }
   }
@@ -497,23 +510,28 @@ export class Orchestrator {
 
   async cleanupActive(): Promise<void> {
     if (!this.active) return;
+    const dir = this.active.dir;
+    getLogger().info({ s: "task", dir }, "cleaning up active task");
+    removeTaskDestination();
     this.resetTaskScopedState();
     if (this.active.release) {
       try {
         await this.active.release();
       } catch (err: any) {
-        console.error(`[pi-pi] Failed to release lock for ${this.active.dir}: ${err.message}`);
+        getLogger().error({ s: "task", dir, err: err.message }, "failed to release lock");
       }
     }
     this.active = null;
   }
 
   registerAgents(): void {
+    const log = getLogger();
     const explore = createExploreAgent(this.config);
     const librarian = createLibrarianAgent(this.config);
     const taskAgent = createTaskAgent(this.config, "{{subtask}}", { userRequest: "", synthesizedPlan: "" });
     const phase = this.active?.state.phase;
     const repos = this.active?.state.repos ?? [];
+    log.debug({ s: "agents", phase, repoCount: repos.length }, "registering agent definitions");
     const contextDirs = getContextDirs(this.cwd, repos, this.config.ignoreExtraRepoConfigs);
     const repoContext = buildRepoContext(repos);
 
@@ -551,6 +569,8 @@ export class Orchestrator {
   }
 
   injectContextAndArtifacts(taskDir: string, phase: Phase): void {
+    const log = getLogger();
+    log.debug({ s: "context", taskDir, phase }, "injecting context and artifacts");
     const modelSpec =
       phase === "debug" && this.active?.type === "debug"
         ? this.config.mainModel.debug.model
@@ -587,6 +607,7 @@ export class Orchestrator {
   }
 
   compactAndTransition(ctx: ExtensionContext, taskDir: string, phase: Phase, onReady?: () => void): void {
+    getLogger().info({ s: "phase", taskDir, phase }, "compact and transition");
     this.phaseCompactionPending = true;
     const finalize = async () => {
       this.phaseStartTime = Date.now();

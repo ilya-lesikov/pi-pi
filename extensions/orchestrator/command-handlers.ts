@@ -6,6 +6,7 @@ import { spawnPlanners } from "./phases/planning.js";
 import { Orchestrator } from "./orchestrator.js";
 import { groupFilesByRepo } from "./repo-utils.js";
 import { saveTask } from "./state.js";
+import { getLogger } from "./log.js";
 
 export async function transitionToNextPhase(
   orchestrator: Orchestrator,
@@ -13,8 +14,9 @@ export async function transitionToNextPhase(
   plannerPreset?: string,
 ): Promise<{ ok: boolean; error?: string }> {
   if (!orchestrator.active) return { ok: false, error: "No active task." };
-
+  const log = getLogger();
   const currentPhase = orchestrator.active.state.phase;
+  log.info({ s: "phase", from: currentPhase, plannerPreset: plannerPreset ?? null }, "transition requested");
   if (currentPhase === "done") return { ok: false, error: "Task is already done." };
 
   const exitCheck = validateExitCriteria(orchestrator.active.dir, orchestrator.active.type, currentPhase);
@@ -124,7 +126,7 @@ export async function transitionToNextPhase(
       orchestrator.pendingSubagentSpawns = 0;
     }).catch((err) => {
       orchestrator.pendingSubagentSpawns = 0;
-      console.error(`[pi-pi] spawnPlanners failed: ${err.message}`);
+      getLogger().error({ s: "planner", err: err.message }, "spawnPlanners failed");
     });
   } : undefined;
 

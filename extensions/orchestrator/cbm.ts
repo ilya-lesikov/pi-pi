@@ -2,6 +2,7 @@ import { spawn, execFileSync, type ChildProcess } from "child_process";
 import { createInterface, type Interface as ReadlineInterface } from "readline";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
+import { getLogger } from "./log.js";
 
 function findCbmBin(): string | null {
   try {
@@ -56,7 +57,7 @@ class CbmDaemon {
 
     this.proc.on("exit", () => this.cleanup());
     this.proc.on("error", (err) => {
-      console.error(`[pi-pi] CBM daemon error: ${err.message}`);
+      getLogger().error({ s: "cbm", err: err.message }, "CBM daemon error");
       this.cleanup();
     });
 

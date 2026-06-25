@@ -1,7 +1,8 @@
-import { appendFileSync, readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "fs";
 import { join, basename, resolve, relative, isAbsolute, sep } from "path";
 import lockfile from "proper-lockfile";
 import { normalizeRepoPath, type RepoInfo } from "./repo-utils.js";
+import { getLogger } from "./log.js";
 
 function getLockfileFs(): typeof import("fs") | undefined {
   try {
@@ -53,6 +54,7 @@ function taskStatePath(taskDir: string): string {
 }
 
 export function createTask(cwd: string, type: TaskType, description: string): string {
+  const log = getLogger();
   const id = crypto.randomUUID().slice(0, 12);
   const safeName = description
     .toLowerCase()
@@ -76,6 +78,7 @@ export function createTask(cwd: string, type: TaskType, description: string): st
   };
 
   writeFileSync(taskStatePath(taskDir), JSON.stringify(state, null, 2) + "\n", "utf-8");
+  log.info({ s: "task", taskDir, type, description, phase: state.phase }, "task created");
   return taskDir;
 }
 
@@ -99,6 +102,7 @@ export function loadTask(taskDir: string): TaskState {
 }
 
 export function saveTask(taskDir: string, state: TaskState): void {
+  getLogger().debug({ s: "task", taskDir, phase: state.phase, step: state.step }, "saving task state");
   writeFileSync(taskStatePath(taskDir), JSON.stringify(state, null, 2) + "\n", "utf-8");
 }
 
@@ -125,7 +129,7 @@ export function listTasks(cwd: string, type?: TaskType): TaskInfo[] {
           results.push({ dir, state, type: t });
         }
       } catch {
-        console.error(`[pi-pi] Skipping corrupt task at ${dir}`);
+        getLogger().warn({ s: "state", dir }, "skipping corrupt task");
       }
     }
   }
@@ -151,7 +155,7 @@ export async function lockTask(taskDir: string, timeouts: TimeoutConfig): Promis
     update: timeouts.lockUpdate,
     retries: { retries: 3, minTimeout: 200, maxTimeout: 1000 },
     onCompromised: (err: Error) => {
-      console.error(`[pi-pi] Lock compromised for ${sp}: ${err.message}`);
+      getLogger().error({ s: "state", path: sp, err: err.message }, "lock compromised");
     },
   });
   return release;
@@ -170,7 +174,7 @@ export function getActiveTask(cwd: string, lockStale?: number): TaskInfo | null 
         unlocked.push(task);
       }
     } catch {
-      console.error(`[pi-pi] Failed to check lock for ${task.dir}`);
+      getLogger().warn({ s: "state", dir: task.dir }, "failed to check lock");
     }
   }
 
@@ -224,7 +228,7 @@ export function taskName(taskDir: string): string {
       return desc;
     }
   } catch {
-    console.error(`[pi-pi] Failed to read task name from ${taskDir}`);
+    getLogger().warn({ s: "state", taskDir }, "failed to read task name");
   }
   const dir = basename(taskDir);
   const match = dir.match(/^\d+_(.+)$/);
@@ -241,9 +245,4 @@ export function taskAge(state: TaskState): string {
   return `${Math.floor(hours / 24)}d`;
 }
 
-export function appendTaskLog(taskDir: string, fileName: string, entry: Record<string, unknown>): string {
-  mkdirSync(taskDir, { recursive: true });
-  const filePath = join(taskDir, fileName);
-  appendFileSync(filePath, JSON.stringify(entry) + "\n", "utf-8");
-  return filePath;
-}
+

@@ -77,6 +77,8 @@ vi.mock("./config.js", async (importOriginal) => {
     commands: { afterEdit: [], afterImplement: [] },
     timeouts: { afterEdit: 1000, afterImplement: 1000, agentSpawn: 1000, agentReadyPing: 1000, lockStale: 600000, lockUpdate: 30000 },
     autoCommit: false,
+    ignoreExtraRepoConfigs: false,
+    logLevel: "info",
   })) };
 });
 
@@ -606,8 +608,8 @@ describe("subagent instrumentation", () => {
     emitSubagentCreated(pi, "explore-1", "Explore agent");
     expect(orchestrator.agentLifecycle.get("explore-1")?.createdAt).toBeTypeOf("number");
     expect(orchestrator.agentLifecycle.get("explore-1")?.phase).toBe("brainstorm");
-    const lifecycleLogPath = join(orchestrator.active!.dir, "subagent-lifecycle.jsonl");
-    expect(existsSync(lifecycleLogPath)).toBe(true);
+    const debugLogPath = join(orchestrator.active!.dir, "debug.jsonl");
+    expect(existsSync(debugLogPath)).toBe(true);
 
     emitSubagentStarted(pi, "explore-1", "Explore agent");
     expect(orchestrator.agentLifecycle.get("explore-1")?.startedAt).toBeTypeOf("number");

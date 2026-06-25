@@ -5,7 +5,8 @@ import { validateUserRequest, validateResearch, validateArtifact } from "./valid
 import { Type } from "@sinclair/typebox";
 import { loadConfig, resolvePreset } from "./config.js";
 import { runAfterEdit, autoCommit, loadRepoAfterEditCommands } from "./commands.js";
-import { taskName, getActiveTask, saveTask, appendTaskLog } from "./state.js";
+import { taskName, getActiveTask, saveTask } from "./state.js";
+import { getLogger, initSessionLogger, addTaskDestination, setLogLevel, flushLogs } from "./log.js";
 import {
   getContextDirs,
   loadAllContextFiles,
@@ -318,7 +319,7 @@ export async function enterReviewCycle(
   }).catch((err) => {
     orchestrator.pendingSubagentSpawns = 0;
     tryCompleteReviewCycle(orchestrator);
-    console.error(`[pi-pi] spawn reviewers failed (${phase}): ${err.message}`);
+    getLogger().error({ s: "review", phase, err: err.message }, "spawn reviewers failed");
   });
 
   orchestrator.active.state.reviewCycle.step = "await_reviewers";
@@ -388,6 +389,7 @@ function registerRepoTool(orchestrator: Orchestrator): void {
       if (!orchestrator.active) {
         return { content: [{ type: "text" as const, text: "No active task." }], isError: true as const, details: {} };
       }
+      getLogger().debug({ s: "tool", tool: "pp_register_repo", path: params.path, baseBranch: params.baseBranch }, "register repo called");
 
       const pathInput = typeof params.path === "string" ? params.path.trim() : "";
       if (!pathInput) {
@@ -836,8 +838,8 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     const pending = orchestrator.pendingSubagentSpawns;
     const running = orchestrator.spawnedAgentIds.size;
     const desc = data.description || lifecycle.description || data.type || lifecycle.type || data.id;
-    appendTaskLog(orchestrator.active.dir, "subagent-lifecycle.jsonl", {
-      timestamp: new Date(now).toISOString(),
+    getLogger().debug({
+      s: "subagent",
       id: data.id,
       event,
       description: desc,
@@ -852,7 +854,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       createdToFirstTurnMs: firstTurnDeltaMs ?? null,
       toolName: data.toolName ?? null,
       turnCount: data.turnCount ?? null,
-    });
+    }, "subagent lifecycle event");
   }
 
   function startStaleAgentWatchdog(): void {
@@ -994,7 +996,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
                 checkPlannerCompletion();
               }).catch((err) => {
                 orchestrator.pendingSubagentSpawns = 0;
-                console.error(`[pi-pi] retry spawnPlanners failed: ${err.message}`);
+                getLogger().error({ s: "planner", err: err.message }, "retry spawnPlanners failed");
                 checkPlannerCompletion();
               });
               orchestrator.safeSendUserMessage(`[PI-PI] Retrying failed planners: ${variantsText}.`);
@@ -1126,7 +1128,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
                   checkReviewCycleCompletion();
                 }).catch((err) => {
                   orchestrator.pendingSubagentSpawns = 0;
-                  console.error(`[pi-pi] retry spawn reviewers failed (${phase}): ${err.message}`);
+                  getLogger().error({ s: "review", phase, err: err.message }, "retry spawn reviewers failed");
                   checkReviewCycleCompletion();
                 });
                 orchestrator.safeSendUserMessage(`[PI-PI] Retrying failed reviewers: ${variantsText}.`);
@@ -1252,14 +1254,20 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     try {
       dumpUsageSummary(tracker, sessionId);
     } catch (err: any) {
-      console.error(`[pi-pi] Failed to dump usage summary: ${err.message}`);
+      getLogger().error({ s: "usage", err: err.message }, "failed to dump usage summary");
     }
+    flushLogs();
     delete (globalThis as any)[USAGE_TRACKER_KEY];
   });
 
   pi.on("session_start", async (_event, ctx) => {
     orchestrator.lastCtx = ctx;
     orchestrator.cwd = ctx.cwd;
+
+    const ppDir = join(ctx.cwd, ".pp");
+    initSessionLogger(ppDir, "info");
+    const log = getLogger();
+    log.info({ s: "session", cwd: ctx.cwd }, "session started");
 
     const available = (ctx as any).modelRegistry?.getAvailable?.();
     if (Array.isArray(available)) {
@@ -1301,7 +1309,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
         `Duplicate tools detected: ${duplicates.join(", ")}. ` +
         `Remove the conflicting packages: pi remove npm:@tintinweb/pi-subagents npm:@tintinweb/pi-tasks npm:pi-ask-user`;
       ctx.ui.notify(msg, "error");
-      console.error(`[pi-pi] FATAL: ${msg}`);
+      getLogger().error({ s: "init", duplicates }, "conflicting extensions detected");
       return;
     }
 
@@ -1310,15 +1318,18 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       setPI(pi);
       await initFlantOnStartup(pi);
     } catch (err: any) {
-      console.error(`[pi-pi] Flant infra init failed: ${err.message}`);
+      getLogger().error({ s: "flant", err: err.message }, "flant infra init failed");
     }
 
     try {
       orchestrator.config = loadConfig(orchestrator.cwd);
     } catch (err: any) {
-      console.error(`[pi-pi] Failed to load config on session start: ${err.message}`);
+      getLogger().error({ s: "config", err: err.message }, "failed to load config on session start");
       return;
     }
+
+    setLogLevel(orchestrator.config.logLevel);
+    log.info({ s: "config", logLevel: orchestrator.config.logLevel }, "config loaded");
 
     registerCommandHandlers(orchestrator);
     registerCbmTools(pi, orchestrator.cwd);
@@ -1350,7 +1361,9 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
 
   pi.on("before_agent_start", async (event, ctx) => {
     orchestrator.lastCtx = ctx;
+    const log = getLogger();
     if (orchestrator.taskDoneCompactionPending || orchestrator.phaseCompactionPending) {
+      log.debug({ s: "hook", hook: "before_agent_start", reason: "compaction_pending" }, "aborting agent start");
       ctx.abort();
       return;
     }
@@ -1358,6 +1371,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
 
     const step = orchestrator.active.state.step;
     if (step === "await_planners" || step === "await_reviewers") {
+      log.debug({ s: "hook", hook: "before_agent_start", step }, "aborting agent start (waiting for subagents)");
       ctx.abort();
       return;
     }
@@ -1383,6 +1397,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   });
 
   pi.on("tool_call", async (event, _ctx) => {
+    getLogger().debug({ s: "hook", hook: "tool_call", tool: event.toolName }, "tool call");
     if (event.toolName === "Agent" && orchestrator.active) {
       const input = event.input as Record<string, unknown>;
       const requestedType = ((input.subagent_type as string) || "").toLowerCase();
@@ -1491,6 +1506,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
 
       const repos = orchestrator.active.state.repos ?? [];
       const repo = resolveRepoForFile(repos, resolvedWrite);
+      getLogger().debug({ s: "afterEdit", file: resolvedWrite, repo: repo?.path ?? null, isRoot: repo?.isRoot ?? null }, "resolving afterEdit commands");
       const afterEditResults: Array<{ ok: boolean; command: string; output: string }> = [];
       if (repo) {
         if (repo.isRoot) {
@@ -1539,6 +1555,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   });
 
   pi.on("session_before_compact", async (event, _ctx) => {
+    getLogger().debug({ s: "hook", hook: "session_before_compact", taskDonePending: orchestrator.taskDoneCompactionPending, phasePending: orchestrator.phaseCompactionPending }, "before compact");
     if (orchestrator.taskDoneCompactionPending) {
       const summary = orchestrator.taskDoneCompactionSummary;
       orchestrator.taskDoneCompactionPending = false;
@@ -1627,15 +1644,24 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (msg?.stopReason === "aborted") return;
     if (msg?.stopReason === "error") {
       const errorMsg = msg.errorMessage || "unknown error";
-      console.error(`[pi-pi] Turn ended with error: ${errorMsg}`);
-      console.error(`[pi-pi]   model=${msg.model} provider=${msg.provider} api=${msg.api}`);
-      console.error(`[pi-pi]   usage: input=${msg.usage?.input} output=${msg.usage?.output} cache_read=${msg.usage?.cacheRead}`);
-      console.error(`[pi-pi]   content blocks: ${msg.content?.length ?? 0}`);
-      for (const c of msg.content || []) {
-        if (c.type === "toolCall") console.error(`[pi-pi]   toolCall: ${c.name}`);
-        if (c.type === "text" && c.text) console.error(`[pi-pi]   text: ${c.text.slice(0, 100)}`);
-        if (c.type === "thinking") console.error(`[pi-pi]   thinking: ${c.thinking?.slice(0, 100) || "(redacted)"}`);
-      }
+      const contentSummary = (msg.content || []).map((c: any) => {
+        if (c.type === "toolCall") return `toolCall:${c.name}`;
+        if (c.type === "text" && c.text) return `text:${c.text.slice(0, 100)}`;
+        if (c.type === "thinking") return `thinking:${c.thinking?.slice(0, 100) || "(redacted)"}`;
+        return c.type;
+      });
+      getLogger().error({
+        s: "turn",
+        err: errorMsg,
+        model: msg.model,
+        provider: msg.provider,
+        api: msg.api,
+        input: msg.usage?.input,
+        output: msg.usage?.output,
+        cacheRead: msg.usage?.cacheRead,
+        contentBlocks: msg.content?.length ?? 0,
+        contentSummary,
+      }, "turn ended with error");
       orchestrator.errorRetryCount = (orchestrator.errorRetryCount ?? 0) + 1;
       const maxRetries = 5;
       if (orchestrator.errorRetryCount <= maxRetries) {

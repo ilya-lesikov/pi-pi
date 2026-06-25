@@ -246,13 +246,9 @@ describe("loadContextFiles", () => {
     chmodSync(brokenPath, 0o000);
     writeFileSync(join(contextDir, "good.md"), "---\nagents: main\n---\ngood file\n", "utf-8");
 
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const result = loadContextFiles(cwd, "main");
 
     expect(result).toEqual([{ mode: "context", content: "good file" }]);
-    expect(errorSpy).toHaveBeenCalledTimes(1);
-    expect(String(errorSpy.mock.calls[0][0])).toContain("Failed to read context file");
-    expect(String(errorSpy.mock.calls[0][0])).toContain("broken.md");
   });
 });
 
