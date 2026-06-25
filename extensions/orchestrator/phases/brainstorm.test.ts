@@ -3,13 +3,13 @@ import { brainstormSystemPrompt } from "./brainstorm.js";
 
 describe("brainstormSystemPrompt", () => {
   it("debug prompt uses pp_phase_complete", () => {
-    const prompt = brainstormSystemPrompt("debug", "fix a bug", "/tmp/task");
+    const prompt = brainstormSystemPrompt("debug", "fix a bug", "/tmp/task", "/tmp");
     expect(prompt).toContain("pp_phase_complete");
     expect(prompt).not.toContain("/pp:next");
   });
 
   it("brainstorm prompt uses pp_phase_complete", () => {
-    const prompt = brainstormSystemPrompt("brainstorm", "explore ideas", "/tmp/task");
+    const prompt = brainstormSystemPrompt("brainstorm", "explore ideas", "/tmp/task", "/tmp");
     expect(prompt).toContain("pp_phase_complete");
   });
 });

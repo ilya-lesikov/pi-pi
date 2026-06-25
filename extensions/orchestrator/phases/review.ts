@@ -5,6 +5,7 @@ import { resolvePreset, type PiPiConfig, type VariantConfig } from "../config.js
 import { registerAgentDefinitions, spawnViaRpc, waitForCompletion } from "../agents/registry.js";
 import { createCodeReviewerAgent } from "../agents/code-reviewer.js";
 import { getLatestSynthesizedPlan } from "../context.js";
+import type { RepoInfo } from "../repo-utils.js";
 
 export function reviewSystemPrompt(taskDir: string, pass: number, phase?: string): string {
   const reviewsDir = phase === "brainstorm" ? join(taskDir, "brainstorm-reviews") : join(taskDir, "code-reviews");
@@ -73,6 +74,7 @@ export async function spawnCodeReviewers(
   round: number,
   phase: string,
   variants?: Record<string, VariantConfig>,
+  repos: RepoInfo[] = [],
 ): Promise<{ spawned: number; agentIds: string[]; failedVariants: string[] }> {
   const urPath = join(taskDir, "USER_REQUEST.md");
   const resPath = join(taskDir, "RESEARCH.md");
@@ -117,6 +119,7 @@ export async function spawnCodeReviewers(
       outputPath,
       cwd,
       reviewerPhase,
+      repos,
     );
 
     registerAgentDefinitions(pi, [{ type: "code_reviewer", variant, ...agent }]);

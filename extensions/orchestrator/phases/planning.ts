@@ -6,6 +6,7 @@ import { registerAgentDefinitions, spawnViaRpc, waitForCompletion } from "../age
 import { createPlannerAgent } from "../agents/planner.js";
 import { createPlanReviewerAgent } from "../agents/plan-reviewer.js";
 import { getLatestSynthesizedPlan } from "../context.js";
+import type { RepoInfo } from "../repo-utils.js";
 import { validatePlan } from "../validate-artifacts.js";
 
 export function planningSystemPrompt(taskDir: string): string {
@@ -52,6 +53,7 @@ export async function spawnPlanners(
   taskId: string,
   config: PiPiConfig,
   variants?: Record<string, VariantConfig>,
+  repos: RepoInfo[] = [],
 ): Promise<{ spawned: number; agentIds: string[]; failedVariants: string[] }> {
   const urPath = join(taskDir, "USER_REQUEST.md");
   const resPath = join(taskDir, "RESEARCH.md");
@@ -74,7 +76,7 @@ export async function spawnPlanners(
 
   for (const [variant] of enabledVariants) {
     const outputPath = join(plansDir, `${timestamp}_${variant}.md`);
-    const agent = createPlannerAgent(variant, plannerVariants, { userRequest, research }, outputPath, cwd, "plan");
+    const agent = createPlannerAgent(variant, plannerVariants, { userRequest, research }, outputPath, cwd, "plan", repos);
 
     registerAgentDefinitions(pi, [{ type: "planner", variant, ...agent }]);
 
@@ -168,6 +170,7 @@ export async function spawnPlanReviewers(
   config: PiPiConfig,
   pass: number,
   variants?: Record<string, VariantConfig>,
+  repos: RepoInfo[] = [],
 ): Promise<{ spawned: number; files: string[]; agentIds: string[]; failedVariants: string[] }> {
   const urPath = join(taskDir, "USER_REQUEST.md");
   const resPath = join(taskDir, "RESEARCH.md");
@@ -202,6 +205,7 @@ export async function spawnPlanReviewers(
       outputPath,
       cwd,
       "plan",
+      repos,
     );
 
     registerAgentDefinitions(pi, [{ type: "plan_reviewer", variant, ...agent }]);

@@ -24,6 +24,7 @@ import { createExploreAgent } from "./agents/explore.js";
 import { createLibrarianAgent } from "./agents/librarian.js";
 import { createTaskAgent } from "./agents/task.js";
 import { resolveModel, getModelInfo } from "./model-registry.js";
+import { buildRepoContext } from "./agents/repo-context.js";
 
 const BUNDLED_TOOLS = new Set([
   "Agent", "get_subagent_result", "steer_subagent",
@@ -246,15 +247,15 @@ export class Orchestrator {
 
     switch (this.active.state.phase) {
       case "brainstorm":
-        return brainstormSystemPrompt(this.active.type, this.active.description, this.active.dir);
+        return brainstormSystemPrompt(this.active.type, this.active.description, this.active.dir, this.cwd);
       case "debug":
-        return brainstormSystemPrompt(this.active.type, this.active.description, this.active.dir);
+        return brainstormSystemPrompt(this.active.type, this.active.description, this.active.dir, this.cwd);
       case "plan":
         return planningSystemPrompt(this.active.dir);
       case "implement":
-        return implementationSystemPrompt(this.active.dir);
+        return implementationSystemPrompt(this.active.dir, this.cwd);
       case "review":
-        return reviewTaskSystemPrompt(this.active.dir);
+        return reviewTaskSystemPrompt(this.active.dir, this.cwd);
       default:
         return "";
     }
@@ -426,7 +427,15 @@ export class Orchestrator {
       const plannerVariants = resolvePreset(this.config, "planners", plannerPresetName);
       this.pendingSubagentSpawns = Object.values(plannerVariants).filter((v) => v.enabled).length;
       this.failedPlannerVariants = [];
-      spawnPlanners(this.pi, this.cwd, this.active.dir, this.active.taskId, this.config, plannerVariants).then((result) => {
+      spawnPlanners(
+        this.pi,
+        this.cwd,
+        this.active.dir,
+        this.active.taskId,
+        this.config,
+        plannerVariants,
+        this.active?.state.repos ?? [],
+      ).then((result) => {
         this.failedPlannerVariants = result.failedVariants;
         if (result.spawned === 0) this.pendingSubagentSpawns = 0;
         for (const id of result.agentIds ?? []) {
@@ -504,12 +513,18 @@ export class Orchestrator {
     const librarian = createLibrarianAgent(this.config);
     const taskAgent = createTaskAgent(this.config, "{{subtask}}", { userRequest: "", synthesizedPlan: "" });
     const phase = this.active?.state.phase;
+    const repos = this.active?.state.repos ?? [];
+    const repoContext = buildRepoContext(repos);
 
     const appendContext = (agentType: string, prompt: string, modelInfo: { vendor: string; family: string; tier: string }): string => {
       const contextFiles = loadContextFiles(this.cwd, agentType as any, "system", phase, modelInfo);
-      if (contextFiles.length === 0) return prompt;
+      if (contextFiles.length === 0 && !repoContext) return prompt;
+      const parts = [prompt];
+      if (repoContext) parts.push(repoContext.trimEnd());
+      if (contextFiles.length === 0) return parts.join("\n\n");
       const contextBlock = contextFiles.map((f) => f.content).join("\n\n");
-      return prompt + "\n\n# Project Context\n\n" + contextBlock;
+      parts.push("# Project Context\n\n" + contextBlock);
+      return parts.join("\n\n");
     };
 
     registerAgentDefinitions(this.pi, [

@@ -1,6 +1,8 @@
 import type { VariantConfig } from "../config.js";
 import { loadContextFiles } from "../context.js";
 import { resolveModel, getModelInfo } from "../model-registry.js";
+import type { RepoInfo } from "../repo-utils.js";
+import { buildRepoContext } from "./repo-context.js";
 import { TOOL_ROUTING, ALL_CBM_TOOLS, EXA_TOOLS, WORKING_PRINCIPLES_READONLY, COMMUNICATION } from "./tool-routing.js";
 
 export function createPlanReviewerAgent(
@@ -10,6 +12,7 @@ export function createPlanReviewerAgent(
   outputPath: string,
   cwd: string,
   phase?: string,
+  repos: RepoInfo[] = [],
 ) {
   const variantConfig = variants[variant];
   if (!variantConfig) {
@@ -17,6 +20,7 @@ export function createPlanReviewerAgent(
   }
   const contextFiles = loadContextFiles(cwd, "planReviewer", "system", phase, getModelInfo(variantConfig.model));
   const contextBlock = contextFiles.map((f) => f.content).join("\n\n");
+  const repoContext = buildRepoContext(repos);
 
   return {
     frontmatter: {
@@ -81,6 +85,7 @@ export function createPlanReviewerAgent(
       "",
       "=== SYNTHESIZED PLAN ===",
       taskArtifacts.synthesizedPlan,
+      ...(repoContext ? [repoContext] : []),
       "",
       "The artifacts above are already in your context. Do NOT re-read them from disk.",
     ].join("\n"),

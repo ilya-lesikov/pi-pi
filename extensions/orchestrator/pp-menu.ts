@@ -322,7 +322,15 @@ export async function resumeTask(
         for (const [name, cfg] of missingVariants) missingConfig[name] = cfg;
         orchestrator.pendingSubagentSpawns = missingVariants.length;
         orchestrator.failedPlannerVariants = [];
-        spawnPlanners(pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, orchestrator.config, missingConfig).then((result) => {
+        spawnPlanners(
+          pi,
+          orchestrator.cwd,
+          orchestrator.active.dir,
+          orchestrator.active.taskId,
+          orchestrator.config,
+          missingConfig,
+          orchestrator.active?.state.repos ?? [],
+        ).then((result) => {
           orchestrator.failedPlannerVariants = result.failedVariants;
           if (result.spawned === 0) orchestrator.pendingSubagentSpawns = 0;
           for (const id of result.agentIds ?? []) {
@@ -409,9 +417,27 @@ export async function resumeTask(
           saveTask(orchestrator.active.dir, orchestrator.active.state);
           orchestrator.pendingSubagentSpawns = missingVariants.length;
           const spawnFn = phase === "brainstorm"
-            ? () => spawnBrainstormReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, orchestrator.config, cycle.pass, missingReviewerConfig)
+            ? () => spawnBrainstormReviewers(
+              pi,
+              orchestrator.cwd,
+              orchestrator.active!.dir,
+              orchestrator.active!.taskId,
+              orchestrator.config,
+              cycle.pass,
+              missingReviewerConfig,
+              orchestrator.active?.state.repos ?? [],
+            )
             : phase === "plan"
-            ? () => spawnPlanReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, orchestrator.config, cycle.pass, missingReviewerConfig)
+            ? () => spawnPlanReviewers(
+              pi,
+              orchestrator.cwd,
+              orchestrator.active!.dir,
+              orchestrator.active!.taskId,
+              orchestrator.config,
+              cycle.pass,
+              missingReviewerConfig,
+              orchestrator.active?.state.repos ?? [],
+            )
             : () => spawnCodeReviewers(
               pi,
               orchestrator.cwd,
@@ -421,6 +447,7 @@ export async function resumeTask(
               cycle.pass,
               phase,
               missingReviewerConfig,
+              orchestrator.active?.state.repos ?? [],
             );
           orchestrator.failedReviewerVariants = [];
           spawnFn().then((result) => {

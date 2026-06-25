@@ -87,7 +87,15 @@ export async function transitionToNextPhase(
     const plannerVariants = resolvePreset(orchestrator.config, "planners", orchestrator.active.state.activePlannerPreset);
     orchestrator.pendingSubagentSpawns = Object.values(plannerVariants).filter((v) => v.enabled).length;
     orchestrator.failedPlannerVariants = [];
-    spawnPlanners(orchestrator.pi, orchestrator.cwd, orchestrator.active.dir, orchestrator.active.taskId, orchestrator.config, plannerVariants).then((result) => {
+    spawnPlanners(
+      orchestrator.pi,
+      orchestrator.cwd,
+      orchestrator.active.dir,
+      orchestrator.active.taskId,
+      orchestrator.config,
+      plannerVariants,
+      orchestrator.active?.state.repos ?? [],
+    ).then((result) => {
       orchestrator.failedPlannerVariants = result.failedVariants;
       if (result.spawned === 0) orchestrator.pendingSubagentSpawns = 0;
       for (const id of result.agentIds ?? []) {

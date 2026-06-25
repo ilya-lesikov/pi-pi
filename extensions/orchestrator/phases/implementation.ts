@@ -1,6 +1,8 @@
-export function implementationSystemPrompt(taskDir: string): string {
+export function implementationSystemPrompt(taskDir: string, cwd: string): string {
   return [
     "[PI-PI — IMPLEMENT PHASE]",
+    "",
+    `First, register all git repositories you'll work in using pp_register_repo (including the root: ${cwd}). For each, determine the base branch by examining the current branch and remote tracking.`,
     "",
     "The plan has been approved. Implement it.",
     "",

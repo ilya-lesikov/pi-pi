@@ -4,13 +4,17 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { resolvePreset, type PiPiConfig, type VariantConfig } from "../config.js";
 import { registerAgentDefinitions, spawnViaRpc, waitForCompletion } from "../agents/registry.js";
 import { createBrainstormReviewerAgent } from "../agents/brainstorm-reviewer.js";
+import type { RepoInfo } from "../repo-utils.js";
 import type { TaskType } from "../state.js";
 
-export function brainstormSystemPrompt(taskType: TaskType, taskDescription: string, taskDir: string): string {
+export function brainstormSystemPrompt(taskType: TaskType, taskDescription: string, taskDir: string, cwd: string): string {
+  const registerReposInstruction = `First, register all git repositories you'll work in using pp_register_repo (including the root: ${cwd}). For each, determine the base branch by examining the current branch and remote tracking.`;
   if (taskType === "debug") {
     return [
       "[PI-PI — DEBUG PHASE]",
       `Problem: ${taskDescription}`,
+      "",
+      registerReposInstruction,
       "",
     "Read-only diagnosis mode.",
     "",
@@ -71,6 +75,8 @@ export function brainstormSystemPrompt(taskType: TaskType, taskDescription: stri
       "[PI-PI — BRAINSTORM]",
       `Topic: ${taskDescription}`,
       "",
+      registerReposInstruction,
+      "",
       "# This is a conversation, not a task.",
       "Your primary job is to TALK WITH THE USER. Explore ideas, analyze tradeoffs, answer questions, discuss approaches.",
       "Do NOT rush to produce artifacts or finish. Stay in the conversation until the user is satisfied.",
@@ -115,6 +121,8 @@ export function brainstormSystemPrompt(taskType: TaskType, taskDescription: stri
   return [
     "[PI-PI — BRAINSTORM PHASE]",
     `Task: ${taskDescription}`,
+    "",
+    registerReposInstruction,
     "",
     "Your job is to produce USER_REQUEST.md and RESEARCH.md — complete enough that",
     "downstream agents can work without re-exploring the codebase or re-interviewing the user.",
@@ -180,6 +188,7 @@ export async function spawnBrainstormReviewers(
   config: PiPiConfig,
   round: number,
   variants?: Record<string, VariantConfig>,
+  repos: RepoInfo[] = [],
 ): Promise<{ spawned: number; files: string[]; agentIds: string[]; failedVariants: string[] }> {
   const urPath = join(taskDir, "USER_REQUEST.md");
   const resPath = join(taskDir, "RESEARCH.md");
@@ -219,6 +228,7 @@ export async function spawnBrainstormReviewers(
       outputPath,
       cwd,
       "brainstorm",
+      repos,
     );
 
     registerAgentDefinitions(pi, [{ type: "brainstorm_reviewer", variant, ...agent }]);

@@ -1,6 +1,8 @@
-export function reviewSystemPrompt(taskDir: string): string {
+export function reviewSystemPrompt(taskDir: string, cwd: string): string {
   return [
     "[PI-PI — REVIEW PHASE]",
+    "",
+    `First, register all git repositories you'll work in using pp_register_repo (including the root: ${cwd}). For each, determine the base branch by examining the current branch and remote tracking.`,
     "",
     "You are reviewing code changes. USER_REQUEST.md describes what to review.",
     "Read it first to understand the scope.",

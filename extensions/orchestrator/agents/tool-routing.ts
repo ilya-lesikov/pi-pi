@@ -53,6 +53,10 @@ export const COMMUNICATION = [
 export const TOOL_ROUTING = [
   "# Tool routing — what do you want to do?",
   "",
+  "**pp_register_repo**: Register a git repo you're working in. Call for every repo including the root directory. " +
+    "Pass the base branch (the branch this work will be merged into). Must call at the start of each task " +
+    "before doing any work.",
+  "",
   "Find code by concept or behavior:",
   "- cbm_search: natural-language search (query='deploy release chart')",
   "- cbm_search with semantic_query: vector similarity (['deploy','install','upgrade'])",

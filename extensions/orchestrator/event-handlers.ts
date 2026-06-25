@@ -30,7 +30,7 @@ import { createCustomFooter, setFooterContext, setFooterTracker } from "./custom
 import { createUsageTracker, dumpUsageSummary, loadUsageSummary, type UsageTracker } from "./usage-tracker.js";
 import { askUser } from "../../3p/pi-ask-user/index.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { getBaseBranchForRepo, type RepoInfo } from "./repo-utils.js";
+import { getBaseBranchForRepo, normalizeRepoPath, type RepoInfo } from "./repo-utils.js";
 
 const USAGE_TRACKER_KEY = Symbol.for("pi-pi:usage-tracker");
 
@@ -234,20 +234,39 @@ export async function enterReviewCycle(
 
   orchestrator.reviewTransitionToken = -1;
   orchestrator.pendingSubagentSpawns = enabledCount;
-  const spawnFn = phase === "brainstorm"
-    ? () => spawnBrainstormReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, orchestrator.config, pass, reviewers)
-    : phase === "plan"
-    ? () => spawnPlanReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, orchestrator.config, pass, reviewers)
-    : () => spawnCodeReviewers(
-      pi,
-      orchestrator.cwd,
-      orchestrator.active!.dir,
-      orchestrator.active!.taskId,
-      orchestrator.config,
-      pass,
-      phase,
-      reviewers,
-    );
+    const spawnFn = phase === "brainstorm"
+      ? () => spawnBrainstormReviewers(
+        pi,
+        orchestrator.cwd,
+        orchestrator.active!.dir,
+        orchestrator.active!.taskId,
+        orchestrator.config,
+        pass,
+        reviewers,
+        orchestrator.active?.state.repos ?? [],
+      )
+      : phase === "plan"
+      ? () => spawnPlanReviewers(
+        pi,
+        orchestrator.cwd,
+        orchestrator.active!.dir,
+        orchestrator.active!.taskId,
+        orchestrator.config,
+        pass,
+        reviewers,
+        orchestrator.active?.state.repos ?? [],
+      )
+      : () => spawnCodeReviewers(
+        pi,
+        orchestrator.cwd,
+        orchestrator.active!.dir,
+        orchestrator.active!.taskId,
+        orchestrator.config,
+        pass,
+        phase,
+        reviewers,
+        orchestrator.active?.state.repos ?? [],
+      );
   spawnFn().then((result) => {
     orchestrator.failedReviewerVariants = result.failedVariants;
     if (result.spawned === 0) orchestrator.pendingSubagentSpawns = 0;
@@ -305,9 +324,122 @@ export function finalizeReviewCycle(task: ActiveTask): void {
 }
 
 function registerOrchestratorTools(orchestrator: Orchestrator): void {
+  registerRepoTool(orchestrator);
   registerPhaseCompleteTool(orchestrator);
   registerCommitTool(orchestrator);
   registerSpecifyReviewsTool(orchestrator);
+}
+
+function registerRepoTool(orchestrator: Orchestrator): void {
+  const pi = orchestrator.pi;
+
+  pi.registerTool({
+    name: "pp_register_repo",
+    label: "pi-pi",
+    description:
+      "Register a git repository you're working in. Call this for every repo " +
+      "including the root directory at the start of each task. Pass the base " +
+      "branch — the branch this work will be merged into (e.g. origin/main, origin/develop).",
+    parameters: Type.Object({
+      path: Type.String({ description: "Absolute path to the git repository (or any path inside it)" }),
+      baseBranch: Type.Optional(Type.String({ description: "Base branch for this repo (e.g. origin/main)" })),
+    }),
+    async execute(_toolCallId, params: any) {
+      if (!orchestrator.active) {
+        return { content: [{ type: "text" as const, text: "No active task." }], isError: true as const, details: {} };
+      }
+
+      const pathInput = typeof params.path === "string" ? params.path.trim() : "";
+      if (!pathInput) {
+        return { content: [{ type: "text" as const, text: "Missing path." }], isError: true as const, details: {} };
+      }
+
+      let gitRoot = "";
+      try {
+        const result = await pi.exec("git", ["rev-parse", "--show-toplevel"], { cwd: pathInput, timeout: 5000 });
+        if (result.code !== 0) {
+          return { content: [{ type: "text" as const, text: "Not a git repository." }], isError: true as const, details: {} };
+        }
+        gitRoot = result.stdout.trim();
+      } catch {
+        return { content: [{ type: "text" as const, text: "Not a git repository." }], isError: true as const, details: {} };
+      }
+
+      if (!gitRoot) {
+        return { content: [{ type: "text" as const, text: "Not a git repository." }], isError: true as const, details: {} };
+      }
+
+      const normalizedRepo = normalizeRepoPath(gitRoot);
+      const normalizedRoot = normalizeRepoPath(orchestrator.cwd);
+      const repos = orchestrator.active.state.repos ?? [{ path: normalizedRoot, isRoot: true }];
+      const baseBranch = typeof params.baseBranch === "string" && params.baseBranch.trim().length > 0
+        ? params.baseBranch.trim()
+        : undefined;
+      const isRoot = normalizedRepo === normalizedRoot;
+
+      let added = false;
+      let changed = false;
+
+      const existingByPathIdx = repos.findIndex((repo) => repo.path === normalizedRepo);
+      if (existingByPathIdx >= 0) {
+        const existing = repos[existingByPathIdx];
+        if (isRoot && !existing.isRoot) {
+          existing.isRoot = true;
+          changed = true;
+        }
+        if (baseBranch && existing.baseBranch !== baseBranch) {
+          existing.baseBranch = baseBranch;
+          changed = true;
+        }
+      } else if (isRoot) {
+        const existingRootIdx = repos.findIndex((repo) => repo.isRoot);
+        if (existingRootIdx >= 0) {
+          const existingRoot = repos[existingRootIdx];
+          if (existingRoot.path !== normalizedRepo) {
+            existingRoot.path = normalizedRepo;
+            changed = true;
+          }
+          if (baseBranch && existingRoot.baseBranch !== baseBranch) {
+            existingRoot.baseBranch = baseBranch;
+            changed = true;
+          }
+        } else {
+          repos.push({ path: normalizedRepo, isRoot: true, ...(baseBranch ? { baseBranch } : {}) });
+          added = true;
+          changed = true;
+        }
+      } else {
+        repos.push({ path: normalizedRepo, isRoot: false, ...(baseBranch ? { baseBranch } : {}) });
+        added = true;
+        changed = true;
+      }
+
+      orchestrator.active.state.repos = repos;
+      if (changed) {
+        saveTask(orchestrator.active.dir, orchestrator.active.state);
+      }
+
+      if (added) {
+        unregisterAgentDefinitions(orchestrator.pi);
+        orchestrator.registerAgents();
+        registerCbmTools(pi, normalizedRepo);
+      }
+
+      const registered = repos.find((repo) => repo.path === normalizedRepo) ?? {
+        path: normalizedRepo,
+        isRoot,
+        ...(baseBranch ? { baseBranch } : {}),
+      };
+      const rootLabel = registered.isRoot ? " (root)" : "";
+      const baseLabel = registered.baseBranch ? `, base: ${registered.baseBranch}` : "";
+      const action = added ? "Registered" : changed ? "Updated" : "Already registered";
+
+      return {
+        content: [{ type: "text" as const, text: `${action} repository: ${registered.path}${rootLabel}${baseLabel}` }],
+        details: {},
+      };
+    },
+  });
 }
 
 function openCodeReviewDirect(
@@ -676,7 +808,15 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
             if (retryCount > 0) {
               orchestrator.failedPlannerVariants = [];
               orchestrator.pendingSubagentSpawns = retryCount;
-              spawnPlanners(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, orchestrator.config, scopedPlanners).then((result) => {
+              spawnPlanners(
+                pi,
+                orchestrator.cwd,
+                orchestrator.active!.dir,
+                orchestrator.active!.taskId,
+                orchestrator.config,
+                scopedPlanners,
+                orchestrator.active?.state.repos ?? [],
+              ).then((result) => {
                 orchestrator.failedPlannerVariants = result.failedVariants;
                 if (result.spawned === 0) orchestrator.pendingSubagentSpawns = 0;
                 for (const id of result.agentIds ?? []) {
@@ -771,9 +911,27 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
               const retryCount = Object.keys(scopedReviewers).length;
               if (retryCount > 0) {
                 const spawnFn = phase === "brainstorm"
-                  ? () => spawnBrainstormReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, orchestrator.config, pass, scopedReviewers)
+                  ? () => spawnBrainstormReviewers(
+                    pi,
+                    orchestrator.cwd,
+                    orchestrator.active!.dir,
+                    orchestrator.active!.taskId,
+                    orchestrator.config,
+                    pass,
+                    scopedReviewers,
+                    orchestrator.active?.state.repos ?? [],
+                  )
                   : phase === "plan"
-                  ? () => spawnPlanReviewers(pi, orchestrator.cwd, orchestrator.active!.dir, orchestrator.active!.taskId, orchestrator.config, pass, scopedReviewers)
+                  ? () => spawnPlanReviewers(
+                    pi,
+                    orchestrator.cwd,
+                    orchestrator.active!.dir,
+                    orchestrator.active!.taskId,
+                    orchestrator.config,
+                    pass,
+                    scopedReviewers,
+                    orchestrator.active?.state.repos ?? [],
+                  )
                   : () => spawnCodeReviewers(
                     pi,
                     orchestrator.cwd,
@@ -783,6 +941,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
                     pass,
                     phase,
                     scopedReviewers,
+                    orchestrator.active?.state.repos ?? [],
                   );
                 orchestrator.failedReviewerVariants = [];
                 orchestrator.pendingSubagentSpawns = retryCount;
