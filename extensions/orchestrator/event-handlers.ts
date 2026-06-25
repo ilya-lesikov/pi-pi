@@ -1265,9 +1265,22 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     orchestrator.cwd = ctx.cwd;
 
     const ppDir = join(ctx.cwd, ".pp");
-    initSessionLogger(ppDir, "info");
+    const { ensureGitignore } = await import("./orchestrator.js");
+    ensureGitignore(ctx.cwd);
+
+    let earlyLogLevel: "debug" | "info" | "warn" | "error" = "info";
+    try {
+      const { readRawConfig, GLOBAL_CONFIG_PATH } = await import("./config.js");
+      const { isValidLogLevel: checkLevel } = await import("./log.js");
+      const globalRaw = readRawConfig(GLOBAL_CONFIG_PATH);
+      const projectRaw = readRawConfig(join(ppDir, "config.json"));
+      const rawLevel = projectRaw?.logLevel ?? globalRaw?.logLevel;
+      if (checkLevel(rawLevel)) earlyLogLevel = rawLevel;
+    } catch {}
+
+    initSessionLogger(ppDir, earlyLogLevel);
     const log = getLogger();
-    log.info({ s: "session", cwd: ctx.cwd }, "session started");
+    log.info({ s: "session", cwd: ctx.cwd, logLevel: earlyLogLevel }, "session started");
 
     const available = (ctx as any).modelRegistry?.getAvailable?.();
     if (Array.isArray(available)) {

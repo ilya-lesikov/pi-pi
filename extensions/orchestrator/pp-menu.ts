@@ -50,7 +50,7 @@ import {
   type FlantSettings,
 } from "./flant-infra.js";
 import { normalizeRepoPath, type RepoInfo } from "./repo-utils.js";
-import { getLogger } from "./log.js";
+import { getLogger, addTaskDestination, setLogLevel } from "./log.js";
 
 type MenuMode = "command" | "tool";
 
@@ -415,6 +415,10 @@ export async function resumeTask(
     reviewPass: task.state.reviewPass,
     description: task.state.description,
   };
+
+  addTaskDestination(task.dir);
+  setLogLevel(orchestrator.config.logLevel);
+  getLogger().info({ s: "task", dir: task.dir, type: task.type, phase: task.state.phase }, "task resumed");
 
   const modelConfig = orchestrator.config.mainModel[
     task.type === "debug" ? "debug"
@@ -2011,9 +2015,8 @@ async function showGeneralSettings(orchestrator: Orchestrator, ctx: any): Promis
         clearConfigOverride(orchestrator, scope, ["logLevel"]);
       } else {
         applyConfigChange(orchestrator, scope, ["logLevel"], action);
-        const { setLogLevel } = await import("./log.js");
-        setLogLevel(orchestrator.config.logLevel);
       }
+      setLogLevel(orchestrator.config.logLevel);
       continue;
     }
 

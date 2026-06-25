@@ -24,7 +24,7 @@ import { createLibrarianAgent } from "./agents/librarian.js";
 import { createTaskAgent } from "./agents/task.js";
 import { resolveModel, getModelInfo } from "./model-registry.js";
 import { buildRepoContext } from "./agents/repo-context.js";
-import { getLogger, addTaskDestination, removeTaskDestination } from "./log.js";
+import { getLogger, addTaskDestination, removeTaskDestination, setLogLevel } from "./log.js";
 
 const BUNDLED_TOOLS = new Set([
   "Agent", "get_subagent_result", "steer_subagent",
@@ -321,6 +321,7 @@ export class Orchestrator {
       return;
     }
 
+    setLogLevel(this.config.logLevel);
     ensureGitignore(this.cwd);
 
     const dir = createTask(this.cwd, type, description);
@@ -655,7 +656,7 @@ export function ensureGitignore(cwd: string): void {
   }
 
   const gitignorePath = join(ppDir, ".gitignore");
-  const requiredEntries = ["state/", "config.json"];
+  const requiredEntries = ["state/", "config.json", "logs/"];
 
   if (!existsSync(gitignorePath)) {
     writeFileSync(gitignorePath, requiredEntries.join("\n") + "\n", "utf-8");

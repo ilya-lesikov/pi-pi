@@ -174,7 +174,7 @@ describe("ensureGitignore", () => {
 
     const gitignorePath = join(cwd, ".pp", ".gitignore");
     expect(existsSync(gitignorePath)).toBe(true);
-    expect(readFileSync(gitignorePath, "utf-8")).toBe("state/\nconfig.json\n");
+    expect(readFileSync(gitignorePath, "utf-8")).toBe("state/\nconfig.json\nlogs/\n");
   });
 
   it("adds missing entries and does not duplicate existing ones", () => {
