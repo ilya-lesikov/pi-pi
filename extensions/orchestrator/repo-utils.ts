@@ -17,7 +17,12 @@ export function normalizeRepoPath(p: string): string {
 }
 
 export function isPathInRepo(filePath: string, repoPath: string): boolean {
-  const normFile = resolve(filePath);
+  let normFile = resolve(filePath);
+  try {
+    if (existsSync(normFile)) {
+      normFile = realpathSync(normFile);
+    }
+  } catch {}
   const normalizedRepoPath = normalizeRepoPath(repoPath);
   const normRepo = normalizedRepoPath.endsWith(sep) ? normalizedRepoPath : normalizedRepoPath + sep;
   return normFile === normalizedRepoPath || normFile.startsWith(normRepo);

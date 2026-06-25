@@ -1,5 +1,5 @@
 import { appendFileSync, readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "fs";
-import { join, basename, resolve } from "path";
+import { join, basename, resolve, relative, isAbsolute, sep } from "path";
 import lockfile from "proper-lockfile";
 import { normalizeRepoPath, type RepoInfo } from "./repo-utils.js";
 
@@ -185,8 +185,9 @@ export function validateFromPath(cwd: string, fromPath: string): { ok: true; dir
 
   const stateRoot = resolve(stateDir(cwd));
   const resolved = resolve(stateRoot, fromPath);
+  const rel = relative(stateRoot, resolved);
 
-  if (resolved !== stateRoot && !resolved.startsWith(stateRoot + "/")) {
+  if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
     return { ok: false, reason: "Path escapes .pp/state/ directory" };
   }
 

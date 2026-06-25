@@ -82,7 +82,8 @@ function getRegisteredRepos(orchestrator: Orchestrator): RepoInfo[] {
 function validateRepos(repos: RepoInfo[]): RepoInfo[] {
   return repos.filter((repo) => {
     try {
-      return existsSync(repo.path);
+      if (!existsSync(repo.path)) return false;
+      return existsSync(join(repo.path, ".git"));
     } catch {
       return false;
     }
@@ -106,6 +107,20 @@ function appendSection(content: string, heading: string, body: string): string {
   const normalized = content.trimEnd();
   if (normalized.includes(`${heading}\n`)) return normalized + "\n";
   return `${normalized}\n\n${heading}\n${body}\n`;
+}
+
+function appendRepoContext(content: string, repos: RepoInfo[]): string {
+  if (repos.length === 0) return content;
+  const lines = repos.map((repo) => `- ${formatRepoLabel(repo)}${repo.baseBranch ? ` (base: ${repo.baseBranch})` : ""}`);
+  return appendSection(content, "## Constraints", `Registered repositories:\n${lines.join("\n")}`);
+}
+
+function appendResearchOpenQuestions(content: string, text: string): string {
+  const normalized = content.trimEnd();
+  if (normalized.includes("## Open Questions\n")) {
+    return `${normalized}\n${text}\n`;
+  }
+  return `${normalized}\n\n## Open Questions\n${text}\n`;
 }
 
 async function pickCommitForRepo(orchestrator: Orchestrator, ctx: any, repo: RepoInfo): Promise<string | null> {
@@ -336,6 +351,18 @@ export async function resumeTask(
     saveTask(task.dir, task.state);
   }
 
+  if (!task.state.repos.some((repo) => repo.isRoot)) {
+    const rootByPath = task.state.repos.find((repo) => repo.path === normalizedRoot);
+    if (rootByPath) {
+      rootByPath.isRoot = true;
+    } else if (task.state.repos.length > 0) {
+      task.state.repos[0]!.isRoot = true;
+    } else {
+      task.state.repos = [{ path: normalizedRoot, isRoot: true }];
+    }
+    saveTask(task.dir, task.state);
+  }
+
   const validRepos = validateRepos(task.state.repos ?? []);
   if ((task.state.repos?.length ?? 0) !== validRepos.length) {
     const pruned = (task.state.repos?.length ?? 0) - validRepos.length;
@@ -349,7 +376,7 @@ export async function resumeTask(
     saveTask(task.dir, task.state);
   }
 
-  const needsRepoRegistrationPrompt = task.state.repos.every((repo) => !repo.baseBranch);
+  const needsRepoRegistrationPrompt = task.state.repos.some((repo) => !repo.baseBranch);
 
   orchestrator.active = {
     dir: task.dir,
