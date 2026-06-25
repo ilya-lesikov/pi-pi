@@ -1,5 +1,5 @@
 import type { VariantConfig } from "../config.js";
-import { loadContextFiles } from "../context.js";
+import { loadAllContextFiles } from "../context.js";
 import { resolveModel, getModelInfo } from "../model-registry.js";
 import type { RepoInfo } from "../repo-utils.js";
 import { buildRepoContext } from "./repo-context.js";
@@ -10,7 +10,7 @@ export function createPlannerAgent(
   variants: Record<string, VariantConfig>,
   taskArtifacts: { userRequest: string; research: string },
   outputPath: string,
-  cwd: string,
+  contextDirs: string[],
   phase?: string,
   repos: RepoInfo[] = [],
 ) {
@@ -18,7 +18,7 @@ export function createPlannerAgent(
   if (!variantConfig) {
     throw new Error(`Unknown planner variant: ${variant}`);
   }
-  const contextFiles = loadContextFiles(cwd, "planner", "system", phase, getModelInfo(variantConfig.model));
+  const contextFiles = loadAllContextFiles(contextDirs, "planner", "system", phase, getModelInfo(variantConfig.model));
   const contextBlock = contextFiles.map((f) => f.content).join("\n\n");
   const repoContext = buildRepoContext(repos);
 

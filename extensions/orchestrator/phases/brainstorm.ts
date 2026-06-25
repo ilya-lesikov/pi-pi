@@ -4,6 +4,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { resolvePreset, type PiPiConfig, type VariantConfig } from "../config.js";
 import { registerAgentDefinitions, spawnViaRpc, waitForCompletion } from "../agents/registry.js";
 import { createBrainstormReviewerAgent } from "../agents/brainstorm-reviewer.js";
+import { getContextDirs } from "../context.js";
 import type { RepoInfo } from "../repo-utils.js";
 import type { TaskType } from "../state.js";
 
@@ -213,6 +214,7 @@ export async function spawnBrainstormReviewers(
   const timestamp = Math.floor(Date.now() / 1000);
   const reviewerVariants = variants ?? resolvePreset(config, "brainstormReviewers");
   const enabledVariants = Object.entries(reviewerVariants).filter(([, v]) => v.enabled);
+  const contextDirs = getContextDirs(cwd, repos, config.ignoreExtraRepoConfigs);
   const reviewFiles: string[] = [];
   const agentIds: string[] = [];
   const failedVariants: string[] = [];
@@ -226,7 +228,7 @@ export async function spawnBrainstormReviewers(
       reviewerVariants,
       { userRequest, research, artifacts: artifacts.length > 0 ? artifacts : undefined },
       outputPath,
-      cwd,
+      contextDirs,
       "brainstorm",
       repos,
     );

@@ -6,7 +6,8 @@ import { loadConfig, resolvePreset } from "./config.js";
 import { runAfterEdit, autoCommit, loadRepoAfterEditCommands } from "./commands.js";
 import { taskName, getActiveTask, saveTask, appendTaskLog } from "./state.js";
 import {
-  loadContextFiles,
+  getContextDirs,
+  loadAllContextFiles,
   getPhaseArtifacts,
   getLatestSynthesizedPlan,
   loadBrainstormReviewOutputs,
@@ -1241,7 +1242,9 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     const phase = orchestrator.active?.state.phase;
     const modelSpec = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "";
     const modelInfo = getModelInfo(modelSpec);
-    const systemContextFiles = loadContextFiles(orchestrator.cwd, "main", "system", phase, modelInfo);
+    const repos = orchestrator.active?.state.repos ?? [];
+    const contextDirs = getContextDirs(orchestrator.cwd, repos, orchestrator.config.ignoreExtraRepoConfigs);
+    const systemContextFiles = loadAllContextFiles(contextDirs, "main", "system", phase, modelInfo);
     const systemSnippets = systemContextFiles.map((f) => f.content).join("\n\n");
 
     const fullAddition = [WORKING_PRINCIPLES, COMMUNICATION, TOOL_ROUTING, systemSnippets, phasePrompt].filter(Boolean).join("\n\n");

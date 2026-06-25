@@ -2,9 +2,20 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
+
+const mockState = vi.hoisted(() => ({
+  agentDir: "",
+}));
+
+vi.mock("@earendil-works/pi-coding-agent", () => ({
+  getAgentDir: () => mockState.agentDir,
+}));
+
 import {
+  getContextDirs,
   getLatestSynthesizedPlan,
   getPhaseArtifacts,
+  loadAllContextFiles,
   loadContextFiles,
   loadBrainstormReviewOutputs,
   loadCodeReviewOutputs,
@@ -242,6 +253,75 @@ describe("loadContextFiles", () => {
     expect(errorSpy).toHaveBeenCalledTimes(1);
     expect(String(errorSpy.mock.calls[0][0])).toContain("Failed to read context file");
     expect(String(errorSpy.mock.calls[0][0])).toContain("broken.md");
+  });
+});
+
+describe("loadAllContextFiles", () => {
+  it("loads files from all provided directories preserving directory order", () => {
+    const root = makeTempDir();
+    const dirA = join(root, "ctx-a");
+    const dirB = join(root, "ctx-b");
+    mkdirSync(dirA, { recursive: true });
+    mkdirSync(dirB, { recursive: true });
+
+    writeFileSync(join(dirA, "a.md"), "---\nagents: main\n---\nfrom a\n", "utf-8");
+    writeFileSync(join(dirB, "b.md"), "---\nagents: main\n---\nfrom b\n", "utf-8");
+
+    expect(loadAllContextFiles([dirA, dirB], "main")).toEqual([
+      { mode: "context", content: "from a" },
+      { mode: "context", content: "from b" },
+    ]);
+  });
+});
+
+describe("getContextDirs", () => {
+  it("returns global, root, and extra repo context dirs in order", () => {
+    const root = makeTempDir();
+    const extra = makeTempDir();
+    const agentDir = makeTempDir();
+    mockState.agentDir = agentDir;
+    mkdirSync(join(root, ".pp", "context"), { recursive: true });
+    mkdirSync(join(extra, ".pp", "context"), { recursive: true });
+    mkdirSync(join(agentDir, "extensions", "pp", "context"), { recursive: true });
+
+    expect(
+      getContextDirs(
+        root,
+        [
+          { path: root, isRoot: true },
+          { path: extra, isRoot: false },
+        ],
+        false,
+      ),
+    ).toEqual([
+      join(agentDir, "extensions", "pp", "context"),
+      join(root, ".pp", "context"),
+      join(extra, ".pp", "context"),
+    ]);
+  });
+
+  it("omits extra repos when ignoreExtraRepoConfigs is true", () => {
+    const root = makeTempDir();
+    const extra = makeTempDir();
+    const agentDir = makeTempDir();
+    mockState.agentDir = agentDir;
+    mkdirSync(join(root, ".pp", "context"), { recursive: true });
+    mkdirSync(join(extra, ".pp", "context"), { recursive: true });
+    mkdirSync(join(agentDir, "extensions", "pp", "context"), { recursive: true });
+
+    expect(
+      getContextDirs(
+        root,
+        [
+          { path: root, isRoot: true },
+          { path: extra, isRoot: false },
+        ],
+        true,
+      ),
+    ).toEqual([
+      join(agentDir, "extensions", "pp", "context"),
+      join(root, ".pp", "context"),
+    ]);
   });
 });
 

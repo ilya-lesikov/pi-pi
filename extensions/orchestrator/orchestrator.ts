@@ -13,7 +13,7 @@ import {
   type Phase,
 } from "./state.js";
 import { phasePipeline } from "./phases/machine.js";
-import { loadContextFiles, getPhaseArtifacts, getLatestSynthesizedPlan } from "./context.js";
+import { getContextDirs, loadAllContextFiles, getPhaseArtifacts, getLatestSynthesizedPlan } from "./context.js";
 import { brainstormSystemPrompt } from "./phases/brainstorm.js";
 import { planningSystemPrompt, spawnPlanners } from "./phases/planning.js";
 import { implementationSystemPrompt } from "./phases/implementation.js";
@@ -514,10 +514,11 @@ export class Orchestrator {
     const taskAgent = createTaskAgent(this.config, "{{subtask}}", { userRequest: "", synthesizedPlan: "" });
     const phase = this.active?.state.phase;
     const repos = this.active?.state.repos ?? [];
+    const contextDirs = getContextDirs(this.cwd, repos, this.config.ignoreExtraRepoConfigs);
     const repoContext = buildRepoContext(repos);
 
     const appendContext = (agentType: string, prompt: string, modelInfo: { vendor: string; family: string; tier: string }): string => {
-      const contextFiles = loadContextFiles(this.cwd, agentType as any, "system", phase, modelInfo);
+      const contextFiles = loadAllContextFiles(contextDirs, agentType as any, "system", phase, modelInfo);
       if (contextFiles.length === 0 && !repoContext) return prompt;
       const parts = [prompt];
       if (repoContext) parts.push(repoContext.trimEnd());
@@ -561,8 +562,10 @@ export class Orchestrator {
     const activeModelSpec = this.lastCtx?.model
       ? `${this.lastCtx.model.provider}/${this.lastCtx.model.id}`
       : modelSpec;
-    const contextFiles = loadContextFiles(
-      this.cwd,
+    const repos = this.active?.state.repos ?? [];
+    const contextDirs = getContextDirs(this.cwd, repos, this.config.ignoreExtraRepoConfigs);
+    const contextFiles = loadAllContextFiles(
+      contextDirs,
       "main",
       "context",
       phase,

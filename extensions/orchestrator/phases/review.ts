@@ -4,7 +4,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { resolvePreset, type PiPiConfig, type VariantConfig } from "../config.js";
 import { registerAgentDefinitions, spawnViaRpc, waitForCompletion } from "../agents/registry.js";
 import { createCodeReviewerAgent } from "../agents/code-reviewer.js";
-import { getLatestSynthesizedPlan } from "../context.js";
+import { getContextDirs, getLatestSynthesizedPlan } from "../context.js";
 import type { RepoInfo } from "../repo-utils.js";
 
 export function reviewSystemPrompt(taskDir: string, pass: number, phase?: string): string {
@@ -105,6 +105,7 @@ export async function spawnCodeReviewers(
   const timestamp = Math.floor(Date.now() / 1000);
   const reviewerVariants = variants ?? resolvePreset(config, "codeReviewers");
   const enabledVariants = Object.entries(reviewerVariants).filter(([, v]) => v.enabled);
+  const contextDirs = getContextDirs(cwd, repos, config.ignoreExtraRepoConfigs);
   const agentIds: string[] = [];
   const failedVariants: string[] = [];
   const results: Promise<void>[] = [];
@@ -117,7 +118,7 @@ export async function spawnCodeReviewers(
       reviewerVariants,
       { userRequest, research, synthesizedPlan },
       outputPath,
-      cwd,
+      contextDirs,
       reviewerPhase,
       repos,
     );

@@ -5,7 +5,7 @@ import { resolvePreset, type PiPiConfig, type VariantConfig } from "../config.js
 import { registerAgentDefinitions, spawnViaRpc, waitForCompletion } from "../agents/registry.js";
 import { createPlannerAgent } from "../agents/planner.js";
 import { createPlanReviewerAgent } from "../agents/plan-reviewer.js";
-import { getLatestSynthesizedPlan } from "../context.js";
+import { getContextDirs, getLatestSynthesizedPlan } from "../context.js";
 import type { RepoInfo } from "../repo-utils.js";
 import { validatePlan } from "../validate-artifacts.js";
 
@@ -70,13 +70,14 @@ export async function spawnPlanners(
   const timestamp = Math.floor(Date.now() / 1000);
   const plannerVariants = variants ?? resolvePreset(config, "planners");
   const enabledVariants = Object.entries(plannerVariants).filter(([, v]) => v.enabled);
+  const contextDirs = getContextDirs(cwd, repos, config.ignoreExtraRepoConfigs);
   const agentIds: string[] = [];
   const failedVariants: string[] = [];
   const results: Promise<void>[] = [];
 
   for (const [variant] of enabledVariants) {
     const outputPath = join(plansDir, `${timestamp}_${variant}.md`);
-    const agent = createPlannerAgent(variant, plannerVariants, { userRequest, research }, outputPath, cwd, "plan", repos);
+    const agent = createPlannerAgent(variant, plannerVariants, { userRequest, research }, outputPath, contextDirs, "plan", repos);
 
     registerAgentDefinitions(pi, [{ type: "planner", variant, ...agent }]);
 
@@ -189,6 +190,7 @@ export async function spawnPlanReviewers(
   const timestamp = Math.floor(Date.now() / 1000);
   const reviewerVariants = variants ?? resolvePreset(config, "planReviewers");
   const enabledVariants = Object.entries(reviewerVariants).filter(([, v]) => v.enabled);
+  const contextDirs = getContextDirs(cwd, repos, config.ignoreExtraRepoConfigs);
   const reviewFiles: string[] = [];
   const agentIds: string[] = [];
   const failedVariants: string[] = [];
@@ -203,7 +205,7 @@ export async function spawnPlanReviewers(
       reviewerVariants,
       { userRequest, research, synthesizedPlan },
       outputPath,
-      cwd,
+      contextDirs,
       "plan",
       repos,
     );

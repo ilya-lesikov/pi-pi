@@ -1,5 +1,7 @@
 import { readFileSync, existsSync, readdirSync } from "fs";
 import { join } from "path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import type { RepoInfo } from "./repo-utils.js";
 import type { Phase } from "./state.js";
 
 type AgentType = "main" | "explore" | "librarian" | "planner" | "planReviewer" | "task" | "codeReviewer" | "brainstormReviewer";
@@ -9,6 +11,7 @@ type PhaseFilter = "brainstorm" | "debug" | "plan" | "implement" | "review";
 type VendorFilter = "anthropic" | "openai" | "google" | "unknown";
 type FamilyFilter = "opus" | "sonnet" | "haiku" | "gpt" | "gpt-mini" | "gemini-pro" | "gemini-flash" | "unknown";
 type TierFilter = "stupid" | "regular" | "smart" | "xsmart" | "unknown";
+type ModelInfo = { vendor: string; family: string; tier: string };
 
 interface ContextFile {
   mode: InjectMode;
@@ -138,7 +141,7 @@ function matchesFilters(
   fm: Frontmatter,
   agentType: AgentType,
   phase?: string,
-  modelInfo?: { vendor: string; family: string; tier: string },
+  modelInfo?: ModelInfo,
 ): boolean {
   if (!matchesAgent(fm, agentType)) return false;
   if (fm.phases.length > 0 && phase && !fm.phases.includes(phase as PhaseFilter)) return false;
@@ -155,9 +158,18 @@ export function loadContextFiles(
   agentType: AgentType,
   injectMode?: InjectMode,
   phase?: string,
-  modelInfo?: { vendor: string; family: string; tier: string },
+  modelInfo?: ModelInfo,
 ): ContextFile[] {
-  const contextDir = join(cwd, ".pp", "context");
+  return loadContextFilesFromDir(join(cwd, ".pp", "context"), agentType, injectMode, phase, modelInfo);
+}
+
+export function loadContextFilesFromDir(
+  contextDir: string,
+  agentType: AgentType,
+  injectMode?: InjectMode,
+  phase?: string,
+  modelInfo?: ModelInfo,
+): ContextFile[] {
   if (!existsSync(contextDir)) return [];
 
   const results: ContextFile[] = [];
@@ -180,6 +192,42 @@ export function loadContextFiles(
   }
 
   return results;
+}
+
+export function loadAllContextFiles(
+  contextDirs: string[],
+  agentType: AgentType,
+  injectMode?: InjectMode,
+  phase?: string,
+  modelInfo?: ModelInfo,
+): ContextFile[] {
+  const results: ContextFile[] = [];
+  for (const contextDir of contextDirs) {
+    results.push(...loadContextFilesFromDir(contextDir, agentType, injectMode, phase, modelInfo));
+  }
+  return results;
+}
+
+export function getContextDirs(rootCwd: string, repos: RepoInfo[], ignoreExtraRepoConfigs: boolean): string[] {
+  const dirs: string[] = [];
+  const seen = new Set<string>();
+  const add = (dir: string) => {
+    if (!existsSync(dir) || seen.has(dir)) return;
+    seen.add(dir);
+    dirs.push(dir);
+  };
+
+  add(join(getAgentDir(), "extensions", "pp", "context"));
+  add(join(rootCwd, ".pp", "context"));
+
+  if (!ignoreExtraRepoConfigs) {
+    for (const repo of repos) {
+      if (repo.isRoot) continue;
+      add(join(repo.path, ".pp", "context"));
+    }
+  }
+
+  return dirs;
 }
 
 export function loadAgentsMd(cwd: string): string | null {
