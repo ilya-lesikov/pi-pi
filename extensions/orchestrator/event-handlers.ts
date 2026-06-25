@@ -30,26 +30,12 @@ import { createCustomFooter, setFooterContext, setFooterTracker } from "./custom
 import { createUsageTracker, dumpUsageSummary, loadUsageSummary, type UsageTracker } from "./usage-tracker.js";
 import { askUser } from "../../3p/pi-ask-user/index.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getBaseBranchForRepo, type RepoInfo } from "./repo-utils.js";
 
 const USAGE_TRACKER_KEY = Symbol.for("pi-pi:usage-tracker");
 
-export async function detectDefaultBranch(pi: ExtensionAPI, cwd: string, config?: { diffBaseBranch?: string }): Promise<string> {
-  if (config?.diffBaseBranch) return config.diffBaseBranch;
-  try {
-    const result = await pi.exec("git", ["symbolic-ref", "refs/remotes/origin/HEAD"], { cwd, timeout: 5000 });
-    if (result.code === 0 && result.stdout.trim()) {
-      return "origin/" + result.stdout.trim().replace("refs/remotes/origin/", "");
-    }
-  } catch {}
-  try {
-    const result = await pi.exec("git", ["show-ref", "--verify", "refs/remotes/origin/main"], { cwd, timeout: 5000 });
-    if (result.code === 0) return "origin/main";
-  } catch {}
-  try {
-    const result = await pi.exec("git", ["show-ref", "--verify", "refs/remotes/origin/master"], { cwd, timeout: 5000 });
-    if (result.code === 0) return "origin/master";
-  } catch {}
-  return "main";
+export async function detectDefaultBranch(_pi: ExtensionAPI, repos: RepoInfo[], repoPath: string): Promise<string> {
+  return getBaseBranchForRepo(repos, repoPath) ?? "origin/main";
 }
 
 export async function selectOption(ctx: any, question: string, options: string[]): Promise<string | undefined> {
@@ -1171,15 +1157,6 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
 
       orchestrator.active.modifiedFiles.add(filePath);
       orchestrator.active.state.modifiedFiles = [...orchestrator.active.modifiedFiles];
-      if (!orchestrator.active.state.repoCwd) {
-        const dir = resolve(filePath, "..");
-        try {
-          const result = await pi.exec("git", ["rev-parse", "--show-toplevel"], { cwd: dir, timeout: 5000 });
-          if (result.code === 0 && result.stdout.trim()) {
-            orchestrator.active.state.repoCwd = result.stdout.trim();
-          }
-        } catch {}
-      }
       try { saveTask(orchestrator.active.dir, orchestrator.active.state); } catch {}
 
       const afterEditResults = runAfterEdit(filePath, orchestrator.config, orchestrator.cwd);

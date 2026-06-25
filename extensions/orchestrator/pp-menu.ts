@@ -1792,7 +1792,7 @@ async function showGeneralSettings(orchestrator: Orchestrator, ctx: any): Promis
     const { globalConfig, projectConfig } = getRawScopeConfigs(orchestrator);
     const options: OptionInput[] = [
       opt("autoCommit", `${orchestrator.config.autoCommit} ${getConfigSource(globalConfig, projectConfig, ["autoCommit"])}`),
-      opt("diffBaseBranch", `${orchestrator.config.diffBaseBranch ?? "(unset)"} ${getConfigSource(globalConfig, projectConfig, ["diffBaseBranch"])}`),
+      opt("ignoreExtraRepoConfigs", `${orchestrator.config.ignoreExtraRepoConfigs} ${getConfigSource(globalConfig, projectConfig, ["ignoreExtraRepoConfigs"])}`),
       opt("Back", "Return to the previous menu"),
     ];
 
@@ -1815,25 +1815,24 @@ async function showGeneralSettings(orchestrator: Orchestrator, ctx: any): Promis
       continue;
     }
 
-    const action = await selectOption(ctx, "General → diffBaseBranch", [
-      opt("Set value", `Current: ${orchestrator.config.diffBaseBranch ?? "(unset)"}`),
+    const action = await selectOption(ctx, "General → ignoreExtraRepoConfigs", [
+      opt("Set true", "Ignore extra repo config files"),
+      opt("Set false", "Load extra repo config files"),
       opt("Clear override", "Remove override in selected scope"),
       opt("Back", "Return to the previous menu"),
     ]);
     if (!action || action === "Back") continue;
 
-    if (action === "Set value") {
-      const value = await promptRequiredInput(ctx, "diffBaseBranch");
-      if (!value) continue;
+    if (action === "Set true" || action === "Set false") {
       const scope = await pickScope(ctx, orchestrator);
       if (!scope) continue;
-      applyConfigChange(orchestrator, scope, ["diffBaseBranch"], value);
+      applyConfigChange(orchestrator, scope, ["ignoreExtraRepoConfigs"], action === "Set true");
       continue;
     }
 
     const scope = await pickScope(ctx, orchestrator);
     if (!scope) continue;
-    clearConfigOverride(orchestrator, scope, ["diffBaseBranch"]);
+    clearConfigOverride(orchestrator, scope, ["ignoreExtraRepoConfigs"]);
   }
 }
 
@@ -1848,7 +1847,7 @@ async function showSettingsMenu(orchestrator: Orchestrator, ctx: any): Promise<t
       opt("Subagents", "Explore, librarian, task agent models"),
       opt("Commands", "afterEdit and afterImplement commands"),
       opt("Timeouts", "Timeout configuration"),
-      opt("General", "autoCommit, diffBaseBranch"),
+      opt("General", "autoCommit, ignoreExtraRepoConfigs"),
       opt("Flant AI Infrastructure", "Configure corporate AI model provider"),
       opt("Back", "Return to the previous menu"),
     ];
@@ -2092,7 +2091,11 @@ async function showReviewMenu(orchestrator: Orchestrator, ctx: any): Promise<typ
     }
 
     if (choice === "Current branch") {
-      const base = await detectDefaultBranch(orchestrator.pi, orchestrator.cwd, orchestrator.config);
+      const base = await detectDefaultBranch(
+        orchestrator.pi,
+        orchestrator.active?.state.repos ?? [{ path: orchestrator.cwd, isRoot: true }],
+        orchestrator.cwd,
+      );
       const pr = await detectCurrentPrContext(orchestrator);
 
       const urLines = [`# User Request\nReview current branch changes (${base}..HEAD)`];

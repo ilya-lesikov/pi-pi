@@ -1,6 +1,6 @@
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { join, resolve } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import lockfile from "proper-lockfile";
 import { createTask, getActiveTask, listTasks, loadTask, saveTask, taskAge, taskName, validateFromPath, type TaskState } from "./state.js";
@@ -30,6 +30,7 @@ describe("createTask", () => {
     expect(taskDir).toContain(join(cwd, ".pp", "state", "implement"));
     expect(state.phase).toBe("brainstorm");
     expect(state.from).toBeNull();
+    expect(state.repos).toEqual([{ path: resolve(cwd), isRoot: true }]);
     expect(state.description).toBe("Build New Feature");
     expect(new Date(state.startedAt).toString()).not.toBe("Invalid Date");
 
@@ -84,6 +85,7 @@ describe("saveTask", () => {
       step: "user_gate",
       reviewCycle: { kind: "auto", step: "await_reviewers", pass: 2 },
       reviewPass: 1,
+      repos: [],
       from: "implement/some-task",
       description: "Updated",
       startedAt: "2026-04-20T00:00:00.000Z",

@@ -1,6 +1,7 @@
 import { appendFileSync, readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "fs";
 import { join, basename, resolve } from "path";
 import lockfile from "proper-lockfile";
+import { normalizeRepoPath, type RepoInfo } from "./repo-utils.js";
 
 function getLockfileFs(): typeof import("fs") | undefined {
   try {
@@ -28,7 +29,7 @@ export interface TaskState {
   reviewPass: number;
   reviewPassByKind?: Record<string, number>;
   modifiedFiles?: string[];
-  repoCwd?: string;
+  repos?: RepoInfo[];
   from: string | null;
   description: string;
   startedAt: string;
@@ -68,6 +69,7 @@ export function createTask(cwd: string, type: TaskType, description: string): st
     step: "llm_work",
     reviewCycle: null,
     reviewPass: 0,
+    repos: [{ path: normalizeRepoPath(cwd), isRoot: true }],
     from: null,
     description,
     startedAt: new Date().toISOString(),
@@ -85,6 +87,11 @@ export function loadTask(taskDir: string): TaskState {
     if ((state as any).phase === "planning") {
       state.phase = "plan";
     }
+    if ((state as any).repoCwd && (!state.repos || state.repos.length === 0)) {
+      state.repos = [{ path: (state as any).repoCwd, isRoot: false }];
+    }
+    if (!state.repos) state.repos = [];
+    delete (state as any).repoCwd;
     return state;
   } catch (err: any) {
     throw new Error(`Failed to parse ${sp}: ${err.message}`);

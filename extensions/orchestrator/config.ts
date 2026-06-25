@@ -63,7 +63,7 @@ export interface PiPiConfig {
   };
   timeouts: TimeoutConfig;
   autoCommit: boolean;
-  diffBaseBranch?: string;
+  ignoreExtraRepoConfigs: boolean;
 }
 
 export const PRESET_GROUPS = ["planners", "codeReviewers", "planReviewers", "brainstormReviewers"] as const;
@@ -146,6 +146,7 @@ const DEFAULT_CONFIG: PiPiConfig = {
     lockUpdate: 30000,
   },
   autoCommit: true,
+  ignoreExtraRepoConfigs: false,
 };
 
 const DANGEROUS_KEYS = new Set(["__proto__", "constructor", "prototype"]);

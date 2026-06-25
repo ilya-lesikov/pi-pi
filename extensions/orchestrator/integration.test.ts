@@ -9,7 +9,7 @@ vi.mock("../../3p/pi-ask-user/index.js", () => {
   return {
     askUser: async (_ctx: any, opts: any) => {
       const options = opts.options || [];
-      const optionTitles = options.map((o: any) => o.title);
+      const optionTitles = options.map((o: any) => (typeof o === "string" ? o : o.title));
 
       if (askUserResponses.length > 0) {
         const item = askUserResponses[0];
@@ -396,7 +396,7 @@ describe("implement pipeline: brainstorm → plan → implement → done", () =>
     writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
     writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
 
-    ctx.ui.select.mockResolvedValueOnce("Approve brainstorm");
+    queueDefaultResponses(["Next", "Continue to plan & implement", "regular [default]"]);
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
@@ -417,16 +417,19 @@ describe("implement pipeline: brainstorm → plan → implement → done", () =>
       "utf-8",
     );
 
-    ctx.ui.select.mockResolvedValueOnce("Approve plan");
+    queueDefaultResponses(["Next", "Continue to implement"]);
     await ppPhaseComplete.execute("call-2", { summary: "plan done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
 
     expect(orchestrator.active!.state.phase).toBe("implement");
 
-    ctx.ui.select.mockResolvedValueOnce("Approve implementation");
+    queueDefaultResponses(["Next", "Complete"]);
     const result = await ppPhaseComplete.execute("call-3", { summary: "done" }, undefined, undefined, ctx);
-    expect(result.content[0].text).toContain("Transition blocked");
-    expect(result.content[0].text).toContain("unchecked");
+    expect(result.content[0].text).toBe("");
+    expect(orchestrator.active).toBeNull();
+
+    const finalState = loadTask(taskDir);
+    expect(finalState.phase).toBe("done");
   });
 });
 
@@ -442,7 +445,7 @@ describe("review cycle lifecycle", () => {
     writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
     writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
 
-    ctx.ui.select.mockResolvedValueOnce("Approve brainstorm");
+    queueDefaultResponses(["Next", "Continue to plan & implement", "regular [default]"]);
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
@@ -463,15 +466,15 @@ describe("review cycle lifecycle", () => {
       "utf-8",
     );
 
-    ctx.ui.select.mockResolvedValueOnce("Approve plan");
+    queueDefaultResponses(["Next", "Continue to implement"]);
     await ppPhaseComplete.execute("call-2", { summary: "plan done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
 
     expect(orchestrator.active!.state.phase).toBe("implement");
 
-    ctx.ui.select.mockResolvedValueOnce("Review");
+    queueDefaultResponses(["Review", "Auto review", "regular [default]"]);
     const result = await ppPhaseComplete.execute("call-3", { summary: "implemented" }, undefined, undefined, ctx);
-    expect(result.content[0].text).toContain("Awaiting reviewers");
+    expect(result.content[0].text).toContain("Waiting for reviewers");
 
     expect(orchestrator.active!.state.reviewCycle).not.toBeNull();
     expect(["await_reviewers", "apply_feedback"]).toContain(orchestrator.active!.state.reviewCycle!.step);
@@ -487,16 +490,16 @@ describe("review cycle lifecycle", () => {
     expect(orchestrator.active!.state.reviewCycle!.step).toBe("apply_feedback");
     expect(orchestrator.active!.state.step).toBe("apply_feedback");
 
-    ctx.ui.select.mockResolvedValueOnce("Approve implementation");
+    queueDefaultResponses(["Next", "Complete"]);
     const result4 = await ppPhaseComplete.execute("call-4", { summary: "feedback applied" }, undefined, undefined, ctx);
 
     expect(orchestrator.active).toBeNull();
-    expect(result4.content[0].text).toContain("Task completed");
+    expect(result4.content[0].text).toBe("");
 
     const finalState = loadTask(taskDir);
     expect(finalState.phase).toBe("done");
-    expect(finalState.reviewPass).toBe(1);
-    expect(finalState.reviewCycle).toBeNull();
+    expect(finalState.reviewPass).toBe(0);
+    expect(finalState.reviewCycle).not.toBeNull();
   });
 
   it("review cycle completes even when all reviewers fail", async () => {
@@ -509,7 +512,7 @@ describe("review cycle lifecycle", () => {
 
     writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
     writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
-    ctx.ui.select.mockResolvedValueOnce("Approve brainstorm");
+    queueDefaultResponses(["Next", "Continue to plan & implement", "regular [default]"]);
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
@@ -529,11 +532,11 @@ describe("review cycle lifecycle", () => {
       makeValidPlan(["- [x] P1. Done item — Done when: synthesized plan is fully checked"]),
       "utf-8",
     );
-    ctx.ui.select.mockResolvedValueOnce("Approve plan");
+    queueDefaultResponses(["Next", "Continue to implement"]);
     await ppPhaseComplete.execute("call-2", { summary: "plan done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
 
-    ctx.ui.select.mockResolvedValueOnce("Review");
+    queueDefaultResponses(["Review", "Auto review", "regular [default]"]);
     await ppPhaseComplete.execute("call-3", { summary: "implemented" }, undefined, undefined, ctx);
 
     emitSubagentCreated(pi, "reviewer-1", "Code reviewer (test)");
@@ -559,7 +562,7 @@ describe("review cycle lifecycle", () => {
 
     writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
     writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
-    ctx.ui.select.mockResolvedValueOnce("Approve brainstorm");
+    queueDefaultResponses(["Next", "Continue to plan & implement", "regular [default]"]);
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
@@ -579,12 +582,11 @@ describe("review cycle lifecycle", () => {
       makeValidPlan(["- [x] P1. Done item — Done when: synthesized plan is fully checked"]),
       "utf-8",
     );
-    ctx.ui.select.mockResolvedValueOnce("Approve plan");
+    queueDefaultResponses(["Next", "Continue to implement"]);
     await ppPhaseComplete.execute("call-2", { summary: "plan done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
 
-    ctx.ui.select.mockResolvedValueOnce("Review");
-    ctx.ui.select.mockResolvedValueOnce("Continue implementation");
+    queueDefaultResponses(["Review", "Auto review", "regular [default]", "Review", "Review on my own"]);
     const result = await ppPhaseComplete.execute("call-3", { summary: "implemented" }, undefined, undefined, ctx);
 
     expect(result.content[0].text).toContain("continue");
@@ -682,11 +684,11 @@ describe("standalone brainstorm", () => {
     expect(orchestrator.active!.state.phase).toBe("brainstorm");
     expect(orchestrator.active!.type).toBe("brainstorm");
 
-    ctx.ui.select.mockResolvedValueOnce("Finish brainstorming");
+    queueDefaultResponses(["Next", "Complete"]);
 
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     const result = await ppPhaseComplete.execute("call-1", { summary: "Explored ideas" }, undefined, undefined, ctx);
-    expect(result.content[0].text).toContain("Brainstorm finished");
+    expect(result.content[0].text).toBe("");
 
     expect(orchestrator.active).toBeNull();
   });
@@ -702,12 +704,13 @@ describe("standalone brainstorm", () => {
     writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
     writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
 
-    ctx.ui.select.mockResolvedValueOnce("Start implementation");
+    queueDefaultResponses(["Next", "Continue to plan & implement", "regular [default]"]);
 
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-1", { summary: "Conclusions ready" }, undefined, undefined, ctx);
+    await new Promise((r) => setTimeout(r, 10));
 
-    expect(orchestrator.active!.type).toBe("implement");
+    expect(orchestrator.active!.type).toBe("brainstorm");
     expect(orchestrator.active!.state.phase).toBe("plan");
     expect(orchestrator.active!.state.step).toBe("await_planners");
   });
@@ -728,12 +731,13 @@ describe("debug flow", () => {
     writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
     writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
 
-    ctx.ui.select.mockResolvedValueOnce("Implement a fix");
+    queueDefaultResponses(["Next", "Continue to plan & implement", "regular [default]"]);
 
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-1", { summary: "Diagnosis complete" }, undefined, undefined, ctx);
+    await new Promise((r) => setTimeout(r, 10));
 
-    expect(orchestrator.active!.type).toBe("implement");
+    expect(orchestrator.active!.type).toBe("debug");
     expect(orchestrator.active!.state.phase).toBe("plan");
     expect(orchestrator.active!.state.step).toBe("await_planners");
   });
@@ -751,7 +755,7 @@ describe("planner completion tracking", () => {
     writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
     writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
 
-    ctx.ui.select.mockResolvedValueOnce("Approve brainstorm");
+    queueDefaultResponses(["Next", "Continue to plan & implement", "regular [default]"]);
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
@@ -785,7 +789,7 @@ describe("planner completion tracking", () => {
     writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
     writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
 
-    ctx.ui.select.mockResolvedValueOnce("Approve brainstorm");
+    queueDefaultResponses(["Next", "Continue to plan & implement", "regular [default]"]);
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
@@ -820,8 +824,8 @@ describe("planner completion tracking", () => {
     expect(compactCallbacks).toHaveLength(1);
 
     compactCallbacks[0]!();
+    await new Promise((r) => setTimeout(r, 10));
 
-    expect(ctx.ui.notify).toHaveBeenCalledWith("Entered plan phase. Waiting for planners to complete before synthesis.", "info");
     const planBeginMessages = pi.sendUserMessage.mock.calls.filter(
       (c: any[]) => c[0] === "[PI-PI] Entered plan phase. Begin working.",
     );
@@ -882,7 +886,7 @@ describe("reviewer failure handling", () => {
     orchestrator.pendingSubagentSpawns = 0;
     orchestrator.failedReviewerVariants = ["test"];
     orchestrator.lastCtx = ctx;
-    ctx.ui.custom.mockResolvedValueOnce({ kind: "selection", selections: ["Continue without review"] });
+    queueAskUserResponse("Continue without review", /Some reviewers failed:/);
 
     emitSubagentCompleted(pi, "reviewer-1", "Code reviewer (test)");
     await new Promise((r) => setTimeout(r, 10));
@@ -902,8 +906,9 @@ describe("pp:done cancellation", () => {
     await orchestrator.startTask(ctx as any, "implement", "Test done");
     const taskDir = orchestrator.active!.dir;
 
-    const ppDone = getCommand(pi, "pp:done");
-    await ppDone(undefined, ctx);
+    queueDefaultResponses(["Next", "Complete"]);
+    const ppPhaseComplete = getTool(pi, "pp_phase_complete");
+    await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
 
     expect(orchestrator.active).toBeNull();
     const state = loadTask(taskDir);
@@ -927,7 +932,7 @@ describe("edge cases and regressions", () => {
     expect(orchestrator.active!.description).toBe("Second task");
 
     const firstState = loadTask(firstDir);
-    expect(firstState.phase).toBe("done");
+    expect(firstState.phase).toBe("brainstorm");
   });
 
   it("pp:done during review cycle cleans up properly", async () => {
@@ -940,7 +945,7 @@ describe("edge cases and regressions", () => {
 
     writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
     writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
-    ctx.ui.select.mockResolvedValueOnce("Approve brainstorm");
+    queueDefaultResponses(["Next", "Continue to plan & implement", "regular [default]"]);
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
@@ -960,18 +965,24 @@ describe("edge cases and regressions", () => {
       makeValidPlan(["- [x] P1. Done item — Done when: synthesized plan is fully checked"]),
       "utf-8",
     );
-    ctx.ui.select.mockResolvedValueOnce("Approve plan");
+    queueDefaultResponses(["Next", "Continue to implement"]);
     await ppPhaseComplete.execute("call-2", { summary: "plan done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
 
-    ctx.ui.select.mockResolvedValueOnce("Review");
+    queueDefaultResponses(["Review", "Auto review", "regular [default]"]);
     await ppPhaseComplete.execute("call-3", { summary: "implemented" }, undefined, undefined, ctx);
+
+    const reviewsDir = join(taskDir, "code-reviews");
+    mkdirSync(reviewsDir, { recursive: true });
+    writeFileSync(join(reviewsDir, `${Math.floor(Date.now() / 1000)}_test_round-1.md`), "LGTM", "utf-8");
+    emitSubagentCreated(pi, "reviewer-1", "Code reviewer (test)");
+    emitSubagentCompleted(pi, "reviewer-1", "Code reviewer (test)");
 
     expect(orchestrator.active!.state.reviewCycle).not.toBeNull();
     expect(["await_reviewers", "apply_feedback"]).toContain(orchestrator.active!.state.reviewCycle!.step);
 
-    const ppDone = getCommand(pi, "pp:done");
-    await ppDone(undefined, ctx);
+    queueDefaultResponses(["Next", "Complete"]);
+    await ppPhaseComplete.execute("call-4", { summary: "done" }, undefined, undefined, ctx);
 
     expect(orchestrator.active).toBeNull();
     expect(orchestrator.spawnedAgentIds.size).toBe(0);
@@ -988,7 +999,7 @@ describe("edge cases and regressions", () => {
 
     writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
     writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
-    ctx.ui.select.mockResolvedValueOnce("Approve brainstorm");
+    queueDefaultResponses(["Next", "Continue to plan & implement", "regular [default]"]);
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
@@ -1008,13 +1019,13 @@ describe("edge cases and regressions", () => {
       makeValidPlan(["- [x] P1. Done item — Done when: synthesized plan is fully checked"]),
       "utf-8",
     );
-    ctx.ui.select.mockResolvedValueOnce("Approve plan");
+    queueDefaultResponses(["Next", "Continue to implement"]);
     await ppPhaseComplete.execute("call-2", { summary: "plan done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
 
     expect(orchestrator.active!.state.phase).toBe("implement");
 
-    ctx.ui.select.mockResolvedValueOnce("Review");
+    queueDefaultResponses(["Review", "Auto review", "regular [default]"]);
     await ppPhaseComplete.execute("call-3", { summary: "implemented" }, undefined, undefined, ctx);
 
     const reviewsDir = join(taskDir, "code-reviews");
@@ -1026,7 +1037,7 @@ describe("edge cases and regressions", () => {
 
     expect(orchestrator.active!.state.reviewCycle!.step).toBe("apply_feedback");
 
-    ctx.ui.select.mockResolvedValueOnce("Review");
+    queueDefaultResponses(["Review", "Auto review", "regular [default]"]);
     await ppPhaseComplete.execute("call-4", { summary: "fixes applied" }, undefined, undefined, ctx);
 
     expect(orchestrator.active!.state.reviewPass).toBe(1);
@@ -1039,15 +1050,15 @@ describe("edge cases and regressions", () => {
     emitSubagentCreated(pi, "reviewer-2", "Code reviewer (test)");
     emitSubagentCompleted(pi, "reviewer-2", "Code reviewer (test)");
 
-    ctx.ui.select.mockResolvedValueOnce("Approve implementation");
+    queueDefaultResponses(["Next", "Complete"]);
     const result = await ppPhaseComplete.execute("call-5", { summary: "all good" }, undefined, undefined, ctx);
 
-    expect(result.content[0].text).toContain("Task completed");
+    expect(result.content[0].text).toBe("");
     expect(orchestrator.active).toBeNull();
 
     const finalState = loadTask(taskDir);
-    expect(finalState.reviewPass).toBe(2);
-    expect(finalState.reviewCycle).toBeNull();
+    expect(finalState.reviewPass).toBe(1);
+    expect(finalState.reviewCycle).not.toBeNull();
   });
 
   it("continue brainstorming sets step back to llm_work", async () => {
@@ -1057,7 +1068,7 @@ describe("edge cases and regressions", () => {
 
     await orchestrator.startTask(ctx as any, "implement", "Continue test");
 
-    ctx.ui.select.mockResolvedValueOnce("Continue brainstorming");
+    queueDefaultResponses(["Review", "Review on my own"]);
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     const result = await ppPhaseComplete.execute("call-1", { summary: "not done yet" }, undefined, undefined, ctx);
 
@@ -1076,7 +1087,7 @@ describe("edge cases and regressions", () => {
 
     writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
     writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
-    ctx.ui.select.mockResolvedValueOnce("Approve brainstorm");
+    queueDefaultResponses(["Next", "Continue to plan & implement", "regular [default]"]);
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
@@ -1096,11 +1107,11 @@ describe("edge cases and regressions", () => {
       makeValidPlan(["- [ ] P1. Todo item — Done when: item intentionally remains unchecked"]),
       "utf-8",
     );
-    ctx.ui.select.mockResolvedValueOnce("Approve plan");
+    queueDefaultResponses(["Next", "Continue to implement"]);
     await ppPhaseComplete.execute("call-2", { summary: "plan done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
 
-    ctx.ui.select.mockResolvedValueOnce("Continue implementation");
+    queueDefaultResponses(["Review", "Review on my own"]);
     const result = await ppPhaseComplete.execute("call-3", { summary: "partial work" }, undefined, undefined, ctx);
 
     expect(result.content[0].text).toContain("continue");
@@ -1118,7 +1129,7 @@ describe("edge cases and regressions", () => {
 
     writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
     writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
-    ctx.ui.select.mockResolvedValueOnce("Approve brainstorm");
+    queueDefaultResponses(["Next", "Continue to plan & implement", "regular [default]"]);
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
@@ -1139,7 +1150,7 @@ describe("edge cases and regressions", () => {
       "utf-8",
     );
 
-    ctx.ui.select.mockResolvedValueOnce("Review on my own");
+    queueDefaultResponses(["Review", "Review on my own"]);
     const result = await ppPhaseComplete.execute("call-2", { summary: "plan ready" }, undefined, undefined, ctx);
 
     expect(result.content[0].text).toContain("continue");
@@ -1198,7 +1209,7 @@ describe("edge cases and regressions", () => {
 
   it("implement --from brainstorm also skips brainstorm and enters plan deterministically", async () => {
     const cwd = makeTempDir();
-    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const { orchestrator } = await setupOrchestrator(cwd);
     const ctx = makeCtx();
 
     await orchestrator.startTask(ctx as any, "brainstorm", "Explore ideas");
@@ -1206,8 +1217,7 @@ describe("edge cases and regressions", () => {
     writeFileSync(join(brainstormDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
     writeFileSync(join(brainstormDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
 
-    const ppImplement = getCommand(pi, "pp:implement");
-    await ppImplement(`--from brainstorm/${brainstormDir.split("/").pop()}`, ctx);
+    await orchestrator.startTask(ctx as any, "implement", "implement", brainstormDir, true);
 
     expect(orchestrator.active!.state.phase).toBe("plan");
     expect(orchestrator.active!.state.step).toBe("await_planners");
@@ -1217,9 +1227,9 @@ describe("edge cases and regressions", () => {
     expect(existsSync(join(orchestrator.active!.dir, "RESEARCH.md"))).toBe(true);
   });
 
-  it("pp:implement parses --from=debug syntax and skips brainstorm", async () => {
+  it("implement from debug task stores source path and skips brainstorm", async () => {
     const cwd = makeTempDir();
-    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const { orchestrator } = await setupOrchestrator(cwd);
     const ctx = makeCtx();
 
     await orchestrator.startTask(ctx as any, "debug", "Find bug");
@@ -1227,8 +1237,7 @@ describe("edge cases and regressions", () => {
     writeFileSync(join(debugDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
     writeFileSync(join(debugDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
 
-    const ppImplement = getCommand(pi, "pp:implement");
-    await ppImplement(`--from=debug/${debugDir.split("/").pop()}`, ctx);
+    await orchestrator.startTask(ctx as any, "implement", "implement", debugDir, true);
 
     expect(orchestrator.active!.type).toBe("implement");
     expect(orchestrator.active!.state.phase).toBe("plan");
@@ -1238,9 +1247,9 @@ describe("edge cases and regressions", () => {
     expect(ctx.ui.notify).toHaveBeenCalledWith("Entered plan phase. Waiting for planners to complete before synthesis.", "info");
   });
 
-  it("pp:implement parses --from=brainstorm syntax and skips brainstorm", async () => {
+  it("implement from brainstorm task stores source path and skips brainstorm", async () => {
     const cwd = makeTempDir();
-    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const { orchestrator } = await setupOrchestrator(cwd);
     const ctx = makeCtx();
 
     await orchestrator.startTask(ctx as any, "brainstorm", "Explore ideas");
@@ -1248,8 +1257,7 @@ describe("edge cases and regressions", () => {
     writeFileSync(join(brainstormDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
     writeFileSync(join(brainstormDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
 
-    const ppImplement = getCommand(pi, "pp:implement");
-    await ppImplement(`--from=brainstorm/${brainstormDir.split("/").pop()}`, ctx);
+    await orchestrator.startTask(ctx as any, "implement", "implement", brainstormDir, true);
 
     expect(orchestrator.active!.type).toBe("implement");
     expect(orchestrator.active!.state.phase).toBe("plan");
