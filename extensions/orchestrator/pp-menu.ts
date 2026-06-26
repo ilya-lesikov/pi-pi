@@ -1501,10 +1501,13 @@ async function pickThinking(
   const options: OptionInput[] = [];
   const byTitle = new Map<string, string>();
   const usedTitles = new Set<string>();
-  const values = ["off", "low", "medium", "high"];
-  if (allowXhigh) values.push("xhigh");
+  const values = allowXhigh ? ["xhigh", "high", "medium", "low", "off"] : ["high", "medium", "low", "off"];
   const info = orchestrator && keyPath ? getConfigSourceInfo(orchestrator, keyPath) : null;
-  for (const value of values) {
+  const activeValue = info?.activeValue;
+  const sorted = activeValue != null
+    ? [activeValue, ...values.filter((v) => v !== activeValue)]
+    : values;
+  for (const value of sorted) {
     const label = thinkingLabel(value);
     const title = makeUniqueTitle(withTags(label, info ? formatSourceTags(value, info) : ""), usedTitles);
     options.push(title);
@@ -2253,9 +2256,11 @@ async function showBooleanSetting(
     const info = getConfigSourceInfo(orchestrator, keyPath);
     const yesTitle = withTags("Yes", formatSourceTags(true, info));
     const noTitle = withTags("No", formatSourceTags(false, info));
+    const activeFirst = info.activeValue === true
+      ? [yesTitle, noTitle]
+      : [noTitle, yesTitle];
     const choice = await selectOption(ctx, title, [
-      yesTitle,
-      noTitle,
+      ...activeFirst,
       ...buildResetOptions(orchestrator, keyPath),
       opt("Back", "Return to the previous menu"),
     ]);
@@ -2281,7 +2286,11 @@ async function showLogLevelSetting(orchestrator: Orchestrator, ctx: any): Promis
   ];
   while (true) {
     const info = getConfigSourceInfo(orchestrator, ["logLevel"]);
-    const options: OptionInput[] = levels.map((entry) => withTags(entry.label, formatSourceTags(entry.value, info)));
+    const activeLevel = info.activeValue;
+    const sorted = activeLevel != null
+      ? [levels.find((e) => e.value === activeLevel)!, ...levels.filter((e) => e.value !== activeLevel)]
+      : levels;
+    const options: OptionInput[] = sorted.map((entry) => withTags(entry.label, formatSourceTags(entry.value, info)));
     options.push(...buildResetOptions(orchestrator, ["logLevel"]));
     options.push(opt("Back", "Return to the previous menu"));
     const choice = await selectOption(ctx, "Log level", options);
