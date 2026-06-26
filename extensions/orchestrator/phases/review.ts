@@ -7,6 +7,10 @@ import { createCodeReviewerAgent } from "../agents/code-reviewer.js";
 import { getContextDirs, getLatestSynthesizedPlan } from "../context.js";
 import type { RepoInfo } from "../repo-utils.js";
 
+function isEnabled(value: { enabled?: boolean } | undefined): boolean {
+  return value?.enabled !== false;
+}
+
 export function reviewSystemPrompt(taskDir: string, pass: number, phase?: string): string {
   const reviewsDir = phase === "brainstorm" ? join(taskDir, "brainstorm-reviews") : join(taskDir, "code-reviews");
   const plansDir = join(taskDir, "plans");
@@ -104,8 +108,8 @@ export async function spawnCodeReviewers(
 
   const timestamp = Math.floor(Date.now() / 1000);
   const reviewerVariants = variants ?? resolvePreset(config, "codeReviewers");
-  const enabledVariants = Object.entries(reviewerVariants).filter(([, v]) => v.enabled);
-  const contextDirs = getContextDirs(cwd, repos, config.ignoreExtraRepoConfigs);
+  const enabledVariants = Object.entries(reviewerVariants).filter(([, v]) => isEnabled(v));
+  const contextDirs = getContextDirs(cwd, repos, config.general.loadExtraRepoConfigs);
   const agentIds: string[] = [];
   const failedVariants: string[] = [];
   const results: Promise<void>[] = [];

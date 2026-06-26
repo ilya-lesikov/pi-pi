@@ -7,9 +7,9 @@ export function createLibrarianAgent(config: PiPiConfig) {
     frontmatter: {
       description: "External docs researcher (pi-pi)",
       tools: "read, bash, grep, find, exa_search, exa_fetch",
-      model: resolveModel(config.agents.librarian.model),
-      thinking: config.agents.librarian.thinking,
-      max_turns: config.agents.librarian.maxTurns ?? 120,
+      model: resolveModel(config.agents.subagents.simple.librarian.model),
+      thinking: config.agents.subagents.simple.librarian.thinking,
+      max_turns: 120,
       prompt_mode: "replace",
     },
     prompt: [

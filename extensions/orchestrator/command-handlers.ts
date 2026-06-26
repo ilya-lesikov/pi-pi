@@ -8,6 +8,10 @@ import { groupFilesByRepo } from "./repo-utils.js";
 import { getEffectiveMode, saveTask } from "./state.js";
 import { getLogger } from "./log.js";
 
+function isEnabled(value: { enabled?: boolean }): boolean {
+  return value.enabled !== false;
+}
+
 export async function transitionToNextPhase(
   orchestrator: Orchestrator,
   ctx: any,
@@ -45,15 +49,15 @@ export async function transitionToNextPhase(
       if (repo.isRoot) {
         afterResults.push(...runAfterImplement(
           orchestrator.config.commands.afterImplement,
-          orchestrator.config.timeouts.afterImplement,
+          orchestrator.config.performance.commands.afterImplement,
           orchestrator.cwd,
         ));
         continue;
       }
-      if (orchestrator.config.ignoreExtraRepoConfigs) continue;
+      if (!orchestrator.config.general.loadExtraRepoConfigs) continue;
       const extraCommands = loadRepoAfterImplementCommands(repoPath);
-      if (!extraCommands || extraCommands.length === 0) continue;
-      afterResults.push(...runAfterImplement(extraCommands, orchestrator.config.timeouts.afterImplement, repoPath));
+      if (!extraCommands || Object.keys(extraCommands).length === 0) continue;
+      afterResults.push(...runAfterImplement(extraCommands, orchestrator.config.performance.commands.afterImplement, repoPath));
     }
     const failures = afterResults.filter((r) => !r.ok);
     if (failures.length > 0) {
@@ -75,7 +79,7 @@ export async function transitionToNextPhase(
         ? orchestrator.active.state.autonomousConfig?.phases.plan?.plannerPreset
         : undefined;
     orchestrator.active.state.activePlannerPreset =
-      plannerPreset ?? autonomousPlannerPreset ?? orchestrator.config.defaultPresets.planners;
+      plannerPreset ?? autonomousPlannerPreset ?? orchestrator.config.agents.subagents.presetGroups.planners.default;
     orchestrator.active.state.step = "spawn_planners";
   } else if (next === "implement") {
     orchestrator.active.state.step = "llm_work";
@@ -112,7 +116,7 @@ export async function transitionToNextPhase(
   const onReady = next === "plan" ? () => {
     if (!orchestrator.active) return;
     const plannerVariants = resolvePreset(orchestrator.config, "planners", orchestrator.active.state.activePlannerPreset);
-    orchestrator.pendingSubagentSpawns = Object.values(plannerVariants).filter((v) => v.enabled).length;
+    orchestrator.pendingSubagentSpawns = Object.values(plannerVariants).filter((v) => isEnabled(v)).length;
     orchestrator.failedPlannerVariants = [];
     spawnPlanners(
       orchestrator.pi,

@@ -7,9 +7,9 @@ export function createExploreAgent(config: PiPiConfig) {
     frontmatter: {
       description: "Codebase explorer (pi-pi)",
       tools: `read, bash, grep, find, ls, lsp, ast_search, ${ALL_CBM_TOOLS}, ${EXA_TOOLS}`,
-      model: resolveModel(config.agents.explore.model),
-      thinking: config.agents.explore.thinking,
-      max_turns: config.agents.explore.maxTurns ?? 170,
+      model: resolveModel(config.agents.subagents.simple.explore.model),
+      thinking: config.agents.subagents.simple.explore.thinking,
+      max_turns: 170,
       prompt_mode: "replace",
     },
     prompt: [

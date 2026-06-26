@@ -1,7 +1,7 @@
 import { existsSync, copyFileSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from "fs";
 import { join, basename, relative } from "path";
 import type { ExtensionAPI, ExtensionContext, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { loadConfig, resolvePreset, type PiPiConfig } from "./config.js";
+import { loadConfig, resolvePreset, type NormalizedPiPiConfig } from "./config.js";
 import {
   createTask,
   loadTask,
@@ -27,6 +27,10 @@ import { resolveModel, getModelInfo } from "./model-registry.js";
 import { buildRepoContext } from "./agents/repo-context.js";
 import { getLogger, addTaskDestination, removeTaskDestination, setLogLevel } from "./log.js";
 
+function isEnabled(value: { enabled?: boolean } | undefined): boolean {
+  return value?.enabled !== false;
+}
+
 const BUNDLED_TOOLS = new Set([
   "Agent", "get_subagent_result", "steer_subagent",
   "TaskCreate", "TaskList", "TaskGet", "TaskUpdate", "TaskOutput", "TaskStop", "TaskExecute",
@@ -46,7 +50,7 @@ export interface ActiveTask {
 
 export class Orchestrator {
   active: ActiveTask | null = null;
-  config!: PiPiConfig;
+  config!: NormalizedPiPiConfig;
   cwd = "";
   spawnedAgentIds = new Set<string>();
   agentDescriptions = new Map<string, string>();
@@ -228,10 +232,10 @@ export class Orchestrator {
 
   getPlanStartState(taskDir: string, plannerPresetName?: string): { step: string; shouldSpawnPlanners: boolean } {
     const plansDir = join(taskDir, "plans");
-    const presetName = plannerPresetName ?? this.config.defaultPresets.planners;
+    const presetName = plannerPresetName ?? this.config.agents.subagents.presetGroups.planners.default;
     const plannerVariants = resolvePreset(this.config, "planners", presetName);
     const enabledPlannerVariants = Object.entries(plannerVariants)
-      .filter(([, v]) => v.enabled)
+      .filter(([, v]) => isEnabled(v))
       .map(([name]) => name);
     const plannerOutputs = existsSync(plansDir)
       ? readdirSync(plansDir).filter((f) => f.endsWith(".md") && !f.includes("synthesized") && !f.includes("review_"))
@@ -332,7 +336,7 @@ export class Orchestrator {
       return;
     }
 
-    setLogLevel(this.config.logLevel);
+    setLogLevel(this.config.general.logLevel);
     ensureGitignore(this.cwd);
 
     const dir = createTask(this.cwd, type, description, mode);
@@ -366,7 +370,7 @@ export class Orchestrator {
       if (skipBrainstorm && type === "implement") {
         state.phase = "plan";
         state.initialPhase = "plan";
-        state.activePlannerPreset = this.config.defaultPresets.planners;
+        state.activePlannerPreset = this.config.agents.subagents.presetGroups.planners.default;
         state.step = this.getPlanStartState(dir, state.activePlannerPreset).step;
       }
       saveTask(dir, state);
@@ -374,7 +378,7 @@ export class Orchestrator {
 
     let release: (() => Promise<void>) | null = null;
     try {
-      release = await lockTask(dir, this.config.timeouts);
+      release = await lockTask(dir, this.config.performance.internals);
     } catch (err: any) {
       try {
         rmSync(dir, { recursive: true, force: true });
@@ -402,7 +406,7 @@ export class Orchestrator {
     addTaskDestination(dir);
     log.info({ s: "task", dir, taskId: this.active.taskId, phase: state.phase, step: state.step }, "task activated");
 
-    const modelConfig = this.config.mainModel[
+    const modelConfig = this.config.agents.orchestrators[
       type === "debug" ? "debug"
       : type === "brainstorm" ? "brainstorm"
       : type === "review" ? "review"
@@ -436,11 +440,11 @@ export class Orchestrator {
     }
 
     if (this.active.state.phase === "plan" && this.active.state.step === "await_planners") {
-      const requestedPlannerPresetName = this.active.state.activePlannerPreset ?? this.config.defaultPresets.planners;
-      const plannerPresetExists = Object.prototype.hasOwnProperty.call(this.config.presets.planners ?? {}, requestedPlannerPresetName);
+      const requestedPlannerPresetName = this.active.state.activePlannerPreset ?? this.config.agents.subagents.presetGroups.planners.default;
+      const plannerPresetExists = Object.prototype.hasOwnProperty.call(this.config.agents.subagents.presetGroups.planners.presets ?? {}, requestedPlannerPresetName);
       const plannerPresetName = plannerPresetExists
         ? requestedPlannerPresetName
-        : (Object.keys(this.config.presets.planners ?? {})[0] ?? requestedPlannerPresetName);
+        : (Object.keys(this.config.agents.subagents.presetGroups.planners.presets ?? {})[0] ?? requestedPlannerPresetName);
       if (this.active.state.activePlannerPreset !== plannerPresetName) {
         this.active.state.activePlannerPreset = plannerPresetName;
         saveTask(this.active.dir, this.active.state);
@@ -452,7 +456,7 @@ export class Orchestrator {
         );
       }
       const plannerVariants = resolvePreset(this.config, "planners", plannerPresetName);
-      this.pendingSubagentSpawns = Object.values(plannerVariants).filter((v) => v.enabled).length;
+      this.pendingSubagentSpawns = Object.values(plannerVariants).filter((v) => isEnabled(v)).length;
       this.failedPlannerVariants = [];
       spawnPlanners(
         this.pi,
@@ -546,7 +550,7 @@ export class Orchestrator {
     const phase = this.active?.state.phase;
     const repos = this.active?.state.repos ?? [];
     log.debug({ s: "agents", phase, repoCount: repos.length }, "registering agent definitions");
-    const contextDirs = getContextDirs(this.cwd, repos, this.config.ignoreExtraRepoConfigs);
+    const contextDirs = getContextDirs(this.cwd, repos, this.config.general.loadExtraRepoConfigs);
     const repoContext = buildRepoContext(repos);
 
     const appendContext = (agentType: string, prompt: string, modelInfo: { vendor: string; family: string; tier: string }): string => {
@@ -565,19 +569,19 @@ export class Orchestrator {
         type: "explore",
         variant: null,
         ...explore,
-        prompt: appendContext("explore", explore.prompt, getModelInfo(resolveModel(this.config.agents.explore.model))),
+        prompt: appendContext("explore", explore.prompt, getModelInfo(resolveModel(this.config.agents.subagents.simple.explore.model))),
       },
       {
         type: "librarian",
         variant: null,
         ...librarian,
-        prompt: appendContext("librarian", librarian.prompt, getModelInfo(resolveModel(this.config.agents.librarian.model))),
+        prompt: appendContext("librarian", librarian.prompt, getModelInfo(resolveModel(this.config.agents.subagents.simple.librarian.model))),
       },
       {
         type: "task",
         variant: null,
         ...taskAgent,
-        prompt: appendContext("task", taskAgent.prompt, getModelInfo(resolveModel(this.config.agents.task.model))),
+        prompt: appendContext("task", taskAgent.prompt, getModelInfo(resolveModel(this.config.agents.subagents.simple.task.model))),
       },
     ]);
   }
@@ -587,19 +591,19 @@ export class Orchestrator {
     log.debug({ s: "context", taskDir, phase }, "injecting context and artifacts");
     const modelSpec =
       phase === "debug" && this.active?.type === "debug"
-        ? this.config.mainModel.debug.model
+        ? this.config.agents.orchestrators.debug.model
       : phase === "brainstorm" && this.active?.type === "brainstorm"
-        ? this.config.mainModel.brainstorm.model
+        ? this.config.agents.orchestrators.brainstorm.model
       : phase === "review" && this.active?.type === "review"
-        ? this.config.mainModel.review.model
+        ? this.config.agents.orchestrators.review.model
       : phase === "plan"
-        ? this.config.mainModel.plan.model
-      : this.config.mainModel.implement.model;
+        ? this.config.agents.orchestrators.plan.model
+      : this.config.agents.orchestrators.implement.model;
     const activeModelSpec = this.lastCtx?.model
       ? `${this.lastCtx.model.provider}/${this.lastCtx.model.id}`
       : modelSpec;
     const repos = this.active?.state.repos ?? [];
-    const contextDirs = getContextDirs(this.cwd, repos, this.config.ignoreExtraRepoConfigs);
+    const contextDirs = getContextDirs(this.cwd, repos, this.config.general.loadExtraRepoConfigs);
     const contextFiles = loadAllContextFiles(
       contextDirs,
       "main",
@@ -628,7 +632,7 @@ export class Orchestrator {
     const finalize = async () => {
       this.phaseStartTime = Date.now();
       if (this.active && (phase === "plan" || phase === "implement")) {
-        const modelConfig = phase === "plan" ? this.config.mainModel.plan : this.config.mainModel.implement;
+        const modelConfig = phase === "plan" ? this.config.agents.orchestrators.plan : this.config.agents.orchestrators.implement;
         await this.switchModel(ctx, modelConfig.model, modelConfig.thinking);
       }
       this.injectContextAndArtifacts(taskDir, phase);

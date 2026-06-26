@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { join } from "path";
-import { getDefaultConfig, GLOBAL_CONFIG_PATH } from "./config.js";
+import { getDefaultConfig, GLOBAL_CONFIG_PATH, parseDuration } from "./config.js";
 import * as configModule from "./config.js";
 import * as flantInfra from "./flant-infra.js";
-import { formatDuration, formatSourceTags, getConfigSourceInfo, parseDuration } from "./pp-menu.js";
+import { formatDuration, formatSourceTags, getConfigSourceInfo } from "./pp-menu.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -43,21 +43,24 @@ describe("settings helpers", () => {
     const projectPath = join(cwd, ".pp", "config.json");
 
     vi.spyOn(configModule, "readRawConfig").mockImplementation((path: string) => {
-      if (path === GLOBAL_CONFIG_PATH) return { autoCommit: true };
-      if (path === projectPath) return { autoCommit: false };
+      if (path === GLOBAL_CONFIG_PATH) return { general: { autoCommit: true } };
+      if (path === projectPath) return { general: { autoCommit: false } };
       return {};
     });
-    vi.spyOn(flantInfra, "getFlantGeneratedConfig").mockReturnValue({ autoCommit: true } as any);
+    vi.spyOn(flantInfra, "getFlantGeneratedConfig").mockReturnValue({ general: { autoCommit: true } } as any);
 
     const orchestrator = {
       cwd,
       config: {
         ...getDefaultConfig(),
-        autoCommit: false,
+        general: {
+          ...getDefaultConfig().general,
+          autoCommit: false,
+        },
       },
     } as any;
 
-    const info = getConfigSourceInfo(orchestrator, ["autoCommit"]);
+    const info = getConfigSourceInfo(orchestrator, ["general", "autoCommit"]);
     expect(info.source).toBe("project");
     expect(info.activeValue).toBe(false);
     expect(info.defaultValue).toBe(true);
@@ -75,17 +78,20 @@ describe("settings helpers", () => {
       if (path === projectPath) return {};
       return {};
     });
-    vi.spyOn(flantInfra, "getFlantGeneratedConfig").mockReturnValue({ autoCommit: false } as any);
+    vi.spyOn(flantInfra, "getFlantGeneratedConfig").mockReturnValue({ general: { autoCommit: false } } as any);
 
     const orchestrator = {
       cwd,
       config: {
         ...getDefaultConfig(),
-        autoCommit: false,
+        general: {
+          ...getDefaultConfig().general,
+          autoCommit: false,
+        },
       },
     } as any;
 
-    const info = getConfigSourceInfo(orchestrator, ["autoCommit"]);
+    const info = getConfigSourceInfo(orchestrator, ["general", "autoCommit"]);
     expect(info.source).toBe("flant");
     expect(info.defaultValue).toBe(true);
     expect(info.flantValue).toBe(false);

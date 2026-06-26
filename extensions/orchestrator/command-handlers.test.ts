@@ -4,6 +4,7 @@ import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerCommandHandlers, transitionToNextPhase } from "./command-handlers.js";
 import { Orchestrator, type ActiveTask } from "./orchestrator.js";
+import { getDefaultConfig } from "./config.js";
 import * as machineModule from "./phases/machine.js";
 import * as commandsModule from "./commands.js";
 import * as stateModule from "./state.js";
@@ -52,35 +53,38 @@ function makePi() {
 }
 
 function makeConfig() {
-  return {
-    mainModel: {
-      implement: { model: "a/b", thinking: "high" },
-      plan: { model: "a/b", thinking: "high" },
-      debug: { model: "a/b", thinking: "high" },
-      brainstorm: { model: "a/b", thinking: "high" },
-      review: { model: "a/b", thinking: "high" },
-    },
+  const config = getDefaultConfig();
+  config.general.autoCommit = false;
+  config.agents.subagents.presetGroups.codeReviewers = {
+    default: "regular",
     presets: {
-      planners: { regular: {} },
-      planReviewers: { regular: {} },
-      codeReviewers: { regular: { variant1: { enabled: true, model: "x/1", thinking: "low" } } },
-      brainstormReviewers: { regular: { variant1: { enabled: true, model: "x/1", thinking: "low" } } },
+      regular: {
+        enabled: true,
+        agents: {
+          variant1: { enabled: true, model: "x/1", thinking: "low" },
+        },
+      },
     },
-    defaultPresets: {
-      planners: "regular",
-      planReviewers: "regular",
-      codeReviewers: "regular",
-      brainstormReviewers: "regular",
-    },
-    agents: {
-      explore: { model: "x/e", thinking: "low" },
-      librarian: { model: "x/l", thinking: "medium" },
-      task: { model: "x/t", thinking: "medium" },
-    },
-    commands: { afterEdit: [], afterImplement: [] },
-    timeouts: { afterEdit: 1, afterImplement: 1, agentSpawn: 1, agentReadyPing: 1, lockStale: 1, lockUpdate: 1 },
-    autoCommit: false,
   };
+  config.agents.subagents.presetGroups.brainstormReviewers = {
+    default: "regular",
+    presets: {
+      regular: {
+        enabled: true,
+        agents: {
+          variant1: { enabled: true, model: "x/1", thinking: "low" },
+        },
+      },
+    },
+  };
+  config.commands.afterEdit = {};
+  config.commands.afterImplement = {};
+  config.performance.commands.afterEdit = 1;
+  config.performance.commands.afterImplement = 1;
+  config.performance.internals.subagentStale = 1;
+  config.performance.internals.taskLockStale = 1;
+  config.performance.internals.taskLockRefresh = 1;
+  return config;
 }
 
 function makeActiveTask(taskDir: string): ActiveTask {
@@ -298,7 +302,7 @@ describe("transitionToNextPhase", () => {
     expect(result.ok).toBe(true);
     expect(runSpy).toHaveBeenCalledWith(
       orchestrator.config.commands.afterImplement,
-      orchestrator.config.timeouts.afterImplement,
+      orchestrator.config.performance.commands.afterImplement,
       orchestrator.cwd,
     );
     expect(cleanupSpy).toHaveBeenCalledTimes(1);
@@ -311,7 +315,10 @@ describe("transitionToNextPhase", () => {
     const extraRepo = join(taskDir, "extra");
     mkdirSync(extraRepo, { recursive: true });
     orchestrator.cwd = taskDir;
-    orchestrator.config = { ...makeConfig(), ignoreExtraRepoConfigs: false } as any;
+    orchestrator.config = {
+      ...makeConfig(),
+      general: { ...makeConfig().general, loadExtraRepoConfigs: true },
+    } as any;
     orchestrator.active = makeTransitionTask(taskDir, "implement");
     orchestrator.active.state.repos = [
       { path: taskDir, isRoot: true },
@@ -323,7 +330,7 @@ describe("transitionToNextPhase", () => {
     vi.spyOn(await import("./repo-utils.js"), "groupFilesByRepo").mockReturnValue(
       new Map([[extraRepo, [join(extraRepo, "src", "extra.ts")]]]) as any,
     );
-    vi.spyOn(commandsModule, "loadRepoAfterImplementCommands").mockReturnValue([{ run: "npm run lint" }]);
+    vi.spyOn(commandsModule, "loadRepoAfterImplementCommands").mockReturnValue({ "cmd-1": { run: "npm run lint" } });
     const runSpy = vi.spyOn(commandsModule, "runAfterImplement").mockReturnValue([{ ok: true, command: "npm run lint", output: "ok" }]);
     vi.spyOn(orchestrator, "cleanupActive").mockImplementation(async () => {
       orchestrator.active = null;
@@ -332,7 +339,7 @@ describe("transitionToNextPhase", () => {
     const result = await transitionToNextPhase(orchestrator, ctx);
 
     expect(result.ok).toBe(true);
-    expect(runSpy).toHaveBeenCalledWith([{ run: "npm run lint" }], orchestrator.config.timeouts.afterImplement, extraRepo);
+    expect(runSpy).toHaveBeenCalledWith({ "cmd-1": { run: "npm run lint" } }, orchestrator.config.performance.commands.afterImplement, extraRepo);
   });
 
   it("blocks transition when afterImplement fails in extra repo", async () => {
@@ -342,7 +349,10 @@ describe("transitionToNextPhase", () => {
     const extraRepo = join(taskDir, "extra");
     mkdirSync(extraRepo, { recursive: true });
     orchestrator.cwd = taskDir;
-    orchestrator.config = { ...makeConfig(), ignoreExtraRepoConfigs: false } as any;
+    orchestrator.config = {
+      ...makeConfig(),
+      general: { ...makeConfig().general, loadExtraRepoConfigs: true },
+    } as any;
     orchestrator.active = makeTransitionTask(taskDir, "implement");
     orchestrator.active.state.repos = [
       { path: taskDir, isRoot: true },
@@ -354,7 +364,7 @@ describe("transitionToNextPhase", () => {
     vi.spyOn(await import("./repo-utils.js"), "groupFilesByRepo").mockReturnValue(
       new Map([[extraRepo, [join(extraRepo, "src", "extra.ts")]]]) as any,
     );
-    vi.spyOn(commandsModule, "loadRepoAfterImplementCommands").mockReturnValue([{ run: "npm run lint" }]);
+    vi.spyOn(commandsModule, "loadRepoAfterImplementCommands").mockReturnValue({ "cmd-1": { run: "npm run lint" } });
     vi.spyOn(commandsModule, "runAfterImplement").mockReturnValue([{ ok: false, command: "npm run lint", output: "lint failed" }]);
     const cleanupSpy = vi.spyOn(orchestrator, "cleanupActive");
 
@@ -374,7 +384,10 @@ describe("transitionToNextPhase", () => {
     const extraRepo = join(taskDir, "extra");
     mkdirSync(extraRepo, { recursive: true });
     orchestrator.cwd = taskDir;
-    orchestrator.config = { ...makeConfig(), ignoreExtraRepoConfigs: true } as any;
+    orchestrator.config = {
+      ...makeConfig(),
+      general: { ...makeConfig().general, loadExtraRepoConfigs: false },
+    } as any;
     orchestrator.active = makeTransitionTask(taskDir, "implement");
     orchestrator.active.state.repos = [
       { path: taskDir, isRoot: true },

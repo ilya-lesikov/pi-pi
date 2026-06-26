@@ -287,7 +287,7 @@ describe("getContextDirs", () => {
           { path: root, isRoot: true },
           { path: extra, isRoot: false },
         ],
-        false,
+        true,
       ),
     ).toEqual([
       join(agentDir, "extensions", "pp", "context"),
@@ -312,7 +312,7 @@ describe("getContextDirs", () => {
           { path: root, isRoot: true },
           { path: extra, isRoot: false },
         ],
-        true,
+        false,
       ),
     ).toEqual([
       join(agentDir, "extensions", "pp", "context"),

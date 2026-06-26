@@ -193,8 +193,8 @@ export async function lockTask(taskDir: string, timeouts: TimeoutConfig): Promis
   const lockFs = getLockfileFs();
   const release = await lockfile.lock(sp, {
     ...(lockFs && { fs: lockFs }),
-    stale: timeouts.lockStale,
-    update: timeouts.lockUpdate,
+    stale: timeouts.taskLockStale,
+    update: timeouts.taskLockRefresh,
     retries: { retries: 3, minTimeout: 200, maxTimeout: 1000 },
     onCompromised: (err: Error) => {
       getLogger().error({ s: "state", path: sp, err: err.message }, "lock compromised");

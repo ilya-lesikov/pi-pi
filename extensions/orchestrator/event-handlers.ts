@@ -37,6 +37,10 @@ import { findRootRepo, normalizeRepoPath, resolveRepoForFile, type RepoInfo } fr
 
 const USAGE_TRACKER_KEY = Symbol.for("pi-pi:usage-tracker");
 
+function isEnabled(value: { enabled?: boolean } | undefined): boolean {
+  return value?.enabled !== false;
+}
+
 function isPathInside(basePath: string, targetPath: string): boolean {
   const rel = relative(basePath, targetPath);
   return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel));
@@ -105,14 +109,14 @@ function resolveReviewers(
 }
 
 function getDefaultReviewPresetName(orchestrator: Orchestrator, phase: string): string {
-  if (phase === "brainstorm") return orchestrator.config.defaultPresets.brainstormReviewers;
-  if (phase === "plan") return orchestrator.config.defaultPresets.planReviewers;
-  return orchestrator.config.defaultPresets.codeReviewers;
+  if (phase === "brainstorm") return orchestrator.config.agents.subagents.presetGroups.brainstormReviewers.default;
+  if (phase === "plan") return orchestrator.config.agents.subagents.presetGroups.planReviewers.default;
+  return orchestrator.config.agents.subagents.presetGroups.codeReviewers.default;
 }
 
 function normalizeStoredPlannerPresetName(orchestrator: Orchestrator): string {
-  const requestedName = orchestrator.active?.state.activePlannerPreset ?? orchestrator.config.defaultPresets.planners;
-  const plannerPresets = orchestrator.config.presets.planners ?? {};
+  const requestedName = orchestrator.active?.state.activePlannerPreset ?? orchestrator.config.agents.subagents.presetGroups.planners.default;
+  const plannerPresets = orchestrator.config.agents.subagents.presetGroups.planners.presets ?? {};
   const exists = Object.prototype.hasOwnProperty.call(plannerPresets, requestedName);
   const resolvedName = exists ? requestedName : (Object.keys(plannerPresets)[0] ?? requestedName);
 
@@ -138,7 +142,7 @@ function normalizeStoredReviewPresetName(orchestrator: Orchestrator, phase: stri
     ? "planReviewers"
     : "codeReviewers";
   const requestedName = orchestrator.active?.state.activeReviewPreset ?? getDefaultReviewPresetName(orchestrator, phase);
-  const reviewPresets = orchestrator.config.presets[group] ?? {};
+  const reviewPresets = orchestrator.config.agents.subagents.presetGroups[group].presets ?? {};
   const exists = Object.prototype.hasOwnProperty.call(reviewPresets, requestedName);
   const resolvedName = exists ? requestedName : (Object.keys(reviewPresets)[0] ?? requestedName);
 
@@ -266,7 +270,7 @@ export async function enterReviewCycle(
   saveTask(orchestrator.active.dir, orchestrator.active.state);
 
   const reviewers = resolveReviewers(orchestrator, phase, presetName);
-  const enabledCount = Object.values(reviewers).filter((v) => v.enabled).length;
+  const enabledCount = Object.values(reviewers).filter((v) => isEnabled(v)).length;
   if (enabledCount === 0) {
     orchestrator.active.state.reviewCycle = null;
     saveTask(orchestrator.active.dir, orchestrator.active.state);
@@ -723,7 +727,7 @@ function registerCommitTool(orchestrator: Orchestrator): void {
       if (!orchestrator.active) {
         return { content: [{ type: "text" as const, text: "No active task." }], isError: true as const, details: {} };
       }
-      if (!orchestrator.config.autoCommit) {
+      if (!orchestrator.config.general.autoCommit) {
         return { content: [{ type: "text" as const, text: "autoCommit is disabled in config." }], details: {} };
       }
 
@@ -917,7 +921,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       }
       const mgr = (globalThis as any)[Symbol.for("pi-subagents:manager")];
       const now = Date.now();
-      const staleMs = orchestrator.config.timeouts.agentStale;
+      const staleMs = orchestrator.config.performance.internals.subagentStale;
       for (const [id, spawnTime] of orchestrator.agentSpawnTimes) {
         const record = mgr?.getRecord?.(id);
         if (record?.status === "running" || record?.status === "queued") continue;
@@ -1547,8 +1551,8 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       return;
     }
 
-    setLogLevel(orchestrator.config.logLevel);
-    log.info({ s: "config", logLevel: orchestrator.config.logLevel }, "config loaded");
+    setLogLevel(orchestrator.config.general.logLevel);
+    log.info({ s: "config", logLevel: orchestrator.config.general.logLevel }, "config loaded");
 
     registerCommandHandlers(orchestrator);
     registerCbmTools(pi, orchestrator.cwd);
@@ -1558,7 +1562,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     setExtensionOnlyMode(pi);
     orchestrator.registerAgents();
 
-    const found = getActiveTask(orchestrator.cwd, orchestrator.config.timeouts.lockStale);
+    const found = getActiveTask(orchestrator.cwd, orchestrator.config.performance.internals.taskLockStale);
     if (found) {
       ctx.ui.notify(
           `Paused task: "${taskName(found.dir)}" (${found.type}, phase: ${found.state.phase}). Run /pp and choose Resume to continue.`,
@@ -1603,7 +1607,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     const modelSpec = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "";
     const modelInfo = getModelInfo(modelSpec);
     const repos = orchestrator.active?.state.repos ?? [];
-    const contextDirs = getContextDirs(orchestrator.cwd, repos, orchestrator.config.ignoreExtraRepoConfigs);
+    const contextDirs = getContextDirs(orchestrator.cwd, repos, orchestrator.config.general.loadExtraRepoConfigs);
     const systemContextFiles = loadAllContextFiles(contextDirs, "main", "system", phase, modelInfo);
     const systemSnippets = systemContextFiles.map((f) => f.content).join("\n\n");
     const effectiveMode = getEffectiveMode(orchestrator.active.state);
@@ -1642,16 +1646,16 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
 
       if (isExplore) {
         input.subagent_type = "explore";
-        input.model = resolveModel(orchestrator.config.agents.explore.model);
-        input.thinking = orchestrator.config.agents.explore.thinking;
+        input.model = resolveModel(orchestrator.config.agents.subagents.simple.explore.model);
+        input.thinking = orchestrator.config.agents.subagents.simple.explore.thinking;
       } else if (isLibrarian) {
         input.subagent_type = "librarian";
-        input.model = resolveModel(orchestrator.config.agents.librarian.model);
-        input.thinking = orchestrator.config.agents.librarian.thinking;
+        input.model = resolveModel(orchestrator.config.agents.subagents.simple.librarian.model);
+        input.thinking = orchestrator.config.agents.subagents.simple.librarian.thinking;
       } else {
         input.subagent_type = "task";
-        input.model = resolveModel(orchestrator.config.agents.task.model);
-        input.thinking = orchestrator.config.agents.task.thinking;
+        input.model = resolveModel(orchestrator.config.agents.subagents.simple.task.model);
+        input.thinking = orchestrator.config.agents.subagents.simple.task.thinking;
       }
     }
 
@@ -1748,15 +1752,15 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
             ...runAfterEdit(
               fileInRepo,
               orchestrator.config.commands.afterEdit,
-              orchestrator.config.timeouts.afterEdit,
+              orchestrator.config.performance.commands.afterEdit,
               orchestrator.cwd,
             ),
           );
-        } else if (!orchestrator.config.ignoreExtraRepoConfigs) {
+        } else if (orchestrator.config.general.loadExtraRepoConfigs) {
           const repoCommands = loadRepoAfterEditCommands(repo.path);
-          if (repoCommands && repoCommands.length > 0) {
+          if (repoCommands && Object.keys(repoCommands).length > 0) {
             const fileInRepo = relative(repo.path, resolvedWrite);
-            afterEditResults.push(...runAfterEdit(fileInRepo, repoCommands, orchestrator.config.timeouts.afterEdit, repo.path));
+            afterEditResults.push(...runAfterEdit(fileInRepo, repoCommands, orchestrator.config.performance.commands.afterEdit, repo.path));
           }
         }
       }
@@ -1857,7 +1861,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
 
     if (
       orchestrator.active.state.phase === "implement" &&
-      orchestrator.config.autoCommit &&
+      orchestrator.config.general.autoCommit &&
       orchestrator.active.modifiedFiles.size > 0 &&
       !orchestrator.commitReminderSent
     ) {
@@ -1934,7 +1938,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
             const presetName = normalizeStoredPlannerPresetName(orchestrator);
             const plannerVariants = resolvePreset(orchestrator.config, "planners", presetName);
             const enabledVariantNames = Object.entries(plannerVariants)
-              .filter(([, v]) => v.enabled)
+              .filter(([, v]) => isEnabled(v))
               .map(([name]) => name);
             if (existsSync(plansDir)) {
               const planFiles = readdirSync(plansDir).filter((f) => f.endsWith(".md") && !f.includes("synthesized") && !f.includes("review_"));
@@ -1956,7 +1960,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
             const phase = orchestrator.active.state.phase;
             const presetName = normalizeStoredReviewPresetName(orchestrator, phase);
             const reviewers = resolveReviewers(orchestrator, phase, presetName);
-            const reviewerCount = Object.values(reviewers).filter((v) => v.enabled).length;
+            const reviewerCount = Object.values(reviewers).filter((v) => isEnabled(v)).length;
             const outputs = loadPhaseReviewOutputs(taskDir, phase, cycle.pass);
             if (outputs.length >= reviewerCount) {
               clearInterval(orchestrator.awaitPollTimer!);

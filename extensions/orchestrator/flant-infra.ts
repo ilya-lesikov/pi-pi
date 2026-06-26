@@ -362,6 +362,13 @@ function makeVariantWithThinking(
   return { enabled: true, model: modelSpec(modelId), thinking };
 }
 
+function buildPresetGroup(
+  presets: Record<string, { enabled?: boolean; agents: Record<string, { enabled: boolean; model: string; thinking: string }> }>,
+  defaultPreset = "regular",
+): { default: string; presets: typeof presets } {
+  return { default: defaultPreset, presets };
+}
+
 export function generateFlantConfig(models: string[]): Partial<PiPiConfig> {
   const uniqueModels = [...new Set(models)];
   if (uniqueModels.length === 0) return {};
@@ -383,68 +390,80 @@ export function generateFlantConfig(models: string[]): Partial<PiPiConfig> {
   const fastModel = fastest ?? debugModel;
 
   return {
-    mainModel: {
-      implement: { model: modelSpec(implementModel), thinking: "high" },
-      plan: { model: modelSpec(implementModel), thinking: "high" },
-      debug: { model: modelSpec(debugModel), thinking: "high" },
-      brainstorm: { model: modelSpec(brainstormModel), thinking: "high" },
-      review: { model: modelSpec(implementModel), thinking: "high" },
-    },
-    presets: {
-      planners: {
-        regular: {
-          opus: makeVariant(latestOpus, fallback),
-          gpt: makeVariant(latestGpt, fallback),
-          gemini: makeVariant(latestGeminiPro, fallback),
-        },
-      },
-      planReviewers: {
-        regular: {
-          opus: makeVariant(latestOpus, fallback),
-          gpt: makeVariant(latestGpt, fallback),
-          gemini: makeVariantWithThinking(latestGeminiPro, fallback, "xhigh"),
-        },
-        deep: {
-          opus: makeVariantWithThinking(latestOpus, fallback, "xhigh"),
-          gpt: makeVariantWithThinking(latestGpt, fallback, "xhigh"),
-          gemini: makeVariantWithThinking(latestGeminiPro, fallback, "xhigh"),
-        },
-      },
-      codeReviewers: {
-        regular: {
-          opus: makeVariant(latestOpus, fallback),
-          gpt: makeVariant(latestGpt, fallback),
-          gemini: makeVariantWithThinking(latestGeminiPro, fallback, "xhigh"),
-        },
-        deep: {
-          opus: makeVariantWithThinking(latestOpus, fallback, "xhigh"),
-          gpt: makeVariantWithThinking(latestGpt, fallback, "xhigh"),
-          gemini: makeVariantWithThinking(latestGeminiPro, fallback, "xhigh"),
-        },
-      },
-      brainstormReviewers: {
-        regular: {
-          opus: makeVariant(latestOpus, fallback),
-          gpt: makeVariant(latestGpt, fallback),
-          gemini: makeVariantWithThinking(latestGeminiPro, fallback, "xhigh"),
-        },
-        deep: {
-          opus: makeVariantWithThinking(latestOpus, fallback, "xhigh"),
-          gpt: makeVariantWithThinking(latestGpt, fallback, "xhigh"),
-          gemini: makeVariantWithThinking(latestGeminiPro, fallback, "xhigh"),
-        },
-      },
-    },
-    defaultPresets: {
-      planners: "regular",
-      planReviewers: "regular",
-      codeReviewers: "regular",
-      brainstormReviewers: "regular",
-    },
     agents: {
-      explore: { model: modelSpec(fastModel), thinking: "low" },
-      librarian: { model: modelSpec(fastModel), thinking: "medium" },
-      task: { model: modelSpec(taskModel), thinking: "medium" },
+      orchestrators: {
+        implement: { model: modelSpec(implementModel), thinking: "high" },
+        plan: { model: modelSpec(implementModel), thinking: "high" },
+        debug: { model: modelSpec(debugModel), thinking: "high" },
+        brainstorm: { model: modelSpec(brainstormModel), thinking: "high" },
+        review: { model: modelSpec(implementModel), thinking: "high" },
+      },
+      subagents: {
+        simple: {
+          explore: { model: modelSpec(fastModel), thinking: "low" },
+          librarian: { model: modelSpec(fastModel), thinking: "medium" },
+          task: { model: modelSpec(taskModel), thinking: "medium" },
+        },
+        presetGroups: {
+          planners: buildPresetGroup({
+            regular: {
+              agents: {
+                opus: makeVariant(latestOpus, fallback),
+                gpt: makeVariant(latestGpt, fallback),
+                gemini: makeVariant(latestGeminiPro, fallback),
+              },
+            },
+          }),
+          planReviewers: buildPresetGroup({
+            regular: {
+              agents: {
+                opus: makeVariant(latestOpus, fallback),
+                gpt: makeVariant(latestGpt, fallback),
+                gemini: makeVariantWithThinking(latestGeminiPro, fallback, "xhigh"),
+              },
+            },
+            deep: {
+              agents: {
+                opus: makeVariantWithThinking(latestOpus, fallback, "xhigh"),
+                gpt: makeVariantWithThinking(latestGpt, fallback, "xhigh"),
+                gemini: makeVariantWithThinking(latestGeminiPro, fallback, "xhigh"),
+              },
+            },
+          }),
+          codeReviewers: buildPresetGroup({
+            regular: {
+              agents: {
+                opus: makeVariant(latestOpus, fallback),
+                gpt: makeVariant(latestGpt, fallback),
+                gemini: makeVariantWithThinking(latestGeminiPro, fallback, "xhigh"),
+              },
+            },
+            deep: {
+              agents: {
+                opus: makeVariantWithThinking(latestOpus, fallback, "xhigh"),
+                gpt: makeVariantWithThinking(latestGpt, fallback, "xhigh"),
+                gemini: makeVariantWithThinking(latestGeminiPro, fallback, "xhigh"),
+              },
+            },
+          }),
+          brainstormReviewers: buildPresetGroup({
+            regular: {
+              agents: {
+                opus: makeVariant(latestOpus, fallback),
+                gpt: makeVariant(latestGpt, fallback),
+                gemini: makeVariantWithThinking(latestGeminiPro, fallback, "xhigh"),
+              },
+            },
+            deep: {
+              agents: {
+                opus: makeVariantWithThinking(latestOpus, fallback, "xhigh"),
+                gpt: makeVariantWithThinking(latestGpt, fallback, "xhigh"),
+                gemini: makeVariantWithThinking(latestGeminiPro, fallback, "xhigh"),
+              },
+            },
+          }),
+        },
+      },
     },
   };
 }

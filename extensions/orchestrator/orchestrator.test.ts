@@ -3,7 +3,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Orchestrator, ensureGitignore, type ActiveTask } from "./orchestrator.js";
-import { resolvePreset } from "./config.js";
+import { getDefaultConfig, resolvePreset } from "./config.js";
 
 const tempDirs: string[] = [];
 
@@ -94,40 +94,56 @@ describe("Orchestrator.taskIdFromDir", () => {
 
 describe("resolvePreset", () => {
   it("resolves deep reviewer preset", () => {
-    const config = {
-      mainModel: {
-        implement: { model: "a/impl", thinking: "high" },
-        plan: { model: "a/plan", thinking: "high" },
-        debug: { model: "a/debug", thinking: "high" },
-        brainstorm: { model: "a/brain", thinking: "high" },
-        review: { model: "a/review", thinking: "high" },
-      },
+    const config = getDefaultConfig();
+    config.agents.subagents.presetGroups.planReviewers = {
+      default: "regular",
       presets: {
-        planners: { regular: {} },
-        planReviewers: {
-          regular: {
+        regular: {
+          enabled: true,
+          agents: {
             low: { enabled: true, model: "x/p1", thinking: "low" },
           },
-          deep: {
+        },
+        deep: {
+          enabled: true,
+          agents: {
             low: { enabled: true, model: "x/p1", thinking: "xhigh" },
           },
         },
-        brainstormReviewers: {
-          regular: {
+      },
+    };
+    config.agents.subagents.presetGroups.brainstormReviewers = {
+      default: "regular",
+      presets: {
+        regular: {
+          enabled: true,
+          agents: {
             low: { enabled: true, model: "x/b1", thinking: "low" },
           },
-          deep: {
+        },
+        deep: {
+          enabled: true,
+          agents: {
             low: { enabled: true, model: "x/b1", thinking: "xhigh" },
           },
         },
-        codeReviewers: {
-          regular: {
+      },
+    };
+    config.agents.subagents.presetGroups.codeReviewers = {
+      default: "regular",
+      presets: {
+        regular: {
+          enabled: true,
+          agents: {
             low: { enabled: true, model: "x/1", thinking: "low" },
             medium: { enabled: true, model: "x/2", thinking: "medium" },
             high: { enabled: true, model: "x/3", thinking: "high" },
             other: { enabled: true, model: "x/4", thinking: "off" },
           },
-          deep: {
+        },
+        deep: {
+          enabled: true,
+          agents: {
             low: { enabled: true, model: "x/1", thinking: "xhigh" },
             medium: { enabled: true, model: "x/2", thinking: "xhigh" },
             high: { enabled: true, model: "x/3", thinking: "xhigh" },
@@ -135,28 +151,9 @@ describe("resolvePreset", () => {
           },
         },
       },
-      defaultPresets: {
-        planners: "regular",
-        planReviewers: "regular",
-        brainstormReviewers: "regular",
-        codeReviewers: "regular",
-      },
-      agents: {
-        explore: { model: "x/e", thinking: "low" },
-        librarian: { model: "x/l", thinking: "medium" },
-        task: { model: "x/t", thinking: "medium" },
-      },
-      commands: { afterEdit: [], afterImplement: [] },
-      timeouts: {
-        afterEdit: 1,
-        afterImplement: 1,
-        agentSpawn: 1,
-        agentReadyPing: 1,
-        lockStale: 1,
-        lockUpdate: 1,
-      },
-      autoCommit: true,
     };
+    config.commands.afterEdit = {};
+    config.commands.afterImplement = {};
 
     const upgraded = resolvePreset(config as any, "codeReviewers", "deep");
 
@@ -268,49 +265,30 @@ describe("Orchestrator.cleanupActive", () => {
 
 describe("Orchestrator.getPlanStartState", () => {
   function makePlannerConfig() {
-    return {
-      mainModel: {
-        implement: { model: "a/impl", thinking: "high" },
-        plan: { model: "a/plan", thinking: "high" },
-        debug: { model: "a/debug", thinking: "high" },
-        brainstorm: { model: "a/brain", thinking: "high" },
-        review: { model: "a/review", thinking: "high" },
-      },
+    const config = getDefaultConfig();
+    config.general.autoCommit = false;
+    config.general.loadExtraRepoConfigs = true;
+    config.general.logLevel = "info";
+    config.agents.subagents.presetGroups.planners = {
+      default: "regular",
       presets: {
-        planners: {
-          regular: {
+        regular: {
+          enabled: true,
+          agents: {
             alpha: { enabled: true, model: "x/a", thinking: "low" },
             beta: { enabled: true, model: "x/b", thinking: "low" },
           },
         },
-        planReviewers: { regular: {} },
-        brainstormReviewers: { regular: {} },
-        codeReviewers: { regular: {} },
       },
-      defaultPresets: {
-        planners: "regular",
-        planReviewers: "regular",
-        brainstormReviewers: "regular",
-        codeReviewers: "regular",
-      },
-      agents: {
-        explore: { model: "x/e", thinking: "low" },
-        librarian: { model: "x/l", thinking: "medium" },
-        task: { model: "x/t", thinking: "medium" },
-      },
-      commands: { afterEdit: [], afterImplement: [] },
-      timeouts: {
-        afterEdit: 1,
-        afterImplement: 1,
-        agentSpawn: 1,
-        agentReadyPing: 1,
-        lockStale: 1,
-        lockUpdate: 1,
-      },
-      autoCommit: false,
-      ignoreExtraRepoConfigs: false,
-      logLevel: "info",
-    } as any;
+    };
+    config.commands.afterEdit = {};
+    config.commands.afterImplement = {};
+    config.performance.commands.afterEdit = 1;
+    config.performance.commands.afterImplement = 1;
+    config.performance.internals.subagentStale = 1;
+    config.performance.internals.taskLockStale = 1;
+    config.performance.internals.taskLockRefresh = 1;
+    return config as any;
   }
 
   it("returns synthesize when all enabled planner variants have outputs", () => {

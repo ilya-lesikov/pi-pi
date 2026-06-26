@@ -127,10 +127,10 @@ describe("runAfterEdit", () => {
   it("runs commands only when glob matches", () => {
     const cwd = makeDir();
     const outFile = join(cwd, "out.txt");
-    const commands = [
-      { run: `node -e "require('fs').appendFileSync(process.argv[1], 'ts\\n')" ${JSON.stringify(outFile)}`, glob: ["**/*.ts"] },
-      { run: `node -e "require('fs').appendFileSync(process.argv[1], 'js\\n')" ${JSON.stringify(outFile)}`, glob: ["**/*.js"] },
-    ];
+    const commands = {
+      "cmd-1": { run: `node -e "require('fs').appendFileSync(process.argv[1], 'ts\\n')" ${JSON.stringify(outFile)}`, globs: ["**/*.ts"] },
+      "cmd-2": { run: `node -e "require('fs').appendFileSync(process.argv[1], 'js\\n')" ${JSON.stringify(outFile)}`, globs: ["**/*.js"] },
+    };
 
     const results = runAfterEdit("src/file.ts", commands, 5000, cwd);
 
@@ -143,9 +143,9 @@ describe("runAfterEdit", () => {
 
   it("substitutes file and dir variables", () => {
     const cwd = makeDir();
-    const commands = [
-      { run: "node -e \"process.stdout.write(process.argv.slice(1).join('|'))\" ${file} ${dir}", glob: ["**/*.ts"] },
-    ];
+    const commands = {
+      "cmd-1": { run: "node -e \"process.stdout.write(process.argv.slice(1).join('|'))\" ${file} ${dir}", globs: ["**/*.ts"] },
+    };
 
     const results = runAfterEdit("src/nested/file.ts", commands, 5000, cwd);
 
@@ -156,7 +156,7 @@ describe("runAfterEdit", () => {
 
   it("returns failure result on timeout", () => {
     const cwd = makeDir();
-    const commands = [{ run: "node -e \"setTimeout(() => {}, 200)\"", glob: ["**/*.ts"] }];
+    const commands = { "cmd-1": { run: "node -e \"setTimeout(() => {}, 200)\"", globs: ["**/*.ts"] } };
 
     const results = runAfterEdit("src/slow.ts", commands, 20, cwd);
 
@@ -167,7 +167,7 @@ describe("runAfterEdit", () => {
 
   it("propagates stderr output on failure", () => {
     const cwd = makeDir();
-    const commands = [{ run: "node -e \"process.stderr.write('boom'); process.exit(2)\"", glob: ["**/*.ts"] }];
+    const commands = { "cmd-1": { run: "node -e \"process.stderr.write('boom'); process.exit(2)\"", globs: ["**/*.ts"] } };
 
     const results = runAfterEdit("src/fail.ts", commands, 5000, cwd);
 
@@ -178,11 +178,11 @@ describe("runAfterEdit", () => {
 
   it("returns mixed results when some commands fail", () => {
     const cwd = makeDir();
-    const commands = [
-      { run: "node -e \"process.stdout.write('ok1')\"", glob: ["**/*.ts"] },
-      { run: "node -e \"process.stderr.write('nope'); process.exit(1)\"", glob: ["**/*.ts"] },
-      { run: "node -e \"process.stdout.write('ok2')\"", glob: ["**/*.ts"] },
-    ];
+    const commands = {
+      "cmd-1": { run: "node -e \"process.stdout.write('ok1')\"", globs: ["**/*.ts"] },
+      "cmd-2": { run: "node -e \"process.stderr.write('nope'); process.exit(1)\"", globs: ["**/*.ts"] },
+      "cmd-3": { run: "node -e \"process.stdout.write('ok2')\"", globs: ["**/*.ts"] },
+    };
 
     const results = runAfterEdit("src/mixed.ts", commands, 5000, cwd);
 
@@ -196,7 +196,7 @@ describe("runAfterImplement", () => {
   it("runs commands and captures output", () => {
     const cwd = makeDir();
 
-    const results = runAfterImplement([{ run: "node -e \"process.stdout.write('done')\"" }], 5000, cwd);
+    const results = runAfterImplement({ "cmd-1": { run: "node -e \"process.stdout.write('done')\"" } }, 5000, cwd);
 
     expect(results).toEqual([{ ok: true, command: "node -e \"process.stdout.write('done')\"", output: "done" }]);
   });
@@ -204,7 +204,7 @@ describe("runAfterImplement", () => {
   it("propagates failure output", () => {
     const cwd = makeDir();
 
-    const results = runAfterImplement([{ run: "node -e \"process.stderr.write('broken'); process.exit(1)\"" }], 5000, cwd);
+    const results = runAfterImplement({ "cmd-1": { run: "node -e \"process.stderr.write('broken'); process.exit(1)\"" } }, 5000, cwd);
 
     expect(results).toHaveLength(1);
     expect(results[0]?.ok).toBe(false);
@@ -218,13 +218,13 @@ describe("loadRepoAfterEditCommands", () => {
     mkdirSync(join(cwd, ".pp"), { recursive: true });
     writeFileSync(
       join(cwd, ".pp", "config.json"),
-      JSON.stringify({ commands: { afterEdit: [{ run: "npm test", glob: ["**/*.ts"] }] } }),
+      JSON.stringify({ commands: { afterEdit: { "cmd-1": { run: "npm test", globs: ["**/*.ts"] } } } }),
       "utf-8",
     );
 
     const commands = loadRepoAfterEditCommands(cwd);
 
-    expect(commands).toEqual([{ run: "npm test", glob: ["**/*.ts"] }]);
+    expect(commands).toEqual({ "cmd-1": { run: "npm test", globs: ["**/*.ts"] } });
   });
 
   it("returns null when config is missing", () => {
@@ -242,13 +242,13 @@ describe("loadRepoAfterEditCommands", () => {
       join(cwd, ".pp", "config.json"),
       JSON.stringify({
         commands: {
-          afterEdit: [
-            null,
-            { run: "" },
-            { run: 1 },
-            { run: "valid-one", glob: ["**/*.ts", 1, null] },
-            { run: "valid-two" },
-          ],
+          afterEdit: {
+            badNull: null,
+            badEmpty: { run: "" },
+            badType: { run: 1 },
+            validOne: { run: "valid-one", globs: ["**/*.ts", 1, null] },
+            validTwo: { run: "valid-two" },
+          },
         },
       }),
       "utf-8",
@@ -256,10 +256,10 @@ describe("loadRepoAfterEditCommands", () => {
 
     const commands = loadRepoAfterEditCommands(cwd);
 
-    expect(commands).toEqual([
-      { run: "valid-one", glob: ["**/*.ts"] },
-      { run: "valid-two", glob: [] },
-    ]);
+    expect(commands).toEqual({
+      validOne: { run: "valid-one", globs: ["**/*.ts"] },
+      validTwo: { run: "valid-two" },
+    });
   });
 });
 
@@ -269,13 +269,13 @@ describe("loadRepoAfterImplementCommands", () => {
     mkdirSync(join(cwd, ".pp"), { recursive: true });
     writeFileSync(
       join(cwd, ".pp", "config.json"),
-      JSON.stringify({ commands: { afterImplement: [{ run: "npm run check" }] } }),
+      JSON.stringify({ commands: { afterImplement: { "cmd-1": { run: "npm run check" } } } }),
       "utf-8",
     );
 
     const commands = loadRepoAfterImplementCommands(cwd);
 
-    expect(commands).toEqual([{ run: "npm run check" }]);
+    expect(commands).toEqual({ "cmd-1": { run: "npm run check" } });
   });
 
   it("returns null when config is missing", () => {
@@ -293,12 +293,12 @@ describe("loadRepoAfterImplementCommands", () => {
       join(cwd, ".pp", "config.json"),
       JSON.stringify({
         commands: {
-          afterImplement: [
-            null,
-            { run: "" },
-            { run: 1 },
-            { run: "valid" },
-          ],
+          afterImplement: {
+            badNull: null,
+            badEmpty: { run: "" },
+            badType: { run: 1 },
+            valid: { run: "valid" },
+          },
         },
       }),
       "utf-8",
@@ -306,6 +306,6 @@ describe("loadRepoAfterImplementCommands", () => {
 
     const commands = loadRepoAfterImplementCommands(cwd);
 
-    expect(commands).toEqual([{ run: "valid" }]);
+    expect(commands).toEqual({ valid: { run: "valid" } });
   });
 });

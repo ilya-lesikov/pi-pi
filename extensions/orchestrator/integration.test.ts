@@ -44,37 +44,52 @@ vi.mock("./agents/registry.js", () => ({
 
 vi.mock("./config.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("./config.js")>();
-  return { ...original, loadConfig: vi.fn(() => ({
-    mainModel: {
-      implement: { model: "test/model", thinking: "high" },
-      plan: { model: "test/model", thinking: "high" },
-      debug: { model: "test/model", thinking: "high" },
-      brainstorm: { model: "test/model", thinking: "high" },
-      review: { model: "test/model", thinking: "high" },
-    },
-    presets: {
-      planners: { regular: { test: { enabled: true, model: "test/planner", thinking: "low" } } },
-      planReviewers: { regular: { test: { enabled: true, model: "test/reviewer", thinking: "low" } } },
-      brainstormReviewers: { regular: { test: { enabled: true, model: "test/reviewer", thinking: "low" } } },
-      codeReviewers: { regular: { test: { enabled: true, model: "test/reviewer", thinking: "low" } } },
-    },
-    defaultPresets: {
-      planners: "regular",
-      planReviewers: "regular",
-      brainstormReviewers: "regular",
-      codeReviewers: "regular",
+  return { ...original, loadConfig: () => ({
+    general: {
+      autoCommit: false,
+      loadExtraRepoConfigs: true,
+      logLevel: "info",
     },
     agents: {
-      explore: { model: "test/explore", thinking: "low" },
-      librarian: { model: "test/librarian", thinking: "medium" },
-      task: { model: "test/task", thinking: "medium" },
+      orchestrators: {
+        implement: { model: "test/model", thinking: "high" },
+        plan: { model: "test/model", thinking: "high" },
+        debug: { model: "test/model", thinking: "high" },
+        brainstorm: { model: "test/model", thinking: "high" },
+        review: { model: "test/model", thinking: "high" },
+      },
+      subagents: {
+        simple: {
+          explore: { model: "test/explore", thinking: "low" },
+          librarian: { model: "test/librarian", thinking: "medium" },
+          task: { model: "test/task", thinking: "medium" },
+        },
+        presetGroups: {
+          planners: {
+            default: "regular",
+            presets: { regular: { enabled: true, agents: { test: { enabled: true, model: "test/planner", thinking: "low" } } } },
+          },
+          planReviewers: {
+            default: "regular",
+            presets: { regular: { enabled: true, agents: { test: { enabled: true, model: "test/reviewer", thinking: "low" } } } },
+          },
+          brainstormReviewers: {
+            default: "regular",
+            presets: { regular: { enabled: true, agents: { test: { enabled: true, model: "test/reviewer", thinking: "low" } } } },
+          },
+          codeReviewers: {
+            default: "regular",
+            presets: { regular: { enabled: true, agents: { test: { enabled: true, model: "test/reviewer", thinking: "low" } } } },
+          },
+        },
+      },
     },
-    commands: { afterEdit: [], afterImplement: [] },
-    timeouts: { afterEdit: 1000, afterImplement: 1000, agentSpawn: 1000, agentReadyPing: 1000, lockStale: 600000, lockUpdate: 30000 },
-    autoCommit: false,
-    ignoreExtraRepoConfigs: false,
-    logLevel: "info",
-  })) };
+    commands: { afterEdit: {}, afterImplement: {} },
+    performance: {
+      commands: { afterEdit: 1000, afterImplement: 1000 },
+      internals: { subagentStale: 1000, taskLockStale: 600000, taskLockRefresh: 30000 },
+    },
+  }) };
 });
 
 type Handler = (...args: any[]) => any;
@@ -181,33 +196,50 @@ function makePi() {
 
 function makeConfig() {
   return {
-    mainModel: {
-      implement: { model: "test/model", thinking: "high" },
-      plan: { model: "test/model", thinking: "high" },
-      debug: { model: "test/model", thinking: "high" },
-      brainstorm: { model: "test/model", thinking: "high" },
-      review: { model: "test/model", thinking: "high" },
-    },
-    presets: {
-      planners: { regular: { test: { enabled: true, model: "test/planner", thinking: "low" } } },
-      planReviewers: { regular: { test: { enabled: true, model: "test/reviewer", thinking: "low" } } },
-      brainstormReviewers: { regular: { test: { enabled: true, model: "test/reviewer", thinking: "low" } } },
-      codeReviewers: { regular: { test: { enabled: true, model: "test/reviewer", thinking: "low" } } },
-    },
-    defaultPresets: {
-      planners: "regular",
-      planReviewers: "regular",
-      brainstormReviewers: "regular",
-      codeReviewers: "regular",
+    general: {
+      autoCommit: false,
+      loadExtraRepoConfigs: true,
+      logLevel: "info",
     },
     agents: {
-      explore: { model: "test/explore", thinking: "low" },
-      librarian: { model: "test/librarian", thinking: "medium" },
-      task: { model: "test/task", thinking: "medium" },
+      orchestrators: {
+        implement: { model: "test/model", thinking: "high" },
+        plan: { model: "test/model", thinking: "high" },
+        debug: { model: "test/model", thinking: "high" },
+        brainstorm: { model: "test/model", thinking: "high" },
+        review: { model: "test/model", thinking: "high" },
+      },
+      subagents: {
+        simple: {
+          explore: { model: "test/explore", thinking: "low" },
+          librarian: { model: "test/librarian", thinking: "medium" },
+          task: { model: "test/task", thinking: "medium" },
+        },
+        presetGroups: {
+          planners: {
+            default: "regular",
+            presets: { regular: { enabled: true, agents: { test: { enabled: true, model: "test/planner", thinking: "low" } } } },
+          },
+          planReviewers: {
+            default: "regular",
+            presets: { regular: { enabled: true, agents: { test: { enabled: true, model: "test/reviewer", thinking: "low" } } } },
+          },
+          brainstormReviewers: {
+            default: "regular",
+            presets: { regular: { enabled: true, agents: { test: { enabled: true, model: "test/reviewer", thinking: "low" } } } },
+          },
+          codeReviewers: {
+            default: "regular",
+            presets: { regular: { enabled: true, agents: { test: { enabled: true, model: "test/reviewer", thinking: "low" } } } },
+          },
+        },
+      },
     },
-    commands: { afterEdit: [], afterImplement: [] },
-    timeouts: { afterEdit: 1000, afterImplement: 1000, agentSpawn: 1000, agentReadyPing: 1000, lockStale: 600000, lockUpdate: 30000 },
-    autoCommit: false,
+    commands: { afterEdit: {}, afterImplement: {} },
+    performance: {
+      commands: { afterEdit: 1000, afterImplement: 1000 },
+      internals: { subagentStale: 1000, taskLockStale: 600000, taskLockRefresh: 30000 },
+    },
   };
 }
 
@@ -584,9 +616,21 @@ describe("review cycle lifecycle", () => {
     await orchestrator.startTask(ctx as any, "implement", "Test no reviewers");
     orchestrator.config = {
       ...orchestrator.config,
-      presets: {
-        ...orchestrator.config.presets,
-        codeReviewers: { regular: {} },
+      agents: {
+        ...orchestrator.config.agents,
+        subagents: {
+          ...orchestrator.config.agents.subagents,
+          presetGroups: {
+            ...orchestrator.config.agents.subagents.presetGroups,
+            codeReviewers: {
+              ...orchestrator.config.agents.subagents.presetGroups.codeReviewers,
+              presets: {
+                ...orchestrator.config.agents.subagents.presetGroups.codeReviewers.presets,
+                regular: { enabled: true, agents: {} },
+              },
+            },
+          },
+        },
       },
     } as any;
     const taskDir = orchestrator.active!.dir;
@@ -2110,10 +2154,13 @@ describe("modified file tracking", () => {
     const runAfterEditSpy = vi.spyOn(commandsModule, "runAfterEdit");
     const loadRepoAfterEditCommandsSpy = vi
       .spyOn(commandsModule, "loadRepoAfterEditCommands")
-      .mockReturnValue([{ run: "npm run lint", glob: ["**/*.ts"] }]);
+      .mockReturnValue({ "cmd-1": { run: "npm run lint", globs: ["**/*.ts"] } });
 
     await orchestrator.startTask(makeCtx() as any, "implement", "afterEdit extra");
-    orchestrator.config = { ...orchestrator.config, ignoreExtraRepoConfigs: false } as any;
+    orchestrator.config = {
+      ...orchestrator.config,
+      general: { ...orchestrator.config.general, loadExtraRepoConfigs: true },
+    } as any;
     orchestrator.active!.state.phase = "implement";
     orchestrator.active!.state.repos = [
       { path: cwd, isRoot: true },
@@ -2128,8 +2175,8 @@ describe("modified file tracking", () => {
     expect(runAfterEditSpy).toHaveBeenCalledTimes(1);
     expect(runAfterEditSpy).toHaveBeenCalledWith(
       "src/extra.ts",
-      [{ run: "npm run lint", glob: ["**/*.ts"] }],
-      orchestrator.config.timeouts.afterEdit,
+      { "cmd-1": { run: "npm run lint", globs: ["**/*.ts"] } },
+      orchestrator.config.performance.commands.afterEdit,
       extraRepo,
     );
   });
@@ -2143,7 +2190,10 @@ describe("modified file tracking", () => {
     const loadRepoAfterEditCommandsSpy = vi.spyOn(commandsModule, "loadRepoAfterEditCommands");
 
     await orchestrator.startTask(makeCtx() as any, "implement", "afterEdit extra skipped");
-    orchestrator.config = { ...orchestrator.config, ignoreExtraRepoConfigs: true } as any;
+    orchestrator.config = {
+      ...orchestrator.config,
+      general: { ...orchestrator.config.general, loadExtraRepoConfigs: false },
+    } as any;
     orchestrator.active!.state.phase = "implement";
     orchestrator.active!.state.repos = [
       { path: cwd, isRoot: true },
@@ -2163,7 +2213,10 @@ describe("modified file tracking", () => {
     const { pi, orchestrator } = await setupOrchestrator(cwd);
 
     await orchestrator.startTask(makeCtx() as any, "implement", "commit disabled");
-    orchestrator.config = { ...orchestrator.config, autoCommit: false } as any;
+    orchestrator.config = {
+      ...orchestrator.config,
+      general: { ...orchestrator.config.general, autoCommit: false },
+    } as any;
 
     const ppCommit = getTool(pi, "pp_commit");
     const result = await ppCommit.execute("call-commit-disabled", { message: "msg" });
@@ -2176,7 +2229,10 @@ describe("modified file tracking", () => {
     const { pi, orchestrator } = await setupOrchestrator(cwd);
 
     await orchestrator.startTask(makeCtx() as any, "implement", "commit empty");
-    orchestrator.config = { ...orchestrator.config, autoCommit: true } as any;
+    orchestrator.config = {
+      ...orchestrator.config,
+      general: { ...orchestrator.config.general, autoCommit: true },
+    } as any;
     pi.exec.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
 
     const ppCommit = getTool(pi, "pp_commit");
@@ -2190,7 +2246,10 @@ describe("modified file tracking", () => {
     const { pi, orchestrator } = await setupOrchestrator(cwd);
 
     await orchestrator.startTask(makeCtx() as any, "implement", "commit invalid repo");
-    orchestrator.config = { ...orchestrator.config, autoCommit: true } as any;
+    orchestrator.config = {
+      ...orchestrator.config,
+      general: { ...orchestrator.config.general, autoCommit: true },
+    } as any;
 
     const ppCommit = getTool(pi, "pp_commit");
     const result = await ppCommit.execute("call-commit-unregistered", {
@@ -2209,7 +2268,10 @@ describe("modified file tracking", () => {
     const ctx = makeCtx();
 
     await orchestrator.startTask(ctx as any, "implement", "commit clear");
-    orchestrator.config = { ...orchestrator.config, autoCommit: true } as any;
+    orchestrator.config = {
+      ...orchestrator.config,
+      general: { ...orchestrator.config.general, autoCommit: true },
+    } as any;
     orchestrator.active!.state.phase = "implement";
     orchestrator.active!.modifiedFiles.add(join(cwd, "src", "tracked.ts"));
     orchestrator.active!.state.modifiedFiles = [...orchestrator.active!.modifiedFiles];
@@ -2236,7 +2298,10 @@ describe("modified file tracking", () => {
     const autoCommitSpy = vi.spyOn(commandsModule, "autoCommit").mockReturnValue({ ok: true, commitHash: "abc123" });
 
     await orchestrator.startTask(makeCtx() as any, "implement", "commit rename parse");
-    orchestrator.config = { ...orchestrator.config, autoCommit: true } as any;
+    orchestrator.config = {
+      ...orchestrator.config,
+      general: { ...orchestrator.config.general, autoCommit: true },
+    } as any;
     orchestrator.active!.state.phase = "implement";
     orchestrator.active!.state.repos = [{ path: cwd, isRoot: true }];
     saveTask(orchestrator.active!.dir, orchestrator.active!.state);
@@ -2963,7 +3028,7 @@ describe("session lifecycle", () => {
     const { orchestrator } = await setupOrchestrator(cwd);
 
     expect(orchestrator.config).toBeDefined();
-    expect(orchestrator.config.mainModel.implement.model).toBe("test/model");
+    expect(orchestrator.config.agents.orchestrators.implement.model).toBe("test/model");
   });
 
   it("session_shutdown dumps usage summary", async () => {

@@ -2,12 +2,16 @@ import { execSync, execFileSync } from "child_process";
 import { existsSync, readFileSync } from "fs";
 import { dirname, join } from "path";
 import { minimatch } from "minimatch";
-import type { AfterEditCommand, AfterImplementCommand } from "./config.js";
+import type { AfterEditCommandConfig, AfterImplementCommandConfig } from "./config.js";
 
 interface CommandResult {
   ok: boolean;
   command: string;
   output: string;
+}
+
+function isEnabled(command: { enabled?: boolean }): boolean {
+  return command.enabled !== false;
 }
 
 function shellEscape(arg: string): string {
@@ -23,11 +27,18 @@ function substituteVars(command: string, file?: string): string {
   return result;
 }
 
-export function runAfterEdit(file: string, commands: AfterEditCommand[], timeout: number, cwd: string): CommandResult[] {
+export function runAfterEdit(
+  file: string,
+  commands: Record<string, AfterEditCommandConfig>,
+  timeout: number,
+  cwd: string,
+): CommandResult[] {
   const results: CommandResult[] = [];
 
-  for (const cmd of commands) {
-    const matches = !cmd.glob || cmd.glob.length === 0 || cmd.glob.some((g) => minimatch(file, g, { matchBase: true }));
+  for (const cmd of Object.values(commands)) {
+    if (!isEnabled(cmd)) continue;
+    const globs = cmd.globs ?? [];
+    const matches = globs.length === 0 || globs.some((g) => minimatch(file, g, { matchBase: true }));
     if (!matches) continue;
 
     const command = substituteVars(cmd.run, file);
@@ -42,10 +53,15 @@ export function runAfterEdit(file: string, commands: AfterEditCommand[], timeout
   return results;
 }
 
-export function runAfterImplement(commands: AfterImplementCommand[], timeout: number, cwd: string): CommandResult[] {
+export function runAfterImplement(
+  commands: Record<string, AfterImplementCommandConfig>,
+  timeout: number,
+  cwd: string,
+): CommandResult[] {
   const results: CommandResult[] = [];
 
-  for (const cmd of commands) {
+  for (const cmd of Object.values(commands)) {
+    if (!isEnabled(cmd)) continue;
     const command = substituteVars(cmd.run);
     try {
       const output = execSync(command, { cwd, encoding: "utf-8", timeout, stdio: "pipe" });
@@ -69,36 +85,45 @@ function loadRepoConfig(repoPath: string): Record<string, any> | null {
   }
 }
 
-export function loadRepoAfterEditCommands(repoPath: string): AfterEditCommand[] | null {
+export function loadRepoAfterEditCommands(repoPath: string): Record<string, AfterEditCommandConfig> | null {
   const raw = loadRepoConfig(repoPath);
   if (!raw) return null;
   const commands = raw?.commands?.afterEdit;
-  if (!Array.isArray(commands)) return null;
+  if (!commands || typeof commands !== "object" || Array.isArray(commands)) return null;
 
-  const valid: AfterEditCommand[] = [];
-  for (const cmd of commands) {
+  const valid: Record<string, AfterEditCommandConfig> = {};
+  for (const [id, cmd] of Object.entries(commands as Record<string, unknown>)) {
     if (!cmd || typeof cmd !== "object") continue;
     const run = (cmd as any).run;
     if (typeof run !== "string" || run.length === 0) continue;
-    const globRaw = (cmd as any).glob;
-    const glob = Array.isArray(globRaw) ? globRaw.filter((g): g is string => typeof g === "string") : [];
-    valid.push({ run, glob });
+    const enabledRaw = (cmd as any).enabled;
+    const globsRaw = (cmd as any).globs;
+    const globs = Array.isArray(globsRaw) ? globsRaw.filter((g): g is string => typeof g === "string") : undefined;
+    valid[id] = {
+      run,
+      ...(globs ? { globs } : {}),
+      ...(typeof enabledRaw === "boolean" ? { enabled: enabledRaw } : {}),
+    };
   }
   return valid;
 }
 
-export function loadRepoAfterImplementCommands(repoPath: string): AfterImplementCommand[] | null {
+export function loadRepoAfterImplementCommands(repoPath: string): Record<string, AfterImplementCommandConfig> | null {
   const raw = loadRepoConfig(repoPath);
   if (!raw) return null;
   const commands = raw?.commands?.afterImplement;
-  if (!Array.isArray(commands)) return null;
+  if (!commands || typeof commands !== "object" || Array.isArray(commands)) return null;
 
-  const valid: AfterImplementCommand[] = [];
-  for (const cmd of commands) {
+  const valid: Record<string, AfterImplementCommandConfig> = {};
+  for (const [id, cmd] of Object.entries(commands as Record<string, unknown>)) {
     if (!cmd || typeof cmd !== "object") continue;
     const run = (cmd as any).run;
     if (typeof run !== "string" || run.length === 0) continue;
-    valid.push({ run });
+    const enabledRaw = (cmd as any).enabled;
+    valid[id] = {
+      run,
+      ...(typeof enabledRaw === "boolean" ? { enabled: enabledRaw } : {}),
+    };
   }
   return valid;
 }

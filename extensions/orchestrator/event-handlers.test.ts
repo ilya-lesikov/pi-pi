@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { registerEventHandlers } from "./event-handlers.js";
 import { Orchestrator, type ActiveTask } from "./orchestrator.js";
+import { getDefaultConfig } from "./config.js";
 
 type Handler = (event: any, ctx: any) => any;
 
@@ -29,35 +30,16 @@ function makePi() {
 }
 
 function makeConfig() {
-  return {
-    mainModel: {
-      implement: { model: "a/b", thinking: "high" },
-      plan: { model: "a/b", thinking: "high" },
-      debug: { model: "a/b", thinking: "high" },
-      brainstorm: { model: "a/b", thinking: "high" },
-      review: { model: "a/b", thinking: "high" },
-    },
-    presets: {
-      planners: { regular: {} },
-      planReviewers: { regular: {} },
-      codeReviewers: { regular: {} },
-      brainstormReviewers: { regular: {} },
-    },
-    defaultPresets: {
-      planners: "regular",
-      planReviewers: "regular",
-      codeReviewers: "regular",
-      brainstormReviewers: "regular",
-    },
-    agents: {
-      explore: { model: "x/e", thinking: "low" },
-      librarian: { model: "x/l", thinking: "medium" },
-      task: { model: "x/t", thinking: "medium" },
-    },
-    commands: { afterEdit: [], afterImplement: [] },
-    timeouts: { afterEdit: 1, afterImplement: 1, agentSpawn: 1, agentReadyPing: 1, lockStale: 1, lockUpdate: 1 },
-    autoCommit: false,
-  };
+  const config = getDefaultConfig();
+  config.general.autoCommit = false;
+  config.commands.afterEdit = {};
+  config.commands.afterImplement = {};
+  config.performance.commands.afterEdit = 1;
+  config.performance.commands.afterImplement = 1;
+  config.performance.internals.subagentStale = 1;
+  config.performance.internals.taskLockStale = 1;
+  config.performance.internals.taskLockRefresh = 1;
+  return config;
 }
 
 function makeActiveTask(): ActiveTask {

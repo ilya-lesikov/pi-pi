@@ -28,7 +28,7 @@ export function createCodeReviewerAgent(
       tools: `read, grep, find, ls, bash, write, lsp, ast_search, ${ALL_CBM_TOOLS}, ${EXA_TOOLS}`,
       model: resolveModel(variantConfig.model),
       thinking: variantConfig.thinking,
-      max_turns: variantConfig.maxTurns ?? 120,
+      max_turns: 120,
       prompt_mode: "replace",
     },
     prompt: [

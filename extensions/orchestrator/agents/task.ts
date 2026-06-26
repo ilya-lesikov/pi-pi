@@ -11,9 +11,9 @@ export function createTaskAgent(
     frontmatter: {
       description: "Implementation subtask (pi-pi)",
       tools: `read, write, edit, bash, grep, find, ls, lsp, ast_search, ${ALL_CBM_TOOLS}, ${EXA_TOOLS}`,
-      model: resolveModel(config.agents.task.model),
-      thinking: config.agents.task.thinking,
-      max_turns: config.agents.task.maxTurns ?? 170,
+      model: resolveModel(config.agents.subagents.simple.task.model),
+      thinking: config.agents.subagents.simple.task.thinking,
+      max_turns: 170,
       prompt_mode: "replace",
     },
     prompt: [

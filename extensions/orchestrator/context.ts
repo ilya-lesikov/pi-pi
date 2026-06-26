@@ -210,7 +210,7 @@ export function loadAllContextFiles(
   return results;
 }
 
-export function getContextDirs(rootCwd: string, repos: RepoInfo[], ignoreExtraRepoConfigs: boolean): string[] {
+export function getContextDirs(rootCwd: string, repos: RepoInfo[], loadExtraRepoConfigs: boolean): string[] {
   const dirs: string[] = [];
   const seen = new Set<string>();
   const add = (dir: string) => {
@@ -222,7 +222,7 @@ export function getContextDirs(rootCwd: string, repos: RepoInfo[], ignoreExtraRe
   add(join(getAgentDir(), "extensions", "pp", "context"));
   add(join(rootCwd, ".pp", "context"));
 
-  if (!ignoreExtraRepoConfigs) {
+  if (loadExtraRepoConfigs) {
     for (const repo of repos) {
       if (repo.isRoot) continue;
       add(join(repo.path, ".pp", "context"));

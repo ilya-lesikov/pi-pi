@@ -8,6 +8,10 @@ import { getContextDirs } from "../context.js";
 import type { RepoInfo } from "../repo-utils.js";
 import type { TaskType } from "../state.js";
 
+function isEnabled(value: { enabled?: boolean } | undefined): boolean {
+  return value?.enabled !== false;
+}
+
 export function brainstormSystemPrompt(taskType: TaskType, taskDescription: string, taskDir: string, cwd: string): string {
   const registerReposInstruction = `First, register all git repositories you'll work in using pp_register_repo (including the root: ${cwd}). For each, determine the base branch by examining the current branch and remote tracking.`;
   if (taskType === "debug") {
@@ -213,8 +217,8 @@ export async function spawnBrainstormReviewers(
 
   const timestamp = Math.floor(Date.now() / 1000);
   const reviewerVariants = variants ?? resolvePreset(config, "brainstormReviewers");
-  const enabledVariants = Object.entries(reviewerVariants).filter(([, v]) => v.enabled);
-  const contextDirs = getContextDirs(cwd, repos, config.ignoreExtraRepoConfigs);
+  const enabledVariants = Object.entries(reviewerVariants).filter(([, v]) => isEnabled(v));
+  const contextDirs = getContextDirs(cwd, repos, config.general.loadExtraRepoConfigs);
   const reviewFiles: string[] = [];
   const agentIds: string[] = [];
   const failedVariants: string[] = [];

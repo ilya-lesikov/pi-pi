@@ -64,16 +64,16 @@ describe("flant-infra", () => {
       "grok-4",
     ]) as any;
 
-    expect(config.mainModel.implement.model).toBe("pp-flant-anthropic/claude-opus-4-6");
-    expect(config.mainModel.plan.model).toBe("pp-flant-anthropic/claude-opus-4-6");
-    expect(config.mainModel.debug.model).toBe("pp-flant-openai/gpt-5-4");
-    expect(config.mainModel.brainstorm.model).toBe("pp-flant-anthropic/claude-opus-4-6");
-    expect(config.mainModel.review.model).toBe("pp-flant-anthropic/claude-opus-4-6");
-    expect(config.agents.explore.model).toBe("pp-flant-openai/gemini-3-1-flash");
-    expect(config.agents.librarian.model).toBe("pp-flant-openai/gemini-3-1-flash");
-    expect(config.presets.planners.regular.opus.model).toBe("pp-flant-anthropic/claude-opus-4-6");
-    expect(config.presets.planners.regular.gpt.model).toBe("pp-flant-openai/gpt-5-4");
-    expect(config.presets.planners.regular.gemini.model).toBe("pp-flant-openai/gemini-3-1-pro");
+    expect(config.agents.orchestrators.implement.model).toBe("pp-flant-anthropic/claude-opus-4-6");
+    expect(config.agents.orchestrators.plan.model).toBe("pp-flant-anthropic/claude-opus-4-6");
+    expect(config.agents.orchestrators.debug.model).toBe("pp-flant-openai/gpt-5-4");
+    expect(config.agents.orchestrators.brainstorm.model).toBe("pp-flant-anthropic/claude-opus-4-6");
+    expect(config.agents.orchestrators.review.model).toBe("pp-flant-anthropic/claude-opus-4-6");
+    expect(config.agents.subagents.simple.explore.model).toBe("pp-flant-openai/gemini-3-1-flash");
+    expect(config.agents.subagents.simple.librarian.model).toBe("pp-flant-openai/gemini-3-1-flash");
+    expect(config.agents.subagents.presetGroups.planners.presets.regular.agents.opus.model).toBe("pp-flant-anthropic/claude-opus-4-6");
+    expect(config.agents.subagents.presetGroups.planners.presets.regular.agents.gpt.model).toBe("pp-flant-openai/gpt-5-4");
+    expect(config.agents.subagents.presetGroups.planners.presets.regular.agents.gemini.model).toBe("pp-flant-openai/gemini-3-1-pro");
   });
 
   it("generateFlantConfig returns empty object for empty models", async () => {
@@ -110,11 +110,11 @@ describe("flant-infra", () => {
       "gemini-3-1-flash-lite",
     ]) as any;
 
-    expect(config.mainModel.implement.model).toBe("pp-flant-anthropic/claude-opus-4-7");
-    expect(config.mainModel.plan.model).toBe("pp-flant-anthropic/claude-opus-4-7");
-    expect(config.mainModel.debug.model).toBe("pp-flant-openai/gpt-5-4");
-    expect(config.presets.planners.regular.gemini.model).toBe("pp-flant-openai/gemini-3-1-pro");
-    expect(config.agents.explore.model).toBe("pp-flant-openai/gemini-3-1-flash-lite");
+    expect(config.agents.orchestrators.implement.model).toBe("pp-flant-anthropic/claude-opus-4-7");
+    expect(config.agents.orchestrators.plan.model).toBe("pp-flant-anthropic/claude-opus-4-7");
+    expect(config.agents.orchestrators.debug.model).toBe("pp-flant-openai/gpt-5-4");
+    expect(config.agents.subagents.presetGroups.planners.presets.regular.agents.gemini.model).toBe("pp-flant-openai/gemini-3-1-pro");
+    expect(config.agents.subagents.simple.explore.model).toBe("pp-flant-openai/gemini-3-1-flash-lite");
   });
 
   it("loadFlantSettings returns defaults when file is missing", async () => {
