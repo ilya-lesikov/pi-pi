@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { join } from "path";
-import { DEFAULT_CONFIG, GLOBAL_CONFIG_PATH } from "./config.js";
+import { getDefaultConfig, GLOBAL_CONFIG_PATH } from "./config.js";
 import * as configModule from "./config.js";
 import * as flantInfra from "./flant-infra.js";
 import { formatDuration, formatSourceTags, getConfigSourceInfo, parseDuration } from "./pp-menu.js";
@@ -52,7 +52,7 @@ describe("settings helpers", () => {
     const orchestrator = {
       cwd,
       config: {
-        ...structuredClone(DEFAULT_CONFIG),
+        ...getDefaultConfig(),
         autoCommit: false,
       },
     } as any;
@@ -80,7 +80,7 @@ describe("settings helpers", () => {
     const orchestrator = {
       cwd,
       config: {
-        ...structuredClone(DEFAULT_CONFIG),
+        ...getDefaultConfig(),
         autoCommit: false,
       },
     } as any;

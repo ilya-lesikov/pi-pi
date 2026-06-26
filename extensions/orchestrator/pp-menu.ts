@@ -6,8 +6,8 @@ import { unregisterAgentDefinitions } from "./agents/registry.js";
 import {
   type AfterEditCommand,
   type AfterImplementCommand,
-  DEFAULT_CONFIG,
   GLOBAL_CONFIG_PATH,
+  getDefaultConfig,
   loadConfig,
   mergeConfigLayers,
   readRawConfig,
@@ -30,7 +30,7 @@ import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
 import { spawnCodeReviewers } from "./phases/review.js";
 import { spawnBrainstormReviewers } from "./phases/brainstorm.js";
 import { nextPhase } from "./phases/machine.js";
-import { getAllAliases, getModelFamilies, getModelInfo, updateRegistryFromAvailableModels } from "./model-registry.js";
+import { getAllAliases, getModelFamilies, getModelInfo, resolveModel, updateRegistryFromAvailableModels } from "./model-registry.js";
 
 import {
   listTasks,
@@ -1200,7 +1200,7 @@ export function getConfigSourceInfo(orchestrator: Orchestrator, keyPath: string[
   const { globalConfig, projectConfig } = getRawScopeConfigs(orchestrator);
   const flantConfig = getFlantGeneratedConfig() as Record<string, any> | null;
   const activeValue = getNestedValue(orchestrator.config as Record<string, any>, keyPath);
-  const defaultValue = getNestedValue(DEFAULT_CONFIG as Record<string, any>, keyPath);
+  const defaultValue = getNestedValue(getDefaultConfig() as Record<string, any>, keyPath);
   const flantValue = flantConfig ? getNestedValue(flantConfig, keyPath) : undefined;
   const globalValue = hasNestedKey(globalConfig, keyPath) ? getNestedValue(globalConfig, keyPath) : undefined;
   const projectValue = hasNestedKey(projectConfig, keyPath) ? getNestedValue(projectConfig, keyPath) : undefined;
@@ -1418,21 +1418,21 @@ async function pickModel(ctx: any, currentModel?: string): Promise<string | null
   const families = getModelFamilies();
   const availableModels = listAvailableModels(ctx);
   const availableSpecs = new Set(availableModels.map((m) => m.spec));
+  const currentResolved = currentModel ? resolveModel(currentModel) : null;
+  const currentAvailable = currentResolved ? availableSpecs.has(currentResolved) : false;
   const visibleAliases = new Set(
     Object.entries(aliasMap)
       .filter(([, resolved]) => availableSpecs.has(resolved))
       .map(([alias]) => alias),
   );
-  if (currentModel && currentModel in aliasMap) {
-    visibleAliases.add(currentModel);
-  }
   const options: OptionInput[] = [];
   const selectionToModel = new Map<string, string>();
   const usedTitles = new Set<string>();
 
-  if (currentModel) {
-    const unavailable = !availableSpecs.has(currentModel) && !(currentModel in aliasMap);
-    const title = makeUniqueTitle(`Current: ${currentModel} (active${unavailable ? ", unavailable" : ""})`, usedTitles);
+  if (currentModel && !visibleAliases.has(currentModel)) {
+    const tags = ["active"];
+    if (!currentAvailable) tags.push("unavailable");
+    const title = makeUniqueTitle(withTags(currentModel, tagsString(tags)), usedTitles);
     options.push(opt(title, "Current model"));
     selectionToModel.set(title, currentModel);
   }
@@ -1459,7 +1459,8 @@ async function pickModel(ctx: any, currentModel?: string): Promise<string | null
 
   for (const entry of aliasEntries) {
     const providerLabel = normalizeProviderLabel(entry.provider);
-    const title = makeUniqueTitle(`${providerLabel} — ${entry.displayName} (latest)`, usedTitles);
+    const tags = entry.alias === currentModel ? tagsString(["active"]) : "";
+    const title = makeUniqueTitle(withTags(`${providerLabel} — ${entry.displayName} (latest)`, tags), usedTitles);
     options.push(opt(title, entry.alias));
     selectionToModel.set(title, entry.alias);
   }
@@ -1484,13 +1485,28 @@ async function pickModel(ctx: any, currentModel?: string): Promise<string | null
   }
 }
 
-async function pickThinking(ctx: any, allowXhigh: boolean): Promise<string | null> {
-  const options: OptionInput[] = ["off", "low", "medium", "high"];
-  if (allowXhigh) options.push("xhigh");
+async function pickThinking(
+  ctx: any,
+  allowXhigh: boolean,
+  orchestrator?: Orchestrator,
+  keyPath?: string[],
+): Promise<string | null> {
+  const options: OptionInput[] = [];
+  const byTitle = new Map<string, string>();
+  const usedTitles = new Set<string>();
+  const values = ["off", "low", "medium", "high"];
+  if (allowXhigh) values.push("xhigh");
+  const info = orchestrator && keyPath ? getConfigSourceInfo(orchestrator, keyPath) : null;
+  for (const value of values) {
+    const label = thinkingLabel(value);
+    const title = makeUniqueTitle(withTags(label, info ? formatSourceTags(value, info) : ""), usedTitles);
+    options.push(title);
+    byTitle.set(title, value);
+  }
   options.push(opt("Back", "Return to the previous menu"));
   const choice = await selectOption(ctx, "Thinking level", options);
   if (!choice || choice === "Back") return null;
-  return choice;
+  return byTitle.get(choice) ?? null;
 }
 
 function refreshSubagentDefinitions(orchestrator: Orchestrator, keyPath: string[]): void {
@@ -1533,7 +1549,7 @@ function thinkingLabel(value: string): string {
   if (value === "low") return "Low";
   if (value === "medium") return "Medium";
   if (value === "high") return "High";
-  if (value === "xhigh") return "XHigh";
+  if (value === "xhigh") return "Extra High";
   return value;
 }
 
@@ -1614,7 +1630,7 @@ async function showOrchestratorEditor(
       continue;
     }
     if (choice.startsWith("Thinking:")) {
-      const thinking = await pickThinking(ctx, false);
+      const thinking = await pickThinking(ctx, false, orchestrator, ["mainModel", role, "thinking"]);
       if (!thinking) continue;
       applyScopeChoice(orchestrator, ["mainModel", role, "thinking"], thinking, await pickScope(ctx, orchestrator));
       continue;
@@ -1662,7 +1678,7 @@ async function showSimpleSubagentEditor(
       continue;
     }
     if (choice.startsWith("Thinking:")) {
-      const thinking = await pickThinking(ctx, true);
+      const thinking = await pickThinking(ctx, true, orchestrator, ["agents", role, "thinking"]);
       if (!thinking) continue;
       applyScopeChoice(orchestrator, ["agents", role, "thinking"], thinking, await pickScope(ctx, orchestrator));
       continue;
@@ -1716,7 +1732,17 @@ async function removePresetVariant(
     return;
   }
   if (Object.keys(rawPreset).length <= 1) {
-    ctx.ui.notify("Preset must contain at least one agent in this scope.", "warning");
+    const nextGlobal = structuredClone(readRawConfig(GLOBAL_CONFIG_PATH));
+    const nextProject = structuredClone(readRawConfig(getProjectConfigPath(orchestrator.cwd)));
+    const target = scope === "global" ? nextGlobal : nextProject;
+    deleteNestedValue(target, ["presets", group, presetName]);
+    const merged = mergeConfigLayers(nextGlobal, nextProject);
+    const mergedPreset = merged.presets[group]?.[presetName] ?? {};
+    if (Object.keys(mergedPreset).length === 0) {
+      ctx.ui.notify("Cannot delete the last agent: no lower-layer preset is available.", "warning");
+      return;
+    }
+    deletePresetFromScope(orchestrator, scope, group, presetName);
     return;
   }
   const nextPreset = structuredClone(rawPreset);
@@ -1755,7 +1781,7 @@ async function showPresetVariantEditor(
       continue;
     }
     if (choice.startsWith("Thinking:")) {
-      const thinking = await pickThinking(ctx, true);
+      const thinking = await pickThinking(ctx, true, orchestrator, ["presets", group, presetName, variantName, "thinking"]);
       if (!thinking) continue;
       applyScopeChoice(orchestrator, ["presets", group, presetName, variantName, "thinking"], thinking, await pickScope(ctx, orchestrator));
       continue;
@@ -1932,8 +1958,7 @@ async function showSubagentSettings(orchestrator: Orchestrator, ctx: any): Promi
 }
 
 function getEditableCommandList(orchestrator: Orchestrator, scope: Scope, key: CommandListKey): any[] {
-  const raw = getRawScopeValue(orchestrator, scope, ["commands", key]);
-  if (Array.isArray(raw)) return structuredClone(raw);
+  void scope;
   return structuredClone(orchestrator.config.commands[key]);
 }
 
@@ -1961,7 +1986,16 @@ async function showAfterEditCommands(orchestrator: Orchestrator, ctx: any): Prom
     if (choice === "New command") {
       const run = await promptRequiredInput(ctx, "Command to run");
       if (!run) continue;
-      const patterns = parseCommaSeparated((await promptRequiredInput(ctx, "Glob patterns (comma-separated)")) ?? "");
+      const globInput = await promptRequiredInput(ctx, "Glob patterns (comma-separated)");
+      if (!globInput) {
+        ctx.ui.notify("At least one file pattern is required.", "warning");
+        continue;
+      }
+      const patterns = parseCommaSeparated(globInput);
+      if (patterns.length === 0) {
+        ctx.ui.notify("At least one file pattern is required.", "warning");
+        continue;
+      }
       const scope = await pickScope(ctx, orchestrator);
       if (!scope) continue;
       const list = getEditableCommandList(orchestrator, scope, "afterEdit") as AfterEditCommand[];
@@ -2139,13 +2173,21 @@ async function showAfterImplementCommands(orchestrator: Orchestrator, ctx: any):
 
 async function showCommandsSettings(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
   while (true) {
+    const afterEditInfo = getConfigSourceInfo(orchestrator, ["commands", "afterEdit"]);
+    const afterImplementInfo = getConfigSourceInfo(orchestrator, ["commands", "afterImplement"]);
     const choice = await selectOption(ctx, "Commands", [
-      opt("After file edit", `${orchestrator.config.commands.afterEdit.length} commands`),
-      opt("After implementation", `${orchestrator.config.commands.afterImplement.length} commands`),
+      opt(
+        `After file edit: ${orchestrator.config.commands.afterEdit.length} commands ${formatSourceTags(orchestrator.config.commands.afterEdit, afterEditInfo)}`.trim(),
+        `${orchestrator.config.commands.afterEdit.length} commands`,
+      ),
+      opt(
+        `After implementation: ${orchestrator.config.commands.afterImplement.length} commands ${formatSourceTags(orchestrator.config.commands.afterImplement, afterImplementInfo)}`.trim(),
+        `${orchestrator.config.commands.afterImplement.length} commands`,
+      ),
       opt("Back", "Return to the previous menu"),
     ]);
     if (!choice || choice === "Back") return BACK;
-    if (choice === "After file edit") {
+    if (choice.startsWith("After file edit:")) {
       await showAfterEditCommands(orchestrator, ctx);
       continue;
     }

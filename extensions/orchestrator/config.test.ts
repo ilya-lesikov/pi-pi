@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import { tmpdir } from "os";
-import { deepMerge, loadConfig, readRawConfig, removeConfigValue, resolvePreset, validateConfig, writeConfigValue } from "./config.js";
+import { deepMerge, getDefaultConfig, loadConfig, readRawConfig, removeConfigValue, resolvePreset, validateConfig, writeConfigValue } from "./config.js";
 
 const tempDirs: string[] = [];
 
@@ -313,6 +313,17 @@ describe("config regressions", () => {
 });
 
 describe("config write helpers", () => {
+  it("getDefaultConfig returns deep clones", () => {
+    const first = getDefaultConfig();
+    const second = getDefaultConfig();
+
+    first.mainModel.implement.model = "custom/model";
+    first.commands.afterEdit.push({ run: "echo test", glob: ["*.ts"] });
+
+    expect(second.mainModel.implement.model).toBe("anthropic/claude-opus-latest");
+    expect(second.commands.afterEdit).toEqual([]);
+  });
+
   it("readRawConfig returns empty object when file does not exist", () => {
     const filePath = join(makeTempDir(), ".pp", "config.json");
     expect(readRawConfig(filePath)).toEqual({});

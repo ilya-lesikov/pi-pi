@@ -71,7 +71,7 @@ export interface PiPiConfig {
 export const PRESET_GROUPS = ["planners", "codeReviewers", "planReviewers", "brainstormReviewers"] as const;
 export type PresetGroup = (typeof PRESET_GROUPS)[number];
 
-export const DEFAULT_CONFIG: PiPiConfig = {
+const DEFAULT_CONFIG: PiPiConfig = {
   mainModel: {
     implement: { model: "anthropic/claude-opus-latest", thinking: "high" },
     debug: { model: "openai/gpt-latest", thinking: "high" },
@@ -151,6 +151,10 @@ export const DEFAULT_CONFIG: PiPiConfig = {
   ignoreExtraRepoConfigs: false,
   logLevel: "info",
 };
+
+export function getDefaultConfig(): PiPiConfig {
+  return structuredClone(DEFAULT_CONFIG);
+}
 
 const DANGEROUS_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 const VALID_NAME_RE = /^[A-Za-z0-9-]+$/;
@@ -318,7 +322,7 @@ export function mergeConfigLayers(
   projectConfig: Record<string, any> | null,
 ): PiPiConfig {
   const log = getLogger();
-  let merged = { ...DEFAULT_CONFIG } as Record<string, any>;
+  let merged = getDefaultConfig() as Record<string, any>;
 
   const getFlantConfig = (globalThis as any)[Symbol.for("pi-pi:flant-config")] as (() => Partial<PiPiConfig> | null) | undefined;
   const flantConfig = getFlantConfig?.();

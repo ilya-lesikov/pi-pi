@@ -61,11 +61,18 @@ describe("log", () => {
   it("initSessionLogger writes JSONL to session file", async () => {
     const ppDir = makeTempDir();
     initSessionLogger(ppDir, "debug");
+
+    getLogger().info({ s: "test" }, "touch-session-log");
+    flushLogs();
+    await delay(60);
+
     const logPath = sessionLogPath(ppDir);
+    expect(logPath).not.toBe("");
+    expect(existsSync(logPath)).toBe(true);
 
     getLogger().info({ s: "test" }, "hello-session");
     flushLogs();
-    await delay(30);
+    await delay(60);
 
     expect(readText(logPath)).toContain("hello-session");
   });
