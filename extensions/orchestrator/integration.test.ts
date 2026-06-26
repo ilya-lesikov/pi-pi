@@ -1,36 +1,24 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createAskUserHarness,
+  expectBrainstormToPlan,
+  expectImplementToDone,
+  expectPlanToImplement,
+  expectPpStartImplementAutonomous,
+  expectQuickMenu,
+  expectReviewAuto,
+  expectReviewOnMyOwn,
+  m,
+} from "./test-helpers.js";
 
-const askUserResponses: Array<{ pattern?: RegExp; response: string }> = [];
-const askUserCalls: Array<{ question: string; options: string[] }> = [];
+let menu: ReturnType<typeof createAskUserHarness>;
 
 vi.mock("../../3p/pi-ask-user/index.js", () => {
   return {
-    askUser: async (_ctx: any, opts: any) => {
-      const options = opts.options || [];
-      const optionTitles = options.map((o: any) => (typeof o === "string" ? o : o.title));
-      askUserCalls.push({ question: String(opts.question || ""), options: optionTitles });
-
-      if (askUserResponses.length > 0) {
-        const item = askUserResponses[0];
-        if (!item.pattern || item.pattern.test(opts.question || "")) {
-          const matching = optionTitles.find((title: string) => title === item.response);
-          if (matching) {
-            askUserResponses.shift();
-            return { kind: "selection", selections: [matching] };
-          }
-        }
-      }
-
-      if (optionTitles.length === 0) {
-        return undefined;
-      }
-
-      const defaultIndex = Math.max(0, optionTitles.findIndex((t: string) => t !== "Back"));
-      return { kind: "selection", selections: [optionTitles[defaultIndex] === "Back" ? optionTitles[0] : optionTitles[defaultIndex]] };
-    },
+    askUser: async (_ctx: any, opts: any) => menu.handle(opts),
   };
 });
 
@@ -91,16 +79,6 @@ type Handler = (...args: any[]) => any;
 
 const tempDirs: string[] = [];
 
-function queueAskUserResponse(response: string, pattern?: RegExp) {
-  askUserResponses.push({ response, pattern });
-}
-
-function queueDefaultResponses(sequence: string[]) {
-  for (const response of sequence) {
-    queueAskUserResponse(response);
-  }
-}
-
 const VALID_USER_REQUEST = `# User Request
 Fix the auth bug.
 
@@ -139,10 +117,13 @@ function makeTempDir(): string {
   return dir;
 }
 
+beforeEach(() => {
+  menu = createAskUserHarness();
+});
+
 afterEach(() => {
+  menu.assertDone();
   vi.restoreAllMocks();
-  askUserResponses.length = 0;
-  askUserCalls.length = 0;
   delete (globalThis as any)[Symbol.for("pi-pi:usage-tracker")];
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
@@ -315,7 +296,7 @@ async function moveTaskToImplementPhase(
   writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
   writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
 
-  queueDefaultResponses(["Next", "Continue to plan & implement", "regular [default]"]);
+  expectBrainstormToPlan(menu);
   const ppPhaseComplete = getTool(pi, "pp_phase_complete");
   await ppPhaseComplete.execute(firstCallId, { summary: "phase complete" }, undefined, undefined, ctx);
   await new Promise((r) => setTimeout(r, 10));
@@ -336,7 +317,7 @@ async function moveTaskToImplementPhase(
     "utf-8",
   );
 
-  queueDefaultResponses(["Next", "Continue to implement"]);
+  expectPlanToImplement(menu);
   await ppPhaseComplete.execute(secondCallId, { summary: "plan complete" }, undefined, undefined, ctx);
   await new Promise((r) => setTimeout(r, 10));
 }
@@ -358,7 +339,7 @@ describe("implement pipeline: brainstorm → plan → implement → done", () =>
     writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
     writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
 
-    queueDefaultResponses(["Next", "Continue to plan & implement", "regular [default]"]);
+    expectBrainstormToPlan(menu);
 
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     const result1 = await ppPhaseComplete.execute("call-1", { summary: "Research complete" }, undefined, undefined, ctx);
@@ -394,7 +375,7 @@ describe("implement pipeline: brainstorm → plan → implement → done", () =>
       "utf-8",
     );
 
-    queueDefaultResponses(["Next", "Continue to implement", "regular [default]"]);
+    expectPlanToImplement(menu);
 
     const result2 = await ppPhaseComplete.execute("call-2", { summary: "Plan synthesized" }, undefined, undefined, ctx);
     expect(result2.content[0]).toBeDefined();
@@ -407,7 +388,7 @@ describe("implement pipeline: brainstorm → plan → implement → done", () =>
     const synthContent = readFileSync(synthPath, "utf-8");
     writeFileSync(synthPath, synthContent.replace(/- \[ \]/g, "- [x]"), "utf-8");
 
-    queueDefaultResponses(["Next", "Complete", "regular [default]"]);
+    expectImplementToDone(menu);
 
     const result3 = await ppPhaseComplete.execute("call-3", { summary: "All items implemented" }, undefined, undefined, ctx);
     expect(result3.content[0]).toBeDefined();
@@ -425,8 +406,7 @@ describe("implement pipeline: brainstorm → plan → implement → done", () =>
 
     await orchestrator.startTask(ctx as any, "implement", "Test task");
 
-    ctx.ui.select.mockResolvedValueOnce("Approve brainstorm");
-
+    expectBrainstormToPlan(menu);
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     const result = await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
     expect(result.content[0].text).toContain("Transition blocked");
@@ -445,7 +425,7 @@ describe("implement pipeline: brainstorm → plan → implement → done", () =>
     writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
     writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
 
-    queueDefaultResponses(["Next", "Continue to plan & implement", "regular [default]"]);
+    expectBrainstormToPlan(menu);
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
@@ -466,7 +446,7 @@ describe("implement pipeline: brainstorm → plan → implement → done", () =>
       "utf-8",
     );
 
-    queueDefaultResponses(["Next", "Continue to implement"]);
+    expectPlanToImplement(menu);
     await ppPhaseComplete.execute("call-2", { summary: "plan done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
 
@@ -493,7 +473,7 @@ describe("review cycle lifecycle", () => {
     writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
     writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
 
-    queueDefaultResponses(["Next", "Continue to plan & implement", "regular [default]"]);
+    expectBrainstormToPlan(menu);
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
@@ -514,13 +494,13 @@ describe("review cycle lifecycle", () => {
       "utf-8",
     );
 
-    queueDefaultResponses(["Next", "Continue to implement"]);
+    expectPlanToImplement(menu);
     await ppPhaseComplete.execute("call-2", { summary: "plan done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
 
     expect(orchestrator.active!.state.phase).toBe("implement");
 
-    queueDefaultResponses(["Review", "Auto review", "regular [default]"]);
+    expectReviewAuto(menu);
     const result = await ppPhaseComplete.execute("call-3", { summary: "implemented" }, undefined, undefined, ctx);
     expect(result.content[0].text).toContain("Waiting for reviewers");
 
@@ -538,7 +518,7 @@ describe("review cycle lifecycle", () => {
     expect(orchestrator.active!.state.reviewCycle!.step).toBe("apply_feedback");
     expect(orchestrator.active!.state.step).toBe("apply_feedback");
 
-    queueDefaultResponses(["Next", "Complete"]);
+    expectImplementToDone(menu);
     const result4 = await ppPhaseComplete.execute("call-4", { summary: "feedback applied" }, undefined, undefined, ctx);
 
     expect(orchestrator.active).toBeNull();
@@ -560,7 +540,7 @@ describe("review cycle lifecycle", () => {
 
     writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
     writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
-    queueDefaultResponses(["Next", "Continue to plan & implement", "regular [default]"]);
+    expectBrainstormToPlan(menu);
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
@@ -580,11 +560,11 @@ describe("review cycle lifecycle", () => {
       makeValidPlan(["- [x] P1. Done item — Done when: synthesized plan is fully checked"]),
       "utf-8",
     );
-    queueDefaultResponses(["Next", "Continue to implement"]);
+    expectPlanToImplement(menu);
     await ppPhaseComplete.execute("call-2", { summary: "plan done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
 
-    queueDefaultResponses(["Review", "Auto review", "regular [default]"]);
+    expectReviewAuto(menu);
     await ppPhaseComplete.execute("call-3", { summary: "implemented" }, undefined, undefined, ctx);
 
     emitSubagentCreated(pi, "reviewer-1", "Code reviewer (test)");
@@ -610,7 +590,7 @@ describe("review cycle lifecycle", () => {
 
     writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
     writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
-    queueDefaultResponses(["Next", "Continue to plan & implement", "regular [default]"]);
+    expectBrainstormToPlan(menu);
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
@@ -630,11 +610,12 @@ describe("review cycle lifecycle", () => {
       makeValidPlan(["- [x] P1. Done item — Done when: synthesized plan is fully checked"]),
       "utf-8",
     );
-    queueDefaultResponses(["Next", "Continue to implement"]);
+    expectPlanToImplement(menu);
     await ppPhaseComplete.execute("call-2", { summary: "plan done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
 
-    queueDefaultResponses(["Review", "Auto review", "regular [default]", "Review", "Review on my own"]);
+    expectReviewAuto(menu);
+    expectReviewOnMyOwn(menu);
     const result = await ppPhaseComplete.execute("call-3", { summary: "implemented" }, undefined, undefined, ctx);
 
     expect(result.content[0].text).toContain("continue");
@@ -732,7 +713,7 @@ describe("standalone brainstorm", () => {
     expect(orchestrator.active!.state.phase).toBe("brainstorm");
     expect(orchestrator.active!.type).toBe("brainstorm");
 
-    queueDefaultResponses(["Next", "Complete"]);
+    expectImplementToDone(menu);
 
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     const result = await ppPhaseComplete.execute("call-1", { summary: "Explored ideas" }, undefined, undefined, ctx);
@@ -752,7 +733,11 @@ describe("standalone brainstorm", () => {
     writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
     writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
 
-    queueDefaultResponses(["Next", "Continue to plan & implement", "regular [default]"]);
+    menu
+      .expect({ question: m.anyTaskMenu, options: { include: ["Next"] }, choose: "Next" })
+      .expect({ question: "Next", options: { include: ["Continue to plan & implement"] }, choose: "Continue to plan & implement" })
+      .expect({ question: "Mode", options: { include: ["Guided", "Autonomous", "Back"] }, choose: "Guided" })
+      .expect({ question: "Planner preset", options: { include: [m.preset("regular"), "Back"] }, choose: m.preset("regular") });
 
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-1", { summary: "Conclusions ready" }, undefined, undefined, ctx);
@@ -779,7 +764,7 @@ describe("debug flow", () => {
     writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
     writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
 
-    queueDefaultResponses(["Next", "Continue to plan & implement", "regular [default]"]);
+    expectBrainstormToPlan(menu);
 
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-1", { summary: "Diagnosis complete" }, undefined, undefined, ctx);
@@ -803,7 +788,7 @@ describe("planner completion tracking", () => {
     writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
     writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
 
-    queueDefaultResponses(["Next", "Continue to plan & implement", "regular [default]"]);
+    expectBrainstormToPlan(menu);
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
@@ -837,7 +822,7 @@ describe("planner completion tracking", () => {
     writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
     writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
 
-    queueDefaultResponses(["Next", "Continue to plan & implement", "regular [default]"]);
+    expectBrainstormToPlan(menu);
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
@@ -863,7 +848,7 @@ describe("planner completion tracking", () => {
     writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
     writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
 
-    ctx.ui.select.mockResolvedValueOnce("Approve brainstorm");
+    expectBrainstormToPlan(menu);
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
 
@@ -891,7 +876,7 @@ describe("planner completion tracking", () => {
     writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
     writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
 
-    ctx.ui.select.mockResolvedValueOnce("Approve brainstorm");
+    expectBrainstormToPlan(menu);
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
@@ -907,7 +892,13 @@ describe("planner completion tracking", () => {
     orchestrator.pendingSubagentSpawns = 0;
     orchestrator.failedPlannerVariants = ["test"];
     orchestrator.lastCtx = ctx;
-    ctx.ui.custom.mockResolvedValueOnce({ kind: "selection", selections: ["Work with available planner outputs"] });
+    menu.expect({
+      question: /Some planners failed:/,
+      options: {
+        exact: ["Retry failed planners", "Work with available planner outputs", "Stop task"],
+      },
+      choose: "Work with available planner outputs",
+    });
 
     emitSubagentCompleted(pi, "planner-1", "Planner (test)");
     await new Promise((r) => setTimeout(r, 10));
@@ -934,7 +925,13 @@ describe("reviewer failure handling", () => {
     orchestrator.pendingSubagentSpawns = 0;
     orchestrator.failedReviewerVariants = ["test"];
     orchestrator.lastCtx = ctx;
-    queueAskUserResponse("Continue without review", /Some reviewers failed:/);
+    menu.expect({
+      question: /Some reviewers failed:/,
+      options: {
+        exact: ["Retry failed reviewers", "Work with available reviewer outputs", "Continue without review", "Stop task"],
+      },
+      choose: "Continue without review",
+    });
 
     emitSubagentCompleted(pi, "reviewer-1", "Code reviewer (test)");
     await new Promise((r) => setTimeout(r, 10));
@@ -954,7 +951,7 @@ describe("pp:done cancellation", () => {
     await orchestrator.startTask(ctx as any, "implement", "Test done");
     const taskDir = orchestrator.active!.dir;
 
-    queueDefaultResponses(["Next", "Complete"]);
+    expectImplementToDone(menu);
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
 
@@ -1114,7 +1111,7 @@ describe("edge cases and regressions", () => {
 
     writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
     writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
-    queueDefaultResponses(["Next", "Continue to plan & implement", "regular [default]"]);
+    expectBrainstormToPlan(menu);
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
@@ -1134,11 +1131,11 @@ describe("edge cases and regressions", () => {
       makeValidPlan(["- [x] P1. Done item — Done when: synthesized plan is fully checked"]),
       "utf-8",
     );
-    queueDefaultResponses(["Next", "Continue to implement"]);
+    expectPlanToImplement(menu);
     await ppPhaseComplete.execute("call-2", { summary: "plan done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
 
-    queueDefaultResponses(["Review", "Auto review", "regular [default]"]);
+    expectReviewAuto(menu);
     await ppPhaseComplete.execute("call-3", { summary: "implemented" }, undefined, undefined, ctx);
 
     const reviewsDir = join(taskDir, "code-reviews");
@@ -1150,7 +1147,7 @@ describe("edge cases and regressions", () => {
     expect(orchestrator.active!.state.reviewCycle).not.toBeNull();
     expect(["await_reviewers", "apply_feedback"]).toContain(orchestrator.active!.state.reviewCycle!.step);
 
-    queueDefaultResponses(["Next", "Complete"]);
+    expectImplementToDone(menu);
     await ppPhaseComplete.execute("call-4", { summary: "done" }, undefined, undefined, ctx);
 
     expect(orchestrator.active).toBeNull();
@@ -1168,7 +1165,7 @@ describe("edge cases and regressions", () => {
 
     writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
     writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
-    queueDefaultResponses(["Next", "Continue to plan & implement", "regular [default]"]);
+    expectBrainstormToPlan(menu);
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
@@ -1188,13 +1185,13 @@ describe("edge cases and regressions", () => {
       makeValidPlan(["- [x] P1. Done item — Done when: synthesized plan is fully checked"]),
       "utf-8",
     );
-    queueDefaultResponses(["Next", "Continue to implement"]);
+    expectPlanToImplement(menu);
     await ppPhaseComplete.execute("call-2", { summary: "plan done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
 
     expect(orchestrator.active!.state.phase).toBe("implement");
 
-    queueDefaultResponses(["Review", "Auto review", "regular [default]"]);
+    expectReviewAuto(menu);
     await ppPhaseComplete.execute("call-3", { summary: "implemented" }, undefined, undefined, ctx);
 
     const reviewsDir = join(taskDir, "code-reviews");
@@ -1206,7 +1203,7 @@ describe("edge cases and regressions", () => {
 
     expect(orchestrator.active!.state.reviewCycle!.step).toBe("apply_feedback");
 
-    queueDefaultResponses(["Review", "Auto review", "regular [default]"]);
+    expectReviewAuto(menu);
     await ppPhaseComplete.execute("call-4", { summary: "fixes applied" }, undefined, undefined, ctx);
 
     expect(orchestrator.active!.state.reviewPass).toBe(1);
@@ -1219,7 +1216,7 @@ describe("edge cases and regressions", () => {
     emitSubagentCreated(pi, "reviewer-2", "Code reviewer (test)");
     emitSubagentCompleted(pi, "reviewer-2", "Code reviewer (test)");
 
-    queueDefaultResponses(["Next", "Complete"]);
+    expectImplementToDone(menu);
     const result = await ppPhaseComplete.execute("call-5", { summary: "all good" }, undefined, undefined, ctx);
 
     expect(result.content[0].text).toBe("");
@@ -1237,7 +1234,7 @@ describe("edge cases and regressions", () => {
 
     await orchestrator.startTask(ctx as any, "implement", "Continue test");
 
-    queueDefaultResponses(["Review", "Review on my own"]);
+    expectReviewOnMyOwn(menu);
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     const result = await ppPhaseComplete.execute("call-1", { summary: "not done yet" }, undefined, undefined, ctx);
 
@@ -1256,7 +1253,7 @@ describe("edge cases and regressions", () => {
 
     writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
     writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
-    queueDefaultResponses(["Next", "Continue to plan & implement", "regular [default]"]);
+    expectBrainstormToPlan(menu);
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
@@ -1276,11 +1273,11 @@ describe("edge cases and regressions", () => {
       makeValidPlan(["- [ ] P1. Todo item — Done when: item intentionally remains unchecked"]),
       "utf-8",
     );
-    queueDefaultResponses(["Next", "Continue to implement"]);
+    expectPlanToImplement(menu);
     await ppPhaseComplete.execute("call-2", { summary: "plan done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
 
-    queueDefaultResponses(["Review", "Review on my own"]);
+    expectReviewOnMyOwn(menu);
     const result = await ppPhaseComplete.execute("call-3", { summary: "partial work" }, undefined, undefined, ctx);
 
     expect(result.content[0].text).toContain("continue");
@@ -1298,7 +1295,7 @@ describe("edge cases and regressions", () => {
 
     writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
     writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
-    queueDefaultResponses(["Next", "Continue to plan & implement", "regular [default]"]);
+    expectBrainstormToPlan(menu);
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
@@ -1319,7 +1316,7 @@ describe("edge cases and regressions", () => {
       "utf-8",
     );
 
-    queueDefaultResponses(["Review", "Review on my own"]);
+    expectReviewOnMyOwn(menu);
     const result = await ppPhaseComplete.execute("call-2", { summary: "plan ready" }, undefined, undefined, ctx);
 
     expect(result.content[0].text).toContain("continue");
@@ -1458,7 +1455,7 @@ describe("task modes and quick task", () => {
     await orchestrator.startTask(ctx as any, "quick", "quick");
     const taskDir = orchestrator.active!.dir;
 
-    queueDefaultResponses(["Complete"]);
+    expectQuickMenu(menu, "Complete");
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     const result = await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
 
@@ -1473,15 +1470,9 @@ describe("task modes and quick task", () => {
     const ctx = makeCtx();
 
     await orchestrator.startTask(ctx as any, "quick", "quick");
-    queueDefaultResponses(["Back"]);
+    menu.expect({ question: m.taskMenu("quick", "quick"), options: { include: ["Complete", "Pause"], exclude: ["Next", "Review"] }, choose: "Back" });
     const pp = getCommand(pi, "pp");
     await pp(undefined, ctx);
-
-    const menuCall = askUserCalls.find((call) => call.question.includes("Task: quick"));
-    expect(menuCall?.options).toContain("Complete");
-    expect(menuCall?.options).toContain("Pause");
-    expect(menuCall?.options).not.toContain("Next");
-    expect(menuCall?.options).not.toContain("Review");
   });
 
   it("mode picker stores autonomous mode in task state", async () => {
@@ -1489,7 +1480,7 @@ describe("task modes and quick task", () => {
     const { pi, orchestrator } = await setupOrchestrator(cwd);
     const ctx = makeCtx();
 
-    queueDefaultResponses(["Task", "Implement", "New", "Autonomous", "Start"]);
+    expectPpStartImplementAutonomous(menu);
     const pp = getCommand(pi, "pp");
     await pp(undefined, ctx);
 
@@ -1521,8 +1512,7 @@ describe("task modes and quick task", () => {
 
     expect(result.content[0].text).toBe("");
     expect(orchestrator.active!.state.phase).toBe("plan");
-    const gateMenuCall = askUserCalls.find((call) => call.question.startsWith("/pp"));
-    expect(gateMenuCall).toBeUndefined();
+    expect(menu.transcript.filter((entry) => entry.question.startsWith("/pp"))).toHaveLength(0);
   });
 
   it("autonomous review loop re-runs until cap then advances", async () => {
@@ -1613,7 +1603,15 @@ describe("task modes and quick task", () => {
     const { pi, orchestrator } = await setupOrchestrator(cwd);
     const ctx = makeCtx();
 
-    queueDefaultResponses(["Task", "Implement", "New", "Back", "Resume", "Back", "Back", "Back"]);
+    menu
+      .expect({ question: "/pp", options: { include: ["Task"] }, choose: "Task" })
+      .expect({ question: "Task", options: { include: ["Implement"] }, choose: "Implement" })
+      .expect({ question: "Implement", options: { include: ["New"] }, choose: "New" })
+      .expect({ question: "Mode", options: { include: ["Back"] }, choose: "Back" })
+      .expect({ question: "Implement", options: { include: ["Resume", "Back"] }, choose: "Resume" })
+      .expect({ question: "Implement", options: { include: ["Back"] }, choose: "Back" })
+      .expect({ question: "Task", options: { include: ["Back"] }, choose: "Back" })
+      .expect({ question: "/pp", options: { include: ["Back"] }, choose: "Back" });
     const pp = getCommand(pi, "pp");
     await pp(undefined, ctx);
 
@@ -1630,7 +1628,11 @@ describe("task modes and quick task", () => {
     writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
     writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
 
-    queueDefaultResponses(["Next", "Continue to plan & implement", "Autonomous", "Start"]);
+    menu
+      .expect({ question: m.anyTaskMenu, options: { include: ["Next"] }, choose: "Next" })
+      .expect({ question: "Next", options: { include: ["Continue to plan & implement"] }, choose: "Continue to plan & implement" })
+      .expect({ question: "Mode", options: { include: ["Autonomous"] }, choose: "Autonomous" })
+      .expect({ question: "Autonomous", options: { include: ["Start"] }, choose: "Start" });
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-1", { summary: "Conclusions ready" }, undefined, undefined, ctx);
 
@@ -1730,11 +1732,13 @@ describe("task modes and quick task", () => {
     };
 
     const pp = getCommand(pi, "pp");
-    queueDefaultResponses(["Switch to Autonomous", "Back"]);
+    menu.expect({ question: m.anyTaskMenu, options: { include: ["Switch to Autonomous"] }, choose: "Switch to Autonomous" });
+    menu.expect({ question: m.anyTaskMenu, options: { include: ["Switch to Guided", "Back"] }, choose: "Back" });
     await pp(undefined, ctx);
     expect(orchestrator.active!.state.effectiveMode).toBe("autonomous");
 
-    queueDefaultResponses(["Switch to Guided", "Back"]);
+    menu.expect({ question: m.anyTaskMenu, options: { include: ["Switch to Guided"] }, choose: "Switch to Guided" });
+    menu.expect({ question: m.anyTaskMenu, options: { include: ["Switch to Autonomous", "Back"] }, choose: "Back" });
     await pp(undefined, ctx);
     expect(orchestrator.active!.state.effectiveMode).toBe("guided");
   });
@@ -1751,7 +1755,10 @@ describe("task modes and quick task", () => {
 
     const title = "implement";
     const pp = getCommand(pi, "pp");
-    queueDefaultResponses(["Task", "Resume", title]);
+    menu
+      .expect({ question: "/pp", options: { include: ["Task"] }, choose: "Task" })
+      .expect({ question: "Task", options: { include: ["Resume"] }, choose: "Resume" })
+      .expect({ question: "Resume", options: { include: [title] }, choose: title });
     await pp(undefined, ctx);
 
     expect(orchestrator.active).not.toBeNull();
@@ -1776,7 +1783,10 @@ describe("task modes and quick task", () => {
     await orchestrator.cleanupActive();
 
     const pp = getCommand(pi, "pp");
-    queueDefaultResponses(["Task", "Resume", "resume autonomous config"]);
+    menu
+      .expect({ question: "/pp", options: { include: ["Task"] }, choose: "Task" })
+      .expect({ question: "Task", options: { include: ["Resume"] }, choose: "Resume" })
+      .expect({ question: "Resume", options: { include: ["resume autonomous config"] }, choose: "resume autonomous config" });
     await pp(undefined, ctx);
 
     expect(orchestrator.active).not.toBeNull();
@@ -1810,8 +1820,7 @@ describe("task modes and quick task", () => {
     await ppPhaseComplete.execute("call-autonomous-skip-planner", { summary: "done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
 
-    const plannerPrompt = askUserCalls.find((call) => call.question.includes("Planner preset"));
-    expect(plannerPrompt).toBeUndefined();
+    expect(menu.transcript.filter((entry) => entry.question.includes("Planner preset"))).toHaveLength(0);
   });
 
   it("autonomous first review triggers automatically and second step proceeds after reviewer output", async () => {
@@ -1867,12 +1876,17 @@ describe("task modes and quick task", () => {
     orchestrator.pendingSubagentSpawns = 0;
     saveTask(orchestrator.active!.dir, orchestrator.active!.state);
 
-    queueAskUserResponse("Continue without review", /Some reviewers failed:/);
+    menu.expect({
+      question: /Some reviewers failed:/,
+      options: {
+        exact: ["Retry failed reviewers", "Work with available reviewer outputs", "Continue without review", "Stop task"],
+      },
+      choose: "Continue without review",
+    });
     emitSubagentCompleted(pi, "reviewer-guided-switch", "Code reviewer (test)");
     await new Promise((r) => setTimeout(r, 10));
 
-    const failureDialog = askUserCalls.find((call) => call.question.includes("Some reviewers failed:"));
-    expect(failureDialog).toBeDefined();
+    expect(menu.transcript.some((entry) => entry.question.includes("Some reviewers failed:"))).toBe(true);
   });
 
   it("review task autonomous defaults to deep preset for review phase", async () => {
@@ -1886,7 +1900,12 @@ describe("task modes and quick task", () => {
     const sessionStartHandler = pi._handlers.get("session_start")!;
     await sessionStartHandler({}, ctx);
 
-    queueDefaultResponses(["Task", "Review", "Describe", "Autonomous", "Start"]);
+    menu
+      .expect({ question: "/pp", options: { include: ["Task"] }, choose: "Task" })
+      .expect({ question: "Task", options: { include: ["Review"] }, choose: "Review" })
+      .expect({ question: "Review", options: { include: ["Describe"] }, choose: "Describe" })
+      .expect({ question: "Mode", options: { include: ["Autonomous"] }, choose: "Autonomous" })
+      .expect({ question: "Autonomous", options: { include: ["Start"] }, choose: "Start" });
     ctx.ui.input.mockResolvedValueOnce("Review current branch changes");
     const pp = getCommand(pi, "pp");
     await pp(undefined, ctx);
@@ -1960,7 +1979,7 @@ describe("review task lifecycle", () => {
     await moveTaskToImplementPhase(pi, orchestrator, ctx, "call-review-to-plan", "call-plan-to-implement");
     expect(orchestrator.active!.state.phase).toBe("implement");
 
-    queueDefaultResponses(["Next", "Complete"]);
+    expectImplementToDone(menu);
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-implement-to-done", { summary: "done" }, undefined, undefined, ctx);
 
@@ -1975,7 +1994,7 @@ describe("review task lifecycle", () => {
 
     await orchestrator.startTask(ctx as any, "review", "Review validation");
 
-    queueDefaultResponses(["Next", "Continue to plan & implement", "regular [default]"]);
+    expectBrainstormToPlan(menu);
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     const result = await ppPhaseComplete.execute("call-review-validation", { summary: "done" }, undefined, undefined, ctx);
 
@@ -2007,7 +2026,7 @@ describe("debug task lifecycle", () => {
     await moveTaskToImplementPhase(pi, orchestrator, ctx, "call-debug-to-plan", "call-debug-plan-to-implement");
     expect(orchestrator.active!.state.phase).toBe("implement");
 
-    queueDefaultResponses(["Next", "Complete"]);
+    expectImplementToDone(menu);
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-debug-implement-to-done", { summary: "done" }, undefined, undefined, ctx);
 
@@ -2248,7 +2267,10 @@ describe("resume and recovery", () => {
     await orchestrator.cleanupActive();
 
     const pp = getCommand(pi, "pp");
-    queueDefaultResponses(["Task", "Resume", "resume phase state"]);
+    menu
+      .expect({ question: "/pp", options: { include: ["Task"] }, choose: "Task" })
+      .expect({ question: "Task", options: { include: ["Resume"] }, choose: "Resume" })
+      .expect({ question: "Resume", options: { include: ["resume phase state"] }, choose: "resume phase state" });
     await pp(undefined, ctx);
 
     expect(orchestrator.active).not.toBeNull();
@@ -2274,7 +2296,10 @@ describe("resume and recovery", () => {
     await orchestrator.cleanupActive();
 
     const pp = getCommand(pi, "pp");
-    queueDefaultResponses(["Task", "Resume", "resume stale repos"]);
+    menu
+      .expect({ question: "/pp", options: { include: ["Task"] }, choose: "Task" })
+      .expect({ question: "Task", options: { include: ["Resume"] }, choose: "Resume" })
+      .expect({ question: "Resume", options: { include: ["resume stale repos"] }, choose: "resume stale repos" });
     await pp(undefined, ctx);
 
     expect(orchestrator.active!.state.repos).toEqual([{ path: cwd, isRoot: true }]);
@@ -2695,5 +2720,245 @@ describe("session lifecycle", () => {
 
     expect(dumpSpy).toHaveBeenCalledTimes(1);
     expect(dumpSpy).toHaveBeenCalledWith(expect.anything(), "session-id-1");
+  });
+});
+
+describe("menu contracts", () => {
+  it("active task menu in guided implement phase has exact options", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "contract");
+
+    menu.expect({
+      question: m.taskMenu("implement", "brainstorm"),
+      options: {
+        exact: ["Next", "Review", "Info", "Settings", "Back"],
+      },
+      choose: "Back",
+    });
+
+    const pp = getCommand(pi, "pp");
+    await pp(undefined, ctx);
+  });
+
+  it("active task menu hides Review while waiting for planners", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "contract waiting");
+    orchestrator.active!.state.phase = "plan";
+    orchestrator.active!.state.step = "await_planners";
+    saveTask(orchestrator.active!.dir, orchestrator.active!.state);
+
+    menu.expect({
+      question: m.taskMenu("implement", "plan"),
+      options: {
+        exact: ["Next", "Info", "Settings", "Back"],
+      },
+      choose: "Back",
+    });
+
+    const pp = getCommand(pi, "pp");
+    await pp(undefined, ctx);
+  });
+
+  it("active task menu in autonomous mode has exact options", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "contract auto", undefined, undefined, "autonomous");
+
+    menu.expect({
+      question: m.taskMenu("implement", "brainstorm"),
+      options: {
+        exact: ["Switch to Guided", "Stop task", "Info", "Settings", "Back"],
+      },
+      choose: "Back",
+    });
+
+    const pp = getCommand(pi, "pp");
+    await pp(undefined, ctx);
+  });
+
+  it("quick task menu has exact options", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "quick", "contract quick");
+
+    menu.expect({
+      question: m.taskMenu("quick", "quick"),
+      options: {
+        exact: ["Complete", "Pause", "Info", "Settings", "Back"],
+      },
+      choose: "Back",
+    });
+
+    const pp = getCommand(pi, "pp");
+    await pp(undefined, ctx);
+  });
+
+  it("Next submenu options change when continue is unavailable", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "contract next");
+    menu
+      .expect({ question: m.taskMenu("implement", "brainstorm"), options: { include: ["Next"] }, choose: "Next" })
+      .expect({ question: "Next", options: { exact: ["Continue to plan & implement", "Complete", "Pause", "Back"] }, choose: "Back" })
+      .expect({ question: m.taskMenu("implement", "brainstorm"), options: { include: ["Back"] }, choose: "Back" });
+
+    const pp = getCommand(pi, "pp");
+    await pp(undefined, ctx);
+
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "llm_work";
+    saveTask(orchestrator.active!.dir, orchestrator.active!.state);
+
+    menu
+      .expect({ question: m.taskMenu("implement", "implement"), options: { include: ["Next"] }, choose: "Next" })
+      .expect({ question: "Next", options: { exact: ["Complete", "Pause", "Back"] }, choose: "Back" })
+      .expect({ question: m.taskMenu("implement", "implement"), options: { include: ["Back"] }, choose: "Back" });
+
+    await pp(undefined, ctx);
+  });
+
+  it("Review submenu has exact options", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "contract review");
+
+    menu
+      .expect({ question: m.taskMenu("implement", "brainstorm"), options: { include: ["Review"] }, choose: "Review" })
+      .expect({ question: "Review", options: { exact: [m.autoReview, "Review on my own", "Back"] }, choose: "Back" })
+      .expect({ question: m.taskMenu("implement", "brainstorm"), options: { include: ["Back"] }, choose: "Back" });
+
+    const pp = getCommand(pi, "pp");
+    await pp(undefined, ctx);
+  });
+
+  it("mode picker options are exact", async () => {
+    const cwd = makeTempDir();
+    const { pi } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    menu
+      .expect({ question: "/pp", options: { include: ["Task"] }, choose: "Task" })
+      .expect({ question: "Task", options: { include: ["Implement"] }, choose: "Implement" })
+      .expect({ question: "Implement", options: { include: ["New"] }, choose: "New" })
+      .expect({ question: "Mode", options: { exact: ["Guided", "Autonomous", "Back"] }, choose: "Back" })
+      .expect({ question: "Implement", options: { include: ["Back"] }, choose: "Back" })
+      .expect({ question: "Task", options: { include: ["Back"] }, choose: "Back" })
+      .expect({ question: "/pp", options: { include: ["Back"] }, choose: "Back" });
+
+    const pp = getCommand(pi, "pp");
+    await pp(undefined, ctx);
+  });
+});
+
+describe("full user flows", () => {
+  it("guided implement happy path", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "guided flow", undefined, undefined, "guided");
+    const taskDir = orchestrator.active!.dir;
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+
+    expectBrainstormToPlan(menu);
+    const ppPhaseComplete = getTool(pi, "pp_phase_complete");
+    await ppPhaseComplete.execute("flow-guided-1", { summary: "brainstorm done" }, undefined, undefined, ctx);
+    await new Promise((r) => setTimeout(r, 10));
+
+    const plansDir = join(taskDir, "plans");
+    mkdirSync(plansDir, { recursive: true });
+    emitSubagentCreated(pi, "flow-guided-planner", "Planner (test)");
+    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000)}_test.md`), makeValidPlan(["- [ ] P1. Draft — Done when: draft exists"]), "utf-8");
+    emitSubagentCompleted(pi, "flow-guided-planner", "Planner (test)");
+    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000) + 1}_synthesized.md`), makeValidPlan(["- [x] P1. Ready — Done when: checked"]), "utf-8");
+
+    expectPlanToImplement(menu);
+    await ppPhaseComplete.execute("flow-guided-2", { summary: "plan done" }, undefined, undefined, ctx);
+    await new Promise((r) => setTimeout(r, 10));
+
+    expectImplementToDone(menu);
+    await ppPhaseComplete.execute("flow-guided-3", { summary: "implement done" }, undefined, undefined, ctx);
+
+    expect(orchestrator.active).toBeNull();
+    expect(loadTask(taskDir).phase).toBe("done");
+  });
+
+  it("autonomous implement happy path", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "autonomous flow", undefined, undefined, "autonomous");
+    const taskDir = orchestrator.active!.dir;
+    orchestrator.active!.state.autonomousConfig = {
+      phases: {
+        brainstorm: { reviewPreset: "regular", maxReviewPasses: 0 },
+        plan: { plannerPreset: "regular", reviewPreset: "regular", maxReviewPasses: 0 },
+        implement: { reviewPreset: "regular", maxReviewPasses: 1 },
+      },
+    };
+    saveTask(taskDir, orchestrator.active!.state);
+
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+
+    const ppPhaseComplete = getTool(pi, "pp_phase_complete");
+    await ppPhaseComplete.execute("flow-auto-1", { summary: "brainstorm done" }, undefined, undefined, ctx);
+    await new Promise((r) => setTimeout(r, 10));
+
+    const plansDir = join(taskDir, "plans");
+    mkdirSync(plansDir, { recursive: true });
+    emitSubagentCreated(pi, "flow-auto-planner", "Planner (test)");
+    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000)}_test.md`), makeValidPlan(["- [ ] P1. Draft — Done when: draft exists"]), "utf-8");
+    emitSubagentCompleted(pi, "flow-auto-planner", "Planner (test)");
+    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000) + 1}_synthesized.md`), makeValidPlan(["- [x] P1. Ready — Done when: checked"]), "utf-8");
+
+    await ppPhaseComplete.execute("flow-auto-2", { summary: "plan done" }, undefined, undefined, ctx);
+    await new Promise((r) => setTimeout(r, 10));
+
+    const firstReview = await ppPhaseComplete.execute("flow-auto-3", { summary: "implement done" }, undefined, undefined, ctx);
+    expect(firstReview.content[0].text).toMatch(/Autonomous mode: reviews running|Started review cycle pass/);
+
+    const reviewsDir = join(taskDir, "code-reviews");
+    mkdirSync(reviewsDir, { recursive: true });
+    writeFileSync(join(reviewsDir, `${Math.floor(Date.now() / 1000)}_test_round-1.md`), "LGTM", "utf-8");
+    emitSubagentCreated(pi, "flow-auto-reviewer", "Code reviewer (test)");
+    emitSubagentCompleted(pi, "flow-auto-reviewer", "Code reviewer (test)");
+
+    await ppPhaseComplete.execute("flow-auto-4", { summary: "feedback applied" }, undefined, undefined, ctx);
+
+    expect(orchestrator.active).toBeNull();
+    expect(loadTask(taskDir).phase).toBe("done");
+  });
+
+  it("quick task happy path", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "quick", "quick flow");
+    const taskDir = orchestrator.active!.dir;
+
+    expectQuickMenu(menu, "Complete");
+    const ppPhaseComplete = getTool(pi, "pp_phase_complete");
+    await ppPhaseComplete.execute("flow-quick-1", { summary: "quick done" }, undefined, undefined, ctx);
+
+    expect(orchestrator.active).toBeNull();
+    expect(loadTask(taskDir).phase).toBe("done");
   });
 });
