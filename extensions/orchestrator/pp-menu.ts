@@ -2042,7 +2042,6 @@ function detectScopeForCommandList(orchestrator: Orchestrator, key: CommandListK
 async function showAfterEditCommands(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
   while (true) {
     const commands = orchestrator.config.commands.afterEdit;
-    const info = getConfigSourceInfo(orchestrator, ["commands", "afterEdit"]);
     const options: OptionInput[] = [];
     const byTitle = new Map<string, number>();
     const usedTitles = new Set<string>();
@@ -2054,7 +2053,7 @@ async function showAfterEditCommands(orchestrator: Orchestrator, ctx: any): Prom
     options.push(opt("New command", "Add command"));
     options.push(...buildResetOptions(orchestrator, ["commands", "afterEdit"]));
     options.push(opt("Back", "Return to the previous menu"));
-    const choice = await selectOption(ctx, `After file edit: ${commands.length} commands ${formatSourceTags(commands, info)}`.trim(), options);
+    const choice = await selectOption(ctx, `After file edit: ${commands.length} commands`, options);
     if (!choice || choice === "Back") return BACK;
     if (choice === "New command") {
       const run = await promptRequiredInput(ctx, "Command to run");
@@ -2083,31 +2082,20 @@ async function showAfterEditCommands(orchestrator: Orchestrator, ctx: any): Prom
       const command = orchestrator.config.commands.afterEdit[index];
       if (!command) break;
       const commandChoice = await selectOption(ctx, `Command "${slugify(command.run, 60)}"`, [
-        opt("Command", "View or edit command string"),
+        opt("Edit command", command.run),
         opt("Triggers", `${command.glob.length} patterns`),
         opt("Delete command", "Remove this command"),
         opt("Back", "Return to previous menu"),
       ]);
       if (!commandChoice || commandChoice === "Back") break;
-      if (commandChoice === "Command") {
-        const action = await selectOption(ctx, "Command", [
-          opt("View", command.run),
-          opt("Edit", "Edit command string"),
-          opt("Back", "Return to previous menu"),
-        ]);
-        if (action === "View") {
-          ctx.ui.notify(command.run, "info");
-          continue;
-        }
-        if (action === "Edit") {
-          const run = await promptRequiredInput(ctx, "New command string");
-          if (!run) continue;
-          const scope = detectScopeForCommandList(orchestrator, "afterEdit");
-          const list = getEditableCommandList(orchestrator, scope, "afterEdit") as AfterEditCommand[];
-          if (!list[index]) continue;
-          list[index] = { ...list[index], run };
-          writeCommandList(orchestrator, scope, "afterEdit", list);
-        }
+      if (commandChoice === "Edit command") {
+        const run = await promptRequiredInput(ctx, `Command (current: ${command.run})`);
+        if (!run) continue;
+        const scope = detectScopeForCommandList(orchestrator, "afterEdit");
+        const list = getEditableCommandList(orchestrator, scope, "afterEdit") as AfterEditCommand[];
+        if (!list[index]) continue;
+        list[index] = { ...list[index], run };
+        writeCommandList(orchestrator, scope, "afterEdit", list);
         continue;
       }
       if (commandChoice === "Triggers") {
@@ -2138,16 +2126,11 @@ async function showAfterEditCommands(orchestrator: Orchestrator, ctx: any): Prom
           const patternIndex = actualGlob ? current.glob.indexOf(actualGlob) : -1;
           if (patternIndex < 0) continue;
           const action = await selectOption(ctx, `Pattern "${slugify(current.glob[patternIndex]!, 50)}"`, [
-            opt("View", current.glob[patternIndex]!),
-            opt("Edit", "Edit pattern"),
-            opt("Delete", "Delete pattern"),
+            opt("Edit", current.glob[patternIndex]!),
+            opt("Delete", "Remove this pattern"),
             opt("Back", "Return to previous menu"),
           ]);
           if (!action || action === "Back") continue;
-          if (action === "View") {
-            ctx.ui.notify(current.glob[patternIndex]!, "info");
-            continue;
-          }
           const scope = detectScopeForCommandList(orchestrator, "afterEdit");
           const list = getEditableCommandList(orchestrator, scope, "afterEdit") as AfterEditCommand[];
           if (!list[index]) continue;
@@ -2155,7 +2138,7 @@ async function showAfterEditCommands(orchestrator: Orchestrator, ctx: any): Prom
           if (action === "Delete") {
             nextGlob.splice(patternIndex, 1);
           } else {
-            const value = await promptRequiredInput(ctx, "New pattern");
+            const value = await promptRequiredInput(ctx, `Pattern (current: ${current.glob[patternIndex]})`);
             if (!value) continue;
             nextGlob[patternIndex] = value;
           }
@@ -2177,7 +2160,6 @@ async function showAfterEditCommands(orchestrator: Orchestrator, ctx: any): Prom
 async function showAfterImplementCommands(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
   while (true) {
     const commands = orchestrator.config.commands.afterImplement;
-    const info = getConfigSourceInfo(orchestrator, ["commands", "afterImplement"]);
     const options: OptionInput[] = [];
     const byTitle = new Map<string, number>();
     const usedTitles = new Set<string>();
@@ -2189,7 +2171,7 @@ async function showAfterImplementCommands(orchestrator: Orchestrator, ctx: any):
     options.push(opt("New command", "Add command"));
     options.push(...buildResetOptions(orchestrator, ["commands", "afterImplement"]));
     options.push(opt("Back", "Return to the previous menu"));
-    const choice = await selectOption(ctx, `After implementation: ${commands.length} commands ${formatSourceTags(commands, info)}`.trim(), options);
+    const choice = await selectOption(ctx, `After implementation: ${commands.length} commands`, options);
     if (!choice || choice === "Back") return BACK;
     if (choice === "New command") {
       const run = await promptRequiredInput(ctx, "Command to run");
@@ -2207,30 +2189,19 @@ async function showAfterImplementCommands(orchestrator: Orchestrator, ctx: any):
       const command = orchestrator.config.commands.afterImplement[index];
       if (!command) break;
       const commandChoice = await selectOption(ctx, `Command "${slugify(command.run, 60)}"`, [
-        opt("Command", "View or edit command string"),
+        opt("Edit command", command.run),
         opt("Delete command", "Remove this command"),
         opt("Back", "Return to previous menu"),
       ]);
       if (!commandChoice || commandChoice === "Back") break;
-      if (commandChoice === "Command") {
-        const action = await selectOption(ctx, "Command", [
-          opt("View", command.run),
-          opt("Edit", "Edit command string"),
-          opt("Back", "Return to previous menu"),
-        ]);
-        if (action === "View") {
-          ctx.ui.notify(command.run, "info");
-          continue;
-        }
-        if (action === "Edit") {
-          const run = await promptRequiredInput(ctx, "New command string");
-          if (!run) continue;
-          const scope = detectScopeForCommandList(orchestrator, "afterImplement");
-          const list = getEditableCommandList(orchestrator, scope, "afterImplement") as AfterImplementCommand[];
-          if (!list[index]) continue;
-          list[index] = { run };
-          writeCommandList(orchestrator, scope, "afterImplement", list);
-        }
+      if (commandChoice === "Edit command") {
+        const run = await promptRequiredInput(ctx, `Command (current: ${command.run})`);
+        if (!run) continue;
+        const scope = detectScopeForCommandList(orchestrator, "afterImplement");
+        const list = getEditableCommandList(orchestrator, scope, "afterImplement") as AfterImplementCommand[];
+        if (!list[index]) continue;
+        list[index] = { run };
+        writeCommandList(orchestrator, scope, "afterImplement", list);
         continue;
       }
       const scope = detectScopeForCommandList(orchestrator, "afterImplement");
