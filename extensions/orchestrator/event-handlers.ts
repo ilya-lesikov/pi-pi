@@ -1484,7 +1484,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       const { isValidLogLevel: checkLevel } = await import("./log.js");
       const globalRaw = readRawConfig(GLOBAL_CONFIG_PATH);
       const projectRaw = readRawConfig(join(ppDir, "config.json"));
-      const rawLevel = projectRaw?.logLevel ?? globalRaw?.logLevel;
+      const rawLevel = projectRaw?.general?.logLevel ?? globalRaw?.general?.logLevel;
       if (checkLevel(rawLevel)) earlyLogLevel = rawLevel;
     } catch {}
 

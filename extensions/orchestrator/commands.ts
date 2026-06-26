@@ -89,7 +89,20 @@ export function loadRepoAfterEditCommands(repoPath: string): Record<string, Afte
   const raw = loadRepoConfig(repoPath);
   if (!raw) return null;
   const commands = raw?.commands?.afterEdit;
-  if (!commands || typeof commands !== "object" || Array.isArray(commands)) return null;
+  if (!commands || typeof commands !== "object") return null;
+
+  if (Array.isArray(commands)) {
+    const valid: Record<string, AfterEditCommandConfig> = {};
+    for (const [index, cmd] of commands.entries()) {
+      if (!cmd || typeof cmd !== "object") continue;
+      const run = (cmd as any).run;
+      if (typeof run !== "string" || run.length === 0) continue;
+      const globsRaw = (cmd as any).globs ?? (cmd as any).glob;
+      const globs = Array.isArray(globsRaw) ? globsRaw.filter((g): g is string => typeof g === "string") : undefined;
+      valid[`cmd-${index + 1}`] = { run, ...(globs && globs.length > 0 ? { globs } : {}) };
+    }
+    return Object.keys(valid).length > 0 ? valid : null;
+  }
 
   const valid: Record<string, AfterEditCommandConfig> = {};
   for (const [id, cmd] of Object.entries(commands as Record<string, unknown>)) {
@@ -97,11 +110,11 @@ export function loadRepoAfterEditCommands(repoPath: string): Record<string, Afte
     const run = (cmd as any).run;
     if (typeof run !== "string" || run.length === 0) continue;
     const enabledRaw = (cmd as any).enabled;
-    const globsRaw = (cmd as any).globs;
+    const globsRaw = (cmd as any).globs ?? (cmd as any).glob;
     const globs = Array.isArray(globsRaw) ? globsRaw.filter((g): g is string => typeof g === "string") : undefined;
     valid[id] = {
       run,
-      ...(globs ? { globs } : {}),
+      ...(globs && globs.length > 0 ? { globs } : {}),
       ...(typeof enabledRaw === "boolean" ? { enabled: enabledRaw } : {}),
     };
   }
@@ -112,7 +125,18 @@ export function loadRepoAfterImplementCommands(repoPath: string): Record<string,
   const raw = loadRepoConfig(repoPath);
   if (!raw) return null;
   const commands = raw?.commands?.afterImplement;
-  if (!commands || typeof commands !== "object" || Array.isArray(commands)) return null;
+  if (!commands || typeof commands !== "object") return null;
+
+  if (Array.isArray(commands)) {
+    const valid: Record<string, AfterImplementCommandConfig> = {};
+    for (const [index, cmd] of commands.entries()) {
+      if (!cmd || typeof cmd !== "object") continue;
+      const run = (cmd as any).run;
+      if (typeof run !== "string" || run.length === 0) continue;
+      valid[`cmd-${index + 1}`] = { run };
+    }
+    return Object.keys(valid).length > 0 ? valid : null;
+  }
 
   const valid: Record<string, AfterImplementCommandConfig> = {};
   for (const [id, cmd] of Object.entries(commands as Record<string, unknown>)) {

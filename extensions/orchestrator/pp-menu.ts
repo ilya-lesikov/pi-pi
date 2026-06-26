@@ -2377,6 +2377,37 @@ async function showBooleanSetting(
   }
 }
 
+async function showInvertedBooleanSetting(
+  orchestrator: Orchestrator,
+  ctx: any,
+  title: string,
+  keyPath: string[],
+): Promise<void> {
+  while (true) {
+    const info = getConfigSourceInfo(orchestrator, keyPath);
+    const yesTitle = withTags("Yes", formatSourceTags(false, info));
+    const noTitle = withTags("No", formatSourceTags(true, info));
+    const activeFirst = info.activeValue === true
+      ? [noTitle, yesTitle]
+      : [yesTitle, noTitle];
+    const choice = await selectOption(ctx, title, [
+      ...activeFirst,
+      ...buildResetOptions(orchestrator, keyPath),
+      opt("Back", "Return to the previous menu"),
+    ]);
+    if (!choice || choice === "Back") return;
+    if (choice === yesTitle) {
+      applyScopeChoice(orchestrator, keyPath, false, await pickScopeForEdit(ctx, orchestrator, keyPath));
+      continue;
+    }
+    if (choice === noTitle) {
+      applyScopeChoice(orchestrator, keyPath, true, await pickScopeForEdit(ctx, orchestrator, keyPath));
+      continue;
+    }
+    maybeHandleResetChoice(orchestrator, choice, keyPath);
+  }
+}
+
 async function showLogLevelSetting(orchestrator: Orchestrator, ctx: any): Promise<void> {
   const levels: Array<{ value: PiPiConfig["general"]["logLevel"]; label: string }> = [
     { value: "debug", label: "Debug" },
@@ -2423,7 +2454,7 @@ async function showGeneralSettings(orchestrator: Orchestrator, ctx: any): Promis
       continue;
     }
     if (choice.startsWith("Ignore configs from other repos:")) {
-      await showBooleanSetting(orchestrator, ctx, "Ignore configs from other repos", ["general", "loadExtraRepoConfigs"]);
+      await showInvertedBooleanSetting(orchestrator, ctx, "Ignore configs from other repos", ["general", "loadExtraRepoConfigs"]);
       continue;
     }
     if (choice.startsWith("Log level:")) {
