@@ -71,7 +71,7 @@ export interface PiPiConfig {
 export const PRESET_GROUPS = ["planners", "codeReviewers", "planReviewers", "brainstormReviewers"] as const;
 export type PresetGroup = (typeof PRESET_GROUPS)[number];
 
-const DEFAULT_CONFIG: PiPiConfig = {
+export const DEFAULT_CONFIG: PiPiConfig = {
   mainModel: {
     implement: { model: "anthropic/claude-opus-latest", thinking: "high" },
     debug: { model: "openai/gpt-latest", thinking: "high" },

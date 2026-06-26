@@ -46,9 +46,12 @@ describe("log", () => {
     })();
   });
 
-  it("initSessionLogger creates session log file in .pp/logs", () => {
+  it("initSessionLogger creates session log file in .pp/logs", async () => {
     const ppDir = makeTempDir();
     initSessionLogger(ppDir, "info");
+    getLogger().info({ s: "test" }, "create-session-log");
+    flushLogs();
+    await delay(30);
 
     const logPath = sessionLogPath(ppDir);
     expect(logPath).not.toBe("");

@@ -1,10 +1,12 @@
 import { existsSync, readdirSync, writeFileSync } from "fs";
 import { join, relative } from "path";
+import { isDeepStrictEqual } from "util";
 import { askUser } from "../../3p/pi-ask-user/index.js";
 import { unregisterAgentDefinitions } from "./agents/registry.js";
 import {
   type AfterEditCommand,
   type AfterImplementCommand,
+  DEFAULT_CONFIG,
   GLOBAL_CONFIG_PATH,
   loadConfig,
   mergeConfigLayers,
@@ -877,7 +879,7 @@ function formatTokenCount(count: number): string {
   return `${Math.round(count / 1000000)}M`;
 }
 
-function formatDuration(ms: number): string {
+function formatElapsedDuration(ms: number): string {
   const sec = Math.floor(ms / 1000);
   if (sec < 60) return `${sec}s`;
   const min = Math.floor(sec / 60);
@@ -1006,7 +1008,7 @@ function showUsage(ctx: any): void {
     const parts = [`↑${formatTokenCount(agg.input)}`, `↓${formatTokenCount(agg.output)}`];
     if (agg.cacheSupported) parts.push(`⚡${saCR}%`);
     if (agg.cost > 0) parts.push(`$${agg.cost.toFixed(2)}`);
-    if (agg.durationMs > 0) parts.push(formatDuration(agg.durationMs));
+    if (agg.durationMs > 0) parts.push(formatElapsedDuration(agg.durationMs));
     if (agg.toolUses > 0) parts.push(`${agg.toolUses} tools`);
     const countSuffix = agg.count > 1 ? ` (×${agg.count})` : "";
     lines.push(`  ${agentType}${countSuffix}: ${parts.join("  ")}`);
@@ -1047,11 +1049,50 @@ async function showInfoMenu(orchestrator: Orchestrator, ctx: any): Promise<typeo
   }
 }
 
-type ConfigSource = "(default)" | "(global)" | "(project)";
 type Scope = "global" | "project";
 type MainModelRole = keyof PiPiConfig["mainModel"];
 type AgentRole = keyof PiPiConfig["agents"];
 type TimeoutKey = keyof PiPiConfig["timeouts"];
+type CommandListKey = keyof PiPiConfig["commands"];
+
+export interface ConfigSourceInfo {
+  activeValue: any;
+  defaultValue: any;
+  flantValue: any | undefined;
+  globalValue: any | undefined;
+  projectValue: any | undefined;
+  source: "default" | "flant" | "global" | "project";
+}
+
+const ORCHESTRATOR_ROLES: Array<{ role: MainModelRole; label: string; description: string }> = [
+  { role: "brainstorm", label: "Brainstormer", description: "mainModel.brainstorm" },
+  { role: "implement", label: "Implementer", description: "mainModel.implement (also used for plan phase)" },
+  { role: "debug", label: "Debugger", description: "mainModel.debug" },
+  { role: "review", label: "Reviewer", description: "mainModel.review" },
+];
+
+const SUBAGENT_ROLES: Array<{ role: AgentRole; label: string; description: string }> = [
+  { role: "explore", label: "Explore", description: "agents.explore" },
+  { role: "librarian", label: "Librarian", description: "agents.librarian" },
+  { role: "task", label: "Task", description: "agents.task" },
+];
+
+const PRESET_GROUP_ITEMS: Array<{ group: PresetGroup; label: string }> = [
+  { group: "brainstormReviewers", label: "Brainstorm reviewers" },
+  { group: "planners", label: "Planners" },
+  { group: "planReviewers", label: "Plan reviewers" },
+  { group: "codeReviewers", label: "Code reviewers" },
+];
+
+const TIMEOUT_LABELS: Record<TimeoutKey, string> = {
+  afterEdit: "After file edit command",
+  afterImplement: "After implementation command",
+  agentSpawn: "Subagent spawn",
+  agentReadyPing: "Subagent ready ping",
+  agentStale: "Subagent stale",
+  lockStale: "Lock stale",
+  lockUpdate: "Lock update",
+};
 
 const VALID_NAME_RE = /^[A-Za-z0-9-]+$/;
 
@@ -1086,32 +1127,147 @@ function getNestedValue(obj: unknown, keyPath: string[]): any {
 function setNestedValue(obj: Record<string, any>, keyPath: string[], value: any): void {
   if (keyPath.length === 0) return;
   let cursor: Record<string, any> = obj;
-  for (let i = 0; i < keyPath.length - 1; i++) {
-    const key = keyPath[i];
+  for (let i = 0; i < keyPath.length - 1; i += 1) {
+    const key = keyPath[i]!;
     const current = cursor[key];
-    if (!current || typeof current !== "object" || Array.isArray(current)) {
-      cursor[key] = {};
-    }
+    if (!current || typeof current !== "object" || Array.isArray(current)) cursor[key] = {};
     cursor = cursor[key] as Record<string, any>;
   }
-  cursor[keyPath[keyPath.length - 1]] = value;
+  cursor[keyPath[keyPath.length - 1]!] = value;
 }
 
 function deleteNestedValue(obj: Record<string, any>, keyPath: string[]): void {
   if (keyPath.length === 0) return;
   let cursor: Record<string, any> = obj;
-  for (let i = 0; i < keyPath.length - 1; i++) {
-    const key = keyPath[i];
+  for (let i = 0; i < keyPath.length - 1; i += 1) {
+    const key = keyPath[i]!;
     const current = cursor[key];
     if (!current || typeof current !== "object" || Array.isArray(current)) return;
     cursor = current;
   }
-  delete cursor[keyPath[keyPath.length - 1]];
+  delete cursor[keyPath[keyPath.length - 1]!];
+}
+
+function formatInlineValue(value: any): string {
+  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "number" || typeof value === "boolean" || value === null) return String(value);
+  if (value === undefined) return "undefined";
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function tagsString(tags: string[]): string {
+  return tags.length > 0 ? `(${tags.join(", ")})` : "";
+}
+
+function withTags(label: string, tags: string): string {
+  return tags ? `${label} ${tags}` : label;
 }
 
 function getRawScopeValue(orchestrator: Orchestrator, scope: Scope, keyPath: string[]): any {
   const raw = readRawConfig(getScopeConfigPath(orchestrator, scope));
   return getNestedValue(raw, keyPath);
+}
+
+function getRawScopeConfigs(orchestrator: Orchestrator): { globalConfig: Record<string, any>; projectConfig: Record<string, any> } {
+  return {
+    globalConfig: readRawConfig(GLOBAL_CONFIG_PATH),
+    projectConfig: readRawConfig(getProjectConfigPath(orchestrator.cwd)),
+  };
+}
+
+function hasLayerOverride(orchestrator: Orchestrator, scope: Scope, keyPath: string[]): boolean {
+  const raw = readRawConfig(getScopeConfigPath(orchestrator, scope));
+  return hasNestedKey(raw, keyPath);
+}
+
+function getLayerOverrideValue(orchestrator: Orchestrator, scope: Scope, keyPath: string[]): any {
+  const raw = readRawConfig(getScopeConfigPath(orchestrator, scope));
+  return getNestedValue(raw, keyPath);
+}
+
+function getOwnedScopes(orchestrator: Orchestrator, keyPath: string[]): Scope[] {
+  const out: Scope[] = [];
+  if (hasLayerOverride(orchestrator, "global", keyPath)) out.push("global");
+  if (hasLayerOverride(orchestrator, "project", keyPath)) out.push("project");
+  return out;
+}
+
+export function getConfigSourceInfo(orchestrator: Orchestrator, keyPath: string[]): ConfigSourceInfo {
+  const { globalConfig, projectConfig } = getRawScopeConfigs(orchestrator);
+  const flantConfig = getFlantGeneratedConfig() as Record<string, any> | null;
+  const activeValue = getNestedValue(orchestrator.config as Record<string, any>, keyPath);
+  const defaultValue = getNestedValue(DEFAULT_CONFIG as Record<string, any>, keyPath);
+  const flantValue = flantConfig ? getNestedValue(flantConfig, keyPath) : undefined;
+  const globalValue = hasNestedKey(globalConfig, keyPath) ? getNestedValue(globalConfig, keyPath) : undefined;
+  const projectValue = hasNestedKey(projectConfig, keyPath) ? getNestedValue(projectConfig, keyPath) : undefined;
+  const source = hasNestedKey(projectConfig, keyPath)
+    ? "project"
+    : hasNestedKey(globalConfig, keyPath)
+    ? "global"
+    : flantConfig && hasNestedKey(flantConfig, keyPath)
+    ? "flant"
+    : "default";
+  return {
+    activeValue,
+    defaultValue,
+    flantValue,
+    globalValue,
+    projectValue,
+    source,
+  };
+}
+
+export function formatSourceTags(currentValue: any, info: ConfigSourceInfo): string {
+  const tags: string[] = [];
+  if (isDeepStrictEqual(currentValue, info.activeValue)) tags.push("active");
+  if (isDeepStrictEqual(currentValue, info.defaultValue)) tags.push("default");
+  if (info.flantValue !== undefined && isDeepStrictEqual(currentValue, info.flantValue)) tags.push("flant");
+  if (info.globalValue !== undefined && isDeepStrictEqual(currentValue, info.globalValue)) tags.push("global");
+  if (info.projectValue !== undefined && isDeepStrictEqual(currentValue, info.projectValue)) tags.push("project");
+  return tagsString(tags);
+}
+
+export function buildResetOptions(orchestrator: Orchestrator, keyPath: string[]): OptionInput[] {
+  const options: OptionInput[] = [];
+  if (hasLayerOverride(orchestrator, "global", keyPath)) {
+    options.push(opt("Reset global setting", formatInlineValue(getLayerOverrideValue(orchestrator, "global", keyPath))));
+  }
+  if (hasLayerOverride(orchestrator, "project", keyPath)) {
+    options.push(opt("Reset project setting", formatInlineValue(getLayerOverrideValue(orchestrator, "project", keyPath))));
+  }
+  return options;
+}
+
+export function formatDuration(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  if (ms < 60000) return `${Math.round(ms / 1000)}s`;
+  if (ms < 3600000) return `${Math.round(ms / 60000)}m`;
+  return `${Math.round(ms / 3600000)}h`;
+}
+
+export function parseDuration(input: string): number | null {
+  const match = /^\s*(\d+)\s*(ms|s|m|h)?\s*$/i.exec(input);
+  if (!match) return null;
+  const value = Number(match[1]);
+  const unit = (match[2] ?? "ms").toLowerCase();
+  if (!Number.isFinite(value) || value < 0) return null;
+  if (unit === "ms") return value;
+  if (unit === "s") return value * 1000;
+  if (unit === "m") return value * 60000;
+  if (unit === "h") return value * 3600000;
+  return null;
+}
+
+export function slugify(text: string, maxLen = 40): string {
+  const collapsed = text.replace(/\s+/g, " ").trim();
+  const safe = collapsed.replace(/[^A-Za-z0-9 _./:-]/g, "").trim();
+  const base = safe || collapsed || "(empty)";
+  if (base.length <= maxLen) return base;
+  return `${base.slice(0, Math.max(1, maxLen - 1)).trimEnd()}…`;
 }
 
 function tryApplyConfigChange(orchestrator: Orchestrator, scope: Scope, keyPath: string[], value: any): { ok: boolean; error?: string } {
@@ -1142,24 +1298,6 @@ function tryClearConfigOverride(orchestrator: Orchestrator, scope: Scope, keyPat
   } catch (err: any) {
     return { ok: false, error: err?.message ?? String(err) };
   }
-}
-
-function getConfigSource(globalConfig: Record<string, any>, projectConfig: Record<string, any>, keyPath: string[]): ConfigSource {
-  if (hasNestedKey(projectConfig, keyPath)) return "(project)";
-  if (hasNestedKey(globalConfig, keyPath)) return "(global)";
-  return "(default)";
-}
-
-function getRawScopeConfigs(orchestrator: Orchestrator): { globalConfig: Record<string, any>; projectConfig: Record<string, any> } {
-  return {
-    globalConfig: readRawConfig(GLOBAL_CONFIG_PATH),
-    projectConfig: readRawConfig(getProjectConfigPath(orchestrator.cwd)),
-  };
-}
-
-function describeModelThinkingSource(modelSource: ConfigSource, thinkingSource: ConfigSource): string {
-  if (modelSource === thinkingSource) return modelSource;
-  return `model ${modelSource}, thinking ${thinkingSource}`;
 }
 
 function parseCommaSeparated(input: string): string[] {
@@ -1198,15 +1336,27 @@ function normalizeProviderLabel(provider: string): string {
 }
 
 function providerOrder(provider: string): number {
-  if (provider === "anthropic") return 0;
-  if (provider === "openai") return 1;
-  if (provider === "google") return 2;
-  if (provider === "deepseek") return 3;
-  if (provider === "x-ai") return 4;
-  if (provider === "qwen") return 5;
-  if (provider === "pp-flant-anthropic") return 6;
-  if (provider === "pp-flant-openai") return 7;
+  if (provider === "pp-flant-anthropic") return 0;
+  if (provider === "pp-flant-openai") return 1;
+  if (provider === "anthropic") return 2;
+  if (provider === "openai") return 3;
+  if (provider === "google") return 4;
+  if (provider === "deepseek") return 5;
+  if (provider === "x-ai") return 6;
+  if (provider === "qwen") return 7;
   return 99;
+}
+
+function compareModelVersion(a: string, b: string): number {
+  const aParts = (a.match(/\d+/g) ?? []).map(Number);
+  const bParts = (b.match(/\d+/g) ?? []).map(Number);
+  const len = Math.max(aParts.length, bParts.length);
+  for (let i = 0; i < len; i += 1) {
+    const ai = aParts[i] ?? 0;
+    const bi = bParts[i] ?? 0;
+    if (ai !== bi) return ai - bi;
+  }
+  return a.localeCompare(b);
 }
 
 function listAvailableModels(ctx: any): Array<{ provider: string; id: string; spec: string }> {
@@ -1231,22 +1381,36 @@ function listAvailableModels(ctx: any): Array<{ provider: string; id: string; sp
     if (byProviderOrder !== 0) return byProviderOrder;
     const byProviderName = a.provider.localeCompare(b.provider);
     if (byProviderName !== 0) return byProviderName;
-    return a.id.localeCompare(b.id);
+    return compareModelVersion(b.id, a.id);
   });
 
   return models;
 }
 
 async function pickScope(ctx: any, orchestrator: Orchestrator): Promise<Scope | null> {
-  const choice = await selectOption(ctx, "Apply to?", [
-    opt("Global", GLOBAL_CONFIG_PATH),
-    opt("Project", getProjectConfigPath(orchestrator.cwd)),
+  const choice = await selectOption(ctx, "Scope", [
+    opt("Set globally", GLOBAL_CONFIG_PATH),
+    opt("Set for project", getProjectConfigPath(orchestrator.cwd)),
     opt("Back", "Return to the previous menu"),
   ]);
   if (!choice || choice === "Back") return null;
-  if (choice === "Global") return "global";
-  if (choice === "Project") return "project";
+  if (choice === "Set globally") return "global";
+  if (choice === "Set for project") return "project";
   return null;
+}
+
+async function pickScopeFromOwned(ctx: any, orchestrator: Orchestrator, keyPath: string[]): Promise<Scope | null> {
+  const scopes = getOwnedScopes(orchestrator, keyPath);
+  if (scopes.length === 0) return null;
+  if (scopes.length === 1) return scopes[0]!;
+  const options: OptionInput[] = [
+    opt("Global override", GLOBAL_CONFIG_PATH),
+    opt("Project override", getProjectConfigPath(orchestrator.cwd)),
+    opt("Back", "Return to the previous menu"),
+  ];
+  const choice = await selectOption(ctx, "Choose override scope", options);
+  if (!choice || choice === "Back") return null;
+  return choice === "Global override" ? "global" : "project";
 }
 
 async function pickModel(ctx: any, currentModel?: string): Promise<string | null> {
@@ -1266,9 +1430,10 @@ async function pickModel(ctx: any, currentModel?: string): Promise<string | null
   const selectionToModel = new Map<string, string>();
   const usedTitles = new Set<string>();
 
-  if (currentModel && !availableSpecs.has(currentModel) && !(currentModel in aliasMap)) {
-    const title = makeUniqueTitle("Configured model (unavailable)", usedTitles);
-    options.push(opt(title, currentModel));
+  if (currentModel) {
+    const unavailable = !availableSpecs.has(currentModel) && !(currentModel in aliasMap);
+    const title = makeUniqueTitle(`Current: ${currentModel} (active${unavailable ? ", unavailable" : ""})`, usedTitles);
+    options.push(opt(title, "Current model"));
     selectionToModel.set(title, currentModel);
   }
 
@@ -1300,8 +1465,8 @@ async function pickModel(ctx: any, currentModel?: string): Promise<string | null
   }
 
   if (availableModels.length > 0) {
-    options.push("── All available models ──");
     for (const model of availableModels) {
+      if (currentModel && model.spec === currentModel) continue;
       const providerLabel = normalizeProviderLabel(model.provider);
       const title = makeUniqueTitle(`${providerLabel} — ${model.id}`, usedTitles);
       options.push(opt(title, model.spec));
@@ -1314,7 +1479,6 @@ async function pickModel(ctx: any, currentModel?: string): Promise<string | null
   while (true) {
     const choice = await selectOption(ctx, "Model", options);
     if (!choice || choice === "Back") return null;
-    if (choice === "── All available models ──") continue;
     const selected = selectionToModel.get(choice);
     if (selected) return selected;
   }
@@ -1364,6 +1528,28 @@ function clearConfigOverride(orchestrator: Orchestrator, scope: Scope, keyPath: 
   refreshSubagentDefinitions(orchestrator, keyPath);
 }
 
+function thinkingLabel(value: string): string {
+  if (value === "off") return "Off";
+  if (value === "low") return "Low";
+  if (value === "medium") return "Medium";
+  if (value === "high") return "High";
+  if (value === "xhigh") return "XHigh";
+  return value;
+}
+
+function logLevelLabel(value: string): string {
+  if (value === "debug") return "Debug";
+  if (value === "info") return "Info";
+  if (value === "warn") return "Warning";
+  if (value === "error") return "Error";
+  return value;
+}
+
+function applyScopeChoice(orchestrator: Orchestrator, keyPath: string[], value: any, scope: Scope | null): void {
+  if (!scope) return;
+  applyConfigChange(orchestrator, scope, keyPath, value);
+}
+
 function enabledPresetSummary(variants: Record<string, VariantConfig>): string {
   const enabled = Object.entries(variants)
     .filter(([, variant]) => variant.enabled)
@@ -1392,107 +1578,96 @@ async function promptSafeName(ctx: any, label: string): Promise<string | null> {
   return value;
 }
 
-async function showMainModelsSettings(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
-  const labels: Record<MainModelRole, string> = {
-    implement: "implement",
-    debug: "debug",
-    brainstorm: "brainstorm",
-    review: "review",
-  };
+function maybeHandleResetChoice(orchestrator: Orchestrator, choice: string, keyPath: string[]): boolean {
+  if (choice === "Reset global setting") {
+    clearConfigOverride(orchestrator, "global", keyPath);
+    return true;
+  }
+  if (choice === "Reset project setting") {
+    clearConfigOverride(orchestrator, "project", keyPath);
+    return true;
+  }
+  return false;
+}
 
+async function showOrchestratorEditor(
+  orchestrator: Orchestrator,
+  ctx: any,
+  role: MainModelRole,
+  label: string,
+): Promise<typeof BACK> {
   while (true) {
-    const { globalConfig, projectConfig } = getRawScopeConfigs(orchestrator);
-    const options: OptionInput[] = (Object.keys(labels) as MainModelRole[]).map((role) => {
-      const modelSource = getConfigSource(globalConfig, projectConfig, ["mainModel", role, "model"]);
-      const thinkingSource = getConfigSource(globalConfig, projectConfig, ["mainModel", role, "thinking"]);
-      const current = orchestrator.config.mainModel[role];
-      return opt(labels[role], `${current.model} / ${current.thinking} ${describeModelThinkingSource(modelSource, thinkingSource)}`);
-    });
-    options.push(opt("Back", "Return to the previous menu"));
-
-    const picked = await selectOption(ctx, "Main models", options);
-    if (!picked || picked === "Back") return BACK;
-    const role = (Object.keys(labels) as MainModelRole[]).find((key) => labels[key] === picked);
-    if (!role) continue;
-
-    while (true) {
-      const raw = getRawScopeConfigs(orchestrator);
-      const current = orchestrator.config.mainModel[role];
-      const modelSource = getConfigSource(raw.globalConfig, raw.projectConfig, ["mainModel", role, "model"]);
-      const thinkingSource = getConfigSource(raw.globalConfig, raw.projectConfig, ["mainModel", role, "thinking"]);
-      const action = await selectOption(ctx, `Main models → ${role}`, [
-        opt("Change model", `${current.model} ${modelSource}`),
-        opt("Change thinking", `${current.thinking} ${thinkingSource}`),
-        opt("Clear overrides", "Remove this role override in selected scope"),
-        opt("Back", "Return to the previous menu"),
-      ]);
-      if (!action || action === "Back") break;
-
-      if (action === "Change model") {
-        const model = await pickModel(ctx, current.model);
-        if (!model) continue;
-        const scope = await pickScope(ctx, orchestrator);
-        if (!scope) continue;
-        applyConfigChange(orchestrator, scope, ["mainModel", role, "model"], model);
-        continue;
-      }
-
-      if (action === "Change thinking") {
-        const thinking = await pickThinking(ctx, false);
-        if (!thinking) continue;
-        const scope = await pickScope(ctx, orchestrator);
-        if (!scope) continue;
-        applyConfigChange(orchestrator, scope, ["mainModel", role, "thinking"], thinking);
-        continue;
-      }
-
-      const scope = await pickScope(ctx, orchestrator);
-      if (!scope) continue;
-      clearConfigOverride(orchestrator, scope, ["mainModel", role]);
+    const current = orchestrator.config.mainModel[role];
+    const modelInfo = getConfigSourceInfo(orchestrator, ["mainModel", role, "model"]);
+    const thinkingInfo = getConfigSourceInfo(orchestrator, ["mainModel", role, "thinking"]);
+    const choice = await selectOption(ctx, label, [
+      opt(`Model: ${withTags(current.model, formatSourceTags(current.model, modelInfo))}`, "Select model"),
+      opt(`Thinking: ${withTags(thinkingLabel(current.thinking), formatSourceTags(current.thinking, thinkingInfo))}`, "Select thinking level"),
+      ...buildResetOptions(orchestrator, ["mainModel", role]),
+      opt("Back", "Return to the previous menu"),
+    ]);
+    if (!choice || choice === "Back") return BACK;
+    if (choice.startsWith("Model:")) {
+      const model = await pickModel(ctx, current.model);
+      if (!model) continue;
+      applyScopeChoice(orchestrator, ["mainModel", role, "model"], model, await pickScope(ctx, orchestrator));
+      continue;
     }
+    if (choice.startsWith("Thinking:")) {
+      const thinking = await pickThinking(ctx, false);
+      if (!thinking) continue;
+      applyScopeChoice(orchestrator, ["mainModel", role, "thinking"], thinking, await pickScope(ctx, orchestrator));
+      continue;
+    }
+    maybeHandleResetChoice(orchestrator, choice, ["mainModel", role]);
   }
 }
 
-async function showPresetVariantEditor(
+async function showOrchestratorsSettings(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
+  while (true) {
+    const options: OptionInput[] = ORCHESTRATOR_ROLES.map(({ role, label, description }) => {
+      const current = orchestrator.config.mainModel[role];
+      return opt(label, `${current.model} / ${thinkingLabel(current.thinking)} — ${description}`);
+    });
+    options.push(opt("Back", "Return to the previous menu"));
+    const choice = await selectOption(ctx, "Orchestrators", options);
+    if (!choice || choice === "Back") return BACK;
+    const picked = ORCHESTRATOR_ROLES.find((item) => item.label === choice);
+    if (!picked) continue;
+    await showOrchestratorEditor(orchestrator, ctx, picked.role, picked.label);
+  }
+}
+
+async function showSimpleSubagentEditor(
   orchestrator: Orchestrator,
   ctx: any,
-  group: PresetGroup,
-  presetName: string,
-  variantName: string,
+  role: AgentRole,
+  label: string,
 ): Promise<typeof BACK> {
   while (true) {
-    const variant = orchestrator.config.presets[group]?.[presetName]?.[variantName];
-    if (!variant) return BACK;
-
-    const action = await selectOption(ctx, `${presetName} → ${variantName}`, [
-      opt("Change model", variant.model),
-      opt("Change thinking", variant.thinking),
-      opt("Toggle enabled", variant.enabled ? "ON" : "OFF"),
+    const current = orchestrator.config.agents[role];
+    const modelInfo = getConfigSourceInfo(orchestrator, ["agents", role, "model"]);
+    const thinkingInfo = getConfigSourceInfo(orchestrator, ["agents", role, "thinking"]);
+    const choice = await selectOption(ctx, label, [
+      opt(`Model: ${withTags(current.model, formatSourceTags(current.model, modelInfo))}`, "Select model"),
+      opt(`Thinking: ${withTags(thinkingLabel(current.thinking), formatSourceTags(current.thinking, thinkingInfo))}`, "Select thinking level"),
+      ...buildResetOptions(orchestrator, ["agents", role]),
       opt("Back", "Return to the previous menu"),
     ]);
-    if (!action || action === "Back") return BACK;
-
-    if (action === "Change model") {
-      const model = await pickModel(ctx, variant.model);
+    if (!choice || choice === "Back") return BACK;
+    if (choice.startsWith("Model:")) {
+      const model = await pickModel(ctx, current.model);
       if (!model) continue;
-      const scope = await pickScope(ctx, orchestrator);
-      if (!scope) continue;
-      applyConfigChange(orchestrator, scope, ["presets", group, presetName, variantName, "model"], model);
+      applyScopeChoice(orchestrator, ["agents", role, "model"], model, await pickScope(ctx, orchestrator));
       continue;
     }
-
-    if (action === "Change thinking") {
+    if (choice.startsWith("Thinking:")) {
       const thinking = await pickThinking(ctx, true);
       if (!thinking) continue;
-      const scope = await pickScope(ctx, orchestrator);
-      if (!scope) continue;
-      applyConfigChange(orchestrator, scope, ["presets", group, presetName, variantName, "thinking"], thinking);
+      applyScopeChoice(orchestrator, ["agents", role, "thinking"], thinking, await pickScope(ctx, orchestrator));
       continue;
     }
-
-    const scope = await pickScope(ctx, orchestrator);
-    if (!scope) continue;
-    applyConfigChange(orchestrator, scope, ["presets", group, presetName, variantName, "enabled"], !variant.enabled);
+    maybeHandleResetChoice(orchestrator, choice, ["agents", role]);
   }
 }
 
@@ -1502,20 +1677,18 @@ async function addPresetVariant(
   group: PresetGroup,
   presetName: string,
 ): Promise<void> {
-  const variantName = await promptSafeName(ctx, "Variant name");
+  const variantName = await promptSafeName(ctx, "Agent name");
   if (!variantName) return;
   if (orchestrator.config.presets[group]?.[presetName]?.[variantName]) {
-    ctx.ui.notify(`Variant '${variantName}' already exists.`, "warning");
+    ctx.ui.notify(`Agent '${variantName}' already exists.`, "warning");
     return;
   }
-
   const model = await pickModel(ctx);
   if (!model) return;
   const thinking = await pickThinking(ctx, true);
   if (!thinking) return;
   const scope = await pickScope(ctx, orchestrator);
   if (!scope) return;
-
   applyConfigChange(orchestrator, scope, ["presets", group, presetName, variantName], {
     enabled: true,
     model,
@@ -1528,41 +1701,118 @@ async function removePresetVariant(
   ctx: any,
   group: PresetGroup,
   presetName: string,
+  variantName: string,
 ): Promise<void> {
-  const preset = orchestrator.config.presets[group]?.[presetName] ?? {};
-  const variantNames = Object.keys(preset);
-  if (variantNames.length <= 1) {
-    ctx.ui.notify("Preset must contain at least one variant.", "warning");
-    return;
-  }
-
-  const options: OptionInput[] = variantNames.map((name) => opt(name, `${preset[name]?.model ?? ""}`));
-  options.push(opt("Back", "Return to the previous menu"));
-  const picked = await selectOption(ctx, "Remove variant", options);
-  if (!picked || picked === "Back") return;
-
-  const scope = await pickScope(ctx, orchestrator);
+  const scope = await pickScopeFromOwned(ctx, orchestrator, ["presets", group, presetName, variantName]);
   if (!scope) return;
-
   const rawPresetValue = getRawScopeValue(orchestrator, scope, ["presets", group, presetName]);
   if (!rawPresetValue || typeof rawPresetValue !== "object" || Array.isArray(rawPresetValue)) {
-    ctx.ui.notify(`No '${presetName}' preset override in selected scope.`, "info");
+    ctx.ui.notify("No override in selected scope.", "info");
     return;
   }
-
   const rawPreset = rawPresetValue as Record<string, VariantConfig>;
-  if (!Object.prototype.hasOwnProperty.call(rawPreset, picked)) {
-    ctx.ui.notify(`Variant '${picked}' is inherited and cannot be removed from selected scope.`, "info");
+  if (!Object.prototype.hasOwnProperty.call(rawPreset, variantName)) {
+    ctx.ui.notify("Agent is inherited and cannot be removed in selected scope.", "info");
     return;
   }
   if (Object.keys(rawPreset).length <= 1) {
-    ctx.ui.notify("Preset must contain at least one variant in this scope.", "warning");
+    ctx.ui.notify("Preset must contain at least one agent in this scope.", "warning");
     return;
   }
-
   const nextPreset = structuredClone(rawPreset);
-  delete nextPreset[picked];
+  delete nextPreset[variantName];
   applyConfigChange(orchestrator, scope, ["presets", group, presetName], nextPreset);
+}
+
+async function showPresetVariantEditor(
+  orchestrator: Orchestrator,
+  ctx: any,
+  group: PresetGroup,
+  presetName: string,
+  variantName: string,
+): Promise<typeof BACK> {
+  while (true) {
+    const variant = orchestrator.config.presets[group]?.[presetName]?.[variantName];
+    if (!variant) return BACK;
+    const modelInfo = getConfigSourceInfo(orchestrator, ["presets", group, presetName, variantName, "model"]);
+    const thinkingInfo = getConfigSourceInfo(orchestrator, ["presets", group, presetName, variantName, "thinking"]);
+    const enabledInfo = getConfigSourceInfo(orchestrator, ["presets", group, presetName, variantName, "enabled"]);
+    const options: OptionInput[] = [
+      opt(`Model: ${withTags(variant.model, formatSourceTags(variant.model, modelInfo))}`, "Select model"),
+      opt(`Thinking: ${withTags(thinkingLabel(variant.thinking), formatSourceTags(variant.thinking, thinkingInfo))}`, "Select thinking level"),
+      opt(`${variant.enabled ? "Disable" : "Enable"}: ${withTags(variant.enabled ? "ON" : "OFF", formatSourceTags(variant.enabled, enabledInfo))}`, "Toggle enabled state"),
+    ];
+    if (getOwnedScopes(orchestrator, ["presets", group, presetName, variantName]).length > 0) {
+      options.push(opt("Delete", "Delete this agent override"));
+    }
+    options.push(opt("Back", "Return to the previous menu"));
+    const choice = await selectOption(ctx, variantName, options);
+    if (!choice || choice === "Back") return BACK;
+    if (choice.startsWith("Model:")) {
+      const model = await pickModel(ctx, variant.model);
+      if (!model) continue;
+      applyScopeChoice(orchestrator, ["presets", group, presetName, variantName, "model"], model, await pickScope(ctx, orchestrator));
+      continue;
+    }
+    if (choice.startsWith("Thinking:")) {
+      const thinking = await pickThinking(ctx, true);
+      if (!thinking) continue;
+      applyScopeChoice(orchestrator, ["presets", group, presetName, variantName, "thinking"], thinking, await pickScope(ctx, orchestrator));
+      continue;
+    }
+    if (choice.startsWith("Disable:") || choice.startsWith("Enable:")) {
+      applyScopeChoice(
+        orchestrator,
+        ["presets", group, presetName, variantName, "enabled"],
+        !variant.enabled,
+        await pickScope(ctx, orchestrator),
+      );
+      continue;
+    }
+    await removePresetVariant(orchestrator, ctx, group, presetName, variantName);
+    return BACK;
+  }
+}
+
+async function showPresetAgentsMenu(
+  orchestrator: Orchestrator,
+  ctx: any,
+  group: PresetGroup,
+  presetName: string,
+): Promise<typeof BACK> {
+  while (true) {
+    const preset = orchestrator.config.presets[group]?.[presetName] ?? {};
+    const options: OptionInput[] = [];
+    const byTitle = new Map<string, string>();
+    for (const [variantName, variant] of Object.entries(preset)) {
+      const title = variant.enabled ? variantName : `${variantName} (disabled)`;
+      options.push(opt(title, `${variant.model} / ${thinkingLabel(variant.thinking)}`));
+      byTitle.set(title, variantName);
+    }
+    options.push(opt("New agent", "Add a new agent"));
+    options.push(opt("Back", "Return to the previous menu"));
+    const choice = await selectOption(ctx, "Agents", options);
+    if (!choice || choice === "Back") return BACK;
+    if (choice === "New agent") {
+      await addPresetVariant(orchestrator, ctx, group, presetName);
+      continue;
+    }
+    const variantName = byTitle.get(choice);
+    if (!variantName) continue;
+    await showPresetVariantEditor(orchestrator, ctx, group, presetName, variantName);
+  }
+}
+
+function deletePresetFromScope(orchestrator: Orchestrator, scope: Scope, group: PresetGroup, presetName: string): void {
+  const rawGroup = getRawScopeValue(orchestrator, scope, ["presets", group]);
+  if (!rawGroup || typeof rawGroup !== "object" || Array.isArray(rawGroup)) return;
+  const nextGroup = structuredClone(rawGroup as Record<string, Record<string, VariantConfig>>);
+  delete nextGroup[presetName];
+  if (Object.keys(nextGroup).length === 0) {
+    clearConfigOverride(orchestrator, scope, ["presets", group]);
+  } else {
+    applyConfigChange(orchestrator, scope, ["presets", group], nextGroup);
+  }
 }
 
 async function showPresetEditor(
@@ -1574,43 +1824,37 @@ async function showPresetEditor(
   while (true) {
     const preset = orchestrator.config.presets[group]?.[presetName];
     if (!preset) return BACK;
-
-    const options: OptionInput[] = [];
-    const editMap = new Map<string, string>();
-    for (const [variantName, variant] of Object.entries(preset)) {
-      const title = `Edit ${variantName}`;
-      options.push(opt(title, `${variant.model} / ${variant.thinking} / ${variant.enabled ? "enabled" : "disabled"}`));
-      editMap.set(title, variantName);
+    const isDefault = orchestrator.config.defaultPresets[group] === presetName;
+    const options: OptionInput[] = [
+      opt("Use as default", isDefault ? "Already default" : "Set as default preset"),
+      opt("Agents", `${Object.keys(preset).length} agents`),
+    ];
+    if (getOwnedScopes(orchestrator, ["presets", group, presetName]).length > 0) {
+      options.push(opt("Delete", "Delete this preset override"));
     }
-    options.push(
-      opt("Add variant", "Create a new variant"),
-      opt("Remove variant", "Delete one variant"),
-      opt("Set as default", "Use this preset by default"),
-      opt("Back", "Return to the previous menu"),
-    );
-
-    const choice = await selectOption(ctx, `Preset: ${presetName}`, options);
+    options.push(...buildResetOptions(orchestrator, ["presets", group, presetName]));
+    options.push(opt("Back", "Return to the previous menu"));
+    const choice = await selectOption(ctx, isDefault ? `${presetName} (default)` : presetName, options);
     if (!choice || choice === "Back") return BACK;
-
-    const variantName = editMap.get(choice);
-    if (variantName) {
-      await showPresetVariantEditor(orchestrator, ctx, group, presetName, variantName);
+    if (choice === "Use as default") {
+      applyScopeChoice(orchestrator, ["defaultPresets", group], presetName, await pickScope(ctx, orchestrator));
       continue;
     }
-
-    if (choice === "Add variant") {
-      await addPresetVariant(orchestrator, ctx, group, presetName);
+    if (choice === "Agents") {
+      await showPresetAgentsMenu(orchestrator, ctx, group, presetName);
       continue;
     }
-
-    if (choice === "Remove variant") {
-      await removePresetVariant(orchestrator, ctx, group, presetName);
-      continue;
+    if (choice === "Delete") {
+      if (isDefault) {
+        ctx.ui.notify("Cannot delete the default preset. Change the default first.", "warning");
+        continue;
+      }
+      const scope = await pickScopeFromOwned(ctx, orchestrator, ["presets", group, presetName]);
+      if (!scope) continue;
+      deletePresetFromScope(orchestrator, scope, group, presetName);
+      return BACK;
     }
-
-    const scope = await pickScope(ctx, orchestrator);
-    if (!scope) continue;
-    applyConfigChange(orchestrator, scope, ["defaultPresets", group], presetName);
+    maybeHandleResetChoice(orchestrator, choice, ["presets", group, presetName]);
   }
 }
 
@@ -1621,42 +1865,17 @@ async function addNewPreset(orchestrator: Orchestrator, ctx: any, group: PresetG
     ctx.ui.notify(`Preset '${name}' already exists.`, "warning");
     return;
   }
-
-  const existingNames = Object.keys(orchestrator.config.presets[group] ?? {});
-  const cloneOptions: OptionInput[] = [opt("Create from scratch", "Create with one new variant")];
-  for (const presetName of existingNames) {
-    cloneOptions.push(opt(`Clone ${presetName}`, enabledPresetSummary(orchestrator.config.presets[group][presetName])));
-  }
-  cloneOptions.push(opt("Back", "Return to the previous menu"));
-
-  const cloneChoice = await selectOption(ctx, "Create preset", cloneOptions);
-  if (!cloneChoice || cloneChoice === "Back") return;
-
-  let presetValue: Record<string, VariantConfig>;
-  if (cloneChoice === "Create from scratch") {
-    const variantName = await promptSafeName(ctx, "Initial variant name");
-    if (!variantName) return;
-    const model = await pickModel(ctx);
-    if (!model) return;
-    const thinking = await pickThinking(ctx, true);
-    if (!thinking) return;
-    presetValue = {
-      [variantName]: {
-        enabled: true,
-        model,
-        thinking,
-      },
-    };
-  } else {
-    const sourceName = cloneChoice.replace(/^Clone\s+/, "").trim();
-    const source = orchestrator.config.presets[group]?.[sourceName];
-    if (!source) return;
-    presetValue = structuredClone(source);
-  }
-
+  const variantName = await promptSafeName(ctx, "Initial agent name");
+  if (!variantName) return;
+  const model = await pickModel(ctx);
+  if (!model) return;
+  const thinking = await pickThinking(ctx, true);
+  if (!thinking) return;
   const scope = await pickScope(ctx, orchestrator);
   if (!scope) return;
-  applyConfigChange(orchestrator, scope, ["presets", group, name], presetValue);
+  applyConfigChange(orchestrator, scope, ["presets", group, name], {
+    [variantName]: { enabled: true, model, thinking },
+  });
 }
 
 async function showPresetSettings(
@@ -1670,22 +1889,19 @@ async function showPresetSettings(
     const defaultName = orchestrator.config.defaultPresets[group];
     const options: OptionInput[] = [];
     const byTitle = new Map<string, string>();
-
     for (const [presetName, variants] of Object.entries(presets)) {
-      const optionTitle = presetName === defaultName ? `${presetName} [default]` : presetName;
+      const optionTitle = presetName === defaultName ? `${presetName} (default)` : presetName;
       options.push(opt(optionTitle, enabledPresetSummary(variants)));
       byTitle.set(optionTitle, presetName);
     }
-    options.push(opt("Add new preset", "Create a preset or clone existing"));
+    options.push(opt("New preset", "Create preset"));
     options.push(opt("Back", "Return to the previous menu"));
-
     const choice = await selectOption(ctx, title, options);
     if (!choice || choice === "Back") return BACK;
-    if (choice === "Add new preset") {
+    if (choice === "New preset") {
       await addNewPreset(orchestrator, ctx, group);
       continue;
     }
-
     const presetName = byTitle.get(choice);
     if (!presetName) continue;
     await showPresetEditor(orchestrator, ctx, group, presetName);
@@ -1693,238 +1909,243 @@ async function showPresetSettings(
 }
 
 async function showSubagentSettings(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
-  const labels: Record<AgentRole, string> = {
-    explore: "explore",
-    librarian: "librarian",
-    task: "task",
-  };
-
   while (true) {
-    const { globalConfig, projectConfig } = getRawScopeConfigs(orchestrator);
-    const options: OptionInput[] = (Object.keys(labels) as AgentRole[]).map((role) => {
-      const modelSource = getConfigSource(globalConfig, projectConfig, ["agents", role, "model"]);
-      const thinkingSource = getConfigSource(globalConfig, projectConfig, ["agents", role, "thinking"]);
+    const options: OptionInput[] = SUBAGENT_ROLES.map(({ role, label, description }) => {
       const current = orchestrator.config.agents[role];
-      return opt(labels[role], `${current.model} / ${current.thinking} ${describeModelThinkingSource(modelSource, thinkingSource)}`);
+      return opt(label, `${current.model} / ${thinkingLabel(current.thinking)} — ${description}`);
     });
-    options.push(opt("Back", "Return to the previous menu"));
-
-    const picked = await selectOption(ctx, "Subagents", options);
-    if (!picked || picked === "Back") return BACK;
-    const role = (Object.keys(labels) as AgentRole[]).find((key) => labels[key] === picked);
-    if (!role) continue;
-
-    while (true) {
-      const raw = getRawScopeConfigs(orchestrator);
-      const current = orchestrator.config.agents[role];
-      const modelSource = getConfigSource(raw.globalConfig, raw.projectConfig, ["agents", role, "model"]);
-      const thinkingSource = getConfigSource(raw.globalConfig, raw.projectConfig, ["agents", role, "thinking"]);
-      const action = await selectOption(ctx, `Subagents → ${role}`, [
-        opt("Change model", `${current.model} ${modelSource}`),
-        opt("Change thinking", `${current.thinking} ${thinkingSource}`),
-        opt("Clear overrides", "Remove this subagent override in selected scope"),
-        opt("Back", "Return to the previous menu"),
-      ]);
-      if (!action || action === "Back") break;
-
-      if (action === "Change model") {
-        const model = await pickModel(ctx, current.model);
-        if (!model) continue;
-        const scope = await pickScope(ctx, orchestrator);
-        if (!scope) continue;
-        applyConfigChange(orchestrator, scope, ["agents", role, "model"], model);
-        continue;
-      }
-
-      if (action === "Change thinking") {
-        const thinking = await pickThinking(ctx, true);
-        if (!thinking) continue;
-        const scope = await pickScope(ctx, orchestrator);
-        if (!scope) continue;
-        applyConfigChange(orchestrator, scope, ["agents", role, "thinking"], thinking);
-        continue;
-      }
-
-      const scope = await pickScope(ctx, orchestrator);
-      if (!scope) continue;
-      clearConfigOverride(orchestrator, scope, ["agents", role]);
+    for (const item of PRESET_GROUP_ITEMS) {
+      options.push(opt(item.label, `${Object.keys(orchestrator.config.presets[item.group] ?? {}).length} presets`));
     }
+    options.push(opt("Back", "Return to the previous menu"));
+    const choice = await selectOption(ctx, "Subagents", options);
+    if (!choice || choice === "Back") return BACK;
+    const simple = SUBAGENT_ROLES.find((item) => item.label === choice);
+    if (simple) {
+      await showSimpleSubagentEditor(orchestrator, ctx, simple.role, simple.label);
+      continue;
+    }
+    const group = PRESET_GROUP_ITEMS.find((item) => item.label === choice);
+    if (!group) continue;
+    await showPresetSettings(orchestrator, ctx, group.group, group.label);
   }
 }
 
-async function editAfterEditCommand(orchestrator: Orchestrator, ctx: any, index: number): Promise<void> {
-  const scope = await pickScope(ctx, orchestrator);
-  if (!scope) return;
+function getEditableCommandList(orchestrator: Orchestrator, scope: Scope, key: CommandListKey): any[] {
+  const raw = getRawScopeValue(orchestrator, scope, ["commands", key]);
+  if (Array.isArray(raw)) return structuredClone(raw);
+  return structuredClone(orchestrator.config.commands[key]);
+}
 
-  const rawCommandsValue = getRawScopeValue(orchestrator, scope, ["commands", "afterEdit"]);
-  if (!Array.isArray(rawCommandsValue)) {
-    ctx.ui.notify("No afterEdit commands configured in selected scope.", "info");
-    return;
-  }
-  const commands = structuredClone(rawCommandsValue) as AfterEditCommand[];
-  if (!commands[index]) {
-    ctx.ui.notify("Selected command is inherited and cannot be edited in selected scope.", "info");
-    return;
-  }
-
-  const run = await promptRequiredInput(ctx, "Command to run");
-  if (!run) return;
-  const globRaw = await promptRequiredInput(ctx, "Glob patterns (comma-separated)");
-  if (globRaw === null) return;
-  const glob = parseCommaSeparated(globRaw);
-
-  const next = commands.map((cmd, idx) => (idx === index ? { run, glob } : cmd));
-  applyConfigChange(orchestrator, scope, ["commands", "afterEdit"], next);
+function writeCommandList(orchestrator: Orchestrator, scope: Scope, key: CommandListKey, list: any[]): void {
+  applyConfigChange(orchestrator, scope, ["commands", key], list);
 }
 
 async function showAfterEditCommands(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
   while (true) {
     const commands = orchestrator.config.commands.afterEdit;
+    const info = getConfigSourceInfo(orchestrator, ["commands", "afterEdit"]);
     const options: OptionInput[] = [];
     const byTitle = new Map<string, number>();
-
+    const usedTitles = new Set<string>();
     commands.forEach((cmd, index) => {
-      const title = `Edit #${index + 1}`;
-      options.push(opt(title, `${cmd.run} | glob: ${cmd.glob.join(", ") || "(none)"}`));
+      const title = makeUniqueTitle(slugify(cmd.run, 56), usedTitles);
+      options.push(opt(title, `${cmd.glob.length} patterns`));
       byTitle.set(title, index);
     });
-
-    options.push(
-      opt("Add command", "Append new afterEdit command"),
-      opt("Remove command", "Remove one afterEdit command"),
-      opt("Back", "Return to the previous menu"),
-    );
-
-    const choice = await selectOption(ctx, "Commands → afterEdit", options);
+    options.push(opt("New command", "Add command"));
+    options.push(...buildResetOptions(orchestrator, ["commands", "afterEdit"]));
+    options.push(opt("Back", "Return to the previous menu"));
+    const choice = await selectOption(ctx, `After file edit: ${commands.length} commands ${formatSourceTags(commands, info)}`.trim(), options);
     if (!choice || choice === "Back") return BACK;
-
-    if (choice === "Add command") {
+    if (choice === "New command") {
       const run = await promptRequiredInput(ctx, "Command to run");
       if (!run) continue;
-      const globRaw = await promptRequiredInput(ctx, "Glob patterns (comma-separated)");
-      if (globRaw === null) continue;
-      const glob = parseCommaSeparated(globRaw);
+      const patterns = parseCommaSeparated((await promptRequiredInput(ctx, "Glob patterns (comma-separated)")) ?? "");
       const scope = await pickScope(ctx, orchestrator);
       if (!scope) continue;
-      const rawCommandsValue = getRawScopeValue(orchestrator, scope, ["commands", "afterEdit"]);
-      const rawCommands = Array.isArray(rawCommandsValue) ? (structuredClone(rawCommandsValue) as AfterEditCommand[]) : [];
-      applyConfigChange(orchestrator, scope, ["commands", "afterEdit"], [...rawCommands, { run, glob }]);
+      const list = getEditableCommandList(orchestrator, scope, "afterEdit") as AfterEditCommand[];
+      list.push({ run, glob: patterns });
+      writeCommandList(orchestrator, scope, "afterEdit", list);
       continue;
     }
-
-    if (choice === "Remove command") {
-      const scope = await pickScope(ctx, orchestrator);
-      if (!scope) continue;
-      const rawCommandsValue = getRawScopeValue(orchestrator, scope, ["commands", "afterEdit"]);
-      if (!Array.isArray(rawCommandsValue) || rawCommandsValue.length === 0) {
-        ctx.ui.notify("No afterEdit commands configured in selected scope.", "info");
-        continue;
-      }
-      const scopedCommands = structuredClone(rawCommandsValue) as AfterEditCommand[];
-      const removeOptions: OptionInput[] = scopedCommands.map((cmd, index) => opt(`#${index + 1}`, `${cmd.run}`));
-      removeOptions.push(opt("Back", "Return to the previous menu"));
-      const picked = await selectOption(ctx, "Remove afterEdit command", removeOptions);
-      if (!picked || picked === "Back") continue;
-      const index = Number(picked.replace(/^#/, "")) - 1;
-      if (!Number.isInteger(index) || index < 0 || index >= scopedCommands.length) continue;
-      applyConfigChange(orchestrator, scope, ["commands", "afterEdit"], scopedCommands.filter((_, idx) => idx !== index));
-      continue;
-    }
-
+    if (maybeHandleResetChoice(orchestrator, choice, ["commands", "afterEdit"])) continue;
     const index = byTitle.get(choice);
     if (index === undefined) continue;
-    await editAfterEditCommand(orchestrator, ctx, index);
+    while (true) {
+      const command = orchestrator.config.commands.afterEdit[index];
+      if (!command) break;
+      const commandChoice = await selectOption(ctx, slugify(command.run, 70), [
+        opt("Command", "View or edit command string"),
+        opt("Triggers", `${command.glob.length} patterns`),
+        opt("Delete command", "Remove this command"),
+        opt("Back", "Return to previous menu"),
+      ]);
+      if (!commandChoice || commandChoice === "Back") break;
+      if (commandChoice === "Command") {
+        const action = await selectOption(ctx, "Command", [
+          opt("View", command.run),
+          opt("Edit", "Edit command string"),
+          opt("Back", "Return to previous menu"),
+        ]);
+        if (action === "View") {
+          ctx.ui.notify(command.run, "info");
+          continue;
+        }
+        if (action === "Edit") {
+          const run = await promptRequiredInput(ctx, "New command string");
+          if (!run) continue;
+          const scope = await pickScope(ctx, orchestrator);
+          if (!scope) continue;
+          const list = getEditableCommandList(orchestrator, scope, "afterEdit") as AfterEditCommand[];
+          if (!list[index]) continue;
+          list[index] = { ...list[index], run };
+          writeCommandList(orchestrator, scope, "afterEdit", list);
+        }
+        continue;
+      }
+      if (commandChoice === "Triggers") {
+        while (true) {
+          const current = orchestrator.config.commands.afterEdit[index];
+          if (!current) break;
+          const patternOptions: OptionInput[] = current.glob.map((glob) => opt(glob, "Pattern"));
+          patternOptions.push(opt("New pattern", "Add trigger pattern"));
+          patternOptions.push(opt("Back", "Return to previous menu"));
+          const patternChoice = await selectOption(ctx, "File patterns", patternOptions);
+          if (!patternChoice || patternChoice === "Back") break;
+          if (patternChoice === "New pattern") {
+            const value = await promptRequiredInput(ctx, "Pattern");
+            if (!value) continue;
+            const scope = await pickScope(ctx, orchestrator);
+            if (!scope) continue;
+            const list = getEditableCommandList(orchestrator, scope, "afterEdit") as AfterEditCommand[];
+            if (!list[index]) continue;
+            list[index] = { ...list[index], glob: [...(list[index].glob ?? []), value] };
+            writeCommandList(orchestrator, scope, "afterEdit", list);
+            continue;
+          }
+          const patternIndex = current.glob.findIndex((glob) => glob === patternChoice);
+          if (patternIndex < 0) continue;
+          const action = await selectOption(ctx, patternChoice, [
+            opt("View", patternChoice),
+            opt("Edit", "Edit pattern"),
+            opt("Delete", "Delete pattern"),
+            opt("Back", "Return to previous menu"),
+          ]);
+          if (!action || action === "Back") continue;
+          if (action === "View") {
+            ctx.ui.notify(patternChoice, "info");
+            continue;
+          }
+          const scope = await pickScope(ctx, orchestrator);
+          if (!scope) continue;
+          const list = getEditableCommandList(orchestrator, scope, "afterEdit") as AfterEditCommand[];
+          if (!list[index]) continue;
+          const nextGlob = [...(list[index].glob ?? [])];
+          if (action === "Delete") {
+            nextGlob.splice(patternIndex, 1);
+          } else {
+            const value = await promptRequiredInput(ctx, "New pattern");
+            if (!value) continue;
+            nextGlob[patternIndex] = value;
+          }
+          list[index] = { ...list[index], glob: nextGlob };
+          writeCommandList(orchestrator, scope, "afterEdit", list);
+        }
+        continue;
+      }
+      const scope = await pickScope(ctx, orchestrator);
+      if (!scope) continue;
+      const list = getEditableCommandList(orchestrator, scope, "afterEdit") as AfterEditCommand[];
+      if (!list[index]) continue;
+      list.splice(index, 1);
+      writeCommandList(orchestrator, scope, "afterEdit", list);
+      break;
+    }
   }
-}
-
-async function editAfterImplementCommand(orchestrator: Orchestrator, ctx: any, index: number): Promise<void> {
-  const scope = await pickScope(ctx, orchestrator);
-  if (!scope) return;
-
-  const rawCommandsValue = getRawScopeValue(orchestrator, scope, ["commands", "afterImplement"]);
-  if (!Array.isArray(rawCommandsValue)) {
-    ctx.ui.notify("No afterImplement commands configured in selected scope.", "info");
-    return;
-  }
-  const commands = structuredClone(rawCommandsValue) as AfterImplementCommand[];
-  if (!commands[index]) {
-    ctx.ui.notify("Selected command is inherited and cannot be edited in selected scope.", "info");
-    return;
-  }
-
-  const run = await promptRequiredInput(ctx, "Command to run");
-  if (!run) return;
-
-  const next = commands.map((cmd, idx) => (idx === index ? { run } : cmd));
-  applyConfigChange(orchestrator, scope, ["commands", "afterImplement"], next);
 }
 
 async function showAfterImplementCommands(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
   while (true) {
     const commands = orchestrator.config.commands.afterImplement;
+    const info = getConfigSourceInfo(orchestrator, ["commands", "afterImplement"]);
     const options: OptionInput[] = [];
     const byTitle = new Map<string, number>();
-
+    const usedTitles = new Set<string>();
     commands.forEach((cmd, index) => {
-      const title = `Edit #${index + 1}`;
+      const title = makeUniqueTitle(slugify(cmd.run, 56), usedTitles);
       options.push(opt(title, cmd.run));
       byTitle.set(title, index);
     });
-
-    options.push(
-      opt("Add command", "Append new afterImplement command"),
-      opt("Remove command", "Remove one afterImplement command"),
-      opt("Back", "Return to the previous menu"),
-    );
-
-    const choice = await selectOption(ctx, "Commands → afterImplement", options);
+    options.push(opt("New command", "Add command"));
+    options.push(...buildResetOptions(orchestrator, ["commands", "afterImplement"]));
+    options.push(opt("Back", "Return to the previous menu"));
+    const choice = await selectOption(ctx, `After implementation: ${commands.length} commands ${formatSourceTags(commands, info)}`.trim(), options);
     if (!choice || choice === "Back") return BACK;
-
-    if (choice === "Add command") {
+    if (choice === "New command") {
       const run = await promptRequiredInput(ctx, "Command to run");
       if (!run) continue;
       const scope = await pickScope(ctx, orchestrator);
       if (!scope) continue;
-      const rawCommandsValue = getRawScopeValue(orchestrator, scope, ["commands", "afterImplement"]);
-      const rawCommands = Array.isArray(rawCommandsValue) ? (structuredClone(rawCommandsValue) as AfterImplementCommand[]) : [];
-      applyConfigChange(orchestrator, scope, ["commands", "afterImplement"], [...rawCommands, { run }]);
+      const list = getEditableCommandList(orchestrator, scope, "afterImplement") as AfterImplementCommand[];
+      list.push({ run });
+      writeCommandList(orchestrator, scope, "afterImplement", list);
       continue;
     }
-
-    if (choice === "Remove command") {
-      const scope = await pickScope(ctx, orchestrator);
-      if (!scope) continue;
-      const rawCommandsValue = getRawScopeValue(orchestrator, scope, ["commands", "afterImplement"]);
-      if (!Array.isArray(rawCommandsValue) || rawCommandsValue.length === 0) {
-        ctx.ui.notify("No afterImplement commands configured in selected scope.", "info");
-        continue;
-      }
-      const scopedCommands = structuredClone(rawCommandsValue) as AfterImplementCommand[];
-      const removeOptions: OptionInput[] = scopedCommands.map((cmd, index) => opt(`#${index + 1}`, cmd.run));
-      removeOptions.push(opt("Back", "Return to the previous menu"));
-      const picked = await selectOption(ctx, "Remove afterImplement command", removeOptions);
-      if (!picked || picked === "Back") continue;
-      const index = Number(picked.replace(/^#/, "")) - 1;
-      if (!Number.isInteger(index) || index < 0 || index >= scopedCommands.length) continue;
-      applyConfigChange(orchestrator, scope, ["commands", "afterImplement"], scopedCommands.filter((_, idx) => idx !== index));
-      continue;
-    }
-
+    if (maybeHandleResetChoice(orchestrator, choice, ["commands", "afterImplement"])) continue;
     const index = byTitle.get(choice);
     if (index === undefined) continue;
-    await editAfterImplementCommand(orchestrator, ctx, index);
+    while (true) {
+      const command = orchestrator.config.commands.afterImplement[index];
+      if (!command) break;
+      const commandChoice = await selectOption(ctx, slugify(command.run, 70), [
+        opt("Command", "View or edit command string"),
+        opt("Delete command", "Remove this command"),
+        opt("Back", "Return to previous menu"),
+      ]);
+      if (!commandChoice || commandChoice === "Back") break;
+      if (commandChoice === "Command") {
+        const action = await selectOption(ctx, "Command", [
+          opt("View", command.run),
+          opt("Edit", "Edit command string"),
+          opt("Back", "Return to previous menu"),
+        ]);
+        if (action === "View") {
+          ctx.ui.notify(command.run, "info");
+          continue;
+        }
+        if (action === "Edit") {
+          const run = await promptRequiredInput(ctx, "New command string");
+          if (!run) continue;
+          const scope = await pickScope(ctx, orchestrator);
+          if (!scope) continue;
+          const list = getEditableCommandList(orchestrator, scope, "afterImplement") as AfterImplementCommand[];
+          if (!list[index]) continue;
+          list[index] = { run };
+          writeCommandList(orchestrator, scope, "afterImplement", list);
+        }
+        continue;
+      }
+      const scope = await pickScope(ctx, orchestrator);
+      if (!scope) continue;
+      const list = getEditableCommandList(orchestrator, scope, "afterImplement") as AfterImplementCommand[];
+      if (!list[index]) continue;
+      list.splice(index, 1);
+      writeCommandList(orchestrator, scope, "afterImplement", list);
+      break;
+    }
   }
 }
 
 async function showCommandsSettings(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
   while (true) {
     const choice = await selectOption(ctx, "Commands", [
-      opt("afterEdit", `${orchestrator.config.commands.afterEdit.length} commands`),
-      opt("afterImplement", `${orchestrator.config.commands.afterImplement.length} commands`),
+      opt("After file edit", `${orchestrator.config.commands.afterEdit.length} commands`),
+      opt("After implementation", `${orchestrator.config.commands.afterImplement.length} commands`),
       opt("Back", "Return to the previous menu"),
     ]);
     if (!choice || choice === "Back") return BACK;
-    if (choice === "afterEdit") {
+    if (choice === "After file edit") {
       await showAfterEditCommands(orchestrator, ctx);
       continue;
     }
@@ -1934,115 +2155,155 @@ async function showCommandsSettings(orchestrator: Orchestrator, ctx: any): Promi
 
 async function showTimeoutsSettings(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
   while (true) {
-    const { globalConfig, projectConfig } = getRawScopeConfigs(orchestrator);
     const timeoutKeys = Object.keys(orchestrator.config.timeouts) as TimeoutKey[];
-    const options: OptionInput[] = timeoutKeys.map((key) =>
-      opt(String(key), `${orchestrator.config.timeouts[key]} ${getConfigSource(globalConfig, projectConfig, ["timeouts", String(key)])}`)
-    );
+    const options: OptionInput[] = timeoutKeys.map((key) => {
+      const value = orchestrator.config.timeouts[key];
+      const info = getConfigSourceInfo(orchestrator, ["timeouts", key]);
+      return opt(`${TIMEOUT_LABELS[key]}: ${withTags(formatDuration(value), formatSourceTags(value, info))}`, "Edit timeout");
+    });
     options.push(opt("Back", "Return to the previous menu"));
-
     const choice = await selectOption(ctx, "Timeouts", options);
     if (!choice || choice === "Back") return BACK;
-    const key = timeoutKeys.find((item) => item === choice);
+    const key = timeoutKeys.find((item) => choice.startsWith(`${TIMEOUT_LABELS[item]}:`));
     if (!key) continue;
-
-    const action = await selectOption(ctx, `Timeouts → ${key}`, [
-      opt("Set value", `Current: ${orchestrator.config.timeouts[key]}`),
-      opt("Clear override", "Remove timeout override in selected scope"),
-      opt("Back", "Return to the previous menu"),
-    ]);
-    if (!action || action === "Back") continue;
-
-    if (action === "Set value") {
-      const input = await promptRequiredInput(ctx, `New value for ${key} (milliseconds)`);
-      if (!input) continue;
-      const value = Number(input);
-      if (!Number.isFinite(value) || value < 0) {
-        ctx.ui.notify("Enter a non-negative number.", "warning");
+    while (true) {
+      const value = orchestrator.config.timeouts[key];
+      const action = await selectOption(ctx, `${TIMEOUT_LABELS[key]}: ${formatDuration(value)}`, [
+        opt("Edit", "Set timeout value"),
+        ...buildResetOptions(orchestrator, ["timeouts", key]),
+        opt("Back", "Return to the previous menu"),
+      ]);
+      if (!action || action === "Back") break;
+      if (action === "Edit") {
+        const input = await promptRequiredInput(ctx, "New value (e.g. 30s, 5m, 1h, or raw milliseconds)");
+        if (!input) continue;
+        const parsed = parseDuration(input);
+        if (parsed === null) {
+          ctx.ui.notify("Invalid duration format.", "warning");
+          continue;
+        }
+        applyScopeChoice(orchestrator, ["timeouts", key], parsed, await pickScope(ctx, orchestrator));
         continue;
       }
-      const scope = await pickScope(ctx, orchestrator);
-      if (!scope) continue;
-      applyConfigChange(orchestrator, scope, ["timeouts", String(key)], value);
+      maybeHandleResetChoice(orchestrator, action, ["timeouts", key]);
+    }
+  }
+}
+
+async function showPerformanceSettings(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
+  while (true) {
+    const choice = await selectOption(ctx, "Performance", [
+      opt("Timeouts", "Timeout configuration"),
+      opt("Back", "Return to the previous menu"),
+    ]);
+    if (!choice || choice === "Back") return BACK;
+    await showTimeoutsSettings(orchestrator, ctx);
+  }
+}
+
+async function showBooleanSetting(
+  orchestrator: Orchestrator,
+  ctx: any,
+  title: string,
+  keyPath: string[],
+): Promise<void> {
+  while (true) {
+    const info = getConfigSourceInfo(orchestrator, keyPath);
+    const yesTitle = withTags("Yes", formatSourceTags(true, info));
+    const noTitle = withTags("No", formatSourceTags(false, info));
+    const choice = await selectOption(ctx, title, [
+      yesTitle,
+      noTitle,
+      ...buildResetOptions(orchestrator, keyPath),
+      opt("Back", "Return to the previous menu"),
+    ]);
+    if (!choice || choice === "Back") return;
+    if (choice === yesTitle) {
+      applyScopeChoice(orchestrator, keyPath, true, await pickScope(ctx, orchestrator));
       continue;
     }
+    if (choice === noTitle) {
+      applyScopeChoice(orchestrator, keyPath, false, await pickScope(ctx, orchestrator));
+      continue;
+    }
+    maybeHandleResetChoice(orchestrator, choice, keyPath);
+  }
+}
 
-    const scope = await pickScope(ctx, orchestrator);
-    if (!scope) continue;
-    clearConfigOverride(orchestrator, scope, ["timeouts", String(key)]);
+async function showLogLevelSetting(orchestrator: Orchestrator, ctx: any): Promise<void> {
+  const levels: Array<{ value: PiPiConfig["logLevel"]; label: string }> = [
+    { value: "debug", label: "Debug" },
+    { value: "info", label: "Info" },
+    { value: "warn", label: "Warning" },
+    { value: "error", label: "Error" },
+  ];
+  while (true) {
+    const info = getConfigSourceInfo(orchestrator, ["logLevel"]);
+    const options: OptionInput[] = levels.map((entry) => withTags(entry.label, formatSourceTags(entry.value, info)));
+    options.push(...buildResetOptions(orchestrator, ["logLevel"]));
+    options.push(opt("Back", "Return to the previous menu"));
+    const choice = await selectOption(ctx, "Log level", options);
+    if (!choice || choice === "Back") return;
+    const picked = levels.find((entry) => choice.startsWith(entry.label));
+    if (picked) {
+      const scope = await pickScope(ctx, orchestrator);
+      if (!scope) continue;
+      applyConfigChange(orchestrator, scope, ["logLevel"], picked.value);
+      setLogLevel(orchestrator.config.logLevel);
+      continue;
+    }
+    maybeHandleResetChoice(orchestrator, choice, ["logLevel"]);
+    setLogLevel(orchestrator.config.logLevel);
   }
 }
 
 async function showGeneralSettings(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
   while (true) {
-    const { globalConfig, projectConfig } = getRawScopeConfigs(orchestrator);
-    const options: OptionInput[] = [
-      opt("autoCommit", `${orchestrator.config.autoCommit} ${getConfigSource(globalConfig, projectConfig, ["autoCommit"])}`),
-      opt("ignoreExtraRepoConfigs", `${orchestrator.config.ignoreExtraRepoConfigs} ${getConfigSource(globalConfig, projectConfig, ["ignoreExtraRepoConfigs"])}`),
-      opt("logLevel", `${orchestrator.config.logLevel} ${getConfigSource(globalConfig, projectConfig, ["logLevel"])}`),
+    const autoInfo = getConfigSourceInfo(orchestrator, ["autoCommit"]);
+    const ignoreInfo = getConfigSourceInfo(orchestrator, ["ignoreExtraRepoConfigs"]);
+    const logInfo = getConfigSourceInfo(orchestrator, ["logLevel"]);
+    const choice = await selectOption(ctx, "General", [
+      opt(`Commit automatically: ${withTags(orchestrator.config.autoCommit ? "Yes" : "No", formatSourceTags(orchestrator.config.autoCommit, autoInfo))}`, "Enable or disable auto commits"),
+      opt(`Ignore configs from other repos: ${withTags(orchestrator.config.ignoreExtraRepoConfigs ? "Yes" : "No", formatSourceTags(orchestrator.config.ignoreExtraRepoConfigs, ignoreInfo))}`, "Load only root repo config"),
+      opt(`Log level: ${withTags(logLevelLabel(orchestrator.config.logLevel), formatSourceTags(orchestrator.config.logLevel, logInfo))}`, "Logging verbosity"),
+      opt("Flant AI Infrastructure", "Configure corporate AI model provider"),
+      opt("Repos", "Registered repositories and base branches"),
       opt("Back", "Return to the previous menu"),
-    ];
-
-    const choice = await selectOption(ctx, "General", options);
+    ]);
     if (!choice || choice === "Back") return BACK;
-
-    if (choice === "autoCommit") {
-      const action = await selectOption(ctx, "General → autoCommit", [
-        opt("Set true", "Enable auto commit"),
-        opt("Set false", "Disable auto commit"),
-        opt("Clear override", "Remove override in selected scope"),
-        opt("Back", "Return to the previous menu"),
-      ]);
-      if (!action || action === "Back") continue;
-      const scope = await pickScope(ctx, orchestrator);
-      if (!scope) continue;
-      if (action === "Set true") applyConfigChange(orchestrator, scope, ["autoCommit"], true);
-      else if (action === "Set false") applyConfigChange(orchestrator, scope, ["autoCommit"], false);
-      else clearConfigOverride(orchestrator, scope, ["autoCommit"]);
+    if (choice.startsWith("Commit automatically:")) {
+      await showBooleanSetting(orchestrator, ctx, "Commit automatically", ["autoCommit"]);
       continue;
     }
-
-    if (choice === "logLevel") {
-      const action = await selectOption(ctx, "General → logLevel", [
-        opt("debug", "All messages including debug traces"),
-        opt("info", "Info, warnings, and errors (default)"),
-        opt("warn", "Warnings and errors only"),
-        opt("error", "Errors only"),
-        opt("Clear override", "Remove override in selected scope"),
-        opt("Back", "Return to the previous menu"),
-      ]);
-      if (!action || action === "Back") continue;
-      const scope = await pickScope(ctx, orchestrator);
-      if (!scope) continue;
-      if (action === "Clear override") {
-        clearConfigOverride(orchestrator, scope, ["logLevel"]);
-      } else {
-        applyConfigChange(orchestrator, scope, ["logLevel"], action);
-      }
-      setLogLevel(orchestrator.config.logLevel);
+    if (choice.startsWith("Ignore configs from other repos:")) {
+      await showBooleanSetting(orchestrator, ctx, "Ignore configs from other repos", ["ignoreExtraRepoConfigs"]);
       continue;
     }
-
-    if (choice === "ignoreExtraRepoConfigs") {
-      const action = await selectOption(ctx, "General → ignoreExtraRepoConfigs", [
-        opt("Set true", "Ignore extra repo config files"),
-        opt("Set false", "Load extra repo config files"),
-        opt("Clear override", "Remove override in selected scope"),
-        opt("Back", "Return to the previous menu"),
-      ]);
-      if (!action || action === "Back") continue;
-
-      if (action === "Set true" || action === "Set false") {
-        const scope = await pickScope(ctx, orchestrator);
-        if (!scope) continue;
-        applyConfigChange(orchestrator, scope, ["ignoreExtraRepoConfigs"], action === "Set true");
-        continue;
-      }
-
-      const scope = await pickScope(ctx, orchestrator);
-      if (!scope) continue;
-      clearConfigOverride(orchestrator, scope, ["ignoreExtraRepoConfigs"]);
+    if (choice.startsWith("Log level:")) {
+      await showLogLevelSetting(orchestrator, ctx);
+      continue;
     }
+    if (choice === "Flant AI Infrastructure") {
+      await showFlantInfraMenu(orchestrator, ctx);
+      continue;
+    }
+    await showReposSettings(orchestrator, ctx);
+  }
+}
+
+async function showAgentsSettings(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
+  while (true) {
+    const choice = await selectOption(ctx, "Agents", [
+      opt("Orchestrators", "Orchestrator and subagent configuration"),
+      opt("Subagents", "Simple subagents and preset groups"),
+      opt("Back", "Return to the previous menu"),
+    ]);
+    if (!choice || choice === "Back") return BACK;
+    if (choice === "Orchestrators") {
+      await showOrchestratorsSettings(orchestrator, ctx);
+      continue;
+    }
+    await showSubagentSettings(orchestrator, ctx);
   }
 }
 
@@ -2093,34 +2354,20 @@ async function showReposSettings(orchestrator: Orchestrator, ctx: any): Promise<
 async function showSettingsMenu(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
   while (true) {
     const options: OptionInput[] = [
-      opt("Main models", "Model and thinking per task type"),
-      opt("Planners", "Planner presets"),
-      opt("Code reviewers", "Code reviewer presets"),
-      opt("Plan reviewers", "Plan reviewer presets"),
-      opt("Brainstorm reviewers", "Brainstorm reviewer presets"),
-      opt("Subagents", "Explore, librarian, task agent models"),
-      opt("Commands", "afterEdit and afterImplement commands"),
-      opt("Timeouts", "Timeout configuration"),
-      opt("General", "autoCommit, ignoreExtraRepoConfigs, logLevel"),
-      opt("Repos", "Registered repositories and base branches"),
-      opt("Flant AI Infrastructure", "Configure corporate AI model provider"),
+      opt("General", "Commit, log level, Flant AI, repos"),
+      opt("Agents", "Orchestrator and subagent configuration"),
+      opt("Commands", "After file edit and after implementation"),
+      opt("Performance", "Timeout configuration"),
       opt("Back", "Return to the previous menu"),
     ];
 
     const choice = await selectOption(ctx, "Settings", options);
     if (!choice || choice === "Back") return BACK;
 
-    if (choice === "Main models") await showMainModelsSettings(orchestrator, ctx);
-    else if (choice === "Planners") await showPresetSettings(orchestrator, ctx, "planners", "Planners");
-    else if (choice === "Code reviewers") await showPresetSettings(orchestrator, ctx, "codeReviewers", "Code reviewers");
-    else if (choice === "Plan reviewers") await showPresetSettings(orchestrator, ctx, "planReviewers", "Plan reviewers");
-    else if (choice === "Brainstorm reviewers") await showPresetSettings(orchestrator, ctx, "brainstormReviewers", "Brainstorm reviewers");
-    else if (choice === "Subagents") await showSubagentSettings(orchestrator, ctx);
+    if (choice === "General") await showGeneralSettings(orchestrator, ctx);
+    else if (choice === "Agents") await showAgentsSettings(orchestrator, ctx);
     else if (choice === "Commands") await showCommandsSettings(orchestrator, ctx);
-    else if (choice === "Timeouts") await showTimeoutsSettings(orchestrator, ctx);
-    else if (choice === "General") await showGeneralSettings(orchestrator, ctx);
-    else if (choice === "Repos") await showReposSettings(orchestrator, ctx);
-    else if (choice === "Flant AI Infrastructure") await showFlantInfraMenu(orchestrator, ctx);
+    else if (choice === "Performance") await showPerformanceSettings(orchestrator, ctx);
   }
 }
 

@@ -2978,6 +2978,36 @@ describe("session lifecycle", () => {
 });
 
 describe("menu contracts", () => {
+  it("settings menu without active task has new top-level sections", async () => {
+    const cwd = makeTempDir();
+    const { pi } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    menu
+      .expect({ question: "/pp", options: { include: ["Settings"] }, choose: "Settings" })
+      .expect({ question: "Settings", options: { exact: ["General", "Agents", "Commands", "Performance", "Back"] }, choose: "Back" })
+      .expect({ question: "/pp", options: { include: ["Back"] }, choose: "Back" });
+
+    const pp = getCommand(pi, "pp");
+    await pp(undefined, ctx);
+  });
+
+  it("settings agents submenu has orchestrators and subagents", async () => {
+    const cwd = makeTempDir();
+    const { pi } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    menu
+      .expect({ question: "/pp", options: { include: ["Settings"] }, choose: "Settings" })
+      .expect({ question: "Settings", options: { include: ["Agents", "Back"] }, choose: "Agents" })
+      .expect({ question: "Agents", options: { exact: ["Orchestrators", "Subagents", "Back"] }, choose: "Back" })
+      .expect({ question: "Settings", options: { include: ["Back"] }, choose: "Back" })
+      .expect({ question: "/pp", options: { include: ["Back"] }, choose: "Back" });
+
+    const pp = getCommand(pi, "pp");
+    await pp(undefined, ctx);
+  });
+
   it("active task menu in guided implement phase has exact options", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);
