@@ -54,6 +54,12 @@ export interface PiPiConfig {
     planReviewers: string;
     brainstormReviewers: string;
   };
+  disabledPresets: {
+    planners: string[];
+    codeReviewers: string[];
+    planReviewers: string[];
+    brainstormReviewers: string[];
+  };
   agents: {
     explore: ModelConfig;
     librarian: ModelConfig;
@@ -130,6 +136,12 @@ const DEFAULT_CONFIG: PiPiConfig = {
     codeReviewers: "regular",
     planReviewers: "regular",
     brainstormReviewers: "regular",
+  },
+  disabledPresets: {
+    planners: [],
+    codeReviewers: [],
+    planReviewers: [],
+    brainstormReviewers: [],
   },
   agents: {
     explore: { model: "google/gemini-flash-latest", thinking: "low" },
@@ -248,6 +260,24 @@ export function validateConfig(config: Record<string, any>): void {
       }
       if (!VALID_NAME_RE.test(presetName)) {
         throw new Error(`config.defaultPresets.${group} has invalid name`);
+      }
+    }
+  }
+
+  if (config.disabledPresets !== undefined) {
+    if (!config.disabledPresets || typeof config.disabledPresets !== "object" || Array.isArray(config.disabledPresets)) {
+      throw new Error("config.disabledPresets must be an object");
+    }
+    for (const group of PRESET_GROUPS) {
+      if (!(group in config.disabledPresets)) continue;
+      const list = config.disabledPresets[group];
+      if (!Array.isArray(list)) {
+        throw new Error(`config.disabledPresets.${group} must be an array`);
+      }
+      for (const name of list) {
+        if (typeof name !== "string" || name.length === 0) {
+          throw new Error(`config.disabledPresets.${group} entries must be non-empty strings`);
+        }
       }
     }
   }
