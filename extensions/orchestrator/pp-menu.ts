@@ -1026,6 +1026,7 @@ async function showInfoMenu(orchestrator: Orchestrator, ctx: any): Promise<typeo
     options.push({ title: "Usage", description: "Show session token usage and cost breakdown" });
     if (orchestrator.active) {
       options.push({ title: "Task status", description: "Show current task phase, step, and timing" });
+      options.push({ title: "Repos", description: "Registered repositories and base branches" });
     }
     options.push({ title: "Back", description: "Return to the previous menu" });
 
@@ -1045,6 +1046,10 @@ async function showInfoMenu(orchestrator: Orchestrator, ctx: any): Promise<typeo
     }
     if (choice === "Task status") {
       showStatus(orchestrator, ctx);
+      continue;
+    }
+    if (choice === "Repos") {
+      await showReposSettings(orchestrator, ctx);
       continue;
     }
   }
@@ -1616,11 +1621,9 @@ async function showOrchestratorEditor(
 ): Promise<typeof BACK> {
   while (true) {
     const current = orchestrator.config.mainModel[role];
-    const modelInfo = getConfigSourceInfo(orchestrator, ["mainModel", role, "model"]);
-    const thinkingInfo = getConfigSourceInfo(orchestrator, ["mainModel", role, "thinking"]);
     const choice = await selectOption(ctx, label, [
-      opt(`Model: ${withTags(current.model, formatSourceTags(current.model, modelInfo))}`, "Select model"),
-      opt(`Thinking: ${withTags(thinkingLabel(current.thinking), formatSourceTags(current.thinking, thinkingInfo))}`, "Select thinking level"),
+      opt(`Model: ${current.model}`, "Select model"),
+      opt(`Thinking: ${thinkingLabel(current.thinking)}`, "Select thinking level"),
       ...buildResetOptions(orchestrator, ["mainModel", role]),
       opt("Back", "Return to the previous menu"),
     ]);
@@ -1664,11 +1667,9 @@ async function showSimpleSubagentEditor(
 ): Promise<typeof BACK> {
   while (true) {
     const current = orchestrator.config.agents[role];
-    const modelInfo = getConfigSourceInfo(orchestrator, ["agents", role, "model"]);
-    const thinkingInfo = getConfigSourceInfo(orchestrator, ["agents", role, "thinking"]);
     const choice = await selectOption(ctx, label, [
-      opt(`Model: ${withTags(current.model, formatSourceTags(current.model, modelInfo))}`, "Select model"),
-      opt(`Thinking: ${withTags(thinkingLabel(current.thinking), formatSourceTags(current.thinking, thinkingInfo))}`, "Select thinking level"),
+      opt(`Model: ${current.model}`, "Select model"),
+      opt(`Thinking: ${thinkingLabel(current.thinking)}`, "Select thinking level"),
       ...buildResetOptions(orchestrator, ["agents", role]),
       opt("Back", "Return to the previous menu"),
     ]);
@@ -1762,13 +1763,10 @@ async function showPresetVariantEditor(
   while (true) {
     const variant = orchestrator.config.presets[group]?.[presetName]?.[variantName];
     if (!variant) return BACK;
-    const modelInfo = getConfigSourceInfo(orchestrator, ["presets", group, presetName, variantName, "model"]);
-    const thinkingInfo = getConfigSourceInfo(orchestrator, ["presets", group, presetName, variantName, "thinking"]);
-    const enabledInfo = getConfigSourceInfo(orchestrator, ["presets", group, presetName, variantName, "enabled"]);
     const options: OptionInput[] = [
-      opt(`Model: ${withTags(variant.model, formatSourceTags(variant.model, modelInfo))}`, "Select model"),
-      opt(`Thinking: ${withTags(thinkingLabel(variant.thinking), formatSourceTags(variant.thinking, thinkingInfo))}`, "Select thinking level"),
-      opt(`${variant.enabled ? "Disable" : "Enable"}: ${withTags(variant.enabled ? "ON" : "OFF", formatSourceTags(variant.enabled, enabledInfo))}`, "Toggle enabled state"),
+      opt(`Model: ${variant.model}`, "Select model"),
+      opt(`Thinking: ${thinkingLabel(variant.thinking)}`, "Select thinking level"),
+      opt(`${variant.enabled ? "Disable" : "Enable"}: ${variant.enabled ? "ON" : "OFF"}`, "Toggle enabled state"),
     ];
     if (getOwnedScopes(orchestrator, ["presets", group, presetName, variantName]).length > 0) {
       options.push(opt("Delete", "Delete this agent override"));
@@ -2175,15 +2173,13 @@ async function showAfterImplementCommands(orchestrator: Orchestrator, ctx: any):
 
 async function showCommandsSettings(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
   while (true) {
-    const afterEditInfo = getConfigSourceInfo(orchestrator, ["commands", "afterEdit"]);
-    const afterImplementInfo = getConfigSourceInfo(orchestrator, ["commands", "afterImplement"]);
     const choice = await selectOption(ctx, "Commands", [
       opt(
-        `After file edit: ${orchestrator.config.commands.afterEdit.length} commands ${formatSourceTags(orchestrator.config.commands.afterEdit, afterEditInfo)}`.trim(),
+        `After file edit: ${orchestrator.config.commands.afterEdit.length} commands`,
         `${orchestrator.config.commands.afterEdit.length} commands`,
       ),
       opt(
-        `After implementation: ${orchestrator.config.commands.afterImplement.length} commands ${formatSourceTags(orchestrator.config.commands.afterImplement, afterImplementInfo)}`.trim(),
+        `After implementation: ${orchestrator.config.commands.afterImplement.length} commands`,
         `${orchestrator.config.commands.afterImplement.length} commands`,
       ),
       opt("Back", "Return to the previous menu"),
@@ -2202,8 +2198,7 @@ async function showTimeoutsSettings(orchestrator: Orchestrator, ctx: any): Promi
     const timeoutKeys = Object.keys(orchestrator.config.timeouts) as TimeoutKey[];
     const options: OptionInput[] = timeoutKeys.map((key) => {
       const value = orchestrator.config.timeouts[key];
-      const info = getConfigSourceInfo(orchestrator, ["timeouts", key]);
-      return opt(`${TIMEOUT_LABELS[key]}: ${withTags(formatDuration(value), formatSourceTags(value, info))}`, "Edit timeout");
+      return opt(`${TIMEOUT_LABELS[key]}: ${formatDuration(value)}`, "Edit timeout");
     });
     options.push(opt("Back", "Return to the previous menu"));
     const choice = await selectOption(ctx, "Timeouts", options);
@@ -2306,15 +2301,11 @@ async function showLogLevelSetting(orchestrator: Orchestrator, ctx: any): Promis
 
 async function showGeneralSettings(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
   while (true) {
-    const autoInfo = getConfigSourceInfo(orchestrator, ["autoCommit"]);
-    const ignoreInfo = getConfigSourceInfo(orchestrator, ["ignoreExtraRepoConfigs"]);
-    const logInfo = getConfigSourceInfo(orchestrator, ["logLevel"]);
     const choice = await selectOption(ctx, "General", [
-      opt(`Commit automatically: ${withTags(orchestrator.config.autoCommit ? "Yes" : "No", formatSourceTags(orchestrator.config.autoCommit, autoInfo))}`, "Enable or disable auto commits"),
-      opt(`Ignore configs from other repos: ${withTags(orchestrator.config.ignoreExtraRepoConfigs ? "Yes" : "No", formatSourceTags(orchestrator.config.ignoreExtraRepoConfigs, ignoreInfo))}`, "Load only root repo config"),
-      opt(`Log level: ${withTags(logLevelLabel(orchestrator.config.logLevel), formatSourceTags(orchestrator.config.logLevel, logInfo))}`, "Logging verbosity"),
+      opt(`Commit automatically: ${orchestrator.config.autoCommit ? "Yes" : "No"}`, "Enable or disable auto commits"),
+      opt(`Ignore configs from other repos: ${orchestrator.config.ignoreExtraRepoConfigs ? "Yes" : "No"}`, "Load only root repo config"),
+      opt(`Log level: ${logLevelLabel(orchestrator.config.logLevel)}`, "Logging verbosity"),
       opt("Flant AI Infrastructure", "Configure corporate AI model provider"),
-      opt("Repos", "Registered repositories and base branches"),
       opt("Back", "Return to the previous menu"),
     ]);
     if (!choice || choice === "Back") return BACK;
@@ -2330,11 +2321,7 @@ async function showGeneralSettings(orchestrator: Orchestrator, ctx: any): Promis
       await showLogLevelSetting(orchestrator, ctx);
       continue;
     }
-    if (choice === "Flant AI Infrastructure") {
-      await showFlantInfraMenu(orchestrator, ctx);
-      continue;
-    }
-    await showReposSettings(orchestrator, ctx);
+    await showFlantInfraMenu(orchestrator, ctx);
   }
 }
 
@@ -2356,14 +2343,7 @@ async function showAgentsSettings(orchestrator: Orchestrator, ctx: any): Promise
 
 async function showReposSettings(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
   while (true) {
-    if (!orchestrator.active) {
-      await selectOption(ctx, "No active task. Start a task first.", [
-        opt("Back", "Return to the previous menu"),
-      ]);
-      return BACK;
-    }
-
-    const repos = orchestrator.active.state.repos ?? [];
+    const repos = orchestrator.active?.state.repos ?? [];
     if (repos.length === 0) {
       await selectOption(ctx, "No repos registered yet. The agent will register repos when it starts working.", [
         opt("Back", "Return to the previous menu"),
@@ -2375,7 +2355,7 @@ async function showReposSettings(orchestrator: Orchestrator, ctx: any): Promise<
       title: repo.path,
       description: `base: ${repo.baseBranch ?? "(not set)"}${repo.isRoot ? " (root)" : ""}`,
     }));
-    options.push(opt("Back", "Return to Settings"));
+    options.push(opt("Back", "Return to the previous menu"));
 
     const choice = await selectOption(ctx, "Repos", options);
     if (!choice || choice === "Back") return BACK;
@@ -2394,7 +2374,7 @@ async function showReposSettings(orchestrator: Orchestrator, ctx: any): Promise<
       const value = await ctx.ui.input("Base branch (e.g. origin/main):");
       if (value === undefined || value === null) continue;
       repo.baseBranch = String(value).trim() || undefined;
-      saveTask(orchestrator.active.dir, orchestrator.active.state);
+      saveTask(orchestrator.active!.dir, orchestrator.active!.state);
       unregisterAgentDefinitions(orchestrator.pi);
       orchestrator.registerAgents();
       ctx.ui.notify(`Base branch set to: ${repo.baseBranch ?? "(cleared)"}`, "info");
