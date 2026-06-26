@@ -97,6 +97,7 @@ describe("resolvePreset", () => {
     const config = {
       mainModel: {
         implement: { model: "a/impl", thinking: "high" },
+        plan: { model: "a/plan", thinking: "high" },
         debug: { model: "a/debug", thinking: "high" },
         brainstorm: { model: "a/brain", thinking: "high" },
         review: { model: "a/review", thinking: "high" },
@@ -270,6 +271,7 @@ describe("Orchestrator.getPlanStartState", () => {
     return {
       mainModel: {
         implement: { model: "a/impl", thinking: "high" },
+        plan: { model: "a/plan", thinking: "high" },
         debug: { model: "a/debug", thinking: "high" },
         brainstorm: { model: "a/brain", thinking: "high" },
         review: { model: "a/review", thinking: "high" },

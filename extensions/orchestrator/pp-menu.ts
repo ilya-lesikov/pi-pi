@@ -739,6 +739,7 @@ function collectRoleAssignments(config: Partial<PiPiConfig> | null): string[] {
   };
 
   add("mainModel.implement", config.mainModel?.implement?.model);
+  add("mainModel.plan", config.mainModel?.plan?.model);
   add("mainModel.debug", config.mainModel?.debug?.model);
   add("mainModel.brainstorm", config.mainModel?.brainstorm?.model);
   add("mainModel.review", config.mainModel?.review?.model);
@@ -1066,7 +1067,8 @@ export interface ConfigSourceInfo {
 
 const ORCHESTRATOR_ROLES: Array<{ role: MainModelRole; label: string; description: string }> = [
   { role: "brainstorm", label: "Brainstormer", description: "mainModel.brainstorm" },
-  { role: "implement", label: "Implementer", description: "mainModel.implement (also used for plan phase)" },
+  { role: "implement", label: "Implementer", description: "mainModel.implement" },
+  { role: "plan", label: "Planner", description: "mainModel.plan" },
   { role: "debug", label: "Debugger", description: "mainModel.debug" },
   { role: "review", label: "Reviewer", description: "mainModel.review" },
 ];
@@ -2217,7 +2219,10 @@ async function showTimeoutsSettings(orchestrator: Orchestrator, ctx: any): Promi
       ]);
       if (!action || action === "Back") break;
       if (action === "Edit") {
-        const input = await promptRequiredInput(ctx, "New value (e.g. 30s, 5m, 1h, or raw milliseconds)");
+        const input = await promptRequiredInput(
+          ctx,
+          `New value (current: ${formatDuration(value)}, e.g. 30s, 5m, 1h, or milliseconds)`,
+        );
         if (!input) continue;
         const parsed = parseDuration(input);
         if (parsed === null) {
@@ -2352,13 +2357,17 @@ async function showAgentsSettings(orchestrator: Orchestrator, ctx: any): Promise
 async function showReposSettings(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
   while (true) {
     if (!orchestrator.active) {
-      ctx.ui.notify("No active task. Start a task first.", "info");
+      await selectOption(ctx, "No active task. Start a task first.", [
+        opt("Back", "Return to the previous menu"),
+      ]);
       return BACK;
     }
 
     const repos = orchestrator.active.state.repos ?? [];
     if (repos.length === 0) {
-      ctx.ui.notify("No repos registered yet. The agent will register repos when it starts working.", "info");
+      await selectOption(ctx, "No repos registered yet. The agent will register repos when it starts working.", [
+        opt("Back", "Return to the previous menu"),
+      ]);
       return BACK;
     }
 

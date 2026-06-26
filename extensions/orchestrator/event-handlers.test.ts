@@ -32,6 +32,7 @@ function makeConfig() {
   return {
     mainModel: {
       implement: { model: "a/b", thinking: "high" },
+      plan: { model: "a/b", thinking: "high" },
       debug: { model: "a/b", thinking: "high" },
       brainstorm: { model: "a/b", thinking: "high" },
       review: { model: "a/b", thinking: "high" },

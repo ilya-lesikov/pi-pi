@@ -47,6 +47,7 @@ vi.mock("./config.js", async (importOriginal) => {
   return { ...original, loadConfig: vi.fn(() => ({
     mainModel: {
       implement: { model: "test/model", thinking: "high" },
+      plan: { model: "test/model", thinking: "high" },
       debug: { model: "test/model", thinking: "high" },
       brainstorm: { model: "test/model", thinking: "high" },
       review: { model: "test/model", thinking: "high" },
@@ -182,6 +183,7 @@ function makeConfig() {
   return {
     mainModel: {
       implement: { model: "test/model", thinking: "high" },
+      plan: { model: "test/model", thinking: "high" },
       debug: { model: "test/model", thinking: "high" },
       brainstorm: { model: "test/model", thinking: "high" },
       review: { model: "test/model", thinking: "high" },

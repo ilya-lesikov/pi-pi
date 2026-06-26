@@ -588,11 +588,13 @@ export class Orchestrator {
     const modelSpec =
       phase === "debug" && this.active?.type === "debug"
         ? this.config.mainModel.debug.model
-        : phase === "brainstorm" && this.active?.type === "brainstorm"
+      : phase === "brainstorm" && this.active?.type === "brainstorm"
         ? this.config.mainModel.brainstorm.model
-        : phase === "review" && this.active?.type === "review"
+      : phase === "review" && this.active?.type === "review"
         ? this.config.mainModel.review.model
-        : this.config.mainModel.implement.model;
+      : phase === "plan"
+        ? this.config.mainModel.plan.model
+      : this.config.mainModel.implement.model;
     const activeModelSpec = this.lastCtx?.model
       ? `${this.lastCtx.model.provider}/${this.lastCtx.model.id}`
       : modelSpec;
@@ -626,7 +628,7 @@ export class Orchestrator {
     const finalize = async () => {
       this.phaseStartTime = Date.now();
       if (this.active && (phase === "plan" || phase === "implement")) {
-        const modelConfig = this.config.mainModel.implement;
+        const modelConfig = phase === "plan" ? this.config.mainModel.plan : this.config.mainModel.implement;
         await this.switchModel(ctx, modelConfig.model, modelConfig.thinking);
       }
       this.injectContextAndArtifacts(taskDir, phase);

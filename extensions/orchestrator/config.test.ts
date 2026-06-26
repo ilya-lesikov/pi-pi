@@ -110,6 +110,7 @@ describe("validateConfig", () => {
       validateConfig({
         mainModel: {
           implement: { model: "provider/model-1" },
+          plan: { model: "provider/model-plan" },
           debug: { model: "provider/model-2" },
           brainstorm: { model: "provider/model-3" },
           review: { model: "provider/model-4" },
@@ -175,6 +176,7 @@ describe("loadConfig", () => {
     const config = loadConfig(cwd, "/nonexistent/global/config.json");
 
     expect(config.mainModel.implement.model).toBe("custom/implement");
+    expect(config.mainModel.plan.model).toBe("anthropic/claude-opus-latest");
     expect(config.mainModel.debug.model).toBe("openai/gpt-latest");
     const planners = resolvePreset(config, "planners");
     expect(planners.opus.enabled).toBe(false);
@@ -194,6 +196,7 @@ describe("loadConfig", () => {
 
     expect(existsSync(configPath)).toBe(false);
     expect(config.mainModel.implement.model).toBe("anthropic/claude-opus-latest");
+    expect(config.mainModel.plan.model).toBe("anthropic/claude-opus-latest");
   });
 
   it("throws parse errors with config file path", () => {

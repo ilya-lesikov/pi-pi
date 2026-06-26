@@ -65,6 +65,7 @@ describe("flant-infra", () => {
     ]) as any;
 
     expect(config.mainModel.implement.model).toBe("pp-flant-anthropic/claude-opus-4-6");
+    expect(config.mainModel.plan.model).toBe("pp-flant-anthropic/claude-opus-4-6");
     expect(config.mainModel.debug.model).toBe("pp-flant-openai/gpt-5-4");
     expect(config.mainModel.brainstorm.model).toBe("pp-flant-anthropic/claude-opus-4-6");
     expect(config.mainModel.review.model).toBe("pp-flant-anthropic/claude-opus-4-6");
@@ -110,6 +111,7 @@ describe("flant-infra", () => {
     ]) as any;
 
     expect(config.mainModel.implement.model).toBe("pp-flant-anthropic/claude-opus-4-7");
+    expect(config.mainModel.plan.model).toBe("pp-flant-anthropic/claude-opus-4-7");
     expect(config.mainModel.debug.model).toBe("pp-flant-openai/gpt-5-4");
     expect(config.presets.planners.regular.gemini.model).toBe("pp-flant-openai/gemini-3-1-pro");
     expect(config.agents.explore.model).toBe("pp-flant-openai/gemini-3-1-flash-lite");

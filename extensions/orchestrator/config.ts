@@ -37,6 +37,7 @@ export interface TimeoutConfig {
 export interface PiPiConfig {
   mainModel: {
     implement: ModelConfig;
+    plan: ModelConfig;
     debug: ModelConfig;
     brainstorm: ModelConfig;
     review: ModelConfig;
@@ -74,6 +75,7 @@ export type PresetGroup = (typeof PRESET_GROUPS)[number];
 const DEFAULT_CONFIG: PiPiConfig = {
   mainModel: {
     implement: { model: "anthropic/claude-opus-latest", thinking: "high" },
+    plan: { model: "anthropic/claude-opus-latest", thinking: "high" },
     debug: { model: "openai/gpt-latest", thinking: "high" },
     brainstorm: { model: "anthropic/claude-opus-latest", thinking: "high" },
     review: { model: "anthropic/claude-opus-latest", thinking: "high" },
@@ -182,7 +184,7 @@ export function deepMerge(target: Record<string, any>, source: Record<string, an
 
 export function validateConfig(config: Record<string, any>): void {
   if (config.mainModel) {
-    for (const key of ["implement", "debug", "brainstorm", "review"]) {
+    for (const key of ["implement", "plan", "debug", "brainstorm", "review"]) {
       const mc = config.mainModel[key];
       if (mc && typeof mc.model === "string" && mc.model.length === 0) {
         throw new Error(`config.mainModel.${key}.model must be non-empty`);
