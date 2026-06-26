@@ -264,3 +264,90 @@ describe("Orchestrator.cleanupActive", () => {
     expect(orchestrator.active).toBeNull();
   });
 });
+
+describe("Orchestrator.getPlanStartState", () => {
+  function makePlannerConfig() {
+    return {
+      mainModel: {
+        implement: { model: "a/impl", thinking: "high" },
+        debug: { model: "a/debug", thinking: "high" },
+        brainstorm: { model: "a/brain", thinking: "high" },
+        review: { model: "a/review", thinking: "high" },
+      },
+      presets: {
+        planners: {
+          regular: {
+            alpha: { enabled: true, model: "x/a", thinking: "low" },
+            beta: { enabled: true, model: "x/b", thinking: "low" },
+          },
+        },
+        planReviewers: { regular: {} },
+        brainstormReviewers: { regular: {} },
+        codeReviewers: { regular: {} },
+      },
+      defaultPresets: {
+        planners: "regular",
+        planReviewers: "regular",
+        brainstormReviewers: "regular",
+        codeReviewers: "regular",
+      },
+      agents: {
+        explore: { model: "x/e", thinking: "low" },
+        librarian: { model: "x/l", thinking: "medium" },
+        task: { model: "x/t", thinking: "medium" },
+      },
+      commands: { afterEdit: [], afterImplement: [] },
+      timeouts: {
+        afterEdit: 1,
+        afterImplement: 1,
+        agentSpawn: 1,
+        agentReadyPing: 1,
+        lockStale: 1,
+        lockUpdate: 1,
+      },
+      autoCommit: false,
+      ignoreExtraRepoConfigs: false,
+      logLevel: "info",
+    } as any;
+  }
+
+  it("returns synthesize when all enabled planner variants have outputs", () => {
+    const orchestrator = new Orchestrator(makePi());
+    orchestrator.config = makePlannerConfig();
+    const taskDir = makeTempDir();
+    const plansDir = join(taskDir, "plans");
+    mkdirSync(plansDir, { recursive: true });
+    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000)}_alpha.md`), "# Plan\n", "utf-8");
+    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000) + 1}_beta.md`), "# Plan\n", "utf-8");
+
+    const state = orchestrator.getPlanStartState(taskDir, "regular");
+
+    expect(state).toEqual({ step: "synthesize", shouldSpawnPlanners: false });
+  });
+
+  it("returns await_planners when required planner outputs are missing", () => {
+    const orchestrator = new Orchestrator(makePi());
+    orchestrator.config = makePlannerConfig();
+    const taskDir = makeTempDir();
+    const plansDir = join(taskDir, "plans");
+    mkdirSync(plansDir, { recursive: true });
+    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000)}_alpha.md`), "# Plan\n", "utf-8");
+
+    const state = orchestrator.getPlanStartState(taskDir, "regular");
+
+    expect(state).toEqual({ step: "await_planners", shouldSpawnPlanners: true });
+  });
+
+  it("returns synthesize when synthesized plan already exists", () => {
+    const orchestrator = new Orchestrator(makePi());
+    orchestrator.config = makePlannerConfig();
+    const taskDir = makeTempDir();
+    const plansDir = join(taskDir, "plans");
+    mkdirSync(plansDir, { recursive: true });
+    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000)}_synthesized.md`), "# Plan\n", "utf-8");
+
+    const state = orchestrator.getPlanStartState(taskDir, "regular");
+
+    expect(state).toEqual({ step: "synthesize", shouldSpawnPlanners: false });
+  });
+});

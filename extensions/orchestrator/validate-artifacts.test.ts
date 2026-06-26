@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validatePlan, validateUserRequest } from "./validate-artifacts.js";
+import { validateArtifact, validatePlan, validateResearch, validateUserRequest } from "./validate-artifacts.js";
 
 describe("validateUserRequest", () => {
   it("rejects placeholder distillation and constraints content", () => {
@@ -84,5 +84,87 @@ Ship minimal fix.
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.errors).toContain("Section ## Scope is empty. Expected 2-4 lines summarizing scope and constraints.");
+  });
+});
+
+describe("validateResearch", () => {
+  it("accepts valid research content", () => {
+    const content = `## Affected Code
+src/main.ts:run — entry point
+
+## Architecture Context
+- Main flow calls run and dispatches handlers
+
+## Constraints & Edge Cases
+- MUST: Keep behavior backward compatible
+- RISK: Regression in startup path
+
+## Open Questions
+Need confirmation about deprecated flag
+`;
+
+    const result = validateResearch(content);
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("fails when required sections are missing", () => {
+    const content = `## Affected Code
+src/main.ts:run — entry point
+
+## Constraints & Edge Cases
+- MUST: Keep behavior backward compatible
+`;
+
+    const result = validateResearch(content);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors.some((error) => error.includes("Missing required section: ## Architecture Context"))).toBe(true);
+  });
+
+  it("fails when affected code section is empty", () => {
+    const content = `## Affected Code
+...
+
+## Architecture Context
+- Main flow calls run and dispatches handlers
+
+## Constraints & Edge Cases
+- MUST: Keep behavior backward compatible
+`;
+
+    const result = validateResearch(content);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors).toContain("Section ## Affected Code is empty. Expected non-empty content.");
+  });
+});
+
+describe("validateArtifact", () => {
+  it("accepts valid artifact with top-level title", () => {
+    const content = `# Risk Analysis
+
+- First risk
+- Second risk
+`;
+
+    const result = validateArtifact(content);
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("fails when top-level title heading is missing", () => {
+    const content = `## Risk Analysis
+
+- First risk
+`;
+
+    const result = validateArtifact(content);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors.some((error) => error.includes("Expected a top-level heading"))).toBe(true);
   });
 });

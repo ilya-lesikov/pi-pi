@@ -24,9 +24,10 @@ vi.mock("../../3p/pi-ask-user/index.js", () => {
 
 import { Orchestrator } from "./orchestrator.js";
 import { registerCommandHandlers } from "./command-handlers.js";
-import { registerEventHandlers } from "./event-handlers.js";
+import { enterReviewCycle, finalizeReviewCycle, registerEventHandlers } from "./event-handlers.js";
 import { createTask, getActiveTask, loadTask, saveTask } from "./state.js";
 import { registerAgentDefinitions } from "./agents/registry.js";
+import { resumeTask } from "./pp-menu.js";
 import * as commandsModule from "./commands.js";
 import * as usageTrackerModule from "./usage-tracker.js";
 
@@ -2323,6 +2324,259 @@ describe("resume and recovery", () => {
     const active = getActiveTask(cwd);
 
     expect(active?.dir).toBe(taskDir);
+  });
+});
+
+describe("crash resume", () => {
+  it("resume in await_planners with partial plan outputs moves to synthesize when all enabled outputs exist", async () => {
+    const cwd = makeTempDir();
+    mkdirSync(join(cwd, ".git"), { recursive: true });
+    const { orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx({ cwd });
+
+    await orchestrator.startTask(ctx as any, "implement", "resume planners complete");
+    const taskDir = orchestrator.active!.dir;
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+    mkdirSync(join(taskDir, "plans"), { recursive: true });
+    writeFileSync(
+      join(taskDir, "plans", `${Math.floor(Date.now() / 1000)}_test.md`),
+      makeValidPlan(["- [ ] P1. Planner output item — Done when: planner output exists"]),
+      "utf-8",
+    );
+    orchestrator.active!.state.phase = "plan";
+    orchestrator.active!.state.step = "await_planners";
+    orchestrator.active!.state.activePlannerPreset = "regular";
+    saveTask(taskDir, orchestrator.active!.state);
+    await orchestrator.cleanupActive();
+
+    const result = await resumeTask(orchestrator, ctx, { dir: taskDir, state: loadTask(taskDir), type: "implement" });
+
+    expect(result.ok).toBe(true);
+    expect(orchestrator.active!.state.step).toBe("synthesize");
+  });
+
+  it("resume in await_planners with missing outputs keeps await_planners and attempts planner respawn", async () => {
+    const cwd = makeTempDir();
+    mkdirSync(join(cwd, ".git"), { recursive: true });
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx({ cwd });
+
+    await orchestrator.startTask(ctx as any, "implement", "resume planners missing");
+    const taskDir = orchestrator.active!.dir;
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+    orchestrator.active!.state.phase = "plan";
+    orchestrator.active!.state.step = "await_planners";
+    orchestrator.active!.state.activePlannerPreset = "regular";
+    saveTask(taskDir, orchestrator.active!.state);
+    await orchestrator.cleanupActive();
+
+    const result = await resumeTask(orchestrator, ctx, { dir: taskDir, state: loadTask(taskDir), type: "implement" });
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(result.ok).toBe(true);
+    expect(orchestrator.active!.state.step).toBe("await_planners");
+    expect(pi.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ customType: "pp-planners-error" }),
+      { deliverAs: "steer" },
+    );
+  });
+
+  it("resume in reviewCycle apply_feedback delivers review outputs and keeps cycle active", async () => {
+    const cwd = makeTempDir();
+    mkdirSync(join(cwd, ".git"), { recursive: true });
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx({ cwd });
+
+    await orchestrator.startTask(ctx as any, "implement", "resume apply feedback");
+    const taskDir = orchestrator.active!.dir;
+    mkdirSync(join(taskDir, "code-reviews"), { recursive: true });
+    writeFileSync(join(taskDir, "code-reviews", `${Math.floor(Date.now() / 1000)}_test_round-1.md`), "Review note", "utf-8");
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "apply_feedback";
+    orchestrator.active!.state.reviewCycle = { kind: "auto", step: "apply_feedback", pass: 1 };
+    saveTask(taskDir, orchestrator.active!.state);
+    await orchestrator.cleanupActive();
+
+    const result = await resumeTask(orchestrator, ctx, { dir: taskDir, state: loadTask(taskDir), type: "implement" });
+
+    expect(result.ok).toBe(true);
+    expect(orchestrator.active!.state.reviewCycle).toEqual({ kind: "auto", step: "apply_feedback", pass: 1 });
+    expect(pi.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customType: "pp-review-ready",
+        content: expect.stringContaining("Review cycle is in apply_feedback step."),
+      }),
+      { deliverAs: "steer" },
+    );
+  });
+
+  it("resume prunes stale repos and sends warning notification", async () => {
+    const cwd = makeTempDir();
+    mkdirSync(join(cwd, ".git"), { recursive: true });
+    const staleRepo = join(cwd, "gone");
+    const { orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx({ cwd });
+
+    await orchestrator.startTask(ctx as any, "implement", "resume stale notify");
+    const taskDir = orchestrator.active!.dir;
+    orchestrator.active!.state.repos = [
+      { path: cwd, isRoot: true },
+      { path: staleRepo, isRoot: false },
+    ];
+    saveTask(taskDir, orchestrator.active!.state);
+    await orchestrator.cleanupActive();
+
+    const result = await resumeTask(orchestrator, ctx, { dir: taskDir, state: loadTask(taskDir), type: "implement" });
+
+    expect(result.ok).toBe(true);
+    expect(ctx.ui.notify).toHaveBeenCalledWith("Pruned 1 stale repo(s) that no longer exist.", "warning");
+  });
+
+  it("resume with missing planner preset falls back to first available preset and warns", async () => {
+    const cwd = makeTempDir();
+    mkdirSync(join(cwd, ".git"), { recursive: true });
+    const { orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx({ cwd });
+
+    await orchestrator.startTask(ctx as any, "implement", "resume missing preset");
+    const taskDir = orchestrator.active!.dir;
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+    orchestrator.active!.state.phase = "plan";
+    orchestrator.active!.state.step = "await_planners";
+    orchestrator.active!.state.activePlannerPreset = "nonexistent";
+    saveTask(taskDir, orchestrator.active!.state);
+    await orchestrator.cleanupActive();
+
+    const result = await resumeTask(orchestrator, ctx, { dir: taskDir, state: loadTask(taskDir), type: "implement" });
+
+    expect(result.ok).toBe(true);
+    expect(orchestrator.active!.state.activePlannerPreset).toBe("regular");
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      'Planner preset "nonexistent" not found. Falling back to "regular".',
+      "warning",
+    );
+  });
+});
+
+describe("brainstorm and plan review cycles", () => {
+  it("brainstorm review cycle reaches apply_feedback and finalizeReviewCycle returns to user_gate", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx({ cwd });
+
+    await orchestrator.startTask(ctx as any, "implement", "brainstorm review cycle");
+    const taskDir = orchestrator.active!.dir;
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+    mkdirSync(join(taskDir, "brainstorm-reviews"), { recursive: true });
+    writeFileSync(
+      join(taskDir, "brainstorm-reviews", `${Math.floor(Date.now() / 1000)}_test_round-1.md`),
+      "Brainstorm review feedback",
+      "utf-8",
+    );
+
+    const message = await enterReviewCycle(orchestrator, ctx, "regular");
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(message).toContain("Started review cycle pass 1");
+    expect(orchestrator.active!.state.reviewCycle?.step).toBe("apply_feedback");
+    expect(orchestrator.active!.state.step).toBe("apply_feedback");
+    expect(pi.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customType: "pp-review-ready",
+        content: expect.stringContaining("Brainstorm review feedback"),
+      }),
+      { deliverAs: "followUp" },
+    );
+
+    finalizeReviewCycle(orchestrator.active!);
+
+    expect(orchestrator.active!.state.step).toBe("user_gate");
+    expect(orchestrator.active!.state.reviewCycle).toBeNull();
+    expect(orchestrator.active!.state.reviewPass).toBe(1);
+  });
+
+  it("plan review cycle reaches apply_feedback and finalizeReviewCycle returns to user_gate", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx({ cwd });
+
+    await orchestrator.startTask(ctx as any, "implement", "plan review cycle");
+    const taskDir = orchestrator.active!.dir;
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+    mkdirSync(join(taskDir, "plans"), { recursive: true });
+    writeFileSync(
+      join(taskDir, "plans", `${Math.floor(Date.now() / 1000)}_synthesized.md`),
+      makeValidPlan(["- [x] P1. Plan ready — Done when: synthesized plan exists"]),
+      "utf-8",
+    );
+    mkdirSync(join(taskDir, "plan-reviews"), { recursive: true });
+    writeFileSync(
+      join(taskDir, "plan-reviews", `${Math.floor(Date.now() / 1000)}_test_round-1.md`),
+      "Plan review feedback",
+      "utf-8",
+    );
+    orchestrator.active!.state.phase = "plan";
+    orchestrator.active!.state.step = "synthesize";
+    saveTask(taskDir, orchestrator.active!.state);
+
+    const message = await enterReviewCycle(orchestrator, ctx, "regular");
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(message).toContain("Started review cycle pass 1");
+    expect(orchestrator.active!.state.reviewCycle?.step).toBe("apply_feedback");
+    expect(orchestrator.active!.state.step).toBe("apply_feedback");
+    expect(pi.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customType: "pp-review-ready",
+        content: expect.stringContaining("Plan review feedback"),
+      }),
+      { deliverAs: "followUp" },
+    );
+
+    finalizeReviewCycle(orchestrator.active!);
+
+    expect(orchestrator.active!.state.step).toBe("user_gate");
+    expect(orchestrator.active!.state.reviewCycle).toBeNull();
+    expect(orchestrator.active!.state.reviewPass).toBe(1);
+  });
+
+  it("review cycle with zero outputs completes and delivers no-outputs message", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx({ cwd });
+
+    await orchestrator.startTask(ctx as any, "implement", "review zero outputs");
+    const taskDir = orchestrator.active!.dir;
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+    mkdirSync(join(taskDir, "plans"), { recursive: true });
+    writeFileSync(
+      join(taskDir, "plans", `${Math.floor(Date.now() / 1000)}_synthesized.md`),
+      makeValidPlan(["- [x] P1. Plan ready — Done when: synthesized plan exists"]),
+      "utf-8",
+    );
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "llm_work";
+    saveTask(taskDir, orchestrator.active!.state);
+
+    const message = await enterReviewCycle(orchestrator, ctx, "regular");
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(message).toContain("Started review cycle pass 1");
+    expect(orchestrator.active!.state.reviewCycle?.step).toBe("apply_feedback");
+    expect(orchestrator.active!.state.step).toBe("apply_feedback");
+    expect(pi.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customType: "pp-review-ready",
+        content: expect.stringContaining("No reviewer outputs found"),
+      }),
+      { deliverAs: "followUp" },
+    );
   });
 });
 

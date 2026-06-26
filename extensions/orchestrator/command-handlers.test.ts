@@ -273,6 +273,131 @@ describe("transitionToNextPhase", () => {
     groupSpy.mockRestore();
   });
 
+  it("runs afterImplement for root repo during implement to done transition", async () => {
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi as any);
+    const taskDir = makeTempDir();
+    orchestrator.cwd = taskDir;
+    orchestrator.config = makeConfig() as any;
+    orchestrator.active = makeTransitionTask(taskDir, "implement");
+    orchestrator.active.state.repos = [{ path: taskDir, isRoot: true }];
+    orchestrator.active.modifiedFiles = new Set([join(taskDir, "src", "root.ts")]);
+    const ctx = makeTransitionCtx();
+    vi.spyOn(machineModule, "validateExitCriteria").mockReturnValue({ ok: true });
+    vi.spyOn(await import("./repo-utils.js"), "groupFilesByRepo").mockReturnValue(
+      new Map([[taskDir, [join(taskDir, "src", "root.ts")]]]) as any,
+    );
+    const runSpy = vi.spyOn(commandsModule, "runAfterImplement").mockReturnValue([{ ok: true, command: "npm test", output: "ok" }]);
+    const cleanupSpy = vi.spyOn(orchestrator, "cleanupActive").mockImplementation(async () => {
+      orchestrator.active = null;
+    });
+
+    const result = await transitionToNextPhase(orchestrator, ctx);
+
+    expect(result.ok).toBe(true);
+    expect(runSpy).toHaveBeenCalledWith(
+      orchestrator.config.commands.afterImplement,
+      orchestrator.config.timeouts.afterImplement,
+      orchestrator.cwd,
+    );
+    expect(cleanupSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs afterImplement for extra repo when extra repo configs are enabled", async () => {
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi as any);
+    const taskDir = makeTempDir();
+    const extraRepo = join(taskDir, "extra");
+    mkdirSync(extraRepo, { recursive: true });
+    orchestrator.cwd = taskDir;
+    orchestrator.config = { ...makeConfig(), ignoreExtraRepoConfigs: false } as any;
+    orchestrator.active = makeTransitionTask(taskDir, "implement");
+    orchestrator.active.state.repos = [
+      { path: taskDir, isRoot: true },
+      { path: extraRepo, isRoot: false },
+    ];
+    orchestrator.active.modifiedFiles = new Set([join(extraRepo, "src", "extra.ts")]);
+    const ctx = makeTransitionCtx();
+    vi.spyOn(machineModule, "validateExitCriteria").mockReturnValue({ ok: true });
+    vi.spyOn(await import("./repo-utils.js"), "groupFilesByRepo").mockReturnValue(
+      new Map([[extraRepo, [join(extraRepo, "src", "extra.ts")]]]) as any,
+    );
+    vi.spyOn(commandsModule, "loadRepoAfterImplementCommands").mockReturnValue([{ run: "npm run lint" }]);
+    const runSpy = vi.spyOn(commandsModule, "runAfterImplement").mockReturnValue([{ ok: true, command: "npm run lint", output: "ok" }]);
+    vi.spyOn(orchestrator, "cleanupActive").mockImplementation(async () => {
+      orchestrator.active = null;
+    });
+
+    const result = await transitionToNextPhase(orchestrator, ctx);
+
+    expect(result.ok).toBe(true);
+    expect(runSpy).toHaveBeenCalledWith([{ run: "npm run lint" }], orchestrator.config.timeouts.afterImplement, extraRepo);
+  });
+
+  it("blocks transition when afterImplement fails in extra repo", async () => {
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi as any);
+    const taskDir = makeTempDir();
+    const extraRepo = join(taskDir, "extra");
+    mkdirSync(extraRepo, { recursive: true });
+    orchestrator.cwd = taskDir;
+    orchestrator.config = { ...makeConfig(), ignoreExtraRepoConfigs: false } as any;
+    orchestrator.active = makeTransitionTask(taskDir, "implement");
+    orchestrator.active.state.repos = [
+      { path: taskDir, isRoot: true },
+      { path: extraRepo, isRoot: false },
+    ];
+    orchestrator.active.modifiedFiles = new Set([join(extraRepo, "src", "extra.ts")]);
+    const ctx = makeTransitionCtx();
+    vi.spyOn(machineModule, "validateExitCriteria").mockReturnValue({ ok: true });
+    vi.spyOn(await import("./repo-utils.js"), "groupFilesByRepo").mockReturnValue(
+      new Map([[extraRepo, [join(extraRepo, "src", "extra.ts")]]]) as any,
+    );
+    vi.spyOn(commandsModule, "loadRepoAfterImplementCommands").mockReturnValue([{ run: "npm run lint" }]);
+    vi.spyOn(commandsModule, "runAfterImplement").mockReturnValue([{ ok: false, command: "npm run lint", output: "lint failed" }]);
+    const cleanupSpy = vi.spyOn(orchestrator, "cleanupActive");
+
+    const result = await transitionToNextPhase(orchestrator, ctx);
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("afterImplement commands failed");
+    expect(result.error).toContain("npm run lint: lint failed");
+    expect(cleanupSpy).not.toHaveBeenCalled();
+    expect(orchestrator.active?.state.phase).toBe("implement");
+  });
+
+  it("skips afterImplement for extra repo when ignoreExtraRepoConfigs is true", async () => {
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi as any);
+    const taskDir = makeTempDir();
+    const extraRepo = join(taskDir, "extra");
+    mkdirSync(extraRepo, { recursive: true });
+    orchestrator.cwd = taskDir;
+    orchestrator.config = { ...makeConfig(), ignoreExtraRepoConfigs: true } as any;
+    orchestrator.active = makeTransitionTask(taskDir, "implement");
+    orchestrator.active.state.repos = [
+      { path: taskDir, isRoot: true },
+      { path: extraRepo, isRoot: false },
+    ];
+    orchestrator.active.modifiedFiles = new Set([join(extraRepo, "src", "extra.ts")]);
+    const ctx = makeTransitionCtx();
+    vi.spyOn(machineModule, "validateExitCriteria").mockReturnValue({ ok: true });
+    vi.spyOn(await import("./repo-utils.js"), "groupFilesByRepo").mockReturnValue(
+      new Map([[extraRepo, [join(extraRepo, "src", "extra.ts")]]]) as any,
+    );
+    const loadExtraSpy = vi.spyOn(commandsModule, "loadRepoAfterImplementCommands");
+    const runSpy = vi.spyOn(commandsModule, "runAfterImplement").mockReturnValue([{ ok: true, command: "npm test", output: "ok" }]);
+    vi.spyOn(orchestrator, "cleanupActive").mockImplementation(async () => {
+      orchestrator.active = null;
+    });
+
+    const result = await transitionToNextPhase(orchestrator, ctx);
+
+    expect(result.ok).toBe(true);
+    expect(loadExtraSpy).not.toHaveBeenCalled();
+    expect(runSpy).not.toHaveBeenCalled();
+  });
+
   it("transition to done cleans up active task", async () => {
     const pi = makePi();
     const orchestrator = new Orchestrator(pi as any);

@@ -3,7 +3,19 @@ import { tmpdir } from "os";
 import { join, resolve } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import lockfile from "proper-lockfile";
-import { createTask, getActiveTask, listTasks, loadTask, saveTask, taskAge, taskName, validateFromPath, type TaskState } from "./state.js";
+import {
+  createTask,
+  getActiveTask,
+  getEffectiveMode,
+  getFirstPhase,
+  listTasks,
+  loadTask,
+  saveTask,
+  taskAge,
+  taskName,
+  validateFromPath,
+  type TaskState,
+} from "./state.js";
 
 const tempDirs: string[] = [];
 
@@ -355,5 +367,47 @@ describe("getActiveTask", () => {
     getActiveTask(cwd, 1234);
 
     expect(checkSpy).toHaveBeenCalledWith(join(taskDir, "state.json"), expect.objectContaining({ stale: 1234 }));
+  });
+});
+
+describe("getFirstPhase", () => {
+  it("returns expected first phase for each task type", () => {
+    expect(getFirstPhase("implement")).toBe("brainstorm");
+    expect(getFirstPhase("brainstorm")).toBe("brainstorm");
+    expect(getFirstPhase("debug")).toBe("debug");
+    expect(getFirstPhase("review")).toBe("review");
+    expect(getFirstPhase("quick")).toBe("quick");
+  });
+});
+
+describe("getEffectiveMode", () => {
+  function baseState(): TaskState {
+    return {
+      phase: "brainstorm",
+      step: "llm_work",
+      reviewCycle: null,
+      reviewPass: 0,
+      from: null,
+      description: "x",
+      startedAt: new Date().toISOString(),
+    };
+  }
+
+  it("returns effectiveMode when it is set", () => {
+    const state: TaskState = { ...baseState(), mode: "guided", effectiveMode: "autonomous" };
+
+    expect(getEffectiveMode(state)).toBe("autonomous");
+  });
+
+  it("falls back to mode when effectiveMode is undefined", () => {
+    const state: TaskState = { ...baseState(), mode: "guided" };
+
+    expect(getEffectiveMode(state)).toBe("guided");
+  });
+
+  it("returns undefined when both effectiveMode and mode are undefined", () => {
+    const state: TaskState = { ...baseState() };
+
+    expect(getEffectiveMode(state)).toBeUndefined();
   });
 });
