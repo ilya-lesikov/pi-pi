@@ -9,7 +9,8 @@ function getLockfileFs(): typeof import("fs") | undefined {
     const fs = require("fs");
     fs.statSync(process.cwd());
     return fs;
-  } catch {
+  } catch (err: any) {
+    getLogger().debug({ s: "state", err: err?.message }, "getLockfileFs unavailable");
     return undefined;
   }
 }

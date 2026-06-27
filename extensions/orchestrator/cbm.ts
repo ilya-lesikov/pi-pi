@@ -86,7 +86,9 @@ export class CbmDaemon {
 
   stop(): void {
     if (!this.proc) return;
-    try { this.proc.kill(); } catch {}
+    try { this.proc.kill(); } catch (err: any) {
+      getLogger().debug({ s: "cbm", err: err?.message }, "CBM daemon kill failed");
+    }
     this.cleanup();
   }
 
