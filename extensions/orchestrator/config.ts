@@ -45,6 +45,7 @@ export interface PiPiConfig {
     autoCommit: boolean;
     loadExtraRepoConfigs: boolean;
     logLevel: LogLevel;
+    tracing: boolean;
   };
   agents: {
     orchestrators: Record<OrchestratorRole, AgentConfig>;
@@ -98,6 +99,7 @@ const DEFAULT_CONFIG: PiPiConfig = {
     autoCommit: true,
     loadExtraRepoConfigs: true,
     logLevel: "info",
+    tracing: false,
   },
   agents: {
     orchestrators: {
@@ -342,6 +344,7 @@ export function validateConfig(config: Record<string, any>): void {
     const general = requireObject(config.general, "config.general");
     ensureBool(general.autoCommit, "config.general.autoCommit");
     ensureBool(general.loadExtraRepoConfigs, "config.general.loadExtraRepoConfigs");
+    ensureBool(general.tracing, "config.general.tracing");
     if (general.logLevel !== undefined && !isValidLogLevel(general.logLevel)) {
       throw new Error("config.general.logLevel must be one of: debug, info, warn, error");
     }
