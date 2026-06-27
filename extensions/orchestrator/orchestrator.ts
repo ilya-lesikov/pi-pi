@@ -91,6 +91,7 @@ export class Orchestrator {
   reviewerFailureDialogPending = false;
   plannotatorReject: ((reason: Error) => void) | null = null;
   plannotatorUnsub: (() => void) | null = null;
+  plannotatorTimer: ReturnType<typeof setTimeout> | null = null;
   transitionToNextPhase: (ctx: any, plannerPreset?: string) => Promise<{ ok: boolean; error?: string }> = async () => ({ ok: false, error: "not initialized" });
 
   constructor(readonly pi: ExtensionAPI) {}

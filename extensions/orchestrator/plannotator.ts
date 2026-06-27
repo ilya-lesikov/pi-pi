@@ -9,23 +9,30 @@ export function openPlannotator(
   const requestId = crypto.randomUUID();
   return new Promise((resolve) => {
     let handled = false;
+    const timer = setTimeout(() => {
+      if (!handled) resolve({ opened: false, reviewId: null });
+    }, 30000);
     pi.events.emit("plannotator:request", {
       requestId,
       action,
       payload,
       respond: (response: any) => {
         handled = true;
+        clearTimeout(timer);
         const reviewId = response?.result?.reviewId ?? null;
         resolve({ opened: response.status === "handled", reviewId });
       },
     });
-    setTimeout(() => {
-      if (!handled) resolve({ opened: false, reviewId: null });
-    }, 30000);
   });
 }
 
+const PLANNOTATOR_RESULT_TIMEOUT_MS = 30 * 60 * 1000;
+
 export function cancelPendingPlannotatorWait(orchestrator: Orchestrator): void {
+  if (orchestrator.plannotatorTimer) {
+    clearTimeout(orchestrator.plannotatorTimer);
+    orchestrator.plannotatorTimer = null;
+  }
   if (orchestrator.plannotatorUnsub) {
     orchestrator.plannotatorUnsub();
     orchestrator.plannotatorUnsub = null;
@@ -46,11 +53,22 @@ export function waitForPlannotatorResult(
     orchestrator.plannotatorReject = reject;
     const unsub = pi.events.on("plannotator:review-result", (data: any) => {
       if (reviewId && data?.reviewId && data.reviewId !== reviewId) return;
-      unsub();
-      orchestrator.plannotatorUnsub = null;
-      orchestrator.plannotatorReject = null;
+      cleanup();
       resolve({ approved: !!data?.approved, feedback: data?.feedback });
     });
     orchestrator.plannotatorUnsub = unsub;
+    function cleanup() {
+      unsub();
+      orchestrator.plannotatorUnsub = null;
+      orchestrator.plannotatorReject = null;
+      if (orchestrator.plannotatorTimer) {
+        clearTimeout(orchestrator.plannotatorTimer);
+        orchestrator.plannotatorTimer = null;
+      }
+    }
+    orchestrator.plannotatorTimer = setTimeout(() => {
+      cleanup();
+      reject(new Error("Plannotator review timed out"));
+    }, PLANNOTATOR_RESULT_TIMEOUT_MS);
   });
 }
