@@ -2889,12 +2889,16 @@ async function openCodeReviewInPlannotator(
 
   return await new Promise((resolve) => {
     let handled = false;
+    const timer = setTimeout(() => {
+      if (!handled) resolve({ status: "error", error: "Plannotator is not available." });
+    }, 30000);
     orchestrator.pi.events.emit("plannotator:request", {
       requestId: crypto.randomUUID(),
       action: "code-review",
       payload: requestPayload,
       respond: (response: any) => {
         handled = true;
+        clearTimeout(timer);
         if (response?.status !== "handled") {
           resolve({ status: "error", error: response?.error || "Plannotator is not available." });
           return;
@@ -2906,9 +2910,6 @@ async function openCodeReviewInPlannotator(
         resolve({ status: approved ? "approved" : "needs_changes", feedback });
       },
     });
-    setTimeout(() => {
-      if (!handled) resolve({ status: "error", error: "Plannotator is not available." });
-    }, 30000);
   });
 }
 

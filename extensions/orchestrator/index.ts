@@ -37,8 +37,9 @@ export default function (pi: ExtensionAPI) {
 
 function registerSubagentTools(pi: ExtensionAPI): void {
   // Subagents run in-process; bind cbm/ast-search and plan validation to the
-  // orchestrator's project root (ctx.cwd, captured on session_start) rather than
-  // process.cwd(), which is the launch dir and wrong for worktree-isolated tasks.
+  // orchestrator's project root (seeded to process.cwd() at init, then refreshed
+  // to ctx.cwd on session_start) rather than a raw process.cwd() captured here,
+  // which is the launch dir and wrong for worktree-isolated tasks.
   const cwd = (globalThis as any)[ORCHESTRATOR_CWD_KEY] ?? process.cwd();
   registerCbmTools(pi, cwd);
   registerExaTools(pi);
