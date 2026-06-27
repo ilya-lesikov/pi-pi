@@ -1,5 +1,5 @@
 import { execFileSync } from "child_process";
-import { existsSync, writeFileSync, unlinkSync } from "fs";
+import { existsSync, mkdirSync, writeFileSync, unlinkSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 import {
@@ -221,8 +221,8 @@ export async function runDoctor(orchestrator: Orchestrator, ctx: any): Promise<v
     const globalConfig = existsSync(GLOBAL_CONFIG_PATH) ? readRawConfig(GLOBAL_CONFIG_PATH) : null;
     const projectConfig = existsSync(projectConfigPath) ? readRawConfig(projectConfigPath) : null;
     mergeConfigLayers(globalConfig, projectConfig);
-    addLine({ severity: "pass", text: "4-layer merge OK" });
-  }, "4-layer merge failed");
+    addLine({ severity: "pass", text: "Config layer merge OK" });
+  }, "Config layer merge failed");
 
   await safeCheck(() => {
     const knownTopLevelKeys = new Set(["general", "agents", "commands", "performance"]);
@@ -483,6 +483,7 @@ export async function runDoctor(orchestrator: Orchestrator, ctx: any): Promise<v
     const cacheDir = flantCacheDir();
     const probePath = join(cacheDir, `doctor-${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`);
     try {
+      mkdirSync(cacheDir, { recursive: true });
       writeFileSync(probePath, "ok", "utf-8");
       unlinkSync(probePath);
       addLine({ severity: "pass", text: `Flant cache directory writable: ${cacheDir}` });
@@ -533,11 +534,9 @@ export async function runDoctor(orchestrator: Orchestrator, ctx: any): Promise<v
     const api = (globalThis as any)[Symbol.for("pi-lsp:api")] as Record<string, unknown> | undefined;
     if (!api) {
       addLine({ severity: "warning", text: "LSP API: not available" });
-      addLine({ severity: "warning", text: "LSP status details are not programmatically exposed in Doctor" });
       return;
     }
     addLine({ severity: "pass", text: "LSP API: available" });
-    addLine({ severity: "warning", text: "LSP status details are not programmatically exposed in Doctor" });
   }, "LSP checks failed");
 
   addCategory("Connectivity");

@@ -290,7 +290,7 @@ describe("runDoctor", () => {
     expect(ctx.ui.notify).toHaveBeenCalledTimes(1);
     const [report] = ctx.ui.notify.mock.calls[0] as [string, string];
     expect(report).toContain("Config files parseable");
-    expect(report).toContain("4-layer merge failed: merge exploded");
+    expect(report).toContain("Config layer merge failed: merge exploded");
     expect(report).toContain("Connectivity checks failed: network down");
     expect(report).toContain("Summary:");
   });
@@ -494,6 +494,7 @@ describe("runDoctor", () => {
     expect(status).not.toHaveBeenCalled();
     const [withApiReport] = ctx.ui.notify.mock.calls[0] as [string, string];
     expect(withApiReport).toContain("LSP API: available");
+    expect(withApiReport).not.toContain("not programmatically exposed");
 
     ctx.ui.notify.mockClear();
     delete (globalThis as any)[Symbol.for("pi-lsp:api")];
