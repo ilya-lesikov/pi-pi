@@ -142,6 +142,7 @@ afterEach(() => {
   menu.assertDone();
   vi.restoreAllMocks();
   delete (globalThis as any)[Symbol.for("pi-pi:usage-tracker")];
+  delete (globalThis as any)[Symbol.for("pi-lsp:api")];
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -3052,11 +3053,53 @@ describe("menu contracts", () => {
 
     menu
       .expect({ question: "/pp", options: { include: ["Settings"] }, choose: "Settings" })
-      .expect({ question: "Settings", options: { exact: ["General", "Agents", "Commands", "Performance", "Back"] }, choose: "Back" })
+      .expect({ question: "Settings", options: { exact: ["General", "Agents", "Commands", "Performance", "LSP", "Back"] }, choose: "Back" })
       .expect({ question: "/pp", options: { include: ["Back"] }, choose: "Back" });
 
     const pp = getCommand(pi, "pp");
     await pp(undefined, ctx);
+  });
+
+  it("info menu shows Doctor and hides LSP", async () => {
+    const cwd = makeTempDir();
+    const { pi } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    menu
+      .expect({ question: "/pp", options: { include: ["Info"] }, choose: "Info" })
+      .expect({
+        question: "Info",
+        options: {
+          include: ["Subagents", "Usage", "Doctor", "Back"],
+          exclude: ["LSP"],
+        },
+        choose: "Back",
+      })
+      .expect({ question: "/pp", options: { include: ["Back"] }, choose: "Back" });
+
+    const pp = getCommand(pi, "pp");
+    await pp(undefined, ctx);
+  });
+
+  it("settings lsp menu restarts servers", async () => {
+    const cwd = makeTempDir();
+    const { pi } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+    const restart = vi.fn(async () => undefined);
+    (globalThis as any)[Symbol.for("pi-lsp:api")] = { restart };
+
+    menu
+      .expect({ question: "/pp", options: { include: ["Settings"] }, choose: "Settings" })
+      .expect({ question: "Settings", options: { include: ["LSP"] }, choose: "LSP" })
+      .expect({ question: "LSP", options: { exact: ["Restart all servers", "Back"] }, choose: "Restart all servers" })
+      .expect({ question: "LSP", options: { include: ["Back"] }, choose: "Back" })
+      .expect({ question: "Settings", options: { include: ["Back"] }, choose: "Back" })
+      .expect({ question: "/pp", options: { include: ["Back"] }, choose: "Back" });
+
+    const pp = getCommand(pi, "pp");
+    await pp(undefined, ctx);
+
+    expect(restart).toHaveBeenCalledTimes(1);
   });
 
   it("settings agents submenu has orchestrators and subagents", async () => {

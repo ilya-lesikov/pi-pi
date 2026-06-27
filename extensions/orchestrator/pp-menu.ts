@@ -56,6 +56,7 @@ import {
   updateFlantInfra,
   type FlantSettings,
 } from "./flant-infra.js";
+import { runDoctor } from "./doctor.js";
 import { normalizeRepoPath, type RepoInfo } from "./repo-utils.js";
 import { getLogger, addTaskDestination, setLogLevel } from "./log.js";
 
@@ -715,34 +716,6 @@ async function showSubagentsMenu(ctx: any): Promise<void> {
   await api.showMenu(ctx);
 }
 
-async function showLspMenu(ctx: any): Promise<typeof BACK> {
-  while (true) {
-    const choice = await selectOption(ctx, "LSP", [
-      { title: "Status", description: "Show detected language servers and their state" },
-      { title: "Restart", description: "Stop all servers. They reinitialize on next use" },
-      { title: "Back", description: "Return to the previous menu" },
-    ]);
-    if (!choice || choice === "Back") return BACK;
-
-    const api = (globalThis as any)[Symbol.for("pi-lsp:api")] as {
-      status?: (menuCtx: any) => Promise<void>;
-      restart?: (menuCtx: any) => Promise<void>;
-    } | undefined;
-
-    if (!api?.status || !api?.restart) {
-      ctx.ui.notify("LSP API is not available.", "warning");
-      continue;
-    }
-
-    if (choice === "Status") {
-      await api.status(ctx);
-      continue;
-    }
-
-    await api.restart(ctx);
-  }
-}
-
 function countFlantProviders(settings: FlantSettings): { anthropic: number; openai: number } {
   const models = settings.cachedFlantModels ?? [];
   const anthropic = models.filter((m) => m.startsWith("claude-")).length;
@@ -1045,8 +1018,8 @@ async function showInfoMenu(orchestrator: Orchestrator, ctx: any): Promise<typeo
   while (true) {
     const options: OptionInput[] = [];
     options.push({ title: "Subagents", description: "Manage running agents" });
-    options.push({ title: "LSP", description: "Language server status and controls" });
     options.push({ title: "Usage", description: "Show session token usage and cost breakdown" });
+    options.push({ title: "Doctor", description: "Run diagnostic checks" });
     if (orchestrator.active) {
       options.push({ title: "Task status", description: "Show current task phase, step, and timing" });
       options.push({ title: "Repos", description: "Registered repositories and base branches" });
@@ -1059,12 +1032,12 @@ async function showInfoMenu(orchestrator: Orchestrator, ctx: any): Promise<typeo
       await showSubagentsMenu(ctx);
       continue;
     }
-    if (choice === "LSP") {
-      await showLspMenu(ctx);
-      continue;
-    }
     if (choice === "Usage") {
       showUsage(ctx);
+      continue;
+    }
+    if (choice === "Doctor") {
+      await runDoctor(orchestrator, ctx);
       continue;
     }
     if (choice === "Task status") {
@@ -2569,6 +2542,25 @@ async function showReposSettings(orchestrator: Orchestrator, ctx: any): Promise<
   }
 }
 
+async function showLspSettings(ctx: any): Promise<typeof BACK> {
+  while (true) {
+    const choice = await selectOption(ctx, "LSP", [
+      opt("Restart all servers", "Stop all servers. They reinitialize on next use"),
+      opt("Back", "Return to the previous menu"),
+    ]);
+    if (!choice || choice === "Back") return BACK;
+
+    const api = (globalThis as any)[Symbol.for("pi-lsp:api")] as {
+      restart?: (menuCtx: any) => Promise<void>;
+    } | undefined;
+    if (!api?.restart) {
+      ctx.ui.notify("LSP API is not available.", "warning");
+      continue;
+    }
+    await api.restart(ctx);
+  }
+}
+
 async function showSettingsMenu(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
   while (true) {
     const options: OptionInput[] = [
@@ -2576,6 +2568,7 @@ async function showSettingsMenu(orchestrator: Orchestrator, ctx: any): Promise<t
       opt("Agents", "Orchestrator and subagent configuration"),
       opt("Commands", "After file edit and after implementation"),
       opt("Performance", "Timeout configuration"),
+      opt("LSP", "Language server controls"),
       opt("Back", "Return to the previous menu"),
     ];
 
@@ -2586,6 +2579,7 @@ async function showSettingsMenu(orchestrator: Orchestrator, ctx: any): Promise<t
     else if (choice === "Agents") await showAgentsSettings(orchestrator, ctx);
     else if (choice === "Commands") await showCommandsSettings(orchestrator, ctx);
     else if (choice === "Performance") await showPerformanceSettings(orchestrator, ctx);
+    else if (choice === "LSP") await showLspSettings(ctx);
   }
 }
 
@@ -3195,7 +3189,7 @@ async function showNoActiveMenu(orchestrator: Orchestrator, ctx: any): Promise<s
   while (true) {
     const choice = await selectOption(ctx, "/pp", [
       { title: "Task", description: "Start a new task or resume a paused one" },
-      { title: "Info", description: "Subagents, LSP, usage, and task status" },
+      { title: "Info", description: "Subagents, usage, and task status" },
       { title: "Settings", description: "Flant AI and other configuration" },
       { title: "Back", description: "Close this menu" },
     ]);
@@ -3255,7 +3249,7 @@ async function showQuickTaskMenu(
     const choice = await selectOption(ctx, menuTitle, [
       opt("Complete", "Mark task as done and clean up"),
       opt("Pause", "Suspend task to resume later"),
-      opt("Info", "Subagents, LSP, usage, and task status"),
+      opt("Info", "Subagents, usage, and task status"),
       opt("Settings", "Flant AI and other configuration"),
       opt("Back", "Return to the prompt and keep working"),
     ]);
@@ -3307,7 +3301,7 @@ export async function showActiveTaskMenu(
       const autoChoice = await selectOption(ctx, `/pp\n\nTask: ${task.type}\nPhase: ${phase}${summary !== "/pp" ? `\n\n${summary}` : ""}`, [
         opt("Switch to Guided", "Return to gated phase transitions"),
         opt("Stop task", "Suspend task to resume later"),
-        opt("Info", "Subagents, LSP, usage, and task status"),
+        opt("Info", "Subagents, usage, and task status"),
         opt("Settings", "Flant AI and other configuration"),
         opt("Back", "Return to the prompt and keep working"),
       ]);
@@ -3337,7 +3331,7 @@ export async function showActiveTaskMenu(
     if (task.state.autonomousConfig) {
       options.push(opt("Switch to Autonomous", "Run with automatic phase transitions"));
     }
-    options.push(opt("Info", "Subagents, LSP, usage, and task status"));
+    options.push(opt("Info", "Subagents, usage, and task status"));
     options.push(opt("Settings", "Flant AI and other configuration"));
     options.push(opt("Back", "Return to the prompt and keep working"));
 
