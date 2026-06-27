@@ -397,6 +397,7 @@ Use get_subagent_result for full output.`,
       durationMs,
       modelId,
       tokens,
+      toolCallId: record.toolCallId,
     };
   }
 
@@ -960,6 +961,7 @@ Guidelines:
           thinkingLevel: thinking,
           isBackground: true,
           isolation,
+          toolCallId,
           ...bgCallbacks,
         });
 
@@ -1069,6 +1071,7 @@ Guidelines:
         inheritContext,
         thinkingLevel: thinking,
         isolation,
+        toolCallId,
         ...fgCallbacks,
       });
 

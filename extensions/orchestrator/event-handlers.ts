@@ -861,10 +861,11 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
 
 function registerMainTraceHooks(orchestrator: Orchestrator): void {
   const pi = orchestrator.pi;
-  const isSubagent = () => !!(globalThis as any)[SUBAGENT_SESSION_KEY];
+  // These hooks are registered only on the root orchestrator session
+  // (registerEventHandlers is never called from the subagent branch in index.ts),
+  // so they only ever receive root-session events — no SUBAGENT_SESSION_KEY gate needed.
 
   pi.on("before_agent_start", async (event) => {
-    if (isSubagent()) return;
     getTracer()?.traceMain("before_agent_start", {
       prompt: event.prompt,
       images: event.images,
@@ -872,46 +873,44 @@ function registerMainTraceHooks(orchestrator: Orchestrator): void {
     });
   });
   pi.on("agent_start", async () => {
-    if (isSubagent()) return;
     getTracer()?.traceMain("agent_start", {});
   });
   pi.on("agent_end", async (event) => {
-    if (isSubagent()) return;
     getTracer()?.traceMain("agent_end", { messages: event.messages });
   });
   pi.on("turn_start", async (event) => {
-    if (isSubagent()) return;
     const tracer = getTracer();
     if (tracer) tracer.turnIndex = event.turnIndex;
     tracer?.traceMain("turn_start", { turnIndex: event.turnIndex, timestamp: event.timestamp });
   });
   pi.on("turn_end", async (event) => {
-    if (isSubagent()) return;
-    getTracer()?.traceMain("turn_end", { turnIndex: event.turnIndex, message: event.message, toolResults: event.toolResults });
+    const tracer = getTracer();
+    if (tracer) tracer.turnIndex = event.turnIndex;
+    tracer?.traceMain("turn_end", { turnIndex: event.turnIndex, message: event.message, toolResults: event.toolResults });
   });
   pi.on("message_start", async (event) => {
-    if (isSubagent()) return;
-    getTracer()?.traceMain("message_start", { message: event.message });
+    const tracer = getTracer();
+    tracer?.traceMain("message_start", { turnIndex: tracer.turnIndex, message: event.message });
   });
   pi.on("message_update", async (event) => {
-    if (isSubagent()) return;
-    getTracer()?.traceMain("message_update", { assistantMessageEvent: event.assistantMessageEvent });
+    const tracer = getTracer();
+    tracer?.traceMain("message_update", { turnIndex: tracer.turnIndex, assistantMessageEvent: event.assistantMessageEvent });
   });
   pi.on("message_end", async (event) => {
-    if (isSubagent()) return;
-    getTracer()?.traceMain("message_end", { message: event.message });
+    const tracer = getTracer();
+    tracer?.traceMain("message_end", { turnIndex: tracer.turnIndex, message: event.message });
   });
   pi.on("tool_execution_start", async (event) => {
-    if (isSubagent()) return;
-    getTracer()?.traceMain("tool_execution_start", { toolCallId: event.toolCallId, toolName: event.toolName, args: event.args });
+    const tracer = getTracer();
+    tracer?.traceMain("tool_execution_start", { turnIndex: tracer.turnIndex, toolCallId: event.toolCallId, toolName: event.toolName, args: event.args });
   });
   pi.on("tool_execution_update", async (event) => {
-    if (isSubagent()) return;
-    getTracer()?.traceMain("tool_execution_update", { toolCallId: event.toolCallId, toolName: event.toolName, partialResult: (event as any).partialResult });
+    const tracer = getTracer();
+    tracer?.traceMain("tool_execution_update", { turnIndex: tracer.turnIndex, toolCallId: event.toolCallId, toolName: event.toolName, args: event.args, partialResult: event.partialResult });
   });
   pi.on("tool_execution_end", async (event) => {
-    if (isSubagent()) return;
-    getTracer()?.traceMain("tool_execution_end", { toolCallId: event.toolCallId, toolName: event.toolName, result: event.result, isError: event.isError });
+    const tracer = getTracer();
+    tracer?.traceMain("tool_execution_end", { turnIndex: tracer.turnIndex, toolCallId: event.toolCallId, toolName: event.toolName, result: event.result, isError: event.isError });
   });
 }
 
@@ -1504,6 +1503,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   });
 
   pi.on("session_before_switch" as any, async () => {
+    finalizeTracer();
     if (!orchestrator.active) return;
     cancelPendingPlannotatorWait(orchestrator);
     orchestrator.abortAllSubagents();
@@ -1615,6 +1615,8 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       const sessionId = ctx.sessionManager?.getSessionId?.() || `session-${Date.now()}`;
       initTracer(ppDir, sessionId);
       log.info({ s: "tracing", sessionId }, "session tracing enabled");
+    } else {
+      finalizeTracer();
     }
 
     registerCommandHandlers(orchestrator);

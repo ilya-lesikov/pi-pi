@@ -47,6 +47,8 @@ interface SpawnOptions {
   onTurnEnd?: (turnCount: number) => void;
   validateCompletion?: () => string | undefined;
   maxValidationRetries?: number;
+  /** toolCallId of the parent tool call that spawned this subagent (for trace correlation). */
+  toolCallId?: string;
 }
 
 export class AgentManager {
@@ -120,6 +122,7 @@ export class AgentManager {
   private startAgent(id: string, record: AgentRecord, { pi, ctx, type, prompt, options }: SpawnArgs) {
     record.status = "running";
     record.startedAt = Date.now();
+    if (options.toolCallId && !record.toolCallId) record.toolCallId = options.toolCallId;
     if (options.isBackground) this.runningBackground++;
     this.onStart?.(record);
 
@@ -159,7 +162,7 @@ export class AgentManager {
       subagentId: id,
       subagentType: type,
       subagentDescription: options.description,
-      parentToolCallId: record.toolCallId,
+      parentToolCallId: options.toolCallId ?? record.toolCallId,
       onSessionCreated: (session) => {
         record.session = session;
         // Flush any steers that arrived before the session was ready

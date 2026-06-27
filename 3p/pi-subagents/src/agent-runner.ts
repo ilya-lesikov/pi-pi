@@ -69,22 +69,22 @@ function traceSubagentEvent(subagentId: string | undefined, event: AgentSessionE
         tracer.traceSubagent(subagentId, "turn_end", { turnIndex, message: (event as any).message, toolResults: (event as any).toolResults });
         break;
       case "message_start":
-        tracer.traceSubagent(subagentId, "message_start", { message: (event as any).message });
+        tracer.traceSubagent(subagentId, "message_start", { turnIndex, message: (event as any).message });
         break;
       case "message_update":
-        tracer.traceSubagent(subagentId, "message_update", { assistantMessageEvent: (event as any).assistantMessageEvent });
+        tracer.traceSubagent(subagentId, "message_update", { turnIndex, assistantMessageEvent: (event as any).assistantMessageEvent });
         break;
       case "message_end":
-        tracer.traceSubagent(subagentId, "message_end", { message: (event as any).message });
+        tracer.traceSubagent(subagentId, "message_end", { turnIndex, message: (event as any).message });
         break;
       case "tool_execution_start":
-        tracer.traceSubagent(subagentId, "tool_execution_start", { toolCallId: (event as any).toolCallId, toolName: (event as any).toolName, args: (event as any).args });
+        tracer.traceSubagent(subagentId, "tool_execution_start", { turnIndex, toolCallId: (event as any).toolCallId, toolName: (event as any).toolName, args: (event as any).args });
         break;
       case "tool_execution_update":
-        tracer.traceSubagent(subagentId, "tool_execution_update", { toolCallId: (event as any).toolCallId, toolName: (event as any).toolName, partialResult: (event as any).partialResult });
+        tracer.traceSubagent(subagentId, "tool_execution_update", { turnIndex, toolCallId: (event as any).toolCallId, toolName: (event as any).toolName, args: (event as any).args, partialResult: (event as any).partialResult });
         break;
       case "tool_execution_end":
-        tracer.traceSubagent(subagentId, "tool_execution_end", { toolCallId: (event as any).toolCallId, toolName: (event as any).toolName, result: (event as any).result, isError: (event as any).isError });
+        tracer.traceSubagent(subagentId, "tool_execution_end", { turnIndex, toolCallId: (event as any).toolCallId, toolName: (event as any).toolName, result: (event as any).result, isError: (event as any).isError });
         break;
     }
   } catch {}
@@ -251,7 +251,10 @@ export async function runAgent(
     : previousSubagentSession
       ? 1
       : 0;
-  const subagentSessionState = { depth: previousDepth + 1 };
+  const parentSubagentId = typeof previousSubagentSession === "object" && previousSubagentSession !== null
+    ? (previousSubagentSession as { subagentId?: string }).subagentId
+    : undefined;
+  const subagentSessionState = { depth: previousDepth + 1, subagentId: options.subagentId };
   (globalThis as any)[subagentSessionKey] = subagentSessionState;
 
   try {
@@ -456,6 +459,7 @@ export async function runAgent(
           type: options.subagentType ?? type,
           description: options.subagentDescription,
           parentToolCallId: options.parentToolCallId,
+          parentSubagentId,
           depth: subagentDepth(),
           systemPrompt,
           effectivePrompt,
@@ -519,7 +523,9 @@ export async function resumeAgent(
   const collector = collectResponseText(session);
   const cleanupAbort = forwardAbortSignal(session, options.signal);
 
-  let resumeTurnCount = 0;
+  // Seed from prior assistant turns so resumed turn indexes don't collide with
+  // the turns already written to this subagent's trace file.
+  let resumeTurnCount = session.messages.filter((m) => m.role === "assistant").length;
   const unsubTrace = session.subscribe((event: AgentSessionEvent) => {
     traceSubagentEvent(options.subagentId, event, resumeTurnCount);
     if (event.type === "turn_end") resumeTurnCount++;

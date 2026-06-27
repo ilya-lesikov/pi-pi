@@ -64,7 +64,8 @@ describe("tracer", () => {
       type: "Explore",
       description: "find stuff",
       parentToolCallId: "call-9",
-      depth: 1,
+      parentSubagentId: "root-agent",
+      depth: 2,
       systemPrompt: "sub-sys",
       effectivePrompt: "do the thing",
     });
@@ -76,11 +77,16 @@ describe("tracer", () => {
     expect(subLines[0].systemPrompt).toBe("sub-sys");
     expect(subLines[0].effectivePrompt).toBe("do the thing");
     expect(subLines[0].parentToolCallId).toBe("call-9");
+    expect(subLines[0].parentSubagentId).toBe("root-agent");
+    expect(subLines[0].depth).toBe(2);
     expect(subLines[1].kind).toBe("tool_execution_start");
     expect(subLines[1].args).toEqual({ pattern: "foo" });
 
     const mainLines = readLines(join(dir, "main.jsonl"));
-    expect(mainLines.some((l) => l.kind === "subagent_spawned" && l.subagentId === "agent-1")).toBe(true);
+    const spawned = mainLines.find((l) => l.kind === "subagent_spawned" && l.subagentId === "agent-1");
+    expect(spawned).toBeDefined();
+    expect(spawned!.parentToolCallId).toBe("call-9");
+    expect(spawned!.parentSubagentId).toBe("root-agent");
   });
 
   it("keeps concurrent subagents in separate files", () => {
