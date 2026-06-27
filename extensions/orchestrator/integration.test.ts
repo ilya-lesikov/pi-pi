@@ -29,11 +29,13 @@ import { createTask, getActiveTask, loadTask, saveTask } from "./state.js";
 import { registerAgentDefinitions } from "./agents/registry.js";
 import { resumeTask } from "./pp-menu.js";
 import * as commandsModule from "./commands.js";
+import * as doctorModule from "./doctor.js";
 import * as usageTrackerModule from "./usage-tracker.js";
 
 vi.mock("./cbm.js", () => ({ registerCbmTools: vi.fn() }));
 vi.mock("./exa.js", () => ({ registerExaTools: vi.fn() }));
 vi.mock("./ast-search.js", () => ({ registerAstSearchTool: vi.fn() }));
+vi.mock("./doctor.js", () => ({ runDoctor: vi.fn(async () => undefined) }));
 vi.mock("./agents/registry.js", () => ({
   registerAgentDefinitions: vi.fn(),
   unregisterAgentDefinitions: vi.fn(),
@@ -3081,6 +3083,25 @@ describe("menu contracts", () => {
     await pp(undefined, ctx);
   });
 
+  it("info doctor option calls runDoctor", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+    const runDoctorSpy = vi.mocked(doctorModule.runDoctor);
+
+    menu
+      .expect({ question: "/pp", options: { include: ["Info"] }, choose: "Info" })
+      .expect({ question: "Info", options: { include: ["Doctor", "Back"] }, choose: "Doctor" })
+      .expect({ question: "Info", options: { include: ["Back"] }, choose: "Back" })
+      .expect({ question: "/pp", options: { include: ["Back"] }, choose: "Back" });
+
+    const pp = getCommand(pi, "pp");
+    await pp(undefined, ctx);
+
+    expect(runDoctorSpy).toHaveBeenCalledTimes(1);
+    expect(runDoctorSpy).toHaveBeenCalledWith(orchestrator, ctx);
+  });
+
   it("settings lsp menu restarts servers", async () => {
     const cwd = makeTempDir();
     const { pi } = await setupOrchestrator(cwd);
@@ -3100,6 +3121,26 @@ describe("menu contracts", () => {
     await pp(undefined, ctx);
 
     expect(restart).toHaveBeenCalledTimes(1);
+  });
+
+  it("settings lsp restart warns when API is missing", async () => {
+    const cwd = makeTempDir();
+    const { pi } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+    delete (globalThis as any)[Symbol.for("pi-lsp:api")];
+
+    menu
+      .expect({ question: "/pp", options: { include: ["Settings"] }, choose: "Settings" })
+      .expect({ question: "Settings", options: { include: ["LSP"] }, choose: "LSP" })
+      .expect({ question: "LSP", options: { exact: ["Restart all servers", "Back"] }, choose: "Restart all servers" })
+      .expect({ question: "LSP", options: { include: ["Back"] }, choose: "Back" })
+      .expect({ question: "Settings", options: { include: ["Back"] }, choose: "Back" })
+      .expect({ question: "/pp", options: { include: ["Back"] }, choose: "Back" });
+
+    const pp = getCommand(pi, "pp");
+    await pp(undefined, ctx);
+
+    expect(ctx.ui.notify).toHaveBeenCalledWith("LSP API is not available.", "warning");
   });
 
   it("settings agents submenu has orchestrators and subagents", async () => {

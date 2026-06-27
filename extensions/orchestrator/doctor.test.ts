@@ -1,16 +1,14 @@
-import { mkdtempSync, mkdirSync, rmSync } from "fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   readRawConfig: vi.fn(),
-  loadConfig: vi.fn(),
+  mergeConfigLayers: vi.fn(),
   resolvePreset: vi.fn(),
   resolveModel: vi.fn(),
   getAllAliases: vi.fn(),
-  discoverFlantModels: vi.fn(),
-  fetchOpenRouterMetadata: vi.fn(),
   loadFlantSettings: vi.fn(),
   execFileSync: vi.fn(),
 }));
@@ -23,7 +21,7 @@ vi.mock("./config.js", () => ({
   GLOBAL_CONFIG_PATH: "/mock/global-config.json",
   PRESET_GROUPS: ["planners", "codeReviewers", "planReviewers", "brainstormReviewers"],
   readRawConfig: mocks.readRawConfig,
-  loadConfig: mocks.loadConfig,
+  mergeConfigLayers: mocks.mergeConfigLayers,
   resolvePreset: mocks.resolvePreset,
 }));
 
@@ -33,8 +31,6 @@ vi.mock("./model-registry.js", () => ({
 }));
 
 vi.mock("./flant-infra.js", () => ({
-  discoverFlantModels: mocks.discoverFlantModels,
-  fetchOpenRouterMetadata: mocks.fetchOpenRouterMetadata,
   loadFlantSettings: mocks.loadFlantSettings,
 }));
 
@@ -166,7 +162,7 @@ beforeEach(() => {
 
   mocks.resolveModel.mockImplementation((value: string) => aliasMap[value] ?? value);
   mocks.getAllAliases.mockReturnValue({ ...aliasMap });
-  mocks.loadConfig.mockImplementation(() => createConfig());
+  mocks.mergeConfigLayers.mockReturnValue(createConfig());
   mocks.readRawConfig.mockImplementation(() => ({}));
   mocks.resolvePreset.mockImplementation((config: any, group: string, presetName?: string) => {
     const groupConfig = config.agents.subagents.presetGroups[group];
@@ -181,8 +177,6 @@ beforeEach(() => {
     cachedFlantModels: null,
     cachedOpenRouterData: null,
   });
-  mocks.discoverFlantModels.mockResolvedValue(["claude-opus-4-6", "gpt-5-4"]);
-  mocks.fetchOpenRouterMetadata.mockResolvedValue({});
 
   mocks.execFileSync.mockImplementation((command: string, args: string[]) => {
     if (command !== "which") throw new Error(`Unexpected command: ${command}`);
@@ -194,15 +188,34 @@ beforeEach(() => {
     throw new Error(`${bin} not found`);
   });
 
-  const fetchMock = vi.fn(async () => ({
-    ok: true,
-    status: 200,
-    json: async () => ({}),
-  }));
+  const fetchMock = vi.fn(async (url: string) => {
+    if (url === "https://llm-api.flant.ru/v1/models") {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ data: [{ id: "claude-opus-4-6" }, { id: "gpt-5-4" }] }),
+      };
+    }
+    if (url === "https://openrouter.ai/api/v1/models") {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ data: [{ id: "a" }, { id: "b" }] }),
+      };
+    }
+    if (url === "https://mcp.exa.ai/mcp") {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({}),
+      };
+    }
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  });
   (globalThis as any).fetch = fetchMock;
 
   (globalThis as any)[Symbol.for("pi-pi:cbm-daemon")] = { proc: {} };
-  (globalThis as any)[Symbol.for("pi-lsp:api")] = { status: vi.fn(async () => undefined) };
+  (globalThis as any)[Symbol.for("pi-lsp:api")] = { restart: vi.fn(async () => undefined) };
 
   process.env.FLANT_API_KEY = "flant-key";
   const agentDir = makeTempDir("pi-pi-doctor-agent-");
@@ -263,7 +276,7 @@ describe("runDoctor", () => {
     mocks.readRawConfig.mockImplementation(() => {
       throw new Error("parse error");
     });
-    mocks.loadConfig.mockImplementation(() => {
+    mocks.mergeConfigLayers.mockImplementation(() => {
       throw new Error("merge exploded");
     });
     (globalThis as any).fetch = vi.fn(async () => {
@@ -277,11 +290,10 @@ describe("runDoctor", () => {
     expect(report).toContain("Config files parseable");
     expect(report).toContain("4-layer merge failed: merge exploded");
     expect(report).toContain("Connectivity checks failed: network down");
-    expect(report).toContain("Connectivity");
     expect(report).toContain("Summary:");
   });
 
-  it("attempts Flant and Exa network probes", async () => {
+  it("probes Flant, OpenRouter, and Exa over HTTP", async () => {
     const cwd = makeTempDir("pi-pi-doctor-network-");
     const ctx = createCtx();
     const orchestrator = {
@@ -290,19 +302,188 @@ describe("runDoctor", () => {
       active: null,
     } as any;
 
-    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) }));
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url === "https://llm-api.flant.ru/v1/models") {
+        return { ok: true, status: 200, json: async () => ({ data: [{ id: "gpt-5-4" }] }) };
+      }
+      if (url === "https://openrouter.ai/api/v1/models") {
+        return { ok: true, status: 200, json: async () => ({ data: [{ id: "openrouter/a" }] }) };
+      }
+      if (url === "https://mcp.exa.ai/mcp") {
+        return { ok: true, status: 200, json: async () => ({}) };
+      }
+      throw new Error("unexpected");
+    });
     (globalThis as any).fetch = fetchMock;
 
     await runDoctor(orchestrator, ctx);
 
-    expect(mocks.discoverFlantModels).toHaveBeenCalledTimes(1);
-    expect(mocks.discoverFlantModels).toHaveBeenCalledWith("flant-key");
-    expect(mocks.fetchOpenRouterMetadata).toHaveBeenCalledTimes(1);
-    expect(mocks.fetchOpenRouterMetadata).toHaveBeenCalledWith([]);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://llm-api.flant.ru/v1/models",
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://openrouter.ai/api/v1/models",
+      expect.objectContaining({ method: "GET" }),
+    );
     expect(fetchMock).toHaveBeenCalledWith(
       "https://mcp.exa.ai/mcp",
       expect.objectContaining({ method: "POST" }),
     );
+  });
+
+  it("does not warn about empty overrides when config files are missing", async () => {
+    const cwd = makeTempDir("pi-pi-doctor-missing-config-");
+    const ctx = createCtx();
+    const orchestrator = {
+      cwd,
+      config: createConfig(),
+      active: null,
+    } as any;
+
+    await runDoctor(orchestrator, ctx);
+
+    const [report] = ctx.ui.notify.mock.calls[0] as [string, string];
+    expect(report).toContain("No empty overrides");
+    expect(report).not.toContain("Empty override objects: global");
+    expect(report).not.toContain("Empty override objects: project");
+  });
+
+  it("skips disabled commands and parses env-prefixed/path commands", async () => {
+    const cwd = makeTempDir("pi-pi-doctor-disabled-commands-");
+    mkdirSync(join(cwd, "scripts"), { recursive: true });
+    mkdirSync(join(cwd, "bin"), { recursive: true });
+    const config = createConfig();
+    config.commands.afterEdit = {
+      disabled: { run: "npm run lint", enabled: false },
+      envprefixed: { run: "FOO=1 BAR=2 node ./scripts/lint.js", enabled: true },
+      pathcmd: { run: "./bin/tool --check", enabled: true },
+    } as any;
+    config.commands.afterImplement = {
+      disabledImpl: { run: "npm test", enabled: false },
+    } as any;
+    writeFileSync(join(cwd, "bin", "tool"), "#!/bin/sh\n", "utf-8");
+
+    const ctx = createCtx();
+    const orchestrator = {
+      cwd,
+      config,
+      active: null,
+    } as any;
+
+    await runDoctor(orchestrator, ctx);
+
+    const [report] = ctx.ui.notify.mock.calls[0] as [string, string];
+    expect(report).toContain("afterEdit.disabled: skipped (disabled)");
+    expect(report).toContain("afterImplement.disabledImpl: skipped (disabled)");
+    expect(report).toContain("afterEdit.envprefixed: node found");
+    expect(report).toContain(`afterEdit.pathcmd: executable path exists at ${join(cwd, "./bin/tool")}`);
+  });
+
+  it("reports Exa timeout/abort errors", async () => {
+    const cwd = makeTempDir("pi-pi-doctor-timeout-");
+    const ctx = createCtx();
+    const orchestrator = {
+      cwd,
+      config: createConfig(),
+      active: null,
+    } as any;
+
+    const fetchMock = vi.fn(async (url: string, options?: RequestInit) => {
+      if (url === "https://llm-api.flant.ru/v1/models") {
+        return { ok: true, status: 200, json: async () => ({ data: [] }) };
+      }
+      if (url === "https://openrouter.ai/api/v1/models") {
+        return { ok: true, status: 200, json: async () => ({ data: [] }) };
+      }
+      if (url === "https://mcp.exa.ai/mcp") {
+        options?.signal?.dispatchEvent?.(new Event("abort"));
+        throw new Error("aborted");
+      }
+      throw new Error("unexpected");
+    });
+    (globalThis as any).fetch = fetchMock;
+
+    await runDoctor(orchestrator, ctx);
+
+    const [report] = ctx.ui.notify.mock.calls[0] as [string, string];
+    expect(report).toContain("Connectivity checks failed: aborted");
+  });
+
+  it("reports LSP API presence/missing without invoking LSP status", async () => {
+    const cwd = makeTempDir("pi-pi-doctor-lsp-");
+    const ctx = createCtx();
+    const orchestrator = {
+      cwd,
+      config: createConfig(),
+      active: null,
+    } as any;
+
+    const status = vi.fn(async () => undefined);
+    (globalThis as any)[Symbol.for("pi-lsp:api")] = { status };
+
+    await runDoctor(orchestrator, ctx);
+
+    expect(status).not.toHaveBeenCalled();
+    const [withApiReport] = ctx.ui.notify.mock.calls[0] as [string, string];
+    expect(withApiReport).toContain("LSP API: available");
+
+    ctx.ui.notify.mockClear();
+    delete (globalThis as any)[Symbol.for("pi-lsp:api")];
+
+    await runDoctor(orchestrator, ctx);
+    const [withoutApiReport] = ctx.ui.notify.mock.calls[0] as [string, string];
+    expect(withoutApiReport).toContain("LSP API: not available");
+  });
+
+  it("validates repos when active task has registered repos", async () => {
+    const root = makeTempDir("pi-pi-doctor-repos-");
+    const validRepo = join(root, "repo-valid");
+    const invalidRepo = join(root, "repo-invalid");
+    mkdirSync(join(validRepo, ".git"), { recursive: true });
+    mkdirSync(invalidRepo, { recursive: true });
+
+    mocks.execFileSync.mockImplementation((command: string, args: string[]) => {
+      if (command === "which") {
+        const bin = args[0];
+        if (bin === "codebase-memory-mcp") return "/usr/bin/codebase-memory-mcp\n";
+        if (bin === "sg") return "/usr/bin/sg\n";
+        if (bin === "node") return "/usr/bin/node\n";
+        if (bin === "npm") return "/usr/bin/npm\n";
+        throw new Error(`${bin} not found`);
+      }
+      if (command === "git" && args[0] === "show-ref" && args[1] === "--verify") {
+        const ref = args[2];
+        if (ref === "refs/remotes/origin/main") return "hash\n";
+        throw new Error("missing ref");
+      }
+      if (command === "git" && args[0] === "rev-parse") {
+        throw new Error("not git");
+      }
+      throw new Error(`Unexpected command: ${command} ${args.join(" ")}`);
+    });
+
+    const ctx = createCtx();
+    const orchestrator = {
+      cwd: root,
+      config: createConfig(),
+      active: {
+        state: {
+          repos: [
+            { path: validRepo, baseBranch: "origin/main", isRoot: true },
+            { path: invalidRepo, baseBranch: "origin/dev", isRoot: false },
+            { path: join(root, "missing"), baseBranch: "origin/main", isRoot: false },
+          ],
+        },
+      },
+    } as any;
+
+    await runDoctor(orchestrator, ctx);
+
+    const [report] = ctx.ui.notify.mock.calls[0] as [string, string];
+    expect(report).toContain(`${validRepo}: path exists`);
+    expect(report).toContain(`${validRepo}: base branch "origin/main" is valid`);
+    expect(report).toContain(`${invalidRepo}: not a git repository`);
+    expect(report).toContain(`${join(root, "missing")}: path does not exist`);
   });
 });

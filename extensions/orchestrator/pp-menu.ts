@@ -2557,7 +2557,12 @@ async function showLspSettings(ctx: any): Promise<typeof BACK> {
       ctx.ui.notify("LSP API is not available.", "warning");
       continue;
     }
-    await api.restart(ctx);
+    try {
+      await api.restart(ctx);
+    } catch (error: any) {
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.ui.notify(`Failed to restart LSP servers: ${message}`, "error");
+    }
   }
 }
 

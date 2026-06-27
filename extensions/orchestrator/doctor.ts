@@ -5,14 +5,14 @@ import { join } from "path";
 import {
   readRawConfig,
   GLOBAL_CONFIG_PATH,
-  loadConfig,
+  mergeConfigLayers,
   resolvePreset,
   type NormalizedPiPiConfig,
   type PiPiConfig,
   PRESET_GROUPS,
 } from "./config.js";
 import { resolveModel, getAllAliases } from "./model-registry.js";
-import { discoverFlantModels, fetchOpenRouterMetadata, loadFlantSettings } from "./flant-infra.js";
+import { loadFlantSettings } from "./flant-infra.js";
 import type { Orchestrator } from "./orchestrator.js";
 
 type Severity = "pass" | "warning" | "failure";
@@ -61,11 +61,70 @@ function which(bin: string): string | null {
 }
 
 function commandBinary(command: string): string | null {
+  const tokens = tokenizeCommand(command);
+  if (tokens.length === 0) return null;
+  let index = 0;
+  while (index < tokens.length && isEnvAssignment(tokens[index] ?? "")) {
+    index += 1;
+  }
+  return tokens[index] ?? null;
+}
+
+function tokenizeCommand(command: string): string[] {
   const trimmed = command.trim();
-  if (!trimmed) return null;
-  const match = trimmed.match(/^("[^"]+"|'[^']+'|`[^`]+`|\S+)/);
-  if (!match) return null;
-  return match[1]?.replace(/^['"`]|['"`]$/g, "") ?? null;
+  if (!trimmed) return [];
+  const tokens: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | "`" | null = null;
+  for (let i = 0; i < trimmed.length; i += 1) {
+    const ch = trimmed[i]!;
+    if (quote) {
+      if (ch === quote) {
+        quote = null;
+        continue;
+      }
+      if (ch === "\\" && quote === '"' && i + 1 < trimmed.length) {
+        current += trimmed[i + 1]!;
+        i += 1;
+        continue;
+      }
+      current += ch;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === "`") {
+      quote = ch;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (current.length > 0) {
+        tokens.push(current);
+        current = "";
+      }
+      continue;
+    }
+    if (ch === "\\" && i + 1 < trimmed.length) {
+      current += trimmed[i + 1]!;
+      i += 1;
+      continue;
+    }
+    current += ch;
+  }
+  if (current.length > 0) tokens.push(current);
+  return tokens;
+}
+
+function isEnvAssignment(token: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*=.*/.test(token);
+}
+
+function isPathLike(binary: string): boolean {
+  return binary.startsWith("/") || binary.startsWith("./") || binary.startsWith("../");
+}
+
+function timedFetch(url: string, options: RequestInit, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timer));
 }
 
 function listAvailableModels(ctx: any): AvailableModel[] {
@@ -103,21 +162,6 @@ function statusSymbol(severity: Severity): string {
   if (severity === "pass") return "✓";
   if (severity === "warning") return "⚠";
   return "✗";
-}
-
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
-    promise
-      .then((value) => {
-        clearTimeout(timer);
-        resolve(value);
-      })
-      .catch((error) => {
-        clearTimeout(timer);
-        reject(error);
-      });
-  });
 }
 
 export async function runDoctor(orchestrator: Orchestrator, ctx: any): Promise<void> {
@@ -173,7 +217,9 @@ export async function runDoctor(orchestrator: Orchestrator, ctx: any): Promise<v
   }, "Config files parseable check failed");
 
   await safeCheck(() => {
-    loadConfig(orchestrator.cwd);
+    const globalConfig = existsSync(GLOBAL_CONFIG_PATH) ? readRawConfig(GLOBAL_CONFIG_PATH) : null;
+    const projectConfig = existsSync(projectConfigPath) ? readRawConfig(projectConfigPath) : null;
+    mergeConfigLayers(globalConfig, projectConfig);
     addLine({ severity: "pass", text: "4-layer merge OK" });
   }, "4-layer merge failed");
 
@@ -185,6 +231,7 @@ export async function runDoctor(orchestrator: Orchestrator, ctx: any): Promise<v
       { label: "project", path: projectConfigPath },
     ];
     for (const file of files) {
+      if (!existsSync(file.path)) continue;
       const raw = readRawConfig(file.path);
       if (!isObject(raw)) continue;
       for (const key of Object.keys(raw)) {
@@ -205,6 +252,7 @@ export async function runDoctor(orchestrator: Orchestrator, ctx: any): Promise<v
       { label: "project", path: projectConfigPath },
     ];
     for (const file of files) {
+      if (!existsSync(file.path)) continue;
       const raw = readRawConfig(file.path);
       if (!isObject(raw)) continue;
       collectEmptyObjects(raw, file.label, emptyPaths);
@@ -350,13 +398,23 @@ export async function runDoctor(orchestrator: Orchestrator, ctx: any): Promise<v
       addLine({ severity: "pass", text: "No afterEdit commands configured" });
     }
     for (const [name, command] of afterEditEntries) {
+      if (command.enabled === false) {
+        addLine({ severity: "pass", text: `afterEdit.${name}: skipped (disabled)` });
+        continue;
+      }
       const bin = commandBinary(command.run);
       if (!bin) {
         addLine({ severity: "failure", text: `afterEdit.${name}: cannot determine binary from "${command.run}"` });
       } else {
-        const binaryPath = which(bin);
-        if (binaryPath) addLine({ severity: "pass", text: `afterEdit.${name}: ${bin} found at ${binaryPath}` });
-        else addLine({ severity: "failure", text: `afterEdit.${name}: ${bin} not found in PATH` });
+        if (isPathLike(bin)) {
+          const fullPath = bin.startsWith("/") ? bin : join(orchestrator.cwd, bin);
+          if (existsSync(fullPath)) addLine({ severity: "pass", text: `afterEdit.${name}: executable path exists at ${fullPath}` });
+          else addLine({ severity: "failure", text: `afterEdit.${name}: executable path not found at ${fullPath}` });
+        } else {
+          const binaryPath = which(bin);
+          if (binaryPath) addLine({ severity: "pass", text: `afterEdit.${name}: ${bin} found at ${binaryPath}` });
+          else addLine({ severity: "failure", text: `afterEdit.${name}: ${bin} not found in PATH` });
+        }
       }
 
       if (command.globs !== undefined) {
@@ -374,9 +432,19 @@ export async function runDoctor(orchestrator: Orchestrator, ctx: any): Promise<v
       addLine({ severity: "pass", text: "No afterImplement commands configured" });
     }
     for (const [name, command] of afterImplementEntries) {
+      if (command.enabled === false) {
+        addLine({ severity: "pass", text: `afterImplement.${name}: skipped (disabled)` });
+        continue;
+      }
       const bin = commandBinary(command.run);
       if (!bin) {
         addLine({ severity: "failure", text: `afterImplement.${name}: cannot determine binary from "${command.run}"` });
+        continue;
+      }
+      if (isPathLike(bin)) {
+        const fullPath = bin.startsWith("/") ? bin : join(orchestrator.cwd, bin);
+        if (existsSync(fullPath)) addLine({ severity: "pass", text: `afterImplement.${name}: executable path exists at ${fullPath}` });
+        else addLine({ severity: "failure", text: `afterImplement.${name}: executable path not found at ${fullPath}` });
         continue;
       }
       const binaryPath = which(bin);
@@ -412,8 +480,17 @@ export async function runDoctor(orchestrator: Orchestrator, ctx: any): Promise<v
     if (apiKey) {
       const started = Date.now();
       try {
-        const models = await withTimeout(discoverFlantModels(apiKey), 15000, "discoverFlantModels");
-        addLine({ severity: "pass", text: `Flant API reachable (${Date.now() - started}ms, ${models.length} models)` });
+        const response = await timedFetch("https://llm-api.flant.ru/v1/models", {
+          method: "GET",
+          headers: { Authorization: `Bearer ${apiKey}` },
+        }, 10000);
+        if (!response.ok) {
+          addLine({ severity: "failure", text: `Flant API probe failed with HTTP ${response.status}` });
+        } else {
+          const payload = await response.json() as { data?: Array<{ id?: unknown }> };
+          const models = (payload.data ?? []).filter((item) => typeof item?.id === "string");
+          addLine({ severity: "pass", text: `Flant API reachable (${Date.now() - started}ms, ${models.length} models)` });
+        }
       } catch (error) {
         addLine({ severity: "failure", text: `Flant API probe failed: ${toErrorMessage(error)}` });
       }
@@ -423,8 +500,15 @@ export async function runDoctor(orchestrator: Orchestrator, ctx: any): Promise<v
 
     const openRouterStarted = Date.now();
     try {
-      await withTimeout(fetchOpenRouterMetadata([]), 15000, "fetchOpenRouterMetadata");
-      addLine({ severity: "pass", text: `OpenRouter probe completed (${Date.now() - openRouterStarted}ms)` });
+      const response = await timedFetch("https://openrouter.ai/api/v1/models", { method: "GET" }, 10000);
+      const latency = Date.now() - openRouterStarted;
+      if (!response.ok) {
+        addLine({ severity: "failure", text: `OpenRouter probe failed with HTTP ${response.status} (${latency}ms)` });
+      } else {
+        const payload = await response.json() as { data?: unknown[] };
+        const modelCount = Array.isArray(payload.data) ? payload.data.length : 0;
+        addLine({ severity: "pass", text: `OpenRouter reachable (${latency}ms, ${modelCount} models)` });
+      }
     } catch (error) {
       addLine({ severity: "failure", text: `OpenRouter probe failed: ${toErrorMessage(error)}` });
     }
@@ -432,19 +516,14 @@ export async function runDoctor(orchestrator: Orchestrator, ctx: any): Promise<v
 
   addCategory("LSP");
 
-  await safeCheck(async () => {
-    const api = (globalThis as any)[Symbol.for("pi-lsp:api")] as { status?: (menuCtx: any) => Promise<void> | void } | undefined;
+  await safeCheck(() => {
+    const api = (globalThis as any)[Symbol.for("pi-lsp:api")] as Record<string, unknown> | undefined;
     if (!api) {
       addLine({ severity: "warning", text: "LSP API: not available" });
       addLine({ severity: "warning", text: "LSP status details are not programmatically exposed in Doctor" });
       return;
     }
-    if (typeof api.status === "function") {
-      await api.status(ctx);
-      addLine({ severity: "pass", text: "LSP API: available (status method callable)" });
-    } else {
-      addLine({ severity: "pass", text: "LSP API: available" });
-    }
+    addLine({ severity: "pass", text: "LSP API: available" });
     addLine({ severity: "warning", text: "LSP status details are not programmatically exposed in Doctor" });
   }, "LSP checks failed");
 
@@ -452,13 +531,11 @@ export async function runDoctor(orchestrator: Orchestrator, ctx: any): Promise<v
 
   await safeCheck(async () => {
     const started = Date.now();
-    const timeoutSignal = (AbortSignal as any).timeout ? (AbortSignal as any).timeout(10000) : undefined;
-    const response = await fetch("https://mcp.exa.ai/mcp", {
+    const response = await timedFetch("https://mcp.exa.ai/mcp", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ jsonrpc: "2.0", method: "initialize", params: {}, id: 1 }),
-      signal: timeoutSignal,
-    });
+    }, 10000);
     const latency = Date.now() - started;
     if (!response.ok) {
       addLine({ severity: "failure", text: `Exa MCP probe failed with HTTP ${response.status} (${latency}ms)` });
