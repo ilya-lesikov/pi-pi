@@ -411,7 +411,7 @@ describe("config write helpers", () => {
     });
   });
 
-  it("removeConfigValue removes nested key and keeps file", () => {
+  it("removeConfigValue removes nested key, prunes empty parents, and keeps file", () => {
     const filePath = join(makeTempDir(), ".pp", "config.json");
     mkdirSync(dirname(filePath), { recursive: true });
     writeFileSync(
@@ -437,6 +437,7 @@ describe("config write helpers", () => {
     );
     removeConfigValue(filePath, ["agents", "subagents", "presetGroups", "planners", "presets", "regular", "agents", "a"]);
     const raw = JSON.parse(readFileSync(filePath, "utf-8"));
-    expect(raw.agents.subagents.presetGroups.planners.presets.regular.agents.a).toBeUndefined();
+    expect(raw).toEqual({});
+    expect(existsSync(filePath)).toBe(true);
   });
 });

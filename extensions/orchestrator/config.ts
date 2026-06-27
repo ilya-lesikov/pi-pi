@@ -697,6 +697,7 @@ export function removeConfigValue(configPath: string, keyPath: string[]): void {
 
     const raw = readRawConfig(configPath);
     let cursor: Record<string, any> = raw;
+    const parents: Array<{ container: Record<string, any>; key: string }> = [];
     for (let i = 0; i < keyPath.length - 1; i++) {
       const key = keyPath[i];
       if (DANGEROUS_KEYS.has(key)) return;
@@ -704,12 +705,19 @@ export function removeConfigValue(configPath: string, keyPath: string[]): void {
       if (!current || typeof current !== "object" || Array.isArray(current)) {
         return;
       }
+      parents.push({ container: cursor, key });
       cursor = current;
     }
 
     const leaf = keyPath[keyPath.length - 1];
     if (DANGEROUS_KEYS.has(leaf)) return;
     delete cursor[leaf];
+    for (let i = parents.length - 1; i >= 0; i -= 1) {
+      const parent = parents[i]!;
+      const current = parent.container[parent.key];
+      if (!isObject(current) || Object.keys(current).length > 0) break;
+      delete parent.container[parent.key];
+    }
     writeFileSync(configPath, JSON.stringify(raw, null, 2) + "\n", "utf-8");
   } finally {
     release();
