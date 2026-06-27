@@ -85,6 +85,29 @@ describe("Orchestrator.truncateResult", () => {
   });
 });
 
+describe("Orchestrator.safeSendUserMessage", () => {
+  it("notifies the user once after exhausting retries, not during them", async () => {
+    vi.useFakeTimers();
+    const notify = vi.fn();
+    const pi = makePi({
+      sendUserMessage: vi.fn(() => {
+        throw new Error("not ready");
+      }),
+    });
+    const orchestrator = new Orchestrator(pi);
+    orchestrator.lastCtx = { ui: { notify } };
+
+    orchestrator.safeSendUserMessage("[PI-PI] Entered plan phase. Begin working.");
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(notify).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify.mock.calls[0][1]).toBe("error");
+    vi.useRealTimers();
+  });
+});
+
 describe("Orchestrator.switchModel thinking level", () => {
   function makeCtx() {
     return {

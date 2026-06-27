@@ -109,6 +109,10 @@ export class Orchestrator {
           setTimeout(() => attempt(retries + 1), 1000);
         } else {
           log.error({ s: "orchestrator", retries, err: err?.message ?? String(err), text: text.slice(0, 200) }, "safeSend failed after max retries");
+          this.lastCtx?.ui?.notify?.(
+            "pi-pi could not deliver a message to the agent; the task may be stalled. See logs.",
+            "error",
+          );
         }
       }
     };
