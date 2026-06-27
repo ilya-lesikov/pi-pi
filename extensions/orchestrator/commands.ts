@@ -53,6 +53,11 @@ export function runAfterEdit(
   return results;
 }
 
+// Executes shell commands from config via execSync. For the root repo these come
+// from the user's own .pp/config.json; for sub-repos they are loaded only when
+// general.loadExtraRepoConfigs is explicitly enabled (off by default), so running
+// them is a deliberate, opt-in trust decision in the same security domain as the
+// repos the user registered.
 export function runAfterImplement(
   commands: Record<string, AfterImplementCommandConfig>,
   timeout: number,
@@ -160,7 +165,7 @@ export function autoCommit(files: string[], message: string, cwd: string): { ok:
   try {
     execFileSync("git", ["add", "--", ...files], { cwd, encoding: "utf-8", stdio: "pipe" });
     const output =     execFileSync("git", ["commit", "-m", cleanMessage], { cwd, encoding: "utf-8", stdio: "pipe" });
-    const hashMatch = output.match(/\[[\w-]+ (?:\([^)]+\) )?([a-f0-9]+)\]/);
+    const hashMatch = output.match(/\[[^\]]* ([a-f0-9]{7,40})\]/);
     return { ok: true, commitHash: hashMatch?.[1] };
   } catch (err: any) {
     return { ok: false, error: err.stderr?.toString() || err.message };

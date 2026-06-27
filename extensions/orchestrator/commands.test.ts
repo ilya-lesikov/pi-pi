@@ -60,6 +60,29 @@ describe("autoCommit", () => {
     expect(subject).toBe("checkpoint");
   });
 
+  it("extracts the commit hash on a normal branch", () => {
+    const cwd = makeRepo();
+    writeFileSync(join(cwd, "h.ts"), "export const h = 1;\n", "utf-8");
+
+    const result = autoCommit(["h.ts"], "first", cwd);
+
+    expect(result.ok).toBe(true);
+    expect(result.commitHash).toMatch(/^[a-f0-9]{7,}$/);
+  });
+
+  it("extracts the commit hash in detached HEAD state", () => {
+    const cwd = makeRepo();
+    writeFileSync(join(cwd, "base.ts"), "export const base = 1;\n", "utf-8");
+    autoCommit(["base.ts"], "base", cwd);
+    execFileSync("git", ["checkout", "--detach"], { cwd, stdio: "pipe" });
+
+    writeFileSync(join(cwd, "detached.ts"), "export const d = 1;\n", "utf-8");
+    const result = autoCommit(["detached.ts"], "on detached head", cwd);
+
+    expect(result.ok).toBe(true);
+    expect(result.commitHash).toMatch(/^[a-f0-9]{7,}$/);
+  });
+
   it("uses message as-is for commit", () => {
     const cwd = makeRepo();
     const file = "b.ts";
