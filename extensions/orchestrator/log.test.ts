@@ -20,6 +20,16 @@ function readText(path: string): string {
   return existsSync(path) ? readFileSync(path, "utf-8") : "";
 }
 
+async function waitForContent(path: string, substring: string, timeoutMs = 2000): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  let text = readText(path);
+  while (!text.includes(substring) && Date.now() < deadline) {
+    await delay(10);
+    text = readText(path);
+  }
+  return text;
+}
+
 function sessionLogPath(ppDir: string): string {
   const logsDir = join(ppDir, "logs");
   const entries = existsSync(logsDir)
@@ -99,10 +109,9 @@ describe("log", () => {
 
     getLogger().info({ s: "test" }, "both-destinations");
     flushLogs();
-    await delay(100);
 
-    expect(readText(sessionPath)).toContain("both-destinations");
-    expect(readText(join(taskDir, "debug.jsonl"))).toContain("both-destinations");
+    expect(await waitForContent(sessionPath, "both-destinations")).toContain("both-destinations");
+    expect(await waitForContent(join(taskDir, "debug.jsonl"), "both-destinations")).toContain("both-destinations");
   });
 
   it("removeTaskDestination stops writing to task file", async () => {
@@ -113,8 +122,7 @@ describe("log", () => {
 
     getLogger().info({ s: "test" }, "before-remove");
     flushLogs();
-    await delay(30);
-    const before = readText(join(taskDir, "debug.jsonl"));
+    const before = await waitForContent(join(taskDir, "debug.jsonl"), "before-remove");
 
     removeTaskDestination();
     getLogger().info({ s: "test" }, "after-remove");
@@ -134,14 +142,12 @@ describe("log", () => {
     getLogger().debug({ s: "test" }, "debug-before");
     getLogger().info({ s: "test" }, "info-before");
     flushLogs();
-    await delay(30);
-    const before = readText(path);
+    const before = await waitForContent(path, "info-before");
 
     setLogLevel("debug");
     getLogger().debug({ s: "test" }, "debug-after");
     flushLogs();
-    await delay(30);
-    const after = readText(path);
+    const after = await waitForContent(path, "debug-after");
 
     expect(before).toContain("info-before");
     expect(before).not.toContain("debug-before");
