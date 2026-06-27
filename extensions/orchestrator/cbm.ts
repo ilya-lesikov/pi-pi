@@ -35,7 +35,7 @@ function setGlobalDaemon(daemon: CbmDaemon): void {
   (globalThis as any)[CBM_DAEMON_KEY] = daemon;
 }
 
-class CbmDaemon {
+export class CbmDaemon {
   private proc: ChildProcess | null = null;
   private rl: ReadlineInterface | null = null;
   private nextId = 1;
@@ -47,13 +47,19 @@ class CbmDaemon {
   start(): void {
     if (this.proc) return;
 
-    this.proc = spawn(getCbmBin()!, [], { stdio: ["pipe", "pipe", "ignore"] });
+    this.proc = spawn(getCbmBin()!, [], { stdio: ["pipe", "pipe", "pipe"] });
     this.proc.unref();
     (this.proc.stdout as any)?.unref?.();
     (this.proc.stdin as any)?.unref?.();
+    (this.proc.stderr as any)?.unref?.();
 
     this.rl = createInterface({ input: this.proc.stdout! });
     this.rl.on("line", (line) => this.handleLine(line));
+
+    this.proc.stderr?.on("data", (chunk) => {
+      const text = chunk.toString().trim();
+      if (text) getLogger().error({ s: "cbm", stderr: text }, "CBM daemon stderr");
+    });
 
     this.proc.on("exit", () => this.cleanup());
     this.proc.on("error", (err) => {
@@ -64,7 +70,7 @@ class CbmDaemon {
     this.initPromise = this.initialize();
   }
 
-  private cleanup(): void {
+  cleanup(): void {
     for (const [, entry] of this.pending) {
       clearTimeout(entry.timer);
       entry.reject(new Error("CBM daemon exited"));
@@ -75,6 +81,7 @@ class CbmDaemon {
     this.proc = null;
     this.initialized = false;
     this.initPromise = null;
+    this.indexedProjects.clear();
   }
 
   stop(): void {
@@ -146,6 +153,10 @@ class CbmDaemon {
     } catch {
       return text;
     }
+  }
+
+  hasIndexed(cwd: string): boolean {
+    return this.indexedProjects.has(projectName(cwd));
   }
 
   async ensureIndexed(cwd: string): Promise<string> {
