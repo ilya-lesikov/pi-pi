@@ -1450,6 +1450,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   pi.on("session_start", async (_event, ctx) => {
     orchestrator.lastCtx = ctx;
     orchestrator.cwd = ctx.cwd;
+    (globalThis as any)[Symbol.for("pi-pi:orchestrator-cwd")] = ctx.cwd;
 
     const ppDir = join(ctx.cwd, ".pp");
     const { ensureGitignore } = await import("./orchestrator.js");

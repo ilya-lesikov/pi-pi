@@ -11,6 +11,7 @@ import { validatePlan, validateArtifact } from "./validate-artifacts.js";
 import { initFlantSync } from "./flant-infra.js";
 
 const ORCHESTRATOR_KEY = Symbol.for("pi-pi:orchestrator-initialized");
+const ORCHESTRATOR_CWD_KEY = Symbol.for("pi-pi:orchestrator-cwd");
 // Shared with 3p/pi-subagents/src/agent-runner.ts: the value is a { depth: number }
 // marking that this process runs as a subagent. The orchestrator only reads it for
 // truthiness ("am I a subagent?"); agent-runner uses depth for nesting.
@@ -25,6 +26,7 @@ export default function (pi: ExtensionAPI) {
     return;
   }
   (globalThis as any)[ORCHESTRATOR_KEY] = true;
+  (globalThis as any)[ORCHESTRATOR_CWD_KEY] = process.cwd();
 
   initFlantSync(pi);
 
@@ -34,7 +36,10 @@ export default function (pi: ExtensionAPI) {
 }
 
 function registerSubagentTools(pi: ExtensionAPI): void {
-  const cwd = process.cwd();
+  // Subagents run in-process; bind cbm/ast-search and plan validation to the
+  // orchestrator's project root (ctx.cwd, captured on session_start) rather than
+  // process.cwd(), which is the launch dir and wrong for worktree-isolated tasks.
+  const cwd = (globalThis as any)[ORCHESTRATOR_CWD_KEY] ?? process.cwd();
   registerCbmTools(pi, cwd);
   registerExaTools(pi);
   registerAstSearchTool(pi, cwd);
