@@ -33,6 +33,7 @@ import { spawnCodeReviewers } from "./phases/review.js";
 import { spawnBrainstormReviewers } from "./phases/brainstorm.js";
 import { nextPhase } from "./phases/machine.js";
 import { getAllAliases, getModelFamilies, getModelInfo, resolveModel, updateRegistryFromAvailableModels } from "./model-registry.js";
+import { compareModelVersion } from "./model-version.js";
 
 import {
   listTasks,
@@ -1341,18 +1342,6 @@ function providerOrder(provider: string): number {
   if (provider === "x-ai") return 6;
   if (provider === "qwen") return 7;
   return 99;
-}
-
-function compareModelVersion(a: string, b: string): number {
-  const aParts = (a.match(/\d+/g) ?? []).map(Number);
-  const bParts = (b.match(/\d+/g) ?? []).map(Number);
-  const len = Math.max(aParts.length, bParts.length);
-  for (let i = 0; i < len; i += 1) {
-    const ai = aParts[i] ?? 0;
-    const bi = bParts[i] ?? 0;
-    if (ai !== bi) return ai - bi;
-  }
-  return a.localeCompare(b);
 }
 
 function listAvailableModels(ctx: any): Array<{ provider: string; id: string; spec: string }> {

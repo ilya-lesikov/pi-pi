@@ -1,3 +1,5 @@
+import { compareModelVersion } from "./model-version.js";
+
 export type Vendor = "anthropic" | "openai" | "google" | "deepseek" | "xai" | "qwen" | "unknown";
 export type Family = "opus" | "sonnet" | "haiku" | "gpt" | "gpt-mini" | "gemini-pro" | "gemini-flash" | "deepseek" | "grok" | "qwen" | "unknown";
 export type Tier = "stupid" | "regular" | "smart" | "xsmart" | "unknown";
@@ -159,18 +161,6 @@ const DEFAULT_ALIAS_MAP: Record<string, string> = {
 };
 
 let aliasMap: Record<string, string> = { ...DEFAULT_ALIAS_MAP };
-
-function compareModelVersion(a: string, b: string): number {
-  const aParts = (a.match(/\d+/g) ?? []).map(Number);
-  const bParts = (b.match(/\d+/g) ?? []).map(Number);
-  const len = Math.max(aParts.length, bParts.length);
-  for (let i = 0; i < len; i++) {
-    const ai = aParts[i] ?? 0;
-    const bi = bParts[i] ?? 0;
-    if (ai !== bi) return ai - bi;
-  }
-  return a.localeCompare(b);
-}
 
 function pickLatest(models: string[]): string | null {
   if (models.length === 0) return null;

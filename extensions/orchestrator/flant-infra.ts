@@ -5,6 +5,7 @@ import lockfile from "proper-lockfile";
 import type { ExtensionAPI, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 import type { PiPiConfig } from "./config.js";
 import { updateRegistryFromAvailableModels } from "./model-registry.js";
+import { compareModelVersion } from "./model-version.js";
 import { getLogger } from "./log.js";
 
 export interface OpenRouterModelData {
@@ -317,18 +318,6 @@ export function registerFlantProviders(
     ...anthropicModels.map((id) => `pp-flant-anthropic/${id}`),
     ...openaiModels.map((id) => `pp-flant-openai/${id}`),
   ]);
-}
-
-function compareModelVersion(a: string, b: string): number {
-  const aParts = (a.match(/\d+/g) ?? []).map(Number);
-  const bParts = (b.match(/\d+/g) ?? []).map(Number);
-  const len = Math.max(aParts.length, bParts.length);
-  for (let i = 0; i < len; i++) {
-    const ai = aParts[i] ?? 0;
-    const bi = bParts[i] ?? 0;
-    if (ai !== bi) return ai - bi;
-  }
-  return a.localeCompare(b);
 }
 
 function pickLatest(models: string[]): string | null {
