@@ -60,6 +60,7 @@ import {
 import { runDoctor } from "./doctor.js";
 import { normalizeRepoPath, type RepoInfo } from "./repo-utils.js";
 import { getLogger, addTaskDestination, setLogLevel } from "./log.js";
+import { handleSpawnResult } from "./spawn-cleanup.js";
 
 type MenuMode = "command" | "tool";
 
@@ -497,7 +498,7 @@ export async function resumeTask(
         for (const [name, cfg] of missingVariants) missingConfig[name] = cfg;
         orchestrator.pendingSubagentSpawns = missingVariants.length;
         orchestrator.failedPlannerVariants = [];
-        spawnPlanners(
+        const plannerSpawn = spawnPlanners(
           pi,
           orchestrator.cwd,
           orchestrator.active.dir,
@@ -505,16 +506,11 @@ export async function resumeTask(
           orchestrator.config,
           missingConfig,
           orchestrator.active?.state.repos ?? [],
-        ).then((result) => {
-          orchestrator.failedPlannerVariants = result.failedVariants;
-          if (result.spawned === 0) orchestrator.pendingSubagentSpawns = 0;
-          for (const id of result.agentIds ?? []) {
-            orchestrator.spawnedAgentIds.delete(id);
-          }
-          orchestrator.pendingSubagentSpawns = 0;
-        }).catch((err: any) => {
-          orchestrator.pendingSubagentSpawns = 0;
-          getLogger().error({ s: "planner", err: err.message }, "spawnPlanners failed");
+        );
+        handleSpawnResult(orchestrator, plannerSpawn, {
+          kind: "planner",
+          logScope: "planner",
+          logMessage: "spawnPlanners failed",
         });
       } else {
         orchestrator.active.state.step = "synthesize";
@@ -625,16 +621,10 @@ export async function resumeTask(
               orchestrator.active?.state.repos ?? [],
             );
           orchestrator.failedReviewerVariants = [];
-          spawnFn().then((result) => {
-            orchestrator.failedReviewerVariants = result.failedVariants;
-            if (result.spawned === 0) orchestrator.pendingSubagentSpawns = 0;
-            for (const id of result.agentIds ?? []) {
-              orchestrator.spawnedAgentIds.delete(id);
-            }
-            orchestrator.pendingSubagentSpawns = 0;
-          }).catch((err: any) => {
-            orchestrator.pendingSubagentSpawns = 0;
-            getLogger().error({ s: "review", err: err.message }, "spawn reviewers failed");
+          handleSpawnResult(orchestrator, spawnFn(), {
+            kind: "reviewer",
+            logScope: "review",
+            logMessage: "spawn reviewers failed",
           });
           cycle.step = "await_reviewers";
           orchestrator.active.state.step = "await_reviewers";

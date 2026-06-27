@@ -26,6 +26,7 @@ import { createTaskAgent } from "./agents/task.js";
 import { resolveModel, getModelInfo } from "./model-registry.js";
 import { buildRepoContext } from "./agents/repo-context.js";
 import { getLogger, addTaskDestination, removeTaskDestination, setLogLevel } from "./log.js";
+import { handleSpawnResult } from "./spawn-cleanup.js";
 
 function isEnabled(value: { enabled?: boolean } | undefined): boolean {
   return value?.enabled !== false;
@@ -465,25 +466,19 @@ export class Orchestrator {
       const plannerVariants = resolvePreset(this.config, "planners", plannerPresetName);
       this.pendingSubagentSpawns = Object.values(plannerVariants).filter((v) => isEnabled(v)).length;
       this.failedPlannerVariants = [];
-      spawnPlanners(
-        this.pi,
-        this.cwd,
-        this.active.dir,
-        this.active.taskId,
-        this.config,
-        plannerVariants,
-        this.active?.state.repos ?? [],
-      ).then((result) => {
-        this.failedPlannerVariants = result.failedVariants;
-        if (result.spawned === 0) this.pendingSubagentSpawns = 0;
-        for (const id of result.agentIds ?? []) {
-          this.spawnedAgentIds.delete(id);
-        }
-        this.pendingSubagentSpawns = 0;
-      }).catch((err) => {
-        this.pendingSubagentSpawns = 0;
-        getLogger().error({ s: "planner", err: err.message }, "spawnPlanners failed");
-      });
+      handleSpawnResult(
+        this,
+        spawnPlanners(
+          this.pi,
+          this.cwd,
+          this.active.dir,
+          this.active.taskId,
+          this.config,
+          plannerVariants,
+          this.active?.state.repos ?? [],
+        ),
+        { kind: "planner", logScope: "planner", logMessage: "spawnPlanners failed" },
+      );
     }
   }
 

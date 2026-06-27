@@ -7,6 +7,7 @@ import { loadConfig, resolvePreset } from "./config.js";
 import { runAfterEdit, autoCommit, loadRepoAfterEditCommands } from "./commands.js";
 import { taskName, getActiveTask, getEffectiveMode, getFirstPhase, saveTask } from "./state.js";
 import { getLogger, initSessionLogger, addTaskDestination, setLogLevel, flushLogs } from "./log.js";
+import { handleSpawnResult } from "./spawn-cleanup.js";
 import {
   getContextDirs,
   loadAllContextFiles,
@@ -313,18 +314,12 @@ export async function enterReviewCycle(
         reviewers,
         orchestrator.active?.state.repos ?? [],
       );
-  spawnFn().then((result) => {
-    orchestrator.failedReviewerVariants = result.failedVariants;
-    if (result.spawned === 0) orchestrator.pendingSubagentSpawns = 0;
-    for (const id of result.agentIds ?? []) {
-      orchestrator.spawnedAgentIds.delete(id);
-    }
-    orchestrator.pendingSubagentSpawns = 0;
-    tryCompleteReviewCycle(orchestrator);
-  }).catch((err) => {
-    orchestrator.pendingSubagentSpawns = 0;
-    tryCompleteReviewCycle(orchestrator);
-    getLogger().error({ s: "review", phase, err: err.message }, "spawn reviewers failed");
+  handleSpawnResult(orchestrator, spawnFn(), {
+    kind: "reviewer",
+    logScope: "review",
+    logMessage: "spawn reviewers failed",
+    logExtra: { phase },
+    onSettled: () => tryCompleteReviewCycle(orchestrator),
   });
 
   orchestrator.active.state.reviewCycle.step = "await_reviewers";
@@ -1020,27 +1015,24 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
           saveTask(orchestrator.active.dir, orchestrator.active.state);
           orchestrator.failedPlannerVariants = [];
           orchestrator.pendingSubagentSpawns = retryCount;
-          spawnPlanners(
-            pi,
-            orchestrator.cwd,
-            orchestrator.active!.dir,
-            orchestrator.active!.taskId,
-            orchestrator.config,
-            scopedPlanners,
-            orchestrator.active?.state.repos ?? [],
-          ).then((result) => {
-            orchestrator.failedPlannerVariants = result.failedVariants;
-            if (result.spawned === 0) orchestrator.pendingSubagentSpawns = 0;
-            for (const id of result.agentIds ?? []) {
-              orchestrator.spawnedAgentIds.delete(id);
-            }
-            orchestrator.pendingSubagentSpawns = 0;
-            checkPlannerCompletion();
-          }).catch((err) => {
-            orchestrator.pendingSubagentSpawns = 0;
-            getLogger().error({ s: "planner", err: err.message }, "retry spawnPlanners failed");
-            checkPlannerCompletion();
-          });
+          handleSpawnResult(
+            orchestrator,
+            spawnPlanners(
+              pi,
+              orchestrator.cwd,
+              orchestrator.active!.dir,
+              orchestrator.active!.taskId,
+              orchestrator.config,
+              scopedPlanners,
+              orchestrator.active?.state.repos ?? [],
+            ),
+            {
+              kind: "planner",
+              logScope: "planner",
+              logMessage: "retry spawnPlanners failed",
+              onSettled: checkPlannerCompletion,
+            },
+          );
           orchestrator.safeSendUserMessage(`[PI-PI] Retrying failed planners once: ${failedPlannerVariants.join(", ")}.`);
           return;
         }
@@ -1096,27 +1088,24 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
             if (retryCount > 0) {
               orchestrator.failedPlannerVariants = [];
               orchestrator.pendingSubagentSpawns = retryCount;
-              spawnPlanners(
-                pi,
-                orchestrator.cwd,
-                orchestrator.active!.dir,
-                orchestrator.active!.taskId,
-                orchestrator.config,
-                scopedPlanners,
-                orchestrator.active?.state.repos ?? [],
-              ).then((result) => {
-                orchestrator.failedPlannerVariants = result.failedVariants;
-                if (result.spawned === 0) orchestrator.pendingSubagentSpawns = 0;
-                for (const id of result.agentIds ?? []) {
-                  orchestrator.spawnedAgentIds.delete(id);
-                }
-                orchestrator.pendingSubagentSpawns = 0;
-                checkPlannerCompletion();
-              }).catch((err) => {
-                orchestrator.pendingSubagentSpawns = 0;
-                getLogger().error({ s: "planner", err: err.message }, "retry spawnPlanners failed");
-                checkPlannerCompletion();
-              });
+              handleSpawnResult(
+                orchestrator,
+                spawnPlanners(
+                  pi,
+                  orchestrator.cwd,
+                  orchestrator.active!.dir,
+                  orchestrator.active!.taskId,
+                  orchestrator.config,
+                  scopedPlanners,
+                  orchestrator.active?.state.repos ?? [],
+                ),
+                {
+                  kind: "planner",
+                  logScope: "planner",
+                  logMessage: "retry spawnPlanners failed",
+                  onSettled: checkPlannerCompletion,
+                },
+              );
               orchestrator.safeSendUserMessage(`[PI-PI] Retrying failed planners: ${variantsText}.`);
               return;
             }
@@ -1227,18 +1216,12 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
           cycle.step = "await_reviewers";
           orchestrator.active.state.step = "await_reviewers";
           saveTask(orchestrator.active.dir, orchestrator.active.state);
-          spawnFn().then((result) => {
-            orchestrator.failedReviewerVariants = result.failedVariants;
-            if (result.spawned === 0) orchestrator.pendingSubagentSpawns = 0;
-            for (const id of result.agentIds ?? []) {
-              orchestrator.spawnedAgentIds.delete(id);
-            }
-            orchestrator.pendingSubagentSpawns = 0;
-            checkReviewCycleCompletion();
-          }).catch((err) => {
-            orchestrator.pendingSubagentSpawns = 0;
-            getLogger().error({ s: "review", phase, err: err.message }, "retry spawn reviewers failed");
-            checkReviewCycleCompletion();
+          handleSpawnResult(orchestrator, spawnFn(), {
+            kind: "reviewer",
+            logScope: "review",
+            logMessage: "retry spawn reviewers failed",
+            logExtra: { phase },
+            onSettled: checkReviewCycleCompletion,
           });
           orchestrator.safeSendUserMessage(`[PI-PI] Retrying failed reviewers once: ${failedReviewerVariants.join(", ")}.`);
           return;
@@ -1324,18 +1307,12 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
                 cycle.step = "await_reviewers";
                 orchestrator.active!.state.step = "await_reviewers";
                 saveTask(orchestrator.active!.dir, orchestrator.active!.state);
-                spawnFn().then((result) => {
-                  orchestrator.failedReviewerVariants = result.failedVariants;
-                  if (result.spawned === 0) orchestrator.pendingSubagentSpawns = 0;
-                  for (const id of result.agentIds ?? []) {
-                    orchestrator.spawnedAgentIds.delete(id);
-                  }
-                  orchestrator.pendingSubagentSpawns = 0;
-                  checkReviewCycleCompletion();
-                }).catch((err) => {
-                  orchestrator.pendingSubagentSpawns = 0;
-                  getLogger().error({ s: "review", phase, err: err.message }, "retry spawn reviewers failed");
-                  checkReviewCycleCompletion();
+                handleSpawnResult(orchestrator, spawnFn(), {
+                  kind: "reviewer",
+                  logScope: "review",
+                  logMessage: "retry spawn reviewers failed",
+                  logExtra: { phase },
+                  onSettled: checkReviewCycleCompletion,
                 });
                 orchestrator.safeSendUserMessage(`[PI-PI] Retrying failed reviewers: ${variantsText}.`);
                 return;

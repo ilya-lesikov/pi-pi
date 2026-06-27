@@ -7,6 +7,7 @@ import { Orchestrator } from "./orchestrator.js";
 import { groupFilesByRepo } from "./repo-utils.js";
 import { getEffectiveMode, saveTask } from "./state.js";
 import { getLogger } from "./log.js";
+import { handleSpawnResult } from "./spawn-cleanup.js";
 
 function isEnabled(value: { enabled?: boolean }): boolean {
   return value.enabled !== false;
@@ -118,25 +119,19 @@ export async function transitionToNextPhase(
     const plannerVariants = resolvePreset(orchestrator.config, "planners", orchestrator.active.state.activePlannerPreset);
     orchestrator.pendingSubagentSpawns = Object.values(plannerVariants).filter((v) => isEnabled(v)).length;
     orchestrator.failedPlannerVariants = [];
-    spawnPlanners(
-      orchestrator.pi,
-      orchestrator.cwd,
-      orchestrator.active.dir,
-      orchestrator.active.taskId,
-      orchestrator.config,
-      plannerVariants,
-      orchestrator.active?.state.repos ?? [],
-    ).then((result) => {
-      orchestrator.failedPlannerVariants = result.failedVariants;
-      if (result.spawned === 0) orchestrator.pendingSubagentSpawns = 0;
-      for (const id of result.agentIds ?? []) {
-        orchestrator.spawnedAgentIds.delete(id);
-      }
-      orchestrator.pendingSubagentSpawns = 0;
-    }).catch((err) => {
-      orchestrator.pendingSubagentSpawns = 0;
-      getLogger().error({ s: "planner", err: err.message }, "spawnPlanners failed");
-    });
+    handleSpawnResult(
+      orchestrator,
+      spawnPlanners(
+        orchestrator.pi,
+        orchestrator.cwd,
+        orchestrator.active.dir,
+        orchestrator.active.taskId,
+        orchestrator.config,
+        plannerVariants,
+        orchestrator.active?.state.repos ?? [],
+      ),
+      { kind: "planner", logScope: "planner", logMessage: "spawnPlanners failed" },
+    );
   } : undefined;
 
   orchestrator.compactAndTransition(ctx, orchestrator.active.dir, orchestrator.active.state.phase, onReady);
