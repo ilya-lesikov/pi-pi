@@ -1258,7 +1258,7 @@ describe("edge cases and regressions", () => {
     await ppPhaseComplete.execute("call-4", { summary: "fixes applied" }, undefined, undefined, ctx);
 
     expect(orchestrator.active!.state.reviewPass).toBe(1);
-    expect(orchestrator.active!.state.reviewPassByKind?.auto).toBe(1);
+    expect(orchestrator.active!.state.reviewPassByKind?.implement?.auto).toBe(1);
     expect(orchestrator.active!.state.reviewCycle).not.toBeNull();
     expect(orchestrator.active!.state.reviewCycle!.pass).toBe(2);
 
@@ -1592,7 +1592,7 @@ describe("task modes and quick task", () => {
 
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     const first = await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
-    expect(first.content[0].text).toMatch(/Autonomous mode: reviews running|Started review cycle pass/);
+    expect(first.content[0].text).toMatch(/Reviews are running|Started review cycle pass/);
 
     const reviewsDir = join(taskDir, "code-reviews");
     mkdirSync(reviewsDir, { recursive: true });
@@ -1897,7 +1897,7 @@ describe("task modes and quick task", () => {
 
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     const first = await ppPhaseComplete.execute("call-autonomous-review-1", { summary: "done" }, undefined, undefined, ctx);
-    expect(first.content[0].text).toMatch(/Autonomous mode: reviews running|Started review cycle pass/);
+    expect(first.content[0].text).toMatch(/Reviews are running|Started review cycle pass/);
     expect(orchestrator.active!.state.reviewCycle).not.toBeNull();
     expect(orchestrator.active!.state.reviewCycle?.pass).toBe(1);
     expect(["await_reviewers", "apply_feedback"]).toContain(orchestrator.active!.state.reviewCycle?.step);
@@ -3368,7 +3368,7 @@ describe("full user flows", () => {
     await new Promise((r) => setTimeout(r, 10));
 
     const firstReview = await ppPhaseComplete.execute("flow-auto-3", { summary: "implement done" }, undefined, undefined, ctx);
-    expect(firstReview.content[0].text).toMatch(/Autonomous mode: reviews running|Started review cycle pass/);
+    expect(firstReview.content[0].text).toMatch(/Reviews are running|Started review cycle pass/);
 
     const reviewsDir = join(taskDir, "code-reviews");
     mkdirSync(reviewsDir, { recursive: true });

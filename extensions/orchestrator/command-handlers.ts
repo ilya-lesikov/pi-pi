@@ -71,7 +71,7 @@ export async function transitionToNextPhase(
   if (next !== "done") {
     orchestrator.active.state.reviewCycle = null;
     orchestrator.active.state.reviewPass = 0;
-    orchestrator.active.state.reviewPassByKind = {};
+    orchestrator.active.state.reviewApprovedClean = false;
     orchestrator.active.reviewPass = 0;
   }
   if (next === "plan") {

@@ -43,8 +43,10 @@ export interface TaskState {
   step: string | null;
   reviewCycle: { kind: string; step: string; pass: number } | null;
   reviewPass: number;
-  reviewPassByKind?: Record<string, number>;
+  reviewPassByKind?: Record<string, Record<string, number>>;
+  reviewApprovedClean?: boolean;
   modifiedFiles?: string[];
+  committedFiles?: string[];
   repos?: RepoInfo[];
   from: string | null;
   description: string;

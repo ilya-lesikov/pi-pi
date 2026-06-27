@@ -29,6 +29,8 @@ import { resolveModel, getModelInfo, updateRegistryFromAvailableModels } from ".
 import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
 import { spawnCodeReviewers } from "./phases/review.js";
 import { spawnBrainstormReviewers } from "./phases/brainstorm.js";
+import { reviewPassUnanimousApprove } from "./phases/verdict.js";
+import { validateExitCriteria } from "./phases/machine.js";
 import { openPlannotator, waitForPlannotatorResult, cancelPendingPlannotatorWait } from "./plannotator.js";
 import { Orchestrator, type ActiveTask } from "./orchestrator.js";
 import { createCustomFooter, setFooterContext, setFooterTracker } from "./custom-footer.js";
@@ -358,11 +360,21 @@ export function finalizeReviewCycle(task: ActiveTask): void {
   const kind = task.state.reviewCycle.kind;
   task.state.reviewPass = task.state.reviewCycle.pass;
   task.reviewPass = task.state.reviewPass;
-  if (!task.state.reviewPassByKind) task.state.reviewPassByKind = {};
-  task.state.reviewPassByKind[kind] = (task.state.reviewPassByKind[kind] ?? 0) + 1;
+  incrementReviewPass(task, kind);
   task.state.reviewCycle = null;
   task.state.step = "user_gate";
   saveTask(task.dir, task.state);
+}
+
+function incrementReviewPass(task: ActiveTask, kind: string): void {
+  if (!task.state.reviewPassByKind) task.state.reviewPassByKind = {};
+  const phase = task.state.phase;
+  if (!task.state.reviewPassByKind[phase]) task.state.reviewPassByKind[phase] = {};
+  task.state.reviewPassByKind[phase][kind] = (task.state.reviewPassByKind[phase][kind] ?? 0) + 1;
+}
+
+function completedReviewPasses(task: ActiveTask, kind: string): number {
+  return task.state.reviewPassByKind?.[task.state.phase]?.[kind] ?? 0;
 }
 
 export function finalizeReviewCycleAutonomous(task: ActiveTask): void {
@@ -370,8 +382,7 @@ export function finalizeReviewCycleAutonomous(task: ActiveTask): void {
   const kind = task.state.reviewCycle.kind;
   task.state.reviewPass = task.state.reviewCycle.pass;
   task.reviewPass = task.state.reviewPass;
-  if (!task.state.reviewPassByKind) task.state.reviewPassByKind = {};
-  task.state.reviewPassByKind[kind] = (task.state.reviewPassByKind[kind] ?? 0) + 1;
+  incrementReviewPass(task, kind);
   task.state.reviewCycle = null;
   if (task.state.phase === "plan") {
     task.state.step = "synthesize";
@@ -565,6 +576,9 @@ function registerSpecifyReviewsTool(orchestrator: Orchestrator): void {
       })),
     }),
     async execute(_toolCallId, params: any, _signal, _onUpdate, ctx) {
+      if (orchestrator.active && getEffectiveMode(orchestrator.active.state) === "autonomous") {
+        return { content: [{ type: "text" as const, text: "Plannotator review is not available in autonomous mode. Continue with automated reviews via pp_phase_complete." }], isError: true as const, details: {} };
+      }
       if (!params.reviews || params.reviews.length === 0) {
         return { content: [{ type: "text" as const, text: "No reviews specified." }], isError: true as const, details: {} };
       }
@@ -767,8 +781,10 @@ function registerCommitTool(orchestrator: Orchestrator): void {
           return repo?.path !== commitRepoPath;
         });
         orchestrator.active.modifiedFiles = new Set(remaining);
-        orchestrator.active.state.modifiedFiles = [];
         orchestrator.active.state.modifiedFiles = [...orchestrator.active.modifiedFiles];
+        const committed = new Set(orchestrator.active.state.committedFiles ?? []);
+        for (const file of files) committed.add(file);
+        orchestrator.active.state.committedFiles = [...committed];
         saveTask(orchestrator.active.dir, orchestrator.active.state);
         orchestrator.commitReminderSent = false;
         return { content: [{ type: "text" as const, text: `Committed ${files.length} file(s): ${result.commitHash ?? "ok"}` }], details: {} };
@@ -804,22 +820,40 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
       }
       const effectiveMode = getEffectiveMode(orchestrator.active.state);
       if (effectiveMode === "autonomous") {
+        const phase = orchestrator.active.state.phase;
         let justFinalizedReviewCycle = false;
         if (orchestrator.active.state.reviewCycle?.step === "apply_feedback") {
+          const completedRound = orchestrator.active.state.reviewCycle.pass;
           finalizeReviewCycleAutonomous(orchestrator.active);
           justFinalizedReviewCycle = true;
+          if (reviewPassUnanimousApprove(orchestrator.active.dir, phase, completedRound)) {
+            orchestrator.active.state.reviewApprovedClean = true;
+            saveTask(orchestrator.active.dir, orchestrator.active.state);
+          }
         }
-        const phase = orchestrator.active.state.phase;
         const phaseConfig = orchestrator.active.state.autonomousConfig?.phases?.[phase];
         const reviewPreset = phaseConfig?.reviewPreset;
         const maxReviewPasses = phaseConfig?.maxReviewPasses ?? 0;
-        const completedAutoPasses = orchestrator.active.state.reviewPassByKind?.auto ?? 0;
+        const completedAutoPasses = orchestrator.active.state.reviewPassByKind?.[phase]?.auto ?? 0;
 
-        if (!justFinalizedReviewCycle && reviewPreset && maxReviewPasses > 0 && completedAutoPasses < maxReviewPasses) {
+        if (
+          !justFinalizedReviewCycle &&
+          !orchestrator.active.state.reviewApprovedClean &&
+          reviewPreset &&
+          maxReviewPasses > 0 &&
+          completedAutoPasses < maxReviewPasses
+        ) {
+          const exitCheck = validateExitCriteria(orchestrator.active.dir, orchestrator.active.type, phase);
+          if (!exitCheck.ok) {
+            return {
+              content: [{ type: "text" as const, text: `Cannot start review yet: ${exitCheck.reason}\n\nFix this and call pp_phase_complete again. Do NOT wait for the user.` }],
+              details: {},
+            };
+          }
           const reviewText = await enterReviewCycle(orchestrator, ctx, reviewPreset);
           if (orchestrator.active?.state.step === "await_reviewers") {
             return {
-              content: [{ type: "text" as const, text: `Autonomous mode: reviews running (${reviewPreset}, pass ${completedAutoPasses + 1}/${maxReviewPasses >= 999 ? "∞" : maxReviewPasses}).` }],
+              content: [{ type: "text" as const, text: `Reviews are running (${reviewPreset}, pass ${completedAutoPasses + 1}/${maxReviewPasses >= 999 ? "∞" : maxReviewPasses}). You will be notified automatically when the reviewer outputs are ready — then read them and proceed. Do NOT wait for the user and do NOT stop.` }],
               details: {},
             };
           }
@@ -2070,21 +2104,30 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     const hasToolResults = event.toolResults && event.toolResults.length > 0;
     const turnWasEmpty = !hasText && !hasToolCalls && !hasToolResults;
 
+    const isAutonomous = getEffectiveMode(orchestrator.active.state) === "autonomous";
+
     if (!turnWasEmpty) {
       const lastPart = contentParts.length > 0 ? contentParts[contentParts.length - 1] : null;
       const endsWithText = lastPart?.type === "text" && lastPart?.text?.trim();
       if (hasText && (!hasToolCalls || endsWithText)) {
         const step = orchestrator.active.state.step;
-        if (!skipPhaseCompleteReminder && step !== "await_planners" && step !== "await_reviewers" && !orchestrator.textStopReminderSent) {
-          orchestrator.textStopReminderSent = true;
-          orchestrator.safeSendUserMessage(`[PI-PI] You stopped without calling pp_phase_complete. If you are done with the ${phase} phase, call pp_phase_complete now. If not, continue working.`);
+        if (!skipPhaseCompleteReminder && step !== "await_planners" && step !== "await_reviewers") {
+          const now = Date.now();
+          orchestrator.textStopTimestamps.push(now);
+          orchestrator.textStopTimestamps = orchestrator.textStopTimestamps.filter((t) => now - t < 5 * 60 * 1000);
+          if (orchestrator.textStopTimestamps.length <= 6) {
+            const tail = isAutonomous
+              ? ` You are in AUTONOMOUS mode — do NOT wait for the user and do NOT stop. Either call pp_phase_complete now (if the ${phase} phase is done) or immediately continue with a tool call.`
+              : ` If you are done with the ${phase} phase, call pp_phase_complete now. If not, continue working.`;
+            orchestrator.safeSendUserMessage(`[PI-PI] You stopped without calling pp_phase_complete.${tail}`);
+          }
         }
       } else {
-        orchestrator.textStopReminderSent = false;
+        orchestrator.textStopTimestamps = [];
       }
       return;
     }
-    orchestrator.textStopReminderSent = false;
+    orchestrator.textStopTimestamps = [];
     if (orchestrator.nudgeHalted) return;
     if (orchestrator.spawnedAgentIds.size > 0 || orchestrator.pendingSubagentSpawns > 0) return;
 
@@ -2097,7 +2140,10 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     orchestrator.nudgeTimestamps = orchestrator.nudgeTimestamps.filter((t) => now - t < 60000);
 
     const sendNudge = () => {
-      orchestrator.safeSendUserMessage(`[PI-PI] Your previous response was interrupted. Continue working on the current phase (${phase}). Pick up where you left off.`);
+      const tail = isAutonomous
+        ? ` You are in AUTONOMOUS mode — do NOT wait for the user. Continue with a tool call or call pp_phase_complete.`
+        : "";
+      orchestrator.safeSendUserMessage(`[PI-PI] Your previous response was interrupted. Continue working on the current phase (${phase}). Pick up where you left off.${tail}`);
     };
 
     if (orchestrator.nudgeTimestamps.length <= 3) {

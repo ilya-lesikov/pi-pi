@@ -3201,8 +3201,9 @@ async function showNoActiveMenu(orchestrator: Orchestrator, ctx: any): Promise<s
 }
 
 function getReviewLabels(orchestrator: Orchestrator): { autoLabel: string } {
-  const byKind = orchestrator.active?.state.reviewPassByKind ?? {};
-  const autoCount = byKind["auto"] ?? 0;
+  const phase = orchestrator.active?.state.phase;
+  const byPhase = (phase && orchestrator.active?.state.reviewPassByKind?.[phase]) ?? {};
+  const autoCount = byPhase["auto"] ?? 0;
   const autoLabel = autoCount > 0 ? `Auto review (pass ${autoCount + 1})` : "Auto review";
   return { autoLabel };
 }
