@@ -181,6 +181,8 @@ beforeEach(() => {
   mocks.execFileSync.mockImplementation((command: string, args: string[]) => {
     if (command !== "which") throw new Error(`Unexpected command: ${command}`);
     const bin = args[0];
+    if (bin === "git") return "/usr/bin/git\n";
+    if (bin === "gh") return "/usr/bin/gh\n";
     if (bin === "codebase-memory-mcp") return "/usr/bin/codebase-memory-mcp\n";
     if (bin === "sg") return "/usr/bin/sg\n";
     if (bin === "node") return "/usr/bin/node\n";
@@ -349,6 +351,71 @@ describe("runDoctor", () => {
     expect(report).not.toContain("Empty override objects: project");
   });
 
+  it("reports git and gh binary availability", async () => {
+    const cwd = makeTempDir("pi-pi-doctor-tools-");
+    const ctx = createCtx();
+    const orchestrator = {
+      cwd,
+      config: createConfig(),
+      active: null,
+    } as any;
+
+    mocks.execFileSync.mockImplementation((command: string, args: string[]) => {
+      if (command !== "which") throw new Error(`Unexpected command: ${command}`);
+      const bin = args[0];
+      if (bin === "git") return "/usr/local/bin/git\n";
+      if (bin === "gh") return "/usr/local/bin/gh\n";
+      if (bin === "codebase-memory-mcp") return "/usr/bin/codebase-memory-mcp\n";
+      if (bin === "sg") return "/usr/bin/sg\n";
+      if (bin === "node") return "/usr/bin/node\n";
+      if (bin === "npm") return "/usr/bin/npm\n";
+      throw new Error(`${bin} not found`);
+    });
+
+    await runDoctor(orchestrator, ctx);
+
+    const [report] = ctx.ui.notify.mock.calls[0] as [string, string];
+    expect(report).toContain("git: /usr/local/bin/git");
+    expect(report).toContain("gh: /usr/local/bin/gh");
+  });
+
+  it("checks current working directory as repo when no task is active", async () => {
+    const cwd = makeTempDir("pi-pi-doctor-cwd-repo-");
+    mkdirSync(join(cwd, ".git"), { recursive: true });
+    const ctx = createCtx();
+    const orchestrator = {
+      cwd,
+      config: createConfig(),
+      active: null,
+    } as any;
+
+    mocks.execFileSync.mockImplementation((command: string, args: string[], options?: { cwd?: string }) => {
+      if (command === "which") {
+        const bin = args[0];
+        if (bin === "git") return "/usr/bin/git\n";
+        if (bin === "gh") return "/usr/bin/gh\n";
+        if (bin === "codebase-memory-mcp") return "/usr/bin/codebase-memory-mcp\n";
+        if (bin === "sg") return "/usr/bin/sg\n";
+        if (bin === "node") return "/usr/bin/node\n";
+        if (bin === "npm") return "/usr/bin/npm\n";
+        throw new Error(`${bin} not found`);
+      }
+      if (command === "git" && args[0] === "status" && args[1] === "--porcelain" && args[2] === "--branch") {
+        if (options?.cwd !== cwd) throw new Error("unexpected cwd");
+        return "## main\n";
+      }
+      throw new Error(`Unexpected command: ${command} ${args.join(" ")}`);
+    });
+
+    await runDoctor(orchestrator, ctx);
+
+    const [report] = ctx.ui.notify.mock.calls[0] as [string, string];
+    expect(report).toContain(`${cwd}: path exists`);
+    expect(report).toContain(`${cwd}: git repository detected`);
+    expect(report).toContain(`${cwd}: git status clean (main)`);
+    expect(report).not.toContain("repo checks skipped");
+  });
+
   it("skips disabled commands and parses env-prefixed/path commands", async () => {
     const cwd = makeTempDir("pi-pi-doctor-disabled-commands-");
     mkdirSync(join(cwd, "scripts"), { recursive: true });
@@ -446,6 +513,8 @@ describe("runDoctor", () => {
     mocks.execFileSync.mockImplementation((command: string, args: string[]) => {
       if (command === "which") {
         const bin = args[0];
+        if (bin === "git") return "/usr/bin/git\n";
+        if (bin === "gh") return "/usr/bin/gh\n";
         if (bin === "codebase-memory-mcp") return "/usr/bin/codebase-memory-mcp\n";
         if (bin === "sg") return "/usr/bin/sg\n";
         if (bin === "node") return "/usr/bin/node\n";

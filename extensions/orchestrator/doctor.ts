@@ -192,6 +192,7 @@ export async function runDoctor(orchestrator: Orchestrator, ctx: any): Promise<v
   const projectConfigPath = join(orchestrator.cwd, ".pp", "config.json");
   let availableModels: AvailableModel[] = [];
   let availableSet = new Set<string>();
+  let gitBin: string | null = null;
   const config: NormalizedPiPiConfig = orchestrator.config;
 
   addCategory("Config");
@@ -365,6 +366,18 @@ export async function runDoctor(orchestrator: Orchestrator, ctx: any): Promise<v
   }, "Preset consistency checks failed");
 
   addCategory("Tools");
+
+  await safeCheck(() => {
+    gitBin = which("git");
+    if (gitBin) addLine({ severity: "pass", text: `git: ${gitBin}` });
+    else addLine({ severity: "warning", text: "git: not found" });
+  }, "git binary check failed");
+
+  await safeCheck(() => {
+    const ghBin = which("gh");
+    if (ghBin) addLine({ severity: "pass", text: `gh: ${ghBin}` });
+    else addLine({ severity: "warning", text: "gh: not found" });
+  }, "gh binary check failed");
 
   await safeCheck(() => {
     const cbmBin = which("codebase-memory-mcp");
@@ -548,7 +561,50 @@ export async function runDoctor(orchestrator: Orchestrator, ctx: any): Promise<v
 
   await safeCheck(() => {
     if (!orchestrator.active) {
-      addLine({ severity: "pass", text: "No active task; repo checks skipped" });
+      const repoPath = orchestrator.cwd;
+      if (!existsSync(repoPath)) {
+        addLine({ severity: "failure", text: `${repoPath}: path does not exist` });
+        return;
+      }
+      addLine({ severity: "pass", text: `${repoPath}: path exists` });
+
+      let isGitRepo = existsSync(join(repoPath, ".git"));
+      if (!isGitRepo && gitBin) {
+        try {
+          execFileSync("git", ["rev-parse", "--git-dir"], { cwd: repoPath, encoding: "utf-8", stdio: "pipe" });
+          isGitRepo = true;
+        } catch {
+          isGitRepo = false;
+        }
+      }
+      if (!isGitRepo) {
+        addLine({ severity: "failure", text: `${repoPath}: not a git repository` });
+        return;
+      }
+      addLine({ severity: "pass", text: `${repoPath}: git repository detected` });
+
+      if (!gitBin) {
+        addLine({ severity: "failure", text: `${repoPath}: cannot read git status because git binary is not available` });
+        return;
+      }
+
+      try {
+        const statusOutput = execFileSync("git", ["status", "--porcelain", "--branch"], {
+          cwd: repoPath,
+          encoding: "utf-8",
+          stdio: "pipe",
+        });
+        const lines = statusOutput.split("\n").filter((line) => line.trim().length > 0);
+        const branchLineRaw = lines[0]?.startsWith("## ") ? lines[0].slice(3).trim() : "detached";
+        const changeLines = lines[0]?.startsWith("## ") ? lines.slice(1) : lines;
+        if (changeLines.length === 0) {
+          addLine({ severity: "pass", text: `${repoPath}: git status clean (${branchLineRaw})` });
+        } else {
+          addLine({ severity: "warning", text: `${repoPath}: git status ${changeLines.length} change(s) (${branchLineRaw})` });
+        }
+      } catch (error) {
+        addLine({ severity: "failure", text: `${repoPath}: git status failed: ${toErrorMessage(error)}` });
+      }
       return;
     }
 
