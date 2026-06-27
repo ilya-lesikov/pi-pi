@@ -3,7 +3,7 @@ import { Type } from "@sinclair/typebox";
 
 const EXA_MCP_URL = "https://mcp.exa.ai/mcp";
 
-async function callExa(toolName: string, args: Record<string, unknown>): Promise<string> {
+export async function callExa(toolName: string, args: Record<string, unknown>): Promise<string> {
   const body = JSON.stringify({
     jsonrpc: "2.0",
     id: 1,
@@ -25,23 +25,25 @@ async function callExa(toolName: string, args: Record<string, unknown>): Promise
 
   for (const line of raw.split("\n")) {
     if (!line.startsWith("data:")) continue;
+    let json: any;
     try {
-      const json = JSON.parse(line.slice(5).trim());
-      if (json.error) throw new Error(json.error.message);
-      const text = json.result?.content?.[0]?.text;
-      if (text) return text;
-    } catch (e: any) {
-      if (e.message?.includes("error")) throw e;
+      json = JSON.parse(line.slice(5).trim());
+    } catch {
+      continue;
     }
+    if (json.error) throw new Error(json.error.message ?? JSON.stringify(json.error));
+    const text = json.result?.content?.[0]?.text;
+    if (text) return text;
   }
 
+  let json: any;
   try {
-    const json = JSON.parse(raw);
-    if (json.error) throw new Error(json.error.message);
-    return json.result?.content?.[0]?.text ?? raw;
+    json = JSON.parse(raw);
   } catch {
     return raw;
   }
+  if (json.error) throw new Error(json.error.message ?? JSON.stringify(json.error));
+  return json.result?.content?.[0]?.text ?? raw;
 }
 
 function ok(text: string) {
