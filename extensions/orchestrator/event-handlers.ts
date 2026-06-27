@@ -7,6 +7,7 @@ import { loadConfig, resolvePreset } from "./config.js";
 import { runAfterEdit, autoCommit, loadRepoAfterEditCommands } from "./commands.js";
 import { taskName, getActiveTask, getEffectiveMode, getFirstPhase, saveTask } from "./state.js";
 import { getLogger, initSessionLogger, addTaskDestination, setLogLevel, flushLogs } from "./log.js";
+import { initTracer, finalizeTracer, getTracer } from "./tracer.js";
 import { handleSpawnResult } from "./spawn-cleanup.js";
 import {
   getContextDirs,
@@ -858,8 +859,66 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
   });
 }
 
+function registerMainTraceHooks(orchestrator: Orchestrator): void {
+  const pi = orchestrator.pi;
+  const isSubagent = () => !!(globalThis as any)[SUBAGENT_SESSION_KEY];
+
+  pi.on("before_agent_start", async (event) => {
+    if (isSubagent()) return;
+    getTracer()?.traceMain("before_agent_start", {
+      prompt: event.prompt,
+      images: event.images,
+      systemPrompt: event.systemPrompt,
+    });
+  });
+  pi.on("agent_start", async () => {
+    if (isSubagent()) return;
+    getTracer()?.traceMain("agent_start", {});
+  });
+  pi.on("agent_end", async (event) => {
+    if (isSubagent()) return;
+    getTracer()?.traceMain("agent_end", { messages: event.messages });
+  });
+  pi.on("turn_start", async (event) => {
+    if (isSubagent()) return;
+    const tracer = getTracer();
+    if (tracer) tracer.turnIndex = event.turnIndex;
+    tracer?.traceMain("turn_start", { turnIndex: event.turnIndex, timestamp: event.timestamp });
+  });
+  pi.on("turn_end", async (event) => {
+    if (isSubagent()) return;
+    getTracer()?.traceMain("turn_end", { turnIndex: event.turnIndex, message: event.message, toolResults: event.toolResults });
+  });
+  pi.on("message_start", async (event) => {
+    if (isSubagent()) return;
+    getTracer()?.traceMain("message_start", { message: event.message });
+  });
+  pi.on("message_update", async (event) => {
+    if (isSubagent()) return;
+    getTracer()?.traceMain("message_update", { assistantMessageEvent: event.assistantMessageEvent });
+  });
+  pi.on("message_end", async (event) => {
+    if (isSubagent()) return;
+    getTracer()?.traceMain("message_end", { message: event.message });
+  });
+  pi.on("tool_execution_start", async (event) => {
+    if (isSubagent()) return;
+    getTracer()?.traceMain("tool_execution_start", { toolCallId: event.toolCallId, toolName: event.toolName, args: event.args });
+  });
+  pi.on("tool_execution_update", async (event) => {
+    if (isSubagent()) return;
+    getTracer()?.traceMain("tool_execution_update", { toolCallId: event.toolCallId, toolName: event.toolName, partialResult: (event as any).partialResult });
+  });
+  pi.on("tool_execution_end", async (event) => {
+    if (isSubagent()) return;
+    getTracer()?.traceMain("tool_execution_end", { toolCallId: event.toolCallId, toolName: event.toolName, result: event.result, isError: event.isError });
+  });
+}
+
 export function registerEventHandlers(orchestrator: Orchestrator): void {
   const pi = orchestrator.pi;
+
+  registerMainTraceHooks(orchestrator);
 
   function getUsageTracker(): UsageTracker | undefined {
     return (globalThis as any)[USAGE_TRACKER_KEY] as UsageTracker | undefined;
@@ -879,6 +938,25 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (event === "first_tool" && lifecycle.firstToolAt == null) lifecycle.firstToolAt = now;
     if (event === "first_turn" && lifecycle.firstTurnAt == null) lifecycle.firstTurnAt = now;
     orchestrator.agentLifecycle.set(data.id, lifecycle);
+
+    getTracer()?.traceMain("subagent_lifecycle", {
+      event,
+      subagentId: data.id,
+      type: data.type ?? lifecycle.type,
+      description: data.description ?? lifecycle.description,
+      parentToolCallId: data.toolCallId,
+      phase: lifecycle.phase,
+      step: lifecycle.step,
+      toolName: data.toolName,
+      turnCount: data.turnCount,
+      tokens: data.tokens,
+      durationMs: data.durationMs,
+      toolUses: data.toolUses,
+      modelId: data.modelId,
+      status: data.status,
+      error: data.error,
+      result: data.result,
+    });
 
     const ageMs = lifecycle.createdAt == null ? 0 : now - lifecycle.createdAt;
     const startedDeltaMs = lifecycle.startedAt == null || lifecycle.createdAt == null ? undefined : lifecycle.startedAt - lifecycle.createdAt;
@@ -1444,6 +1522,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       getLogger().error({ s: "usage", err: err.message }, "failed to dump usage summary");
     }
     flushLogs();
+    finalizeTracer();
     delete (globalThis as any)[USAGE_TRACKER_KEY];
   });
 
@@ -1531,6 +1610,12 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
 
     setLogLevel(orchestrator.config.general.logLevel);
     log.info({ s: "config", logLevel: orchestrator.config.general.logLevel }, "config loaded");
+
+    if (orchestrator.config.general.tracing) {
+      const sessionId = ctx.sessionManager?.getSessionId?.() || `session-${Date.now()}`;
+      initTracer(ppDir, sessionId);
+      log.info({ s: "tracing", sessionId }, "session tracing enabled");
+    }
 
     registerCommandHandlers(orchestrator);
     registerCbmTools(pi, orchestrator.cwd);
