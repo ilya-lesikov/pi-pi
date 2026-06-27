@@ -24,6 +24,72 @@ import type { SubagentType, ThinkingLevel } from "./types.js";
 /** Names of tools registered by this extension that subagents must NOT inherit. */
 const EXCLUDED_TOOL_NAMES = ["Agent", "get_subagent_result", "steer_subagent"];
 
+const TRACER_KEY = Symbol.for("pi-pi:tracer");
+const SUBAGENT_SESSION_KEY = Symbol.for("pi-pi:subagent-session");
+
+interface PiPiTracer {
+  openSubagent(meta: {
+    subagentId: string;
+    type?: string;
+    description?: string;
+    parentToolCallId?: string;
+    parentSubagentId?: string;
+    depth: number;
+    systemPrompt?: string;
+    effectivePrompt?: string;
+  }): void;
+  traceSubagent(subagentId: string, kind: string, payload: Record<string, unknown>): void;
+}
+
+function getTracer(): PiPiTracer | undefined {
+  return (globalThis as any)[TRACER_KEY];
+}
+
+function subagentDepth(): number {
+  const marker = (globalThis as any)[SUBAGENT_SESSION_KEY];
+  return typeof marker?.depth === "number" ? marker.depth : 1;
+}
+
+function traceSubagentEvent(subagentId: string | undefined, event: AgentSessionEvent, turnIndex: number): void {
+  if (!subagentId) return;
+  const tracer = getTracer();
+  if (!tracer) return;
+  try {
+    switch (event.type) {
+      case "agent_start":
+        tracer.traceSubagent(subagentId, "agent_start", {});
+        break;
+      case "agent_end":
+        tracer.traceSubagent(subagentId, "agent_end", { messages: (event as any).messages, willRetry: (event as any).willRetry });
+        break;
+      case "turn_start":
+        tracer.traceSubagent(subagentId, "turn_start", { turnIndex });
+        break;
+      case "turn_end":
+        tracer.traceSubagent(subagentId, "turn_end", { turnIndex, message: (event as any).message, toolResults: (event as any).toolResults });
+        break;
+      case "message_start":
+        tracer.traceSubagent(subagentId, "message_start", { message: (event as any).message });
+        break;
+      case "message_update":
+        tracer.traceSubagent(subagentId, "message_update", { assistantMessageEvent: (event as any).assistantMessageEvent });
+        break;
+      case "message_end":
+        tracer.traceSubagent(subagentId, "message_end", { message: (event as any).message });
+        break;
+      case "tool_execution_start":
+        tracer.traceSubagent(subagentId, "tool_execution_start", { toolCallId: (event as any).toolCallId, toolName: (event as any).toolName, args: (event as any).args });
+        break;
+      case "tool_execution_update":
+        tracer.traceSubagent(subagentId, "tool_execution_update", { toolCallId: (event as any).toolCallId, toolName: (event as any).toolName, partialResult: (event as any).partialResult });
+        break;
+      case "tool_execution_end":
+        tracer.traceSubagent(subagentId, "tool_execution_end", { toolCallId: (event as any).toolCallId, toolName: (event as any).toolName, result: (event as any).result, isError: (event as any).isError });
+        break;
+    }
+  } catch {}
+}
+
 /** Default max turns. undefined = unlimited (no turn limit). */
 let defaultMaxTurns: number | undefined;
 
@@ -109,6 +175,11 @@ export interface RunOptions {
    */
   validateCompletion?: () => string | undefined;
   maxValidationRetries?: number;
+  /** Correlation IDs for session tracing. */
+  subagentId?: string;
+  subagentType?: string;
+  subagentDescription?: string;
+  parentToolCallId?: string;
 }
 
 export interface RunResult {
@@ -334,16 +405,7 @@ export async function runAgent(
 
     let currentMessageText = "";
     const unsubTurns = session.subscribe((event: AgentSessionEvent) => {
-      if (event.type === "session_shutdown") {
-      }
-      if (event.type === "agent_start") {
-      }
-      if (event.type === "turn_start") {
-      }
-      if (event.type === "message_start") {
-      }
-      if (event.type === "tool_execution_start") {
-      }
+      traceSubagentEvent(options.subagentId, event, turnCount);
       if (event.type === "turn_end") {
         turnCount++;
         const msg = (event as any).message;
@@ -385,6 +447,20 @@ export async function runAgent(
       if (parentContext) {
         effectivePrompt = parentContext + prompt;
       }
+    }
+
+    if (options.subagentId) {
+      try {
+        getTracer()?.openSubagent({
+          subagentId: options.subagentId,
+          type: options.subagentType ?? type,
+          description: options.subagentDescription,
+          parentToolCallId: options.parentToolCallId,
+          depth: subagentDepth(),
+          systemPrompt,
+          effectivePrompt,
+        });
+      } catch {}
     }
 
     try {
@@ -438,23 +514,32 @@ export async function runAgent(
 export async function resumeAgent(
   session: AgentSession,
   prompt: string,
-  options: { onToolActivity?: (activity: ToolActivity) => void; signal?: AbortSignal } = {},
+  options: { onToolActivity?: (activity: ToolActivity) => void; signal?: AbortSignal; subagentId?: string } = {},
 ): Promise<string> {
   const collector = collectResponseText(session);
   const cleanupAbort = forwardAbortSignal(session, options.signal);
 
-  const unsubToolUse = options.onToolActivity
-    ? session.subscribe((event: AgentSessionEvent) => {
-        if (event.type === "tool_execution_start") options.onToolActivity!({ type: "start", toolName: event.toolName });
-        if (event.type === "tool_execution_end") options.onToolActivity!({ type: "end", toolName: event.toolName });
-      })
-    : () => {};
+  let resumeTurnCount = 0;
+  const unsubTrace = session.subscribe((event: AgentSessionEvent) => {
+    traceSubagentEvent(options.subagentId, event, resumeTurnCount);
+    if (event.type === "turn_end") resumeTurnCount++;
+    if (options.onToolActivity) {
+      if (event.type === "tool_execution_start") options.onToolActivity({ type: "start", toolName: event.toolName });
+      if (event.type === "tool_execution_end") options.onToolActivity({ type: "end", toolName: event.toolName });
+    }
+  });
+
+  if (options.subagentId) {
+    try {
+      getTracer()?.traceSubagent(options.subagentId, "resume_start", { prompt });
+    } catch {}
+  }
 
   try {
     await session.prompt(prompt);
   } finally {
     collector.unsubscribe();
-    unsubToolUse();
+    unsubTrace();
     cleanupAbort();
   }
 

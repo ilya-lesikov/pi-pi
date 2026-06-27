@@ -156,6 +156,10 @@ export class AgentManager {
       onTextDelta: options.onTextDelta,
       validateCompletion: options.validateCompletion,
       maxValidationRetries: options.maxValidationRetries,
+      subagentId: id,
+      subagentType: type,
+      subagentDescription: options.description,
+      parentToolCallId: record.toolCallId,
       onSessionCreated: (session) => {
         record.session = session;
         // Flush any steers that arrived before the session was ready
@@ -283,6 +287,7 @@ export class AgentManager {
           if (activity.type === "end") record.toolUses++;
         },
         signal,
+        subagentId: id,
       });
       record.status = "completed";
       record.result = responseText;
