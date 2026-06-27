@@ -87,48 +87,55 @@ describe("log", () => {
     expect(readText(logPath)).toContain("hello-session");
   });
 
-  it("addTaskDestination creates debug.jsonl in task dir", async () => {
-    const ppDir = makeTempDir();
-    const taskDir = join(ppDir, "task");
+  it("addTaskDestination creates debug.jsonl under .pp/logs (re-rooted from .pp/state)", async () => {
+    const cwd = makeTempDir();
+    const ppDir = join(cwd, ".pp");
+    const stateTaskDir = join(ppDir, "state", "implement", "abc_task");
+    const logsTaskDir = join(ppDir, "logs", "implement", "abc_task");
     initSessionLogger(ppDir, "info");
 
-    addTaskDestination(taskDir);
+    addTaskDestination(stateTaskDir);
     getLogger().info({ s: "test" }, "touch-task-log");
     flushLogs();
     await delay(30);
 
-    expect(existsSync(join(taskDir, "debug.jsonl"))).toBe(true);
+    expect(existsSync(join(logsTaskDir, "debug.jsonl"))).toBe(true);
+    expect(existsSync(join(stateTaskDir, "debug.jsonl"))).toBe(false);
   });
 
   it("addTaskDestination logs to both session and task files", async () => {
-    const ppDir = makeTempDir();
-    const taskDir = join(ppDir, "task");
+    const cwd = makeTempDir();
+    const ppDir = join(cwd, ".pp");
+    const stateTaskDir = join(ppDir, "state", "implement", "abc_task");
+    const logsTaskDir = join(ppDir, "logs", "implement", "abc_task");
     initSessionLogger(ppDir, "debug");
     const sessionPath = sessionLogPath(ppDir);
-    addTaskDestination(taskDir);
+    addTaskDestination(stateTaskDir);
 
     getLogger().info({ s: "test" }, "both-destinations");
     flushLogs();
 
     expect(await waitForContent(sessionPath, "both-destinations")).toContain("both-destinations");
-    expect(await waitForContent(join(taskDir, "debug.jsonl"), "both-destinations")).toContain("both-destinations");
+    expect(await waitForContent(join(logsTaskDir, "debug.jsonl"), "both-destinations")).toContain("both-destinations");
   });
 
   it("removeTaskDestination stops writing to task file", async () => {
-    const ppDir = makeTempDir();
-    const taskDir = join(ppDir, "task");
+    const cwd = makeTempDir();
+    const ppDir = join(cwd, ".pp");
+    const stateTaskDir = join(ppDir, "state", "implement", "abc_task");
+    const logsTaskDir = join(ppDir, "logs", "implement", "abc_task");
     initSessionLogger(ppDir, "debug");
-    addTaskDestination(taskDir);
+    addTaskDestination(stateTaskDir);
 
     getLogger().info({ s: "test" }, "before-remove");
     flushLogs();
-    const before = await waitForContent(join(taskDir, "debug.jsonl"), "before-remove");
+    const before = await waitForContent(join(logsTaskDir, "debug.jsonl"), "before-remove");
 
     removeTaskDestination();
     getLogger().info({ s: "test" }, "after-remove");
     flushLogs();
     await delay(30);
-    const after = readText(join(taskDir, "debug.jsonl"));
+    const after = readText(join(logsTaskDir, "debug.jsonl"));
 
     expect(before).toContain("before-remove");
     expect(after).not.toContain("after-remove");

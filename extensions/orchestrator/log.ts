@@ -1,6 +1,6 @@
 import pino from "pino";
 import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from "fs";
-import { join } from "path";
+import { join, sep } from "path";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -68,11 +68,19 @@ export function initSessionLogger(ppDir: string, level: LogLevel = "info"): void
   }
 }
 
-export function addTaskDestination(taskDir: string): void {
+export function taskLogsDir(stateTaskDir: string): string {
+  const stateSegment = `${sep}.pp${sep}state${sep}`;
+  const idx = stateTaskDir.lastIndexOf(stateSegment);
+  if (idx < 0) return stateTaskDir;
+  return stateTaskDir.slice(0, idx) + `${sep}.pp${sep}logs${sep}` + stateTaskDir.slice(idx + stateSegment.length);
+}
+
+export function addTaskDestination(stateTaskDir: string): void {
   if (!ms) return;
   try {
-    mkdirSync(taskDir, { recursive: true });
-    const logFile = join(taskDir, "debug.jsonl");
+    const logsTaskDir = taskLogsDir(stateTaskDir);
+    mkdirSync(logsTaskDir, { recursive: true });
+    const logFile = join(logsTaskDir, "debug.jsonl");
     taskStreamRef = pino.destination({ dest: logFile, sync: false });
     ms.add({ stream: taskStreamRef, level: logger.level });
     taskStreamId = ms.lastId;

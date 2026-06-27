@@ -27,6 +27,7 @@ import { registerCommandHandlers } from "./command-handlers.js";
 import { enterReviewCycle, finalizeReviewCycle, registerEventHandlers } from "./event-handlers.js";
 import { createTask, getActiveTask, loadTask, saveTask } from "./state.js";
 import { registerAgentDefinitions } from "./agents/registry.js";
+import { taskLogsDir } from "./log.js";
 import { resumeTask } from "./pp-menu.js";
 import * as commandsModule from "./commands.js";
 import * as doctorModule from "./doctor.js";
@@ -684,7 +685,7 @@ describe("subagent instrumentation", () => {
     emitSubagentCreated(pi, "explore-1", "Explore agent");
     expect(orchestrator.agentLifecycle.get("explore-1")?.createdAt).toBeTypeOf("number");
     expect(orchestrator.agentLifecycle.get("explore-1")?.phase).toBe("brainstorm");
-    const debugLogPath = join(orchestrator.active!.dir, "debug.jsonl");
+    const debugLogPath = join(taskLogsDir(orchestrator.active!.dir), "debug.jsonl");
     expect(existsSync(debugLogPath)).toBe(true);
 
     emitSubagentStarted(pi, "explore-1", "Explore agent");
