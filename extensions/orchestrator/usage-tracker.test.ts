@@ -33,6 +33,24 @@ describe("usage-tracker", () => {
     expect(tracker.getTotalCost()).toBe(0);
   });
 
+  it("loadFromSummary is idempotent and does not double-count subagents", () => {
+    const tracker = createUsageTracker();
+    const summary = {
+      subagents: [
+        { description: "a", agentType: "Explore", modelId: "m", inputTokens: 100, outputTokens: 50, cost: 0.5, toolUses: 1, durationMs: 10 },
+      ],
+    };
+
+    tracker.loadFromSummary(summary);
+    tracker.loadFromSummary(summary);
+
+    expect(tracker.getSubagentList()).toHaveLength(1);
+    const totals = tracker.getSubagentTotals();
+    expect(totals.inputTokens).toBe(100);
+    expect(totals.outputTokens).toBe(50);
+    expect(totals.cost).toBeCloseTo(0.5);
+  });
+
   it("recordTurn accumulates input output and cache tokens", () => {
     const tracker = createUsageTracker();
 

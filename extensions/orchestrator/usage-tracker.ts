@@ -180,6 +180,10 @@ export function createUsageTracker(): UsageTracker {
         state.totalTurns = toFiniteNumber(totals.turns);
       }
       if (Array.isArray(summary.subagents)) {
+        state.subagents = [];
+        state.subagentInputTokens = 0;
+        state.subagentOutputTokens = 0;
+        state.subagentCost = 0;
         for (const sa of summary.subagents as Record<string, unknown>[]) {
           const entry: SubagentUsage = {
             description: typeof sa.description === "string" ? sa.description : "unknown",
