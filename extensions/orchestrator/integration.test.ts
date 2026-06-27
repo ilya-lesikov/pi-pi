@@ -1606,6 +1606,140 @@ describe("task modes and quick task", () => {
     expect(loadTask(taskDir).phase).toBe("done");
   });
 
+  it("autonomous review early-exits on unanimous approval before reaching the cap", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "implement", undefined, undefined, "autonomous");
+    const taskDir = orchestrator.active!.dir;
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "llm_work";
+    orchestrator.active!.state.reviewPass = 0;
+    orchestrator.active!.state.reviewPassByKind = {};
+    orchestrator.active!.state.autonomousConfig = {
+      phases: { implement: { reviewPreset: "regular", maxReviewPasses: 3 } },
+    };
+    const plansDir = join(taskDir, "plans");
+    mkdirSync(plansDir, { recursive: true });
+    writeFileSync(
+      join(plansDir, "1_synthesized.md"),
+      makeValidPlan(["- [x] P1. Done item — Done when: synthesized plan is fully checked"]),
+      "utf-8",
+    );
+
+    const ppPhaseComplete = getTool(pi, "pp_phase_complete");
+    const first = await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
+    expect(first.content[0].text).toMatch(/Reviews are running|Started review cycle pass/);
+
+    const reviewsDir = join(taskDir, "code-reviews");
+    mkdirSync(reviewsDir, { recursive: true });
+    const round = orchestrator.active!.state.reviewCycle!.pass;
+    writeFileSync(join(reviewsDir, `1_a_round-${round}.md`), "- CRITICAL: none\n- VERDICT: APPROVE", "utf-8");
+    emitSubagentCreated(pi, "reviewer-1", "Code reviewer (test)");
+    emitSubagentCompleted(pi, "reviewer-1", "Code reviewer (test)");
+
+    const second = await ppPhaseComplete.execute("call-2", { summary: "applied" }, undefined, undefined, ctx);
+    expect(second.content[0].text).toBe("");
+    expect(orchestrator.active).toBeNull();
+    const finalState = loadTask(taskDir);
+    expect(finalState.phase).toBe("done");
+    expect(finalState.reviewApprovedClean).toBe(true);
+    expect(finalState.reviewPassByKind?.implement?.auto).toBe(1);
+  });
+
+  it("clean-approved review is not re-run on a later checklist-repair re-entry", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "implement", undefined, undefined, "autonomous");
+    const taskDir = orchestrator.active!.dir;
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "llm_work";
+    orchestrator.active!.state.reviewPass = 1;
+    orchestrator.active!.state.reviewPassByKind = { implement: { auto: 1 } };
+    orchestrator.active!.state.reviewApprovedClean = true;
+    orchestrator.active!.state.autonomousConfig = {
+      phases: { implement: { reviewPreset: "regular", maxReviewPasses: 3 } },
+    };
+    const plansDir = join(taskDir, "plans");
+    mkdirSync(plansDir, { recursive: true });
+    writeFileSync(
+      join(plansDir, "1_synthesized.md"),
+      makeValidPlan(["- [x] P1. Done item — Done when: synthesized plan is fully checked"]),
+      "utf-8",
+    );
+
+    const ppPhaseComplete = getTool(pi, "pp_phase_complete");
+    const result = await ppPhaseComplete.execute("call-1", { summary: "checklist repaired" }, undefined, undefined, ctx);
+    expect(result.content[0].text).toBe("");
+    expect(orchestrator.active).toBeNull();
+    expect(loadTask(taskDir).phase).toBe("done");
+  });
+
+  it("autonomous review runs another pass when a reviewer reports a CRITICAL finding", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "implement", undefined, undefined, "autonomous");
+    const taskDir = orchestrator.active!.dir;
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "llm_work";
+    orchestrator.active!.state.reviewPass = 1;
+    orchestrator.active!.state.reviewPassByKind = { implement: { auto: 1 } };
+    orchestrator.active!.state.autonomousConfig = {
+      phases: { implement: { reviewPreset: "regular", maxReviewPasses: 3 } },
+    };
+    const plansDir = join(taskDir, "plans");
+    mkdirSync(plansDir, { recursive: true });
+    writeFileSync(
+      join(plansDir, "1_synthesized.md"),
+      makeValidPlan(["- [x] P1. Done item — Done when: synthesized plan is fully checked"]),
+      "utf-8",
+    );
+
+    const reviewsDir = join(taskDir, "code-reviews");
+    mkdirSync(reviewsDir, { recursive: true });
+    writeFileSync(join(reviewsDir, "1_a_round-1.md"), "- CRITICAL: bug at x.ts:1\n- VERDICT: NEEDS_CHANGES", "utf-8");
+
+    const ppPhaseComplete = getTool(pi, "pp_phase_complete");
+    const next = await ppPhaseComplete.execute("call-1", { summary: "fixes applied, re-review" }, undefined, undefined, ctx);
+    expect(orchestrator.active!.state.reviewApprovedClean).toBeFalsy();
+    expect(next.content[0].text).toMatch(/Reviews are running|Started review cycle pass/);
+    expect(orchestrator.active!.state.reviewCycle!.pass).toBe(2);
+  });
+
+  it("autonomous implement blocks review until exit criteria pass", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "implement", undefined, undefined, "autonomous");
+    const taskDir = orchestrator.active!.dir;
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "llm_work";
+    orchestrator.active!.state.reviewPass = 0;
+    orchestrator.active!.state.reviewPassByKind = {};
+    orchestrator.active!.state.autonomousConfig = {
+      phases: { implement: { reviewPreset: "regular", maxReviewPasses: 3 } },
+    };
+    const plansDir = join(taskDir, "plans");
+    mkdirSync(plansDir, { recursive: true });
+    writeFileSync(
+      join(plansDir, "1_synthesized.md"),
+      makeValidPlan(["- [ ] P1. Unchecked item — Done when: this is checked"]),
+      "utf-8",
+    );
+
+    const ppPhaseComplete = getTool(pi, "pp_phase_complete");
+    const first = await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
+    expect(first.content[0].text).toMatch(/Cannot start review yet/);
+    expect(orchestrator.active!.state.step).not.toBe("await_reviewers");
+    expect(orchestrator.active!.state.phase).toBe("implement");
+  });
+
   it("autonomous planner retries failed variants once even with partial outputs", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);
@@ -2858,6 +2992,63 @@ describe("error retry", () => {
       { deliverAs: "steer" },
     );
     vi.useRealTimers();
+  });
+
+  it("repeated text-only stops re-nudge instead of latching once", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "text stop test", undefined, undefined, "autonomous");
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "llm_work";
+    const turnEnd = pi._handlers.get("turn_end")!;
+
+    const textTurn = { message: { stopReason: "stop", content: [{ type: "text", text: "thinking out loud" }] }, toolResults: [] };
+    for (let i = 0; i < 3; i += 1) {
+      await turnEnd(textTurn, ctx);
+    }
+
+    const reminderCalls = (pi.sendUserMessage as any).mock.calls.filter((c: any[]) =>
+      String(c[0]).includes("You stopped without calling pp_phase_complete"),
+    );
+    expect(reminderCalls.length).toBe(3);
+    expect(reminderCalls[0][0]).toContain("AUTONOMOUS mode");
+    expect(orchestrator.nudgeHalted).toBe(false);
+  });
+
+  it("text-only stalls never trip the permanent halt", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "text stop halt test", undefined, undefined, "autonomous");
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "llm_work";
+    const turnEnd = pi._handlers.get("turn_end")!;
+
+    const textTurn = { message: { stopReason: "stop", content: [{ type: "text", text: "still talking" }] }, toolResults: [] };
+    for (let i = 0; i < 30; i += 1) {
+      await turnEnd(textTurn, ctx);
+    }
+
+    expect(orchestrator.nudgeHalted).toBe(false);
+  });
+
+  it("a tool-call turn resets the text-stop rate limit", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "text stop reset test", undefined, undefined, "autonomous");
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "llm_work";
+    const turnEnd = pi._handlers.get("turn_end")!;
+
+    await turnEnd({ message: { stopReason: "stop", content: [{ type: "text", text: "a" }] }, toolResults: [] }, ctx);
+    expect(orchestrator.textStopTimestamps.length).toBe(1);
+    await turnEnd({ message: { stopReason: "stop", content: [{ type: "toolCall" }] }, toolResults: [] }, ctx);
+    expect(orchestrator.textStopTimestamps.length).toBe(0);
   });
 });
 
