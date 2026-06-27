@@ -11,11 +11,16 @@ import { validatePlan, validateArtifact } from "./validate-artifacts.js";
 import { initFlantSync } from "./flant-infra.js";
 
 const ORCHESTRATOR_KEY = Symbol.for("pi-pi:orchestrator-initialized");
+// Shared with 3p/pi-subagents/src/agent-runner.ts: the value is a { depth: number }
+// marking that this process runs as a subagent. The orchestrator only reads it for
+// truthiness ("am I a subagent?"); agent-runner uses depth for nesting.
 export const SUBAGENT_SESSION_KEY = Symbol.for("pi-pi:subagent-session");
 
 export default function (pi: ExtensionAPI) {
   if ((globalThis as any)[ORCHESTRATOR_KEY]) {
-    (globalThis as any)[SUBAGENT_SESSION_KEY] = true;
+    if (!(globalThis as any)[SUBAGENT_SESSION_KEY]) {
+      (globalThis as any)[SUBAGENT_SESSION_KEY] = { depth: 1 };
+    }
     registerSubagentTools(pi);
     return;
   }

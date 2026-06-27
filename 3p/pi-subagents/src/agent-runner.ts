@@ -171,6 +171,8 @@ export async function runAgent(
 
   // Resolve working directory: worktree override > parent cwd
   const effectiveCwd = options.cwd ?? ctx.cwd;
+  // Shared marker with extensions/orchestrator/index.ts (SUBAGENT_SESSION_KEY).
+  // Canonical shape is { depth: number }; a legacy boolean true is tolerated as depth 1.
   const subagentSessionKey = Symbol.for("pi-pi:subagent-session");
   const previousSubagentSession = (globalThis as any)[subagentSessionKey];
   const previousDepth = typeof previousSubagentSession === "object" && previousSubagentSession !== null
