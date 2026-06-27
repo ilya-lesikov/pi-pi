@@ -161,8 +161,14 @@ export class Orchestrator {
       return false;
     }
 
-    const VALID_THINKING = new Set(["off", "low", "medium", "high"]);
-    const thinkingLevel = (VALID_THINKING.has(thinking) ? thinking : "high") as "off" | "low" | "medium" | "high";
+    const VALID_THINKING = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
+    const thinkingLevel = (VALID_THINKING.has(thinking) ? thinking : "high") as
+      | "off"
+      | "minimal"
+      | "low"
+      | "medium"
+      | "high"
+      | "xhigh";
     this.pi.setThinkingLevel(thinkingLevel);
     log.debug({ s: "model", model: `${resolved.provider}/${resolved.id}`, thinking: thinkingLevel }, "model switched");
     return true;

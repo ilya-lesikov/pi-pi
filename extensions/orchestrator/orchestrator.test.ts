@@ -85,6 +85,38 @@ describe("Orchestrator.truncateResult", () => {
   });
 });
 
+describe("Orchestrator.switchModel thinking level", () => {
+  function makeCtx() {
+    return {
+      modelRegistry: {
+        getAvailable: () => [{ provider: "anthropic", id: "claude-test-model" }],
+      },
+    } as any;
+  }
+
+  it("honors xhigh on the main agent (no downgrade)", async () => {
+    const pi = makePi({ setModel: vi.fn().mockResolvedValue(true) });
+    const orchestrator = new Orchestrator(pi);
+    const ok = await orchestrator.switchModel(makeCtx(), "anthropic/claude-test-model", "xhigh");
+    expect(ok).toBe(true);
+    expect(pi.setThinkingLevel).toHaveBeenCalledWith("xhigh");
+  });
+
+  it("honors minimal on the main agent", async () => {
+    const pi = makePi({ setModel: vi.fn().mockResolvedValue(true) });
+    const orchestrator = new Orchestrator(pi);
+    await orchestrator.switchModel(makeCtx(), "anthropic/claude-test-model", "minimal");
+    expect(pi.setThinkingLevel).toHaveBeenCalledWith("minimal");
+  });
+
+  it("falls back to high for an invalid thinking level", async () => {
+    const pi = makePi({ setModel: vi.fn().mockResolvedValue(true) });
+    const orchestrator = new Orchestrator(pi);
+    await orchestrator.switchModel(makeCtx(), "anthropic/claude-test-model", "bogus");
+    expect(pi.setThinkingLevel).toHaveBeenCalledWith("high");
+  });
+});
+
 describe("Orchestrator.taskIdFromDir", () => {
   it("extracts numeric prefix from directory basename", () => {
     const orchestrator = new Orchestrator(makePi());
