@@ -300,6 +300,8 @@ export function registerFlantProviders(
   const openaiModels = uniqueModels.filter((m) => !m.startsWith("claude-"));
   log.debug({ s: "flant", total: uniqueModels.length, anthropic: anthropicModels.length, openai: openaiModels.length }, "registering flant providers");
 
+  unregisterFlantProviders(pi);
+
   pi.registerProvider("pp-flant-anthropic", {
     api: "anthropic-messages",
     baseUrl: "https://llm-api.flant.ru",

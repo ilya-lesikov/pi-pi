@@ -39,6 +39,24 @@ afterEach(() => {
 });
 
 describe("flant-infra", () => {
+  it("registerFlantProviders is idempotent across repeated calls", async () => {
+    const dir = makeTempDir();
+    const mod = await loadFlantInfraModule(dir);
+
+    const registered = new Map<string, unknown>();
+    const pi = {
+      registerProvider: vi.fn((name: string, config: unknown) => registered.set(name, config)),
+      unregisterProvider: vi.fn((name: string) => registered.delete(name)),
+    } as any;
+
+    const models = ["claude-opus-4-6", "gpt-5"];
+    mod.registerFlantProviders(pi, models, {});
+    mod.registerFlantProviders(pi, models, {});
+
+    expect(registered.size).toBe(2);
+    expect([...registered.keys()].sort()).toEqual(["pp-flant-anthropic", "pp-flant-openai"]);
+  });
+
   it("generateDisplayName formats model ids", async () => {
     const dir = makeTempDir();
     const mod = await loadFlantInfraModule(dir);
