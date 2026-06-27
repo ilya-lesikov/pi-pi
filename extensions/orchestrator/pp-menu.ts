@@ -2444,6 +2444,7 @@ async function showGeneralSettings(orchestrator: Orchestrator, ctx: any): Promis
       opt(`Commit automatically: ${orchestrator.config.general.autoCommit ? "Yes" : "No"}`, "Enable or disable auto commits"),
       opt(`Ignore configs from other repos: ${orchestrator.config.general.loadExtraRepoConfigs ? "No" : "Yes"}`, "Load only root repo config"),
       opt(`Log level: ${logLevelLabel(orchestrator.config.general.logLevel)}`, "Logging verbosity"),
+      opt(`Tracing: ${orchestrator.config.general.tracing ? "Yes" : "No"}`, "Capture full session traces to .pp/logs/traces/"),
       opt("Flant AI Infrastructure", "Configure corporate AI model provider"),
       opt("Back", "Return to the previous menu"),
     ]);
@@ -2458,6 +2459,10 @@ async function showGeneralSettings(orchestrator: Orchestrator, ctx: any): Promis
     }
     if (choice.startsWith("Log level:")) {
       await showLogLevelSetting(orchestrator, ctx);
+      continue;
+    }
+    if (choice.startsWith("Tracing:")) {
+      await showBooleanSetting(orchestrator, ctx, "Tracing", ["general", "tracing"]);
       continue;
     }
     await showFlantInfraMenu(orchestrator, ctx);
