@@ -2237,6 +2237,21 @@ describe("modified file tracking", () => {
     expect(orchestrator.active!.modifiedFiles.has(join(cwd, "src", "b.ts"))).toBe(true);
   });
 
+  it("source write clears reviewApprovedClean so post-approval edits get re-reviewed", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "Stale flag");
+    await moveTaskToImplementPhase(pi, orchestrator, ctx, "call-stale-brainstorm", "call-stale-plan");
+    orchestrator.active!.state.reviewApprovedClean = true;
+
+    const toolResult = pi._handlers.get("tool_result")!;
+    await toolResult({ toolName: "write", input: { path: "src/c.ts" }, isError: false, content: [] }, {});
+
+    expect(orchestrator.active!.state.reviewApprovedClean).toBe(false);
+  });
+
   it("tool_result ignores writes inside .pp directory", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);

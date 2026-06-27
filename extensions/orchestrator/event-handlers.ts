@@ -824,9 +824,11 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
         let justFinalizedReviewCycle = false;
         if (orchestrator.active.state.reviewCycle?.step === "apply_feedback") {
           const completedRound = orchestrator.active.state.reviewCycle.pass;
+          const completedPreset = normalizeStoredReviewPresetName(orchestrator, phase);
+          const enabledReviewerCount = Object.values(resolveReviewers(orchestrator, phase, completedPreset)).filter((v) => isEnabled(v)).length;
           finalizeReviewCycleAutonomous(orchestrator.active);
           justFinalizedReviewCycle = true;
-          if (reviewPassUnanimousApprove(orchestrator.active.dir, phase, completedRound)) {
+          if (reviewPassUnanimousApprove(orchestrator.active.dir, phase, completedRound, enabledReviewerCount)) {
             orchestrator.active.state.reviewApprovedClean = true;
             saveTask(orchestrator.active.dir, orchestrator.active.state);
           }
@@ -1838,6 +1840,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
 
       orchestrator.active.modifiedFiles.add(resolvedWrite);
       orchestrator.active.state.modifiedFiles = [...orchestrator.active.modifiedFiles];
+      orchestrator.active.state.reviewApprovedClean = false;
       try { saveTask(orchestrator.active.dir, orchestrator.active.state); } catch {}
 
       const repos = orchestrator.active.state.repos ?? [];
