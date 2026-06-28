@@ -3282,7 +3282,8 @@ export async function showActiveTaskMenu(
     if (effectiveMode === "autonomous") {
       const autoChoice = await selectOption(ctx, `/pp\n\nTask: ${task.type}\nPhase: ${phase}${summary !== "/pp" ? `\n\n${summary}` : ""}`, [
         opt("Switch to Guided", "Return to gated phase transitions"),
-        opt("Stop task", "Suspend task to resume later"),
+        opt("Complete task", "Mark task as done and clean up"),
+        opt("Pause task", "Suspend task to resume later"),
         opt("Info", "Subagents, usage, and task status"),
         opt("Settings", "Flant AI and other configuration"),
         opt("Back", "Return to the prompt and keep working"),
@@ -3300,6 +3301,10 @@ export async function showActiveTaskMenu(
         task.state.effectiveMode = "guided";
         saveTask(task.dir, task.state);
         continue;
+      }
+      if (autoChoice === "Complete task") {
+        const text = await finishTask(orchestrator, ctx);
+        return mode === "tool" ? text : "";
       }
       const text = await pauseTask(orchestrator, ctx);
       return mode === "tool" ? text : "";

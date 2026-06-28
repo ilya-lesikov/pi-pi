@@ -3417,7 +3417,7 @@ describe("menu contracts", () => {
     menu.expect({
       question: m.taskMenu("implement", "brainstorm"),
       options: {
-        exact: ["Switch to Guided", "Stop task", "Info", "Settings", "Back"],
+        exact: ["Switch to Guided", "Complete task", "Pause task", "Info", "Settings", "Back"],
       },
       choose: "Back",
     });
