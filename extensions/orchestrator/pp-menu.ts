@@ -2608,27 +2608,18 @@ async function showTaskModePicker(ctx: any): Promise<TaskMode | "back"> {
 }
 
 async function pickMaxReviewPasses(ctx: any, current: number): Promise<number | null> {
-  const currentLabel = current >= 999 ? "No limit" : String(current);
+  const currentLabel = current >= 999 ? "-" : String(current);
   while (true) {
-    const choice = await selectOption(ctx, `Max review passes (${currentLabel})`, [
-      opt("1", "Single pass"),
-      opt("3", "Default"),
-      opt("5", "Extended"),
-      opt("No limit", "Allow as many passes as needed"),
-      opt("Custom...", "Enter a custom positive integer"),
-      opt("Back", "Return to the previous menu"),
-    ]);
-    if (!choice || choice === "Back") return null;
-    if (choice === "1") return 1;
-    if (choice === "3") return 3;
-    if (choice === "5") return 5;
-    if (choice === "No limit") return 999;
-
-    const input = await ctx.ui.input("Enter max review passes (positive integer)");
-    if (input === undefined || input === null) continue;
-    const parsed = Number.parseInt(String(input).trim(), 10);
+    const input = await ctx.ui.input(
+      `Max review passes (enter a positive integer, or "-" for unlimited) [${currentLabel}]`,
+    );
+    if (input === undefined || input === null) return null;
+    const trimmed = String(input).trim();
+    if (trimmed === "") return null;
+    if (trimmed === "-") return 999;
+    const parsed = Number.parseInt(trimmed, 10);
     if (!Number.isFinite(parsed) || parsed <= 0) {
-      ctx.ui.notify("Please enter a positive integer.", "warning");
+      ctx.ui.notify('Please enter a positive integer, or "-" for unlimited.', "warning");
       continue;
     }
     return parsed;
