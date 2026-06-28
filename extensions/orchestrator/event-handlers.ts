@@ -181,13 +181,20 @@ function tryCompleteReviewCycle(orchestrator: Orchestrator): void {
   const pi = orchestrator.pi;
 
   orchestrator.reviewTransitionToken = orchestrator.activeTaskToken;
+
+  if (outputs.length === 0) {
+    orchestrator.active.state.reviewCycle = null;
+    orchestrator.active.state.step = "llm_work";
+    saveTask(orchestrator.active.dir, orchestrator.active.state);
+    orchestrator.safeSendUserMessage("[PI-PI] No reviewer outputs were produced — nothing to review. Continue working.");
+    return;
+  }
+
   cycle.step = "apply_feedback";
   orchestrator.active.state.step = "apply_feedback";
   saveTask(orchestrator.active.dir, orchestrator.active.state);
 
-  const rendered = outputs.length
-    ? outputs.map((o) => `=== ${o.name} ===\n${o.content}`).join("\n\n")
-    : "No reviewer outputs found. Review the implementation yourself and decide whether to approve or request changes.";
+  const rendered = outputs.map((o) => `=== ${o.name} ===\n${o.content}`).join("\n\n");
 
   pi.sendMessage(
     {
@@ -197,7 +204,14 @@ function tryCompleteReviewCycle(orchestrator: Orchestrator): void {
     },
     { deliverAs: "followUp" },
   );
-  orchestrator.safeSendUserMessage("[PI-PI] Review cycle is ready for apply_feedback. Read reviewer outputs and proceed.");
+  orchestrator.safeSendUserMessage(reviewReadyMessage(phase));
+}
+
+function reviewReadyMessage(phase: string): string {
+  if (phase === "brainstorm") {
+    return "[PI-PI] Review cycle is ready for apply_feedback. The reviewers assessed your artifacts (USER_REQUEST.md, RESEARCH.md, and artifacts/), not a code diff. Read their outputs and update those artifacts as needed.";
+  }
+  return "[PI-PI] Review cycle is ready for apply_feedback. Read reviewer outputs and proceed.";
 }
 
 export async function enterReviewCycle(
@@ -334,6 +348,7 @@ export async function enterReviewCycle(
 export async function stopTask(orchestrator: Orchestrator): Promise<string> {
   if (!orchestrator.active) return "No active task.";
   orchestrator.abortAllSubagents();
+  orchestrator.active.state.reviewCycle = null;
   saveTask(orchestrator.active.dir, orchestrator.active.state);
   const desc = orchestrator.active.description;
   const type = orchestrator.active.type;
@@ -2076,6 +2091,14 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
               if (orchestrator.reviewTransitionToken === orchestrator.activeTaskToken) return;
               orchestrator.reviewTransitionToken = orchestrator.activeTaskToken;
 
+              if (outputs.length === 0) {
+                orchestrator.active.state.reviewCycle = null;
+                orchestrator.active.state.step = "llm_work";
+                saveTask(orchestrator.active.dir, orchestrator.active.state);
+                orchestrator.safeSendUserMessage("[PI-PI] No reviewer outputs were produced — nothing to review. Continue working.");
+                return;
+              }
+
               cycle.step = "apply_feedback";
               orchestrator.active.state.step = "apply_feedback";
               saveTask(orchestrator.active.dir, orchestrator.active.state);
@@ -2084,7 +2107,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
                 { customType: "pp-review-ready", content: `[PI-PI] Reviewer outputs are ready.\n\n${rendered}`, display: false },
                 { deliverAs: "followUp" },
               );
-              orchestrator.safeSendUserMessage("[PI-PI] Review cycle is ready for apply_feedback. Read reviewer outputs and proceed.");
+              orchestrator.safeSendUserMessage(reviewReadyMessage(phase));
             }
           } else {
             clearInterval(orchestrator.awaitPollTimer!);
@@ -2100,8 +2123,9 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     }
 
     const skipPhaseCompleteReminder =
-      (orchestrator.active.type === "brainstorm" && phase === "brainstorm") ||
-      (orchestrator.active.type === "review" && phase === "review");
+      phase === "brainstorm" ||
+      (orchestrator.active.type === "review" && phase === "review") ||
+      orchestrator.active.state.step === "apply_feedback";
 
     const contentParts = Array.isArray(msg?.content) ? msg.content : [];
     const hasText = contentParts.some((c: any) => c.type === "text" && c.text?.trim());

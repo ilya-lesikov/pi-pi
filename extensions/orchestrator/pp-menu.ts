@@ -246,6 +246,7 @@ async function pauseTask(orchestrator: Orchestrator, ctx: any): Promise<string> 
   const name = orchestrator.active.description;
   const type = orchestrator.active.type;
 
+  orchestrator.active.state.reviewCycle = null;
   saveTask(orchestrator.active.dir, orchestrator.active.state);
   unregisterAgentDefinitions(orchestrator.pi);
   await orchestrator.cleanupActive();
@@ -286,6 +287,7 @@ async function finishTask(orchestrator: Orchestrator, ctx: any): Promise<string>
   orchestrator.taskDoneCompactionSummary = `Task "${name}" (${type}) completed.`;
 
   orchestrator.active.state.phase = "done";
+  orchestrator.active.state.reviewCycle = null;
   saveTask(orchestrator.active.dir, orchestrator.active.state);
   unregisterAgentDefinitions(orchestrator.pi);
   await orchestrator.cleanupActive();
@@ -548,7 +550,12 @@ export async function resumeTask(
 
     if (cycle.kind === "auto" && (cycle.step === "spawn_reviewers" || cycle.step === "await_reviewers")) {
       const outputs = loadPhaseReviewOutputs(orchestrator.active.dir, phase, cycle.pass);
-      if (outputs.length >= reviewerCount) {
+      if (reviewerCount === 0 || (outputs.length >= reviewerCount && outputs.length === 0)) {
+        orchestrator.active.state.reviewCycle = null;
+        orchestrator.active.state.step = "llm_work";
+        saveTask(orchestrator.active.dir, orchestrator.active.state);
+        orchestrator.safeSendUserMessage("[PI-PI] No reviewers configured — nothing to review. Continue working.");
+      } else if (outputs.length >= reviewerCount) {
         cycle.step = "apply_feedback";
         orchestrator.active.state.step = "apply_feedback";
         saveTask(orchestrator.active.dir, orchestrator.active.state);
