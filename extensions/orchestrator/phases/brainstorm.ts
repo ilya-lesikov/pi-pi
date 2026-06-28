@@ -71,6 +71,7 @@ export function brainstormSystemPrompt(taskType: TaskType, taskDescription: stri
       "Each artifact must start with # <Title>. Content is freeform. These are reviewed alongside USER_REQUEST.md and RESEARCH.md.",
       "Do NOT duplicate content already in RESEARCH.md — artifacts are for supplementary deep dives.",
       "",
+      "Keep USER_REQUEST.md current: update it whenever the user's request changes or clarifies, so it never goes stale.",
       "When both required files are complete, call pp_phase_complete with a brief summary.",
     ].join("\n");
   }
@@ -112,6 +113,7 @@ export function brainstormSystemPrompt(taskType: TaskType, taskDescription: stri
       `- ${taskDir}/RESEARCH.md — MUST use structure: ## Affected Code, ## Architecture Context, ## Constraints & Edge Cases, ## Open Questions (optional)`,
       "These files are validated. Missing or unexpected sections will be rejected.",
       "Do NOT create these files preemptively. Only write them when there's substance to capture.",
+      "Once USER_REQUEST.md exists, keep it current: update it whenever the user's request changes or clarifies, so it never goes stale.",
       "",
       "# Optional: focused analysis artifacts",
       `You may also write additional analysis files to ${taskDir}/artifacts/<name>.md`,
@@ -152,6 +154,7 @@ export function brainstormSystemPrompt(taskType: TaskType, taskDescription: stri
     "   - ast_search: find structural patterns across the codebase",
     "4. Ask the user follow-up questions as needed",
     "5. Write findings into RESEARCH.md as results come back — don't wait for all subagents",
+    "6. Keep USER_REQUEST.md current: update it whenever the user's request changes or clarifies, so it reflects what the user actually wants — don't write it once and leave it stale",
     "",
     "Produce two files:",
     `- ${taskDir}/USER_REQUEST.md — MUST follow this exact structure:`,
