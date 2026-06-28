@@ -728,7 +728,9 @@ function registerCommitTool(orchestrator: Orchestrator): void {
     description:
       "Commit modified files with a descriptive message. Call after completing a logical " +
       "unit of work (e.g. implementing one plan item, fixing a bug, adding a test). " +
-      "The message should describe WHAT changed and WHY, not list files.",
+      "The message should describe WHAT changed and WHY, not list files. " +
+      "Prefix the message with a conventional-commit type (fix:, feat:, or chore:) " +
+      "unless the user asked for a different commit style.",
     parameters: Type.Object({
       message: Type.String({ description: "Commit message describing the change (max 72 chars for first line)" }),
       repo: Type.Optional(Type.String({ description: "Absolute path to the repo to commit in. Defaults to root." })),
@@ -1971,7 +1973,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       pi.sendMessage(
         {
           customType: "pp-commit-reminder",
-          content: `You have ${orchestrator.active.modifiedFiles.size} uncommitted file(s). If you've completed a logical unit of work, call pp_commit with a descriptive message.`,
+          content: `You have ${orchestrator.active.modifiedFiles.size} uncommitted file(s). If you've completed a logical unit of work, call pp_commit with a descriptive message. Prefix it with a conventional-commit type (fix:, feat:, or chore:) unless the user asked for a different commit style.`,
           display: false,
         },
         { deliverAs: "steer" },
