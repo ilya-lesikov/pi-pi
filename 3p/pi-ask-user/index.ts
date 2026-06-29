@@ -1044,7 +1044,7 @@ class AskComponent extends Container {
 
    constructor(
       question: string,
-      context: string | undefined,
+      _context: string | undefined,
       options: QuestionOption[],
       allowMultiple: boolean,
       allowFreeform: boolean,
