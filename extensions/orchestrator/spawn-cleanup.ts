@@ -8,7 +8,7 @@ type SpawnCleanupOptions = {
   logScope: string;
   logMessage: string;
   logExtra?: Record<string, unknown>;
-  onSettled?: () => void;
+  onSettled?: (result?: SpawnResult) => void;
 };
 
 // Centralizes the cleanup that runs after a planner/reviewer spawn promise
@@ -25,7 +25,7 @@ export function handleSpawnResult(
     .then((result) => {
       orchestrator[field] = result.failedVariants;
       orchestrator.pendingSubagentSpawns = 0;
-      opts.onSettled?.();
+      opts.onSettled?.(result);
     })
     .catch((err: any) => {
       orchestrator.pendingSubagentSpawns = 0;

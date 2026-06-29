@@ -566,7 +566,7 @@ describe("review cycle lifecycle", () => {
     const finalState = loadTask(taskDir);
     expect(finalState.phase).toBe("done");
     expect(finalState.reviewPass).toBe(0);
-    expect(finalState.reviewCycle).not.toBeNull();
+    expect(finalState.reviewCycle).toBeNull();
   });
 
   it("review cycle completes even when all reviewers fail", async () => {
@@ -1275,7 +1275,7 @@ describe("edge cases and regressions", () => {
 
     const finalState = loadTask(taskDir);
     expect(finalState.reviewPass).toBe(1);
-    expect(finalState.reviewCycle).not.toBeNull();
+    expect(finalState.reviewCycle).toBeNull();
   });
 
   it("continue brainstorming sets step back to llm_work", async () => {
@@ -1582,6 +1582,8 @@ describe("task modes and quick task", () => {
         implement: { reviewPreset: "regular", maxReviewPasses: 2 },
       },
     };
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
     const plansDir = join(taskDir, "plans");
     mkdirSync(plansDir, { recursive: true });
     writeFileSync(
@@ -1620,6 +1622,8 @@ describe("task modes and quick task", () => {
     orchestrator.active!.state.autonomousConfig = {
       phases: { implement: { reviewPreset: "regular", maxReviewPasses: 3 } },
     };
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
     const plansDir = join(taskDir, "plans");
     mkdirSync(plansDir, { recursive: true });
     writeFileSync(
@@ -1692,6 +1696,8 @@ describe("task modes and quick task", () => {
     orchestrator.active!.state.autonomousConfig = {
       phases: { implement: { reviewPreset: "regular", maxReviewPasses: 3 } },
     };
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
     const plansDir = join(taskDir, "plans");
     mkdirSync(plansDir, { recursive: true });
     writeFileSync(
@@ -2022,6 +2028,8 @@ describe("task modes and quick task", () => {
         implement: { reviewPreset: "regular", maxReviewPasses: 2 },
       },
     };
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
     mkdirSync(join(taskDir, "plans"), { recursive: true });
     writeFileSync(
       join(taskDir, "plans", "1_synthesized.md"),
@@ -2719,6 +2727,34 @@ describe("brainstorm and plan review cycles", () => {
     expect(orchestrator.active!.state.reviewPass).toBe(1);
   });
 
+  it("brainstorm review-ready message names the artifacts under review, not a code diff", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx({ cwd });
+
+    await orchestrator.startTask(ctx as any, "implement", "brainstorm review message");
+    const taskDir = orchestrator.active!.dir;
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+    mkdirSync(join(taskDir, "brainstorm-reviews"), { recursive: true });
+    writeFileSync(
+      join(taskDir, "brainstorm-reviews", `${Math.floor(Date.now() / 1000)}_test_round-1.md`),
+      "Brainstorm review feedback",
+      "utf-8",
+    );
+
+    await enterReviewCycle(orchestrator, ctx, "regular");
+    await new Promise((r) => setTimeout(r, 10));
+
+    const readyMessages = (pi.sendUserMessage as any).mock.calls
+      .map((c: any[]) => c[0] as string)
+      .filter((text: string) => text.includes("ready for apply_feedback"));
+    expect(readyMessages.length).toBeGreaterThan(0);
+    expect(readyMessages[readyMessages.length - 1]).toContain("USER_REQUEST.md");
+    expect(readyMessages[readyMessages.length - 1]).toContain("RESEARCH.md");
+    expect(readyMessages[readyMessages.length - 1]).toContain("artifacts/");
+  });
+
   it("plan review cycle reaches apply_feedback and finalizeReviewCycle returns to user_gate", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);
@@ -2765,22 +2801,14 @@ describe("brainstorm and plan review cycles", () => {
     expect(orchestrator.active!.state.reviewPass).toBe(1);
   });
 
-  it("review cycle with zero outputs completes and delivers no-outputs message", async () => {
+  it("brainstorm review with no artifacts spawns nothing and clears the cycle", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);
     const ctx = makeCtx({ cwd });
 
-    await orchestrator.startTask(ctx as any, "implement", "review zero outputs");
+    await orchestrator.startTask(ctx as any, "implement", "review no artifacts");
     const taskDir = orchestrator.active!.dir;
-    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
-    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
-    mkdirSync(join(taskDir, "plans"), { recursive: true });
-    writeFileSync(
-      join(taskDir, "plans", `${Math.floor(Date.now() / 1000)}_synthesized.md`),
-      makeValidPlan(["- [x] P1. Plan ready — Done when: synthesized plan exists"]),
-      "utf-8",
-    );
-    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.phase = "brainstorm";
     orchestrator.active!.state.step = "llm_work";
     saveTask(taskDir, orchestrator.active!.state);
 
@@ -2788,13 +2816,10 @@ describe("brainstorm and plan review cycles", () => {
     await new Promise((r) => setTimeout(r, 10));
 
     expect(message).toContain("Started review cycle pass 1");
-    expect(orchestrator.active!.state.reviewCycle?.step).toBe("apply_feedback");
-    expect(orchestrator.active!.state.step).toBe("apply_feedback");
-    expect(pi.sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        customType: "pp-review-ready",
-        content: expect.stringContaining("No reviewer outputs found"),
-      }),
+    expect(orchestrator.active!.state.reviewCycle).toBeNull();
+    expect(orchestrator.active!.state.step).toBe("llm_work");
+    expect(pi.sendMessage).not.toHaveBeenCalledWith(
+      expect.objectContaining({ customType: "pp-review-ready" }),
       { deliverAs: "followUp" },
     );
   });
@@ -3424,6 +3449,104 @@ describe("menu contracts", () => {
 
     const pp = getCommand(pi, "pp");
     await pp(undefined, ctx);
+  });
+
+  it("autonomous menu 'Complete task' completes the task", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "contract complete", undefined, undefined, "autonomous");
+    const taskDir = orchestrator.active!.dir;
+
+    menu.expect({
+      question: m.taskMenu("implement", "brainstorm"),
+      options: { include: ["Complete task"] },
+      choose: "Complete task",
+    });
+
+    const pp = getCommand(pi, "pp");
+    await pp(undefined, ctx);
+
+    expect(orchestrator.active).toBeNull();
+    expect(loadTask(taskDir).phase).toBe("done");
+  });
+
+  it("autonomous menu 'Pause task' pauses without completing", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "contract pause", undefined, undefined, "autonomous");
+    const taskDir = orchestrator.active!.dir;
+
+    menu.expect({
+      question: m.taskMenu("implement", "brainstorm"),
+      options: { include: ["Pause task"] },
+      choose: "Pause task",
+    });
+
+    const pp = getCommand(pi, "pp");
+    await pp(undefined, ctx);
+
+    expect(orchestrator.active).toBeNull();
+    expect(loadTask(taskDir).phase).not.toBe("done");
+  });
+
+  it("completing a task mid-review clears reviewCycle without incrementing reviewPass", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "complete mid review", undefined, undefined, "autonomous");
+    const taskDir = orchestrator.active!.dir;
+    orchestrator.active!.state.reviewCycle = { kind: "auto", step: "apply_feedback", pass: 1 };
+    orchestrator.active!.state.step = "apply_feedback";
+    orchestrator.active!.state.reviewPass = 0;
+    orchestrator.active!.state.reviewPassByKind = {};
+    saveTask(taskDir, orchestrator.active!.state);
+
+    menu.expect({
+      question: m.taskMenu("implement", "brainstorm"),
+      options: { include: ["Complete task"] },
+      choose: "Complete task",
+    });
+
+    const pp = getCommand(pi, "pp");
+    await pp(undefined, ctx);
+
+    const finalState = loadTask(taskDir);
+    expect(finalState.reviewCycle).toBeNull();
+    expect(finalState.reviewPass).toBe(0);
+    expect(finalState.reviewPassByKind?.implement?.auto ?? 0).toBe(0);
+  });
+
+  it("pausing a task mid-review clears reviewCycle without incrementing reviewPass", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "pause mid review", undefined, undefined, "autonomous");
+    const taskDir = orchestrator.active!.dir;
+    orchestrator.active!.state.reviewCycle = { kind: "auto", step: "apply_feedback", pass: 1 };
+    orchestrator.active!.state.step = "apply_feedback";
+    orchestrator.active!.state.reviewPass = 0;
+    orchestrator.active!.state.reviewPassByKind = {};
+    saveTask(taskDir, orchestrator.active!.state);
+
+    menu.expect({
+      question: m.taskMenu("implement", "brainstorm"),
+      options: { include: ["Pause task"] },
+      choose: "Pause task",
+    });
+
+    const pp = getCommand(pi, "pp");
+    await pp(undefined, ctx);
+
+    const finalState = loadTask(taskDir);
+    expect(finalState.reviewCycle).toBeNull();
+    expect(finalState.reviewPass).toBe(0);
+    expect(finalState.reviewPassByKind?.implement?.auto ?? 0).toBe(0);
   });
 
   it("quick task menu has exact options", async () => {

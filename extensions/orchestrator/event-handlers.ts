@@ -165,7 +165,7 @@ function normalizeStoredReviewPresetName(orchestrator: Orchestrator, phase: stri
   return resolvedName;
 }
 
-function tryCompleteReviewCycle(orchestrator: Orchestrator): void {
+function tryCompleteReviewCycle(orchestrator: Orchestrator, spawnedReviewers?: number): void {
   if (
     !orchestrator.active?.state.reviewCycle ||
     orchestrator.active.state.reviewCycle.step !== "await_reviewers" ||
@@ -182,7 +182,7 @@ function tryCompleteReviewCycle(orchestrator: Orchestrator): void {
 
   orchestrator.reviewTransitionToken = orchestrator.activeTaskToken;
 
-  if (outputs.length === 0) {
+  if (spawnedReviewers === 0 && outputs.length === 0) {
     orchestrator.active.state.reviewCycle = null;
     orchestrator.active.state.step = "llm_work";
     saveTask(orchestrator.active.dir, orchestrator.active.state);
@@ -336,7 +336,7 @@ export async function enterReviewCycle(
     logScope: "review",
     logMessage: "spawn reviewers failed",
     logExtra: { phase },
-    onSettled: () => tryCompleteReviewCycle(orchestrator),
+    onSettled: (result) => tryCompleteReviewCycle(orchestrator, result?.spawned),
   });
 
   orchestrator.active.state.reviewCycle.step = "await_reviewers";
