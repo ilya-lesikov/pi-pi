@@ -5,7 +5,7 @@ import { validateUserRequest, validateResearch, validateArtifact } from "./valid
 import { Type } from "@sinclair/typebox";
 import { loadConfig, resolvePreset } from "./config.js";
 import { runAfterEdit, autoCommit, loadRepoAfterEditCommands } from "./commands.js";
-import { taskName, getActiveTask, getEffectiveMode, saveTask, type Phase, type TaskMode } from "./state.js";
+import { taskName, getActiveTask, getEffectiveMode, getEffectivePhaseMode, saveTask, type Phase, type TaskMode } from "./state.js";
 import { getLogger, initSessionLogger, addTaskDestination, setLogLevel, flushLogs } from "./log.js";
 import { initTracer, finalizeTracer, getTracer } from "./tracer.js";
 import { handleSpawnResult } from "./spawn-cleanup.js";
@@ -858,9 +858,6 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
         const maxReviewPasses = phaseConfig?.maxReviewPasses ?? 0;
         const completedAutoPasses = orchestrator.active.state.reviewPassByKind?.[phase]?.auto ?? 0;
 
-        // A review pass that just finalized as NOT clean (actionable findings) must force
-        // the agent to apply fixes and re-review — do NOT transition the phase yet. Only a
-        // clean/unanimous-APPROVE pass (or an exhausted review budget) may fall through.
         if (
           justFinalizedReviewCycle &&
           !orchestrator.active.state.reviewApprovedClean &&
@@ -1747,21 +1744,24 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     const contextDirs = getContextDirs(orchestrator.cwd, repos, orchestrator.config.general.loadExtraRepoConfigs);
     const systemContextFiles = loadAllContextFiles(contextDirs, "main", "system", phase, modelInfo);
     const systemSnippets = systemContextFiles.map((f) => f.content).join("\n\n");
-    const effectiveMode: TaskMode = getEffectiveMode(orchestrator.active.state) ?? "guided";
+    const effectiveMode: TaskMode = getEffectivePhaseMode(orchestrator.active.state);
     const now = new Date();
     const monthYear = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 
     const projectContext = systemSnippets
       ? ["<project_context>", systemSnippets, "</project_context>"].join("\n")
       : "";
+    const checklistLine =
+      phase === "implement" ? "Keep the plan checklist current: mark each item done (- [ ] → - [x]) as you complete it." : "";
     const taskBlock = [
       "<task>",
       phasePrompt,
-      "",
-      "Keep the plan checklist current: mark each item done (- [ ] → - [x]) as you complete it.",
+      checklistLine,
       `Current month: ${monthYear}. Working directory: ${orchestrator.cwd}.`,
       "</task>",
-    ].join("\n");
+    ]
+      .filter(Boolean)
+      .join("\n");
 
     const fullPrompt = [
       constraintsBlock(phase as Phase, effectiveMode),
@@ -1781,7 +1781,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   pi.on("tool_call", async (event, _ctx) => {
     getLogger().debug({ s: "hook", hook: "tool_call", tool: event.toolName }, "tool call");
     if (event.toolName === "ask_user" && orchestrator.active) {
-      if (getEffectiveMode(orchestrator.active.state) === "autonomous") {
+      if (getEffectivePhaseMode(orchestrator.active.state) === "autonomous") {
         return { block: true, reason: "Autonomous mode — make your best judgment based on available context." };
       }
     }
@@ -2163,7 +2163,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     const hasToolResults = event.toolResults && event.toolResults.length > 0;
     const turnWasEmpty = !hasText && !hasToolCalls && !hasToolResults;
 
-    const isAutonomous = getEffectiveMode(orchestrator.active.state) === "autonomous";
+    const isAutonomous = getEffectivePhaseMode(orchestrator.active.state) === "autonomous";
 
     // Nudges fire ONLY for plan/implement. brainstorm/debug/review (and quick) are
     // interactive by nature — stopping there is normal, not a stall.

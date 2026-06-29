@@ -1913,6 +1913,61 @@ describe("task modes and quick task", () => {
     expect(prompt).toMatch(/Current month: \d{4}-\d{2}\./);
   });
 
+  it("first phase of an autonomous task stays interactive (ask_user allowed, interactive prompt)", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask({ ...ctx, cwd } as any, "implement", "implement", undefined, undefined, "autonomous");
+    // Task starts at its first phase (brainstorm) with task mode = autonomous.
+    expect(orchestrator.active!.state.phase).toBe("brainstorm");
+
+    const toolCall = pi._handlers.get("tool_call")!;
+    expect(await toolCall({ toolName: "ask_user", input: {} }, {})).toBeUndefined();
+
+    const beforeStart = pi._handlers.get("before_agent_start")!;
+    const prompt = (await beforeStart({ systemPrompt: "base" }, ctx))?.systemPrompt ?? "";
+    expect(prompt).not.toContain("There is no user driving this phase");
+
+    // Later autonomous phase (implement) is forcing and blocks ask_user.
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "llm_work";
+    expect(await toolCall({ toolName: "ask_user", input: {} }, {})).toEqual({
+      block: true,
+      reason: "Autonomous mode — make your best judgment based on available context.",
+    });
+    const implPrompt = (await beforeStart({ systemPrompt: "base" }, ctx))?.systemPrompt ?? "";
+    expect(implPrompt).toContain("There is no user driving this phase");
+  });
+
+  it("quick task completion line tells the agent to call pp_phase_complete", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask({ ...ctx, cwd } as any, "quick", "quick");
+    expect(orchestrator.active!.state.phase).toBe("quick");
+
+    const beforeStart = pi._handlers.get("before_agent_start")!;
+    const prompt = (await beforeStart({ systemPrompt: "base" }, ctx))?.systemPrompt ?? "";
+    expect(prompt).toContain("call pp_phase_complete");
+    expect(prompt).not.toContain("advance it via the /pp menu");
+  });
+
+  it("autonomous plan-phase prompt body contains no /pp guidance", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask({ ...ctx, cwd } as any, "implement", "implement", undefined, undefined, "autonomous");
+    orchestrator.active!.state.phase = "plan";
+    orchestrator.active!.state.step = "synthesize";
+
+    const beforeStart = pi._handlers.get("before_agent_start")!;
+    const prompt = (await beforeStart({ systemPrompt: "base" }, ctx))?.systemPrompt ?? "";
+    expect(prompt).not.toContain("/pp");
+  });
+
   it("persists retry bookkeeping flags in task state", async () => {
     const cwd = makeTempDir();
     const { orchestrator } = await setupOrchestrator(cwd);

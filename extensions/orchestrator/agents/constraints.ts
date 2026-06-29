@@ -20,6 +20,9 @@ export function phaseConstraint(phase: Phase): string {
 }
 
 export function completionLine(phase: Phase, mode: TaskMode): string {
+  if (phase === "quick") {
+    return "When the user's request is complete, call pp_phase_complete. Do NOT stop and wait for the user before then.";
+  }
   if (mode === "autonomous") {
     return "There is no user driving this phase. The moment its work is complete, call pp_phase_complete — do NOT pause, ask for confirmation, or wait for input. Never end a turn with prose: every turn ends in a tool call.";
   }

@@ -85,6 +85,14 @@ export function getEffectiveMode(state: TaskState): TaskMode | undefined {
   return state.effectiveMode ?? state.mode;
 }
 
+// The research first phases (brainstorm/debug/review) are always interactive: the user
+// drives them, so they never inherit the task's autonomous mode even when one is set.
+// plan/implement are autonomous-capable regardless of whether they are the task's initial phase.
+export function getEffectivePhaseMode(state: TaskState): TaskMode {
+  if (state.phase === "brainstorm" || state.phase === "debug" || state.phase === "review") return "guided";
+  return getEffectiveMode(state) ?? "guided";
+}
+
 export function createTask(cwd: string, type: TaskType, description: string, mode?: TaskMode): string {
   const log = getLogger();
   const id = crypto.randomUUID().slice(0, 12);

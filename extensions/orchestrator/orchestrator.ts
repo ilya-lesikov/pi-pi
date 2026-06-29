@@ -7,7 +7,7 @@ import {
   loadTask,
   saveTask,
   lockTask,
-  getEffectiveMode,
+  getEffectivePhaseMode,
   type TaskType,
   type TaskMode,
   type TaskState,
@@ -268,7 +268,7 @@ export class Orchestrator {
   getPhasePrompt(_ctx: ExtensionContext): string {
     if (!this.active) return "";
 
-    const mode: TaskMode = getEffectiveMode(this.active.state) ?? "guided";
+    const mode: TaskMode = getEffectivePhaseMode(this.active.state);
 
     if (this.active.state.reviewCycle?.step === "apply_feedback") {
       const pass = this.active.state.reviewCycle.pass;

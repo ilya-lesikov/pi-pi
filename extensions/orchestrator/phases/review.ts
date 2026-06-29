@@ -49,7 +49,7 @@ export function reviewSystemPrompt(taskDir: string, pass: number, phase?: string
     "",
     "You are a SYNTHESIZER: merge the reviewer outputs. Do NOT write your own code review from scratch.",
     "- Do NOT create the code-reviews/ directory yourself — the extension manages it.",
-    "- Do NOT call plannotator_submit_plan — code review is handled by the user via the /pp menu.",
+    "- Do NOT call plannotator_submit_plan.",
     "",
     "# Your job (in this order):",
     `1. Read ALL reviewer outputs from ${reviewsDir}/`,

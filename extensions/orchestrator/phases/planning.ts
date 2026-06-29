@@ -30,7 +30,7 @@ export function planningSystemPrompt(taskDir: string, mode: TaskMode): string {
     "- Do NOT create the plans/ directory yourself — the extension manages it.",
     "- Do NOT check the plans directory yourself — wait for the notification that all planners completed.",
     "- Do NOT read project source code directly — the planner outputs already contain the analysis.",
-    "- Do NOT call plannotator_submit_plan — plan review is handled by the user via the /pp menu.",
+    "- Do NOT call plannotator_submit_plan.",
     "",
     "# Your job (in this order):",
     "1. Wait for the notification that says 'All planners completed' — do NOT proceed before this",
