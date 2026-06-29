@@ -111,15 +111,35 @@ type AskResponse =
       text: string;
    };
 
+// Reason a question was cancelled. Only "user" (a deliberate top-level ESC)
+// should abort the LLM turn; "timeout" and "signal" are programmatic and must not.
+type CancelReason = "user" | "timeout" | "signal";
+
+// Sentinel returned through the UI/askUser boundary to carry a cancel reason.
+// Distinct from a plain AskResponse so callers can disambiguate cancel vs answer.
+interface AskCancel {
+   __cancel: true;
+   reason: CancelReason;
+}
+
+function makeCancel(reason: CancelReason): AskCancel {
+   return { __cancel: true, reason };
+}
+
+function isCancel(value: unknown): value is AskCancel {
+   return typeof value === "object" && value !== null && (value as AskCancel).__cancel === true;
+}
+
 interface AskToolDetails {
    question: string;
    context?: string;
    options: QuestionOption[];
    response: AskResponse | null;
    cancelled: boolean;
+   cancelReason?: CancelReason;
 }
 
-type AskUIResult = AskResponse;
+type AskUIResult = AskResponse | AskCancel;
 
 function normalizeOptions(options: AskOptionInput[]): QuestionOption[] {
    return options
@@ -1171,7 +1191,7 @@ class AskComponent extends Container {
          ? literalHint(theme, this.shortcuts.overlayToggle.spec, "hide")
          : null;
       const commentHint = this.allowComment && !this.shortcuts.commentToggle.disabled
-         ? literalHint(theme, this.shortcuts.commentToggle.spec, "toggle context")
+         ? literalHint(theme, this.shortcuts.commentToggle.spec, "add text")
          : null;
       if (this.mode === "freeform" || this.mode === "comment") {
          const alternateCancelKeys = this.keybindings
@@ -1236,7 +1256,7 @@ class AskComponent extends Container {
          this.shortcuts.commentToggle,
       );
       list.onSubmit = (result) => this.handleSelectionSubmit([result], list.isCommentEnabled());
-      list.onCancel = () => this.onDone(null);
+      list.onCancel = () => this.onDone(makeCancel("user"));
       list.onEnterFreeform = () => this.showFreeformMode();
 
       this.singleSelectList = list;
@@ -1254,7 +1274,7 @@ class AskComponent extends Container {
          this.keybindings,
          this.shortcuts.commentToggle,
       );
-      list.onCancel = () => this.onDone(null);
+      list.onCancel = () => this.onDone(makeCancel("user"));
       list.onSubmit = (result) => this.handleSelectionSubmit(result, list.isCommentEnabled());
       list.onEnterFreeform = () => this.showFreeformMode();
 
@@ -1389,7 +1409,7 @@ class AskComponent extends Container {
          }
 
          if (this.keybindings.matches(data, "tui.select.cancel")) {
-            this.onDone(null);
+            this.onDone(makeCancel("user"));
             return;
          }
 
@@ -1490,14 +1510,14 @@ export async function askUser(
       overlayToggleKey?: string | null;
       commentToggleKey?: string | null;
    },
-): Promise<AskResponse | null> {
+): Promise<AskResponse | AskCancel | null> {
    const {
       question,
       context,
       options: rawOptions = [],
       allowMultiple = false,
       allowFreeform = true,
-      allowComment = false,
+      allowComment = true,
       timeout,
       signal,
       overlay,
@@ -1544,11 +1564,11 @@ export async function askUser(
    try {
       const customFactory = (tui: TUI, theme: Theme, keybindings: KeybindingsManager, done: (result: AskUIResult | null) => void) => {
          if (signal) {
-            const onAbort = () => done(null);
+            const onAbort = () => done(makeCancel("signal"));
             signal.addEventListener("abort", onAbort, { once: true });
          }
          if (timeout && timeout > 0) {
-            setTimeout(() => done(null), timeout);
+            setTimeout(() => done(makeCancel("timeout")), timeout);
          }
          return new AskComponent(
             question,
@@ -1645,7 +1665,7 @@ export default function(pi: ExtensionAPI) {
             Type.Boolean({ description: "Add a freeform text option. Default: true" }),
          ),
          allowComment: Type.Optional(
-            Type.Boolean({ description: "Collect an optional comment after selecting one or more options. Default: false" }),
+            Type.Boolean({ description: "Collect an optional comment to append after selecting one or more options. Default: true" }),
          ),
          displayMode: Type.Optional(
             StringEnum(["overlay", "inline"] as const, {
@@ -1683,7 +1703,7 @@ export default function(pi: ExtensionAPI) {
             options: rawOptions = [],
             allowMultiple = false,
             allowFreeform = true,
-            allowComment = false,
+            allowComment = true,
             displayMode,
             overlayToggleKey,
             commentToggleKey,
@@ -1712,7 +1732,7 @@ export default function(pi: ExtensionAPI) {
             });
          }
 
-         let result: AskResponse | null;
+         let result: AskResponse | AskCancel | null;
          try {
             result = await askUser(ctx, {
                question,
@@ -1737,11 +1757,27 @@ export default function(pi: ExtensionAPI) {
             };
          }
 
-         if (result === null) {
-            pi.events.emit("ask:cancelled", { question, context: normalizedContext, options });
+         if (result === null || isCancel(result)) {
+            // Only a deliberate top-level user ESC carries reason "user"; timeout and
+            // programmatic signal aborts must NOT abort the LLM turn. A bare null
+            // (e.g. empty submit) is treated as non-user.
+            const cancelReason: CancelReason | undefined = isCancel(result) ? result.reason : undefined;
+            pi.events.emit("ask:cancelled", {
+               question,
+               context: normalizedContext,
+               options,
+               reason: cancelReason,
+            });
             return {
                content: [{ type: "text" as const, text: "User cancelled the question" }],
-               details: { question, context: normalizedContext, options, response: null, cancelled: true } as AskToolDetails,
+               details: {
+                  question,
+                  context: normalizedContext,
+                  options,
+                  response: null,
+                  cancelled: true,
+                  cancelReason,
+               } as AskToolDetails,
             };
          }
 
