@@ -19,7 +19,7 @@ import {
   loadPlanReviewOutputs,
 } from "./context.js";
 import { PRINCIPLES_BLOCK, TOOLS_BLOCK } from "./agents/tool-routing.js";
-import { constraintsBlock } from "./agents/constraints.js";
+import { constraintsBlock, phaseConstraint } from "./agents/constraints.js";
 import { registerCbmTools } from "./cbm.js";
 import { registerExaTools } from "./exa.js";
 import { registerAstSearchTool } from "./ast-search.js";
@@ -2141,11 +2141,6 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       orchestrator.awaitPollTimer = null;
     }
 
-    const skipPhaseCompleteReminder =
-      phase === "brainstorm" ||
-      (orchestrator.active.type === "review" && phase === "review") ||
-      orchestrator.active.state.step === "apply_feedback";
-
     const contentParts = Array.isArray(msg?.content) ? msg.content : [];
     const hasText = contentParts.some((c: any) => c.type === "text" && c.text?.trim());
     const hasToolCalls = contentParts.some((c: any) => c.type === "toolCall");
@@ -2154,20 +2149,26 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
 
     const isAutonomous = getEffectiveMode(orchestrator.active.state) === "autonomous";
 
+    // Nudges fire ONLY for plan/implement. brainstorm/debug/review (and quick) are
+    // interactive by nature — stopping there is normal, not a stall.
+    const nudgesEnabled = phase === "plan" || phase === "implement";
+
+    const buildNudge = () =>
+      isAutonomous
+        ? `[PI-PI] Continue the ${phase} phase. ${phaseConstraint(phase as Phase)} If the phase's objectives are met, call pp_phase_complete now; otherwise call the next tool. Do NOT apologize or reply with text only — respond with a tool call.`
+        : `[PI-PI] Continue the ${phase} phase where you left off.`;
+
     if (!turnWasEmpty) {
       const lastPart = contentParts.length > 0 ? contentParts[contentParts.length - 1] : null;
       const endsWithText = lastPart?.type === "text" && lastPart?.text?.trim();
       if (hasText && (!hasToolCalls || endsWithText)) {
         const step = orchestrator.active.state.step;
-        if (!skipPhaseCompleteReminder && step !== "await_planners" && step !== "await_reviewers") {
+        if (nudgesEnabled && step !== "await_planners" && step !== "await_reviewers") {
           const now = Date.now();
           orchestrator.textStopTimestamps.push(now);
           orchestrator.textStopTimestamps = orchestrator.textStopTimestamps.filter((t) => now - t < 5 * 60 * 1000);
           if (orchestrator.textStopTimestamps.length <= 6) {
-            const tail = isAutonomous
-              ? ` You are in AUTONOMOUS mode — do NOT wait for the user and do NOT stop. Either call pp_phase_complete now (if the ${phase} phase is done) or immediately continue with a tool call.`
-              : ` If you are done with the ${phase} phase, call pp_phase_complete now. If not, continue working.`;
-            orchestrator.safeSendUserMessage(`[PI-PI] You stopped without calling pp_phase_complete.${tail}`);
+            orchestrator.safeSendUserMessage(buildNudge());
           }
         }
       } else {
@@ -2176,6 +2177,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       return;
     }
     orchestrator.textStopTimestamps = [];
+    if (!nudgesEnabled) return;
     if (orchestrator.nudgeHalted) return;
     if (orchestrator.spawnedAgentIds.size > 0 || orchestrator.pendingSubagentSpawns > 0) return;
 
@@ -2188,10 +2190,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     orchestrator.nudgeTimestamps = orchestrator.nudgeTimestamps.filter((t) => now - t < 60000);
 
     const sendNudge = () => {
-      const tail = isAutonomous
-        ? ` You are in AUTONOMOUS mode — do NOT wait for the user. Continue with a tool call or call pp_phase_complete.`
-        : "";
-      orchestrator.safeSendUserMessage(`[PI-PI] Your previous response was interrupted. Continue working on the current phase (${phase}). Pick up where you left off.${tail}`);
+      orchestrator.safeSendUserMessage(buildNudge());
     };
 
     if (orchestrator.nudgeTimestamps.length <= 3) {
