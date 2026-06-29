@@ -1885,7 +1885,7 @@ describe("task modes and quick task", () => {
     const prompt = result?.systemPrompt ?? "";
     expect(prompt.startsWith("<constraints>")).toBe(true);
     expect(prompt).not.toContain("HARNESS_BASE_PROMPT");
-    expect(prompt).toContain("you MUST call pp_phase_complete immediately");
+    expect(prompt).toContain("The moment its work is complete, call pp_phase_complete");
     // No interactive '/pp menu' advance guidance in autonomous mode.
     expect(prompt).not.toContain("/pp menu");
     expect(prompt).not.toContain("advance it via");
@@ -1907,7 +1907,7 @@ describe("task modes and quick task", () => {
     expect(prompt).toContain("<principles>");
     expect(prompt).toContain("<tools>");
     expect(prompt).toContain("<task>");
-    expect(prompt).toContain("the user will review and advance it via the /pp menu");
+    expect(prompt).toContain("let the user review and advance it via the /pp menu");
     expect(prompt).not.toContain("HARNESS_BASE_PROMPT");
     expect(prompt).toContain(`Working directory: ${cwd}.`);
     expect(prompt).toMatch(/Current month: \d{4}-\d{2}\./);
