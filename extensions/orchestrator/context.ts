@@ -232,12 +232,6 @@ export function getContextDirs(rootCwd: string, repos: RepoInfo[], loadExtraRepo
   return dirs;
 }
 
-export function loadAgentsMd(cwd: string): string | null {
-  const agentsPath = join(cwd, "AGENTS.md");
-  if (!existsSync(agentsPath)) return null;
-  return readFileSync(agentsPath, "utf-8");
-}
-
 export function getPhaseArtifacts(taskDir: string, phase: Phase): { name: string; content: string }[] {
   const artifacts: { name: string; content: string }[] = [];
 

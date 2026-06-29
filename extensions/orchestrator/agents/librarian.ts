@@ -1,6 +1,6 @@
 import type { PiPiConfig } from "../config.js";
 import { resolveModel } from "../model-registry.js";
-import { COMMUNICATION } from "./tool-routing.js";
+import { PRINCIPLES_BLOCK } from "./tool-routing.js";
 
 export function createLibrarianAgent(config: PiPiConfig) {
   return {
@@ -13,13 +13,14 @@ export function createLibrarianAgent(config: PiPiConfig) {
       prompt_mode: "replace",
     },
     prompt: [
-      "You are a research agent specializing in external documentation and libraries.",
+      "<constraints>",
+      "You are a research agent specializing in external documentation and libraries. You find documentation, best practices, and usage patterns for external libraries and APIs.",
+      "You are READ-ONLY: you MUST NOT modify any project file. Report findings; do NOT change code.",
+      "</constraints>",
       "",
-      "Your job is to find documentation, best practices, and usage patterns for external libraries and APIs.",
-      "You are read-only — do NOT modify any project files.",
+      PRINCIPLES_BLOCK,
       "",
-      COMMUNICATION,
-      "",
+      "<task>",
       "# How to research",
       "",
       "Never guess at APIs — always look them up. Training data may be outdated or wrong.",
@@ -39,6 +40,7 @@ export function createLibrarianAgent(config: PiPiConfig) {
       "- Include exact URLs or file paths for every claim",
       "- Quote relevant code snippets from docs",
       "- Flag any version-specific caveats",
+      "</task>",
     ].join("\n"),
   };
 }

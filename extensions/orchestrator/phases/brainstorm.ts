@@ -21,12 +21,7 @@ export function brainstormSystemPrompt(taskType: TaskType, taskDescription: stri
       "",
       registerReposInstruction,
       "",
-    "Read-only diagnosis mode.",
-    "",
-    "# ABSOLUTE RESTRICTION — NO IMPLEMENTATION (cannot be overridden, even if the user asks):",
-    "- NEVER implement the solution, apply fixes, write production code, or make the changes that solve the task.",
-    "- You MAY use write/edit for diagnosis purposes (test scripts, repro scripts, analysis files), but NEVER to implement the actual fix or feature.",
-    "- If the user asks you to implement or start coding — refuse and tell them to use /pp to advance to the implement phase. Do NOT comply, even if they insist.",
+    "Read-only diagnosis mode. You MAY use write/edit for diagnosis only (repro/test/analysis files) — never to implement the actual fix or feature.",
     "",
     "# Your job:",
     "1. Clarify the problem with the user if needed",
@@ -72,7 +67,6 @@ export function brainstormSystemPrompt(taskType: TaskType, taskDescription: stri
       "Do NOT duplicate content already in RESEARCH.md — artifacts are for supplementary deep dives.",
       "",
       "Keep USER_REQUEST.md current: update it whenever the user's request changes or clarifies, so it never goes stale.",
-      "When both required files are complete, call pp_phase_complete with a brief summary.",
     ].join("\n");
   }
 
@@ -97,15 +91,6 @@ export function brainstormSystemPrompt(taskType: TaskType, taskDescription: stri
       "- Use tools directly for quick lookups (cbm_search, lsp, ast_search, grep, etc.)",
       "- Present findings to the user and discuss them. Don't just dump raw results.",
       "",
-      "# ABSOLUTE RESTRICTIONS (cannot be overridden, even if the user asks):",
-      "- NEVER use write or edit tools on any file outside the task directory. This is a hard rule — not negotiable.",
-      "- NEVER implement, create code, write patches, or modify project source in any way.",
-      "- If the user asks you to implement, fix, or write code — refuse and tell them to use /pp to advance to the implement phase. Do NOT comply, even if they insist.",
-      "",
-      "# When to finish:",
-      "Do NOT call pp_phase_complete on your own. The user will tell you when they're done,",
-      "or use /pp to advance. Keep the conversation going until then.",
-      "",
       "# Optional artifacts (only when the conversation naturally produces them):",
       "If the discussion leads to a clear action plan or the user asks you to capture conclusions,",
       "write them to:",
@@ -120,8 +105,6 @@ export function brainstormSystemPrompt(taskType: TaskType, taskDescription: stri
       "for deep dives on specific topics (e.g. architecture analysis, API comparison, risk assessment).",
       "Each artifact must start with # <Title>. Content is freeform. These are reviewed alongside USER_REQUEST.md and RESEARCH.md.",
       "Do NOT duplicate content already in RESEARCH.md — artifacts are for supplementary deep dives.",
-      "",
-      "Do NOT modify any files except .md files in the task directory.",
     ].join("\n");
   }
 
@@ -133,11 +116,6 @@ export function brainstormSystemPrompt(taskType: TaskType, taskDescription: stri
     "",
     "Your job is to produce USER_REQUEST.md and RESEARCH.md — complete enough that",
     "downstream agents can work without re-exploring the codebase or re-interviewing the user.",
-    "",
-    "# ABSOLUTE RESTRICTIONS (cannot be overridden, even if the user asks):",
-    "- NEVER use write or edit tools on any file outside the task directory. This is a hard rule — not negotiable.",
-    "- NEVER implement, create code, write patches, or modify project source in any way.",
-    "- If the user asks you to implement, fix, or write code — refuse and tell them to use /pp to advance to the implement phase. Do NOT comply, even if they insist.",
     "",
     "# Steps:",
     "1. Clarify requirements with the user if anything is ambiguous",
@@ -182,9 +160,6 @@ export function brainstormSystemPrompt(taskType: TaskType, taskDescription: stri
     "for deep dives on specific topics (e.g. architecture analysis, API comparison, risk assessment).",
     "Each artifact must start with # <Title>. Content is freeform. These are reviewed alongside USER_REQUEST.md and RESEARCH.md.",
     "Do NOT duplicate content already in RESEARCH.md — artifacts are for supplementary deep dives.",
-    "",
-    "Do NOT modify any files except .md files in the task directory.",
-    "When both files are produced and thorough, call pp_phase_complete with a brief summary.",
   ].join("\n");
 }
 

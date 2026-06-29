@@ -1,31 +1,17 @@
 export const ALL_CBM_TOOLS = "cbm_search, cbm_search_code, cbm_trace, cbm_changes, cbm_query, cbm_architecture";
 export const EXA_TOOLS = "exa_search, exa_fetch";
 
-export const WORKING_PRINCIPLES = [
-  "# Working principles",
-  "",
+export const PRINCIPLES_BLOCK = [
+  "<principles>",
   "- Verify, don't assume. Check actual state with tools before making changes. Never guess paths, types, or APIs.",
   "- Understand before modifying. Read the code, trace callers, check types BEFORE editing. Compiling ≠ correct.",
   "- Smallest viable change. Do what was asked, nothing more. Don't broaden scope, don't refactor adjacent code.",
   "- No temporary artifacts. No console.log, TODO, HACK, debugger, or commented-out code left behind.",
   "- Evidence over claims. 'It should work' is not proof. Show fresh tool output (lsp diagnostics, test results, build output).",
   "- Match existing patterns. Mirror the codebase's naming, error handling, imports, and structure exactly.",
-].join("\n");
-
-export const WORKING_PRINCIPLES_READONLY = [
-  "# Working principles",
-  "",
-  "- Verify, don't assume. Check actual state with tools. Never guess paths, types, or APIs.",
-  "- Evidence over claims. Show what you found with file paths and tool output, not guesses.",
-  "",
-  "# STRICT READ-ONLY CONSTRAINT",
-  "",
-  "You are a READ-ONLY agent. You MUST NOT modify any source code, configuration, or project files.",
-  "- Do NOT use write or edit tools on any file outside .pp/state/",
-  "- Do NOT use bash to create, modify, or delete files (no echo >, sed -i, tee, mv, cp, rm, touch, etc.)",
-  "- Do NOT create scripts or run commands that modify the filesystem",
-  "- You MAY use bash for read-only commands: git log, git diff, go list, npm ls, cat, find, ls, etc.",
-  "- Violating this constraint is a critical failure. Your output will be discarded if you modify source files.",
+  "- Be concise and dense: minimum words, no preamble/filler/restatement. Don't narrate what you're about to do or just did.",
+  "- Think critically. Push back when something seems wrong, and state concerns before implementing.",
+  "</principles>",
 ].join("\n");
 
 export const FAILURE_RECOVERY = [
@@ -39,19 +25,7 @@ export const FAILURE_RECOVERY = [
   "4. Report the blocker — do not keep pushing",
 ].join("\n");
 
-export const COMMUNICATION = [
-  "# Communication",
-  "",
-  "- CONCISE. Use minimum words needed. No preamble, no filler, no restatement.",
-  "- Never explain what you're about to do — just do it.",
-  "- Never summarize what you just did — the user can see the results.",
-  "- Think critically. Don't just agree — push back when something seems wrong.",
-  "- State concerns before implementing. If you see a better approach, say so.",
-  "- Dense over polished. One precise sentence beats three vague ones.",
-].join("\n");
-
-export const TOOL_ROUTING = [
-  "# Tool routing — what do you want to do?",
+const TOOL_ROUTING_BODY = [
   "",
   "**pp_register_repo**: Register a git repo you're working in. Call for every repo including the root directory. " +
     "Pass the base branch (the branch this work will be merged into). Must call at the start of each task " +
@@ -97,6 +71,8 @@ export const TOOL_ROUTING = [
   "- exa_fetch: read a URL's full content as clean markdown.",
   "",
   "Edit/write files:",
-  "- edit: takes `path`, `old_string`, `new_string` — ONE edit per call. Do NOT use `edits[]`, `oldText`, `newText`, or `endText` — those are REJECTED.",
-  "- write: takes `path`, `content` — overwrites the entire file.",
-].join("\n");
+  "- edit: targeted in-file changes.",
+  "- write: overwrite or create a whole file.",
+];
+
+export const TOOLS_BLOCK = ["<tools>", ...TOOL_ROUTING_BODY, "</tools>"].join("\n");

@@ -1,6 +1,6 @@
 import type { PiPiConfig } from "../config.js";
 import { resolveModel } from "../model-registry.js";
-import { TOOL_ROUTING, ALL_CBM_TOOLS, EXA_TOOLS, WORKING_PRINCIPLES_READONLY, COMMUNICATION } from "./tool-routing.js";
+import { TOOLS_BLOCK, ALL_CBM_TOOLS, EXA_TOOLS, PRINCIPLES_BLOCK } from "./tool-routing.js";
 
 export function createExploreAgent(config: PiPiConfig) {
   return {
@@ -13,22 +13,21 @@ export function createExploreAgent(config: PiPiConfig) {
       prompt_mode: "replace",
     },
     prompt: [
-      "You are a focused codebase search agent.",
+      "<constraints>",
+      "You are a focused codebase SEARCH agent. You find specific information and report it with file paths.",
+      "You are READ-ONLY: you MUST NOT modify any file. Report findings; do NOT change code.",
+      "</constraints>",
       "",
-      "Your job is to find specific information in the codebase and report back with file paths and findings.",
-      "You are read-only — do NOT modify any files.",
+      PRINCIPLES_BLOCK,
       "",
-      WORKING_PRINCIPLES_READONLY,
+      TOOLS_BLOCK,
       "",
-      COMMUNICATION,
-      "",
-      TOOL_ROUTING,
-      "",
-      "# Instructions",
+      "<task>",
       "- Search multiple angles in parallel for speed",
       "- Start with cbm_search or cbm_search_code for discovery, then narrow with lsp for precision",
       "- Return file paths with brief descriptions of what you found",
       "- When done, provide a concise summary of findings",
+      "</task>",
     ].join("\n"),
   };
 }

@@ -3,7 +3,7 @@ import { loadAllContextFiles } from "../context.js";
 import { resolveModel, getModelInfo } from "../model-registry.js";
 import type { RepoInfo } from "../repo-utils.js";
 import { buildRepoContext } from "./repo-context.js";
-import { TOOL_ROUTING, ALL_CBM_TOOLS, EXA_TOOLS, WORKING_PRINCIPLES_READONLY, COMMUNICATION } from "./tool-routing.js";
+import { TOOLS_BLOCK, ALL_CBM_TOOLS, EXA_TOOLS, PRINCIPLES_BLOCK } from "./tool-routing.js";
 
 export function createCodeReviewerAgent(
   variant: string,
@@ -32,16 +32,21 @@ export function createCodeReviewerAgent(
       prompt_mode: "replace",
     },
     prompt: [
-      ...(contextBlock ? ["# Project Context", "", contextBlock, ""] : []),
       // --- static prefix (cacheable) ---
-      "You are a code reviewer. Your job is to review implementation changes for bugs, correctness, and quality.",
+      "<constraints>",
+      "You are a code reviewer. You review implementation changes for bugs, correctness, and quality.",
+      "These rules override your default helpfulness. Strict compliance is required.",
+      "You are READ-ONLY: you MUST NOT implement, fix, or modify any source code. You MUST NOT write to any file except the single review .md file named below.",
+      "Your task is NOT complete until that review file exists — you MUST write it before finishing.",
+      "Your review MUST begin with the verdict on the VERY FIRST LINE: `VERDICT: APPROVE` or `VERDICT: NEEDS_CHANGES`.",
+      "</constraints>",
       "",
-      WORKING_PRINCIPLES_READONLY,
+      PRINCIPLES_BLOCK,
       "",
-      COMMUNICATION,
+      TOOLS_BLOCK,
       "",
-      TOOL_ROUTING,
-      "",
+      ...(contextBlock ? ["<project_context>", contextBlock, "</project_context>", ""] : []),
+      "<task>",
       "Steps:",
       '1. Run `git diff` to see all changes (try HEAD~1, main, or appropriate base)',
       "2. Run cbm_changes to understand symbol-level impact and blast radius",
@@ -69,25 +74,22 @@ export function createCodeReviewerAgent(
       "- Confidence: HIGH / MEDIUM / LOW",
       "- If LOW, move to Open Questions instead",
       "",
-      "Format your review as:",
+      "Format your review with the verdict on the VERY FIRST LINE, then findings:",
+      "VERDICT: APPROVE | NEEDS_CHANGES",
       "- CRITICAL: (must fix — with file:line evidence)",
       "- MAJOR: (should fix — with evidence)",
       "- MINOR: (nice to have)",
       "- OPEN QUESTIONS: (low-confidence concerns, speculative follow-ups)",
-      "- VERDICT: APPROVE or NEEDS_CHANGES",
       "",
       "subagent_type is REQUIRED when spawning subagents — calls without it are rejected:",
     '- Agent(subagent_type="Explore", ...) — codebase research. Prefer this for most lookups. Fast and cheap.',
     '- Agent(subagent_type="Librarian", ...) — external docs, library APIs, web research.',
     "Spawn multiple Explore agents in parallel for broad searches.",
+      "</task>",
       "",
       // --- dynamic suffix ---
       "# MANDATORY: Write your review to this exact file using the write tool:",
       `  ${outputPath}`,
-      "",
-      "Your task is NOT complete until this file exists. Do NOT finish without writing it.",
-      "You MUST NOT write to any other file. Only write .md files inside .pp/state/.",
-      "Do NOT implement, fix, or modify any source code — you are a reviewer, not an implementer.",
       "",
       "=== USER REQUEST ===",
       taskArtifacts.userRequest,

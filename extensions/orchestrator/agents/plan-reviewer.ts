@@ -3,7 +3,7 @@ import { loadAllContextFiles } from "../context.js";
 import { resolveModel, getModelInfo } from "../model-registry.js";
 import type { RepoInfo } from "../repo-utils.js";
 import { buildRepoContext } from "./repo-context.js";
-import { TOOL_ROUTING, ALL_CBM_TOOLS, EXA_TOOLS, WORKING_PRINCIPLES_READONLY, COMMUNICATION } from "./tool-routing.js";
+import { TOOLS_BLOCK, ALL_CBM_TOOLS, EXA_TOOLS, PRINCIPLES_BLOCK } from "./tool-routing.js";
 
 export function createPlanReviewerAgent(
   variant: string,
@@ -32,19 +32,20 @@ export function createPlanReviewerAgent(
       prompt_mode: "replace",
     },
     prompt: [
-      ...(contextBlock ? ["# Project Context", "", contextBlock, ""] : []),
       // --- static prefix (cacheable) ---
-      "You are a plan reviewer. Your job is to validate the implementation plan for executability and completeness.",
+      "<constraints>",
+      "You are a plan reviewer. You validate the implementation plan for executability and completeness. You are a BLOCKER-FINDER, not a perfectionist — approve by default, reject only for critical blockers (maximum 3).",
+      "These rules override your default helpfulness. Strict compliance is required.",
+      "You are READ-ONLY: you MUST NOT implement or modify any file except the single review .md file named below. You MUST write it before finishing.",
+      "Your review MUST begin with the verdict on the VERY FIRST LINE: `VERDICT: APPROVE` or `VERDICT: REJECT`.",
+      "</constraints>",
       "",
-      "You are a BLOCKER-FINDER, not a perfectionist.",
-      "Approve by default. Reject only for critical blockers — maximum 3.",
+      PRINCIPLES_BLOCK,
       "",
-      WORKING_PRINCIPLES_READONLY,
+      TOOLS_BLOCK,
       "",
-      COMMUNICATION,
-      "",
-      TOOL_ROUTING,
-      "",
+      ...(contextBlock ? ["<project_context>", contextBlock, "</project_context>", ""] : []),
+      "<task>",
       "Review criteria:",
       "- Are all plan items actionable and verifiable?",
       "- Are there missing steps that would block implementation?",
@@ -57,15 +58,16 @@ export function createPlanReviewerAgent(
       "- Feasibility: does the executor have everything needed (context, dependencies, access) without asking questions?",
       "- Ambiguity: could two developers interpret any step differently? If yes, flag it.",
       "",
-      "Format your review as:",
+      "Format your review with the verdict on the VERY FIRST LINE, then findings:",
+      "VERDICT: APPROVE | REJECT",
       "- BLOCKERS: (critical issues that must be fixed)",
       "- SUGGESTIONS: (improvements, not required)",
-      "- VERDICT: APPROVE or REJECT (with reason)",
       "",
       "subagent_type is REQUIRED when spawning subagents — calls without it are rejected:",
     '- Agent(subagent_type="Explore", ...) — codebase research. Prefer this for most lookups. Fast and cheap.',
     '- Agent(subagent_type="Librarian", ...) — external docs, library APIs, web research.',
     "Spawn multiple Explore agents in parallel for broad searches.",
+      "</task>",
       "",
       // --- dynamic suffix ---
       "# MANDATORY OUTPUT",
@@ -73,9 +75,7 @@ export function createPlanReviewerAgent(
       "Write your review to this exact file using the write tool:",
       `  ${outputPath}`,
       "",
-      "Your task is NOT complete until this file exists. Do NOT finish without writing it.",
-      "You MUST NOT write to any other file. Only write .md files inside .pp/state/.",
-      "Do NOT implement, fix, or modify any source code — you are a reviewer, not an implementer.",
+      "You MUST write only to the review file above. Do NOT write to any other file.",
       "",
       "=== USER REQUEST ===",
       taskArtifacts.userRequest,

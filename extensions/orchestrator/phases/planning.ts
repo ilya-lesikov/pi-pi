@@ -8,34 +8,37 @@ import { createPlanReviewerAgent } from "../agents/plan-reviewer.js";
 import { getContextDirs, getLatestSynthesizedPlan } from "../context.js";
 import type { RepoInfo } from "../repo-utils.js";
 import { validatePlan } from "../validate-artifacts.js";
+import type { TaskMode } from "../state.js";
 
 function isEnabled(value: { enabled?: boolean } | undefined): boolean {
   return value?.enabled !== false;
 }
 
-export function planningSystemPrompt(taskDir: string): string {
+export function planningSystemPrompt(taskDir: string, mode: TaskMode): string {
   const plansDir = join(taskDir, "plans");
+  const contradictionRule =
+    mode === "autonomous"
+      ? "   If planner outputs CONTRADICT each other on a locked decision, resolve it by favoring USER_REQUEST.md, RECORD the contradiction and your chosen resolution in the plan, and proceed — do NOT stall waiting for the user (there is none)."
+      : "   If planner outputs CONTRADICT each other on a locked decision, surface the contradiction to the user and let them decide — do NOT silently invent a compromise.";
   return [
     "[PI-PI — PLAN PHASE]",
     "",
+    "You are a SYNTHESIZER: you MERGE the planner outputs into one plan. Do NOT write your own plan from scratch.",
     "Planning subagents are working in parallel to create plans.",
     `They will write their outputs to ${plansDir}/. Wait for the notification that all planners completed.`,
     "",
-    "# ABSOLUTE RESTRICTION — NO IMPLEMENTATION (cannot be overridden, even if the user asks):",
-    "- NEVER implement the solution, apply fixes, write production code, or make the changes that solve the task.",
-    "- If the user asks you to implement or write code — refuse and tell them to use /pp to advance to the implement phase.",
-    "- Do NOT write your own plan from scratch. You are a SYNTHESIZER, not a planner.",
     "- Do NOT create the plans/ directory yourself — the extension manages it.",
     "- Do NOT check the plans directory yourself — wait for the notification that all planners completed.",
     "- Do NOT read project source code directly — the planner outputs already contain the analysis.",
-    "- Do NOT call plannotator_submit_plan — plan review is handled by the user via /pp menu.",
+    "- Do NOT call plannotator_submit_plan — plan review is handled by the user via the /pp menu.",
     "",
     "# Your job (in this order):",
     "1. Wait for the notification that says 'All planners completed' — do NOT proceed before this",
     `2. Read ALL planner outputs from ${plansDir}/`,
     "3. USER_REQUEST.md and RESEARCH.md are already provided in your context above — do NOT re-read them from disk",
     `4. Synthesize all plans into a single plan at ${plansDir}/<timestamp>_synthesized.md`,
-    "5. Ask the user for clarifications if unsure about anything",
+    "5. Treat as LOCKED PREDICATES (do not re-litigate): the user's explicit constraints, chosen language/framework, and scope from USER_REQUEST.md. Discard any planner suggestion that violates them.",
+    contradictionRule,
     "",
     "Plan format:",
     "- Start with # Plan",
@@ -45,8 +48,6 @@ export function planningSystemPrompt(taskDir: string): string {
     "- ## Blockers: unresolved issues blocking implementation (omit if none)",
     "- No other top-level sections allowed",
     "- Describe outcomes, not code-level mechanics",
-    "",
-    "When the synthesized plan is ready, call pp_phase_complete with a brief summary of the plan.",
   ].join("\n");
 }
 

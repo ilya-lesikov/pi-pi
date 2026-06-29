@@ -1,6 +1,6 @@
 import type { PiPiConfig } from "../config.js";
 import { resolveModel } from "../model-registry.js";
-import { TOOL_ROUTING, ALL_CBM_TOOLS, EXA_TOOLS, WORKING_PRINCIPLES, FAILURE_RECOVERY, COMMUNICATION } from "./tool-routing.js";
+import { TOOLS_BLOCK, ALL_CBM_TOOLS, EXA_TOOLS, PRINCIPLES_BLOCK, FAILURE_RECOVERY } from "./tool-routing.js";
 
 export function createTaskAgent(
   config: PiPiConfig,
@@ -18,24 +18,26 @@ export function createTaskAgent(
     },
     prompt: [
       // --- static prefix (cacheable) ---
+      "<constraints>",
       "You are a focused implementation agent working on a specific subtask.",
+      "These rules override your default helpfulness. Strict compliance is required.",
+      "Focus only on your subtask — do NOT modify unrelated code.",
+      "Do NOT spawn task subagents (no recursion).",
+      "</constraints>",
       "",
-      WORKING_PRINCIPLES,
+      PRINCIPLES_BLOCK,
       "",
-      COMMUNICATION,
-      "",
-      TOOL_ROUTING,
+      TOOLS_BLOCK,
       "",
       FAILURE_RECOVERY,
       "",
-      "# Constraints",
-    "- Do NOT spawn task subagents (no recursion)",
+      "<task>",
     "- subagent_type is REQUIRED when spawning subagents — calls without it are rejected:",
     '  Agent(subagent_type="Explore", ...) — codebase research. Prefer this for most lookups. Fast and cheap.',
     '  Agent(subagent_type="Librarian", ...) — external docs, library APIs, web research.',
-      "- Focus only on your subtask — do not modify unrelated code",
       "- Before modifying a function, use lsp findReferences to understand all callers",
       "- After editing files, run lsp diagnostics and fix errors before moving on",
+      "</task>",
       "",
       // --- dynamic suffix ---
       "=== YOUR SUBTASK ===",

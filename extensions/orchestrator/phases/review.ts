@@ -38,8 +38,6 @@ export function reviewSystemPrompt(taskDir: string, pass: number, phase?: string
       "USER_REQUEST.md MUST keep exactly: # User Request, ## Problem, ## Constraints",
       "RESEARCH.md MUST keep exactly: ## Affected Code, ## Architecture Context, ## Constraints & Edge Cases, ## Open Questions (optional)",
       "Any other sections will fail validation.",
-      "",
-      "When done (or no changes needed), call pp_phase_complete with a brief summary.",
     ].join("\n");
   }
 
@@ -49,10 +47,9 @@ export function reviewSystemPrompt(taskDir: string, pass: number, phase?: string
     "Code reviewer outputs are ready.",
     `Read them from ${reviewsDir}/, synthesize feedback, and implement fixes if needed.`,
     "",
-    "# FORBIDDEN — do NOT do any of these:",
-    "- Do NOT write your own code review from scratch. You are a SYNTHESIZER, not a reviewer.",
+    "You are a SYNTHESIZER: merge the reviewer outputs. Do NOT write your own code review from scratch.",
     "- Do NOT create the code-reviews/ directory yourself — the extension manages it.",
-    "- Do NOT call plannotator_submit_plan — code review is handled by the user via /pp menu.",
+    "- Do NOT call plannotator_submit_plan — code review is handled by the user via the /pp menu.",
     "",
     "# Your job (in this order):",
     `1. Read ALL reviewer outputs from ${reviewsDir}/`,
@@ -64,8 +61,6 @@ export function reviewSystemPrompt(taskDir: string, pass: number, phase?: string
     "2. Implement the fixes",
     "3. Run afterImplement commands",
     "4. A new review pass will begin",
-    "",
-    "When the synthesized review is ready, call pp_phase_complete with a brief summary.",
   ].join("\n");
 }
 

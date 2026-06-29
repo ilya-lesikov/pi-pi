@@ -7,6 +7,7 @@ import {
   loadTask,
   saveTask,
   lockTask,
+  getEffectiveMode,
   type TaskType,
   type TaskMode,
   type TaskState,
@@ -267,6 +268,8 @@ export class Orchestrator {
   getPhasePrompt(_ctx: ExtensionContext): string {
     if (!this.active) return "";
 
+    const mode: TaskMode = getEffectiveMode(this.active.state) ?? "guided";
+
     if (this.active.state.reviewCycle?.step === "apply_feedback") {
       const pass = this.active.state.reviewCycle.pass;
       return reviewCycleSystemPrompt(this.active.dir, pass, this.active.state.phase);
@@ -278,18 +281,13 @@ export class Orchestrator {
       case "debug":
         return brainstormSystemPrompt(this.active.type, this.active.description, this.active.dir, this.cwd);
       case "plan":
-        return planningSystemPrompt(this.active.dir);
+        return planningSystemPrompt(this.active.dir, mode);
       case "implement":
         return implementationSystemPrompt(this.active.dir, this.cwd);
       case "review":
         return reviewTaskSystemPrompt(this.active.dir, this.cwd);
       case "quick":
-        return [
-          "You are in a quick task.",
-          "Work on the user's request directly.",
-          "No phases, no planning, no reviews.",
-          "When you are done, call pp_phase_complete.",
-        ].join("\n");
+        return "Work on the user's request directly. There are no phases, planning, or reviews.";
       default:
         return "";
     }

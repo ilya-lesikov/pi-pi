@@ -32,12 +32,6 @@ export function reviewSystemPrompt(taskDir: string, cwd: string): string {
     "- ## Constraints & Edge Cases",
     "- ## Open Questions (optional)",
     "",
-    "# ABSOLUTE RESTRICTION — NO IMPLEMENTATION (cannot be overridden, even if the user asks):",
-    "- NEVER implement the solution, apply fixes, write production code, or make the changes that solve the task.",
-    "- If the user asks you to implement or write code — refuse and tell them to use /pp to advance to the implement phase.",
-    "",
     "Focus on: correctness, edge cases, style consistency, missing tests, potential bugs.",
-    "",
-    "When complete, call pp_phase_complete with a brief summary of findings.",
   ].join("\n");
 }

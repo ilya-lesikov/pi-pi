@@ -5,7 +5,7 @@ import { validateUserRequest, validateResearch, validateArtifact } from "./valid
 import { Type } from "@sinclair/typebox";
 import { loadConfig, resolvePreset } from "./config.js";
 import { runAfterEdit, autoCommit, loadRepoAfterEditCommands } from "./commands.js";
-import { taskName, getActiveTask, getEffectiveMode, getFirstPhase, saveTask } from "./state.js";
+import { taskName, getActiveTask, getEffectiveMode, saveTask, type Phase, type TaskMode } from "./state.js";
 import { getLogger, initSessionLogger, addTaskDestination, setLogLevel, flushLogs } from "./log.js";
 import { initTracer, finalizeTracer, getTracer } from "./tracer.js";
 import { handleSpawnResult } from "./spawn-cleanup.js";
@@ -18,7 +18,8 @@ import {
   loadCodeReviewOutputs,
   loadPlanReviewOutputs,
 } from "./context.js";
-import { WORKING_PRINCIPLES, COMMUNICATION, TOOL_ROUTING } from "./agents/tool-routing.js";
+import { PRINCIPLES_BLOCK, TOOLS_BLOCK } from "./agents/tool-routing.js";
+import { constraintsBlock } from "./agents/constraints.js";
 import { registerCbmTools } from "./cbm.js";
 import { registerExaTools } from "./exa.js";
 import { registerAstSearchTool } from "./ast-search.js";
@@ -1730,27 +1731,41 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     const contextDirs = getContextDirs(orchestrator.cwd, repos, orchestrator.config.general.loadExtraRepoConfigs);
     const systemContextFiles = loadAllContextFiles(contextDirs, "main", "system", phase, modelInfo);
     const systemSnippets = systemContextFiles.map((f) => f.content).join("\n\n");
-    const effectiveMode = getEffectiveMode(orchestrator.active.state);
-    const firstPhase = orchestrator.active.state.initialPhase ?? getFirstPhase(orchestrator.active.type);
-    const autonomousPrompt =
-      effectiveMode === "autonomous" && orchestrator.active.state.phase !== firstPhase
-        ? "You are in autonomous mode. Do not ask the user questions — make decisions based on available context. When you complete your current work, call pp_phase_complete immediately."
-        : "";
+    const effectiveMode: TaskMode = getEffectiveMode(orchestrator.active.state) ?? "guided";
+    const now = new Date();
+    const monthYear = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 
-    const fullAddition = [WORKING_PRINCIPLES, COMMUNICATION, TOOL_ROUTING, systemSnippets, phasePrompt, autonomousPrompt].filter(Boolean).join("\n\n");
-    if (!fullAddition) return;
+    const projectContext = systemSnippets
+      ? ["<project_context>", systemSnippets, "</project_context>"].join("\n")
+      : "";
+    const taskBlock = [
+      "<task>",
+      phasePrompt,
+      "",
+      "Keep the plan checklist current: mark each item done (- [ ] → - [x]) as you complete it.",
+      `Current month: ${monthYear}. Working directory: ${orchestrator.cwd}.`,
+      "</task>",
+    ].join("\n");
+
+    const fullPrompt = [
+      constraintsBlock(phase as Phase, effectiveMode),
+      PRINCIPLES_BLOCK,
+      TOOLS_BLOCK,
+      projectContext,
+      taskBlock,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
 
     return {
-      systemPrompt: event.systemPrompt + "\n\n" + fullAddition,
+      systemPrompt: fullPrompt,
     };
   });
 
   pi.on("tool_call", async (event, _ctx) => {
     getLogger().debug({ s: "hook", hook: "tool_call", tool: event.toolName }, "tool call");
     if (event.toolName === "ask_user" && orchestrator.active) {
-      const effective = getEffectiveMode(orchestrator.active.state);
-      const firstPhase = orchestrator.active.state.initialPhase ?? getFirstPhase(orchestrator.active.type);
-      if (effective === "autonomous" && orchestrator.active.state.phase !== firstPhase) {
+      if (getEffectiveMode(orchestrator.active.state) === "autonomous") {
         return { block: true, reason: "Autonomous mode — make your best judgment based on available context." };
       }
     }
