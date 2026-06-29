@@ -308,6 +308,35 @@ describe("transitionToNextPhase", () => {
     expect(cleanupSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("clears reviewCycle and review bookkeeping on the done transition (Issue 4)", async () => {
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi as any);
+    const taskDir = makeTempDir();
+    orchestrator.cwd = taskDir;
+    orchestrator.config = makeConfig() as any;
+    orchestrator.active = makeTransitionTask(taskDir, "implement");
+    orchestrator.active.state.repos = [{ path: taskDir, isRoot: true }];
+    orchestrator.active.state.reviewCycle = { kind: "auto", step: "apply_feedback", pass: 2 };
+    orchestrator.active.state.reviewPass = 2;
+    orchestrator.active.state.reviewApprovedClean = true;
+    const ctx = makeTransitionCtx();
+    vi.spyOn(machineModule, "validateExitCriteria").mockReturnValue({ ok: true });
+    vi.spyOn(commandsModule, "runAfterImplement").mockReturnValue([{ ok: true, command: "npm test", output: "ok" }]);
+    let savedState: any = null;
+    vi.spyOn(orchestrator, "cleanupActive").mockImplementation(async () => {
+      savedState = orchestrator.active?.state;
+      orchestrator.active = null;
+    });
+
+    const result = await transitionToNextPhase(orchestrator, ctx);
+
+    expect(result.ok).toBe(true);
+    expect(savedState.phase).toBe("done");
+    expect(savedState.reviewCycle).toBeNull();
+    expect(savedState.reviewPass).toBe(0);
+    expect(savedState.reviewApprovedClean).toBe(false);
+  });
+
   it("runs afterImplement for extra repo when extra repo configs are enabled", async () => {
     const pi = makePi();
     const orchestrator = new Orchestrator(pi as any);

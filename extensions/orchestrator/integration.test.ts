@@ -1593,17 +1593,30 @@ describe("task modes and quick task", () => {
     );
 
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
-    const first = await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
-    expect(first.content[0].text).toMatch(/Reviews are running|Started review cycle pass/);
-
     const reviewsDir = join(taskDir, "code-reviews");
     mkdirSync(reviewsDir, { recursive: true });
-    writeFileSync(join(reviewsDir, `${Math.floor(Date.now() / 1000)}_test_round-1.md`), "pass1", "utf-8");
+
+    // Pass 1: non-clean review (no APPROVE) below cap — must force apply+re-review, NOT advance.
+    const first = await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
+    expect(first.content[0].text).toMatch(/Reviews are running|Started review cycle pass/);
+    writeFileSync(join(reviewsDir, `1_test_round-1.md`), "- CRITICAL: fix this\n- VERDICT: NEEDS_CHANGES", "utf-8");
     emitSubagentCreated(pi, "reviewer-1", "Code reviewer (test)");
     emitSubagentCompleted(pi, "reviewer-1", "Code reviewer (test)");
 
     const second = await ppPhaseComplete.execute("call-2", { summary: "applied" }, undefined, undefined, ctx);
-    expect(second.content[0].text).toBe("");
+    expect(second.content[0].text).toMatch(/Apply the reviewers' required changes/);
+    expect(orchestrator.active).not.toBeNull();
+    expect(orchestrator.active!.state.phase).toBe("implement");
+
+    // Pass 2 (= cap): non-clean again, but at maxReviewPasses — cap honored, advances to done.
+    const third = await ppPhaseComplete.execute("call-3", { summary: "redo" }, undefined, undefined, ctx);
+    expect(third.content[0].text).toMatch(/Reviews are running|Started review cycle pass/);
+    writeFileSync(join(reviewsDir, `2_test_round-2.md`), "- CRITICAL: still\n- VERDICT: NEEDS_CHANGES", "utf-8");
+    emitSubagentCreated(pi, "reviewer-2", "Code reviewer (test)");
+    emitSubagentCompleted(pi, "reviewer-2", "Code reviewer (test)");
+
+    const fourth = await ppPhaseComplete.execute("call-4", { summary: "applied 2" }, undefined, undefined, ctx);
+    expect(fourth.content[0].text).toBe("");
     expect(orchestrator.active).toBeNull();
     expect(loadTask(taskDir).phase).toBe("done");
   });
@@ -1639,7 +1652,9 @@ describe("task modes and quick task", () => {
     const reviewsDir = join(taskDir, "code-reviews");
     mkdirSync(reviewsDir, { recursive: true });
     const round = orchestrator.active!.state.reviewCycle!.pass;
-    writeFileSync(join(reviewsDir, `1_a_round-${round}.md`), "- CRITICAL: none\n- VERDICT: APPROVE", "utf-8");
+    for (const v of ["opus", "gpt", "gemini"]) {
+      writeFileSync(join(reviewsDir, `1_${v}_round-${round}.md`), "VERDICT: APPROVE\n- CRITICAL: none", "utf-8");
+    }
     emitSubagentCreated(pi, "reviewer-1", "Code reviewer (test)");
     emitSubagentCompleted(pi, "reviewer-1", "Code reviewer (test)");
 
@@ -1648,7 +1663,9 @@ describe("task modes and quick task", () => {
     expect(orchestrator.active).toBeNull();
     const finalState = loadTask(taskDir);
     expect(finalState.phase).toBe("done");
-    expect(finalState.reviewApprovedClean).toBe(true);
+    // Issue 4: review bookkeeping is cleared on the transition to done.
+    expect(finalState.reviewCycle).toBeNull();
+    // Early exit: only one auto pass ran (cap was 3), proving the clean APPROVE short-circuited.
     expect(finalState.reviewPassByKind?.implement?.auto).toBe(1);
   });
 
@@ -1832,7 +1849,7 @@ describe("task modes and quick task", () => {
     expect(orchestrator.active!.state.autonomousConfig?.phases.brainstorm).toBeUndefined();
   });
 
-  it("from-task implement sets initialPhase plan and ask_user remains allowed in plan", async () => {
+  it("from-task implement sets initialPhase plan and ask_user is blocked in autonomous plan", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);
 
@@ -1847,10 +1864,10 @@ describe("task modes and quick task", () => {
 
     const toolCall = pi._handlers.get("tool_call")!;
     const result = await toolCall({ toolName: "ask_user", input: {} }, {});
-    expect(result).toBeUndefined();
+    expect(result).toEqual({ block: true, reason: "Autonomous mode — make your best judgment based on available context." });
   });
 
-  it("autonomous prompt injection uses initialPhase for from-task implement", async () => {
+  it("autonomous prompt is full-replace with constraints first and mode-aware completion", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);
     const ctx = makeCtx();
@@ -1860,16 +1877,40 @@ describe("task modes and quick task", () => {
     writeFileSync(join(debugDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
     writeFileSync(join(debugDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
     await orchestrator.startTask({ ...ctx, cwd } as any, "implement", "implement", debugDir, true, "autonomous");
+    orchestrator.active!.state.phase = "implement";
     orchestrator.active!.state.step = "llm_work";
 
     const beforeStart = pi._handlers.get("before_agent_start")!;
-    const resultAtInitial = await beforeStart({ systemPrompt: "base" }, ctx);
-    expect(resultAtInitial?.systemPrompt ?? "").not.toContain("You are in autonomous mode");
+    const result = await beforeStart({ systemPrompt: "HARNESS_BASE_PROMPT" }, ctx);
+    const prompt = result?.systemPrompt ?? "";
+    expect(prompt.startsWith("<constraints>")).toBe(true);
+    expect(prompt).not.toContain("HARNESS_BASE_PROMPT");
+    expect(prompt).toContain("you MUST call pp_phase_complete immediately");
+    // No interactive '/pp menu' advance guidance in autonomous mode.
+    expect(prompt).not.toContain("/pp menu");
+    expect(prompt).not.toContain("advance it via");
+  });
 
-    orchestrator.active!.state.phase = "implement";
-    orchestrator.active!.state.step = "llm_work";
-    const resultAfter = await beforeStart({ systemPrompt: "base" }, ctx);
-    expect(resultAfter?.systemPrompt ?? "").toContain("You are in autonomous mode");
+  it("guided read-only phase prompt is XML macro-blocks with month/year + cwd and interactive completion", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask({ ...ctx, cwd } as any, "implement", "implement", undefined, undefined, "guided");
+    orchestrator.active!.state.phase = "plan";
+    orchestrator.active!.state.step = "synthesize";
+
+    const beforeStart = pi._handlers.get("before_agent_start")!;
+    const prompt = (await beforeStart({ systemPrompt: "HARNESS_BASE_PROMPT" }, ctx))?.systemPrompt ?? "";
+    expect(prompt.startsWith("<constraints>")).toBe(true);
+    expect(prompt).toContain("ACTIVE PHASE: plan (READ-ONLY)");
+    expect(prompt).toContain("<principles>");
+    expect(prompt).toContain("<tools>");
+    expect(prompt).toContain("<task>");
+    expect(prompt).toContain("the user will review and advance it via the /pp menu");
+    expect(prompt).not.toContain("HARNESS_BASE_PROMPT");
+    expect(prompt).toContain(`Working directory: ${cwd}.`);
+    expect(prompt).toMatch(/Current month: \d{4}-\d{2}\./);
   });
 
   it("persists retry bookkeeping flags in task state", async () => {
@@ -1896,42 +1937,16 @@ describe("task modes and quick task", () => {
     expect(result).toEqual({ block: true, reason: "Autonomous mode — make your best judgment based on available context." });
   });
 
-  it("allows ask_user in autonomous mode first phase", async () => {
+  it("blocks ask_user whenever effective mode is autonomous", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);
 
     await orchestrator.startTask({ ...makeCtx(), cwd } as any, "implement", "implement", undefined, undefined, "autonomous");
-    orchestrator.active!.state.phase = "brainstorm";
+    orchestrator.active!.state.phase = "implement";
     const toolCall = pi._handlers.get("tool_call")!;
 
     const result = await toolCall({ toolName: "ask_user", input: {} }, {});
-    expect(result).toBeUndefined();
-  });
-
-  it("switches guided to autonomous and back", async () => {
-    const cwd = makeTempDir();
-    const { pi, orchestrator } = await setupOrchestrator(cwd);
-    const ctx = makeCtx();
-
-    await orchestrator.startTask(ctx as any, "implement", "implement", undefined, undefined, "guided");
-    orchestrator.active!.state.autonomousConfig = {
-      phases: {
-        brainstorm: { reviewPreset: "regular", maxReviewPasses: 1 },
-        plan: { plannerPreset: "regular", reviewPreset: "regular", maxReviewPasses: 1 },
-        implement: { reviewPreset: "regular", maxReviewPasses: 1 },
-      },
-    };
-
-    const pp = getCommand(pi, "pp");
-    menu.expect({ question: m.anyTaskMenu, options: { include: ["Switch to Autonomous"] }, choose: "Switch to Autonomous" });
-    menu.expect({ question: m.anyTaskMenu, options: { include: ["Switch to Guided", "Back"] }, choose: "Back" });
-    await pp(undefined, ctx);
-    expect(orchestrator.active!.state.effectiveMode).toBe("autonomous");
-
-    menu.expect({ question: m.anyTaskMenu, options: { include: ["Switch to Guided"] }, choose: "Switch to Guided" });
-    menu.expect({ question: m.anyTaskMenu, options: { include: ["Switch to Autonomous", "Back"] }, choose: "Back" });
-    await pp(undefined, ctx);
-    expect(orchestrator.active!.state.effectiveMode).toBe("guided");
+    expect(result).toEqual({ block: true, reason: "Autonomous mode — make your best judgment based on available context." });
   });
 
   it("resume preserves autonomous mode", async () => {
@@ -2046,7 +2061,9 @@ describe("task modes and quick task", () => {
 
     const reviewsDir = join(taskDir, "code-reviews");
     mkdirSync(reviewsDir, { recursive: true });
-    writeFileSync(join(reviewsDir, `${Math.floor(Date.now() / 1000)}_test_round-1.md`), "looks good", "utf-8");
+    for (const v of ["opus", "gpt", "gemini"]) {
+      writeFileSync(join(reviewsDir, `1_${v}_round-1.md`), "VERDICT: APPROVE\n- CRITICAL: none", "utf-8");
+    }
     emitSubagentCreated(pi, "reviewer-auto-1", "Code reviewer (test)");
     emitSubagentCompleted(pi, "reviewer-auto-1", "Code reviewer (test)");
 
@@ -2082,7 +2099,7 @@ describe("task modes and quick task", () => {
     expect(menu.transcript.some((entry) => entry.question.includes("Some reviewers failed:"))).toBe(true);
   });
 
-  it("review task autonomous defaults to deep preset for review phase", async () => {
+  it("review task autonomous config covers only plan/implement, not the review first phase", async () => {
     const cwd = makeTempDir();
     const pi = makePi();
     const orchestrator = new Orchestrator(pi as any);
@@ -2104,7 +2121,8 @@ describe("task modes and quick task", () => {
     await pp(undefined, ctx);
 
     expect(orchestrator.active!.type).toBe("review");
-    expect(orchestrator.active!.state.autonomousConfig?.phases.review?.reviewPreset).toBe("deep");
+    expect(orchestrator.active!.state.autonomousConfig?.phases.review).toBeUndefined();
+    expect(orchestrator.active!.state.autonomousConfig?.phases.implement?.reviewPreset).toBe("regular");
   });
 
   it("quick task does not track modified files", async () => {
@@ -2131,20 +2149,19 @@ describe("task modes and quick task", () => {
     expect(runAfterEditSpy).not.toHaveBeenCalled();
   });
 
-  it("autonomous ask_user blocked in plan but allowed in brainstorm for same task", async () => {
+  it("autonomous ask_user blocked in plan and implement", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);
 
     await orchestrator.startTask({ ...makeCtx(), cwd } as any, "implement", "implement", undefined, undefined, "autonomous");
     const toolCall = pi._handlers.get("tool_call")!;
-
-    orchestrator.active!.state.phase = "brainstorm";
-    const brainstormResult = await toolCall({ toolName: "ask_user", input: {} }, {});
-    expect(brainstormResult).toBeUndefined();
+    const blocked = { block: true, reason: "Autonomous mode — make your best judgment based on available context." };
 
     orchestrator.active!.state.phase = "plan";
-    const planResult = await toolCall({ toolName: "ask_user", input: {} }, {});
-    expect(planResult).toEqual({ block: true, reason: "Autonomous mode — make your best judgment based on available context." });
+    expect(await toolCall({ toolName: "ask_user", input: {} }, {})).toEqual(blocked);
+
+    orchestrator.active!.state.phase = "implement";
+    expect(await toolCall({ toolName: "ask_user", input: {} }, {})).toEqual(blocked);
   });
 });
 
@@ -3005,12 +3022,14 @@ describe("error retry", () => {
     const ctx = makeCtx();
 
     await orchestrator.startTask(ctx as any, "implement", "nudge test");
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "llm_work";
     const turnEnd = pi._handlers.get("turn_end")!;
 
     await turnEnd({ message: { stopReason: "stop", content: [] }, toolResults: [] }, ctx);
 
     expect(orchestrator.nudgeTimestamps.length).toBe(1);
-    expect(pi.sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("previous response was interrupted"));
+    expect(pi.sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("Continue the implement phase"));
   });
 
   it("nudge halts after repeated interruptions", async () => {
@@ -3020,6 +3039,8 @@ describe("error retry", () => {
     const ctx = makeCtx();
 
     await orchestrator.startTask(ctx as any, "implement", "nudge halt");
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "llm_work";
     const turnEnd = pi._handlers.get("turn_end")!;
 
     for (let i = 0; i < 25; i += 1) {
@@ -3050,10 +3071,10 @@ describe("error retry", () => {
     }
 
     const reminderCalls = (pi.sendUserMessage as any).mock.calls.filter((c: any[]) =>
-      String(c[0]).includes("You stopped without calling pp_phase_complete"),
+      String(c[0]).includes("Continue the implement phase"),
     );
     expect(reminderCalls.length).toBe(3);
-    expect(reminderCalls[0][0]).toContain("AUTONOMOUS mode");
+    expect(reminderCalls[0][0]).toContain("Do NOT apologize");
     expect(orchestrator.nudgeHalted).toBe(false);
   });
 
@@ -3442,7 +3463,7 @@ describe("menu contracts", () => {
     menu.expect({
       question: m.taskMenu("implement", "brainstorm"),
       options: {
-        exact: ["Switch to Guided", "Complete task", "Pause task", "Info", "Settings", "Back"],
+        exact: ["Complete task", "Pause task", "Info", "Settings", "Back"],
       },
       choose: "Back",
     });

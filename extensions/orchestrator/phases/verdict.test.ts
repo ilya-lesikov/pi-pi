@@ -31,6 +31,14 @@ describe("parseVerdict", () => {
   it("returns unknown when no verdict line", () => {
     expect(parseVerdict("LGTM, looks fine")).toBe("unknown");
   });
+
+  it("first-line verdict wins over a later VERDICT-like word in prose", () => {
+    const review = [
+      "VERDICT: NEEDS_CHANGES",
+      "- CRITICAL: the prose below mentions the word VERDICT: APPROVE but must not win",
+    ].join("\n");
+    expect(parseVerdict(review)).toBe("changes");
+  });
 });
 
 describe("hasActionableFindings", () => {
