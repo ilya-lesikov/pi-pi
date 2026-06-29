@@ -38,6 +38,7 @@ import { compareModelVersion } from "./model-version.js";
 import {
   listTasks,
   getEffectiveMode,
+  getEffectivePhaseMode,
   loadTask,
   lockTask,
   saveTask,
@@ -3287,7 +3288,7 @@ export async function showActiveTaskMenu(
     }
     const phase = task.state.phase;
     const step = task.state.step;
-    const effectiveMode = getEffectiveMode(task.state);
+    const effectiveMode = getEffectivePhaseMode(task.state);
 
     const waiting = step === "await_planners" || step === "await_reviewers";
     const { autoLabel } = getReviewLabels(orchestrator);

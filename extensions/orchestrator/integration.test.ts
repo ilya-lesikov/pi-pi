@@ -4,6 +4,7 @@ import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createAskUserHarness,
+  expectActiveTaskNext,
   expectBrainstormToPlan,
   expectImplementToDone,
   expectPlanToImplement,
@@ -3515,10 +3516,50 @@ describe("menu contracts", () => {
 
     await orchestrator.startTask(ctx as any, "implement", "contract auto", undefined, undefined, "autonomous");
 
+    // brainstorm is a forced-interactive phase, so even an autonomous task
+    // shows the full interactive menu (Next/Review).
     menu.expect({
       question: m.taskMenu("implement", "brainstorm"),
       options: {
-        exact: ["Complete task", "Pause task", "Info", "Settings", "Back"],
+        exact: ["Next", "Review", "Info", "Settings", "Back"],
+      },
+      choose: "Back",
+    });
+
+    const pp = getCommand(pi, "pp");
+    await pp(undefined, ctx);
+  });
+
+  it("autonomous debug task shows interactive menu in debug phase", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "debug", "contract debug auto", undefined, undefined, "autonomous");
+
+    menu.expect({
+      question: m.taskMenu("debug", "debug"),
+      options: {
+        exact: ["Next", "Review", "Info", "Settings", "Back"],
+      },
+      choose: "Back",
+    });
+
+    const pp = getCommand(pi, "pp");
+    await pp(undefined, ctx);
+  });
+
+  it("autonomous review task shows interactive menu in review phase", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "review", "contract review auto", undefined, undefined, "autonomous");
+
+    menu.expect({
+      question: m.taskMenu("review", "review"),
+      options: {
+        exact: ["Next", "Review", "Info", "Settings", "Back"],
       },
       choose: "Back",
     });
@@ -3535,11 +3576,7 @@ describe("menu contracts", () => {
     await orchestrator.startTask(ctx as any, "implement", "contract complete", undefined, undefined, "autonomous");
     const taskDir = orchestrator.active!.dir;
 
-    menu.expect({
-      question: m.taskMenu("implement", "brainstorm"),
-      options: { include: ["Complete task"] },
-      choose: "Complete task",
-    });
+    expectActiveTaskNext(menu, "Complete");
 
     const pp = getCommand(pi, "pp");
     await pp(undefined, ctx);
@@ -3556,11 +3593,7 @@ describe("menu contracts", () => {
     await orchestrator.startTask(ctx as any, "implement", "contract pause", undefined, undefined, "autonomous");
     const taskDir = orchestrator.active!.dir;
 
-    menu.expect({
-      question: m.taskMenu("implement", "brainstorm"),
-      options: { include: ["Pause task"] },
-      choose: "Pause task",
-    });
+    expectActiveTaskNext(menu, "Pause");
 
     const pp = getCommand(pi, "pp");
     await pp(undefined, ctx);
@@ -3582,11 +3615,7 @@ describe("menu contracts", () => {
     orchestrator.active!.state.reviewPassByKind = {};
     saveTask(taskDir, orchestrator.active!.state);
 
-    menu.expect({
-      question: m.taskMenu("implement", "brainstorm"),
-      options: { include: ["Complete task"] },
-      choose: "Complete task",
-    });
+    expectActiveTaskNext(menu, "Complete");
 
     const pp = getCommand(pi, "pp");
     await pp(undefined, ctx);
@@ -3610,11 +3639,7 @@ describe("menu contracts", () => {
     orchestrator.active!.state.reviewPassByKind = {};
     saveTask(taskDir, orchestrator.active!.state);
 
-    menu.expect({
-      question: m.taskMenu("implement", "brainstorm"),
-      options: { include: ["Pause task"] },
-      choose: "Pause task",
-    });
+    expectActiveTaskNext(menu, "Pause");
 
     const pp = getCommand(pi, "pp");
     await pp(undefined, ctx);
