@@ -68,12 +68,10 @@ export async function transitionToNextPhase(
   }
 
   orchestrator.active.state.phase = next;
-  if (next !== "done") {
-    orchestrator.active.state.reviewCycle = null;
-    orchestrator.active.state.reviewPass = 0;
-    orchestrator.active.state.reviewApprovedClean = false;
-    orchestrator.active.reviewPass = 0;
-  }
+  orchestrator.active.state.reviewCycle = null;
+  orchestrator.active.state.reviewPass = 0;
+  orchestrator.active.state.reviewApprovedClean = false;
+  orchestrator.active.reviewPass = 0;
   if (next === "plan") {
     const autonomousPlannerPreset =
       getEffectiveMode(orchestrator.active.state) === "autonomous"

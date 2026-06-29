@@ -858,6 +858,22 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
         const maxReviewPasses = phaseConfig?.maxReviewPasses ?? 0;
         const completedAutoPasses = orchestrator.active.state.reviewPassByKind?.[phase]?.auto ?? 0;
 
+        // A review pass that just finalized as NOT clean (actionable findings) must force
+        // the agent to apply fixes and re-review — do NOT transition the phase yet. Only a
+        // clean/unanimous-APPROVE pass (or an exhausted review budget) may fall through.
+        if (
+          justFinalizedReviewCycle &&
+          !orchestrator.active.state.reviewApprovedClean &&
+          reviewPreset &&
+          maxReviewPasses > 0 &&
+          completedAutoPasses < maxReviewPasses
+        ) {
+          return {
+            content: [{ type: "text" as const, text: `The review pass found changes to make. Apply the reviewers' required changes, then call pp_phase_complete again to re-review (pass ${completedAutoPasses + 1}/${maxReviewPasses >= 999 ? "∞" : maxReviewPasses}). Do NOT wait for the user and do NOT advance the phase.` }],
+            details: {},
+          };
+        }
+
         if (
           !justFinalizedReviewCycle &&
           !orchestrator.active.state.reviewApprovedClean &&
