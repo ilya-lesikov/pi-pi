@@ -920,6 +920,7 @@ describe("ask_user", () => {
             question: "Which option should we use?",
             options: ["A", "B"],
             allowFreeform: true,
+            allowComment: false,
          },
          undefined,
          undefined,
@@ -1038,6 +1039,7 @@ describe("ask_user", () => {
             question: "Which option should we use?",
             options: ["Alpha", "Beta", "Gamma"],
             allowFreeform: false,
+            allowComment: false,
          },
          undefined,
          undefined,
@@ -1233,6 +1235,7 @@ describe("ask_user", () => {
             question: "Which option should we use?",
             options: ["Alpha", "Beta"],
             allowFreeform: true,
+            allowComment: false,
          },
          undefined,
          undefined,
@@ -1358,6 +1361,7 @@ describe("ask_user", () => {
             question: "Which option should we use?",
             options: ["Alpha", "Beta"],
             allowFreeform: true,
+            allowComment: false,
          },
          undefined,
          undefined,
@@ -1499,7 +1503,7 @@ describe("ask_user", () => {
       expect(result.isError).not.toBe(true);
       expect(renderedBefore).toContain("[ ] Add extra context after selection");
       expect(renderedAfter).toContain("[✓] Add extra context after selection");
-      expect(helpText).toContain("ctrl+g toggle context");
+      expect(helpText).toContain("ctrl+g add text");
    });
 
    test("uses custom commentToggleKey for comment toggling and help text", async () => {
@@ -1548,8 +1552,8 @@ describe("ask_user", () => {
       expect(renderedBefore).toContain("[ ] Add extra context after selection");
       expect(renderedAfterIgnored).toContain("[ ] Add extra context after selection");
       expect(renderedAfterCustom).toContain("[✓] Add extra context after selection");
-      expect(helpText).toContain("alt+c toggle context");
-      expect(helpText).not.toContain("ctrl+g toggle context");
+      expect(helpText).toContain("alt+c add text");
+      expect(helpText).not.toContain("ctrl+g add text");
    });
 
    test("commentToggleKey 'off' hides the toggle hint and ignores ctrl+g", async () => {
@@ -1689,6 +1693,231 @@ describe("ask_user", () => {
          comment: "Roll out both behind the same flag.",
       });
       expect(result.details.cancelled).toBe(false);
+   });
+
+   test("defaults allowComment ON when the caller omits it", async () => {
+      const tool = await setupTool();
+      let renderedBefore = "";
+      let helpText = "";
+
+      const result = await tool.execute(
+         "tool-call-id",
+         {
+            question: "Which option should we use?",
+            options: ["Alpha", "Beta"],
+            // allowComment intentionally omitted — should default ON.
+         },
+         undefined,
+         undefined,
+         {
+            hasUI: true,
+            ui: {
+               custom: async (factory: any) => {
+                  let resolved: any;
+                  const component = factory(
+                     { requestRender() { }, terminal: { rows: 24 } },
+                     createTheme(),
+                     createKeybindings(),
+                     (value: any) => {
+                        resolved = value;
+                     },
+                  );
+
+                  renderedBefore = ((component as any).singleSelectList as any).render(80).join("\n");
+                  helpText = (component as any).helpText.render().join("\n");
+                  // Comment mode is reachable: toggle, confirm, append text.
+                  component.handleInput("ctrl+g");
+                  component.handleInput("enter");
+                  expect(resolved).toBeUndefined();
+                  editorText = "appended note";
+                  component.handleInput("enter");
+                  return resolved ?? null;
+               },
+            },
+         },
+      );
+
+      expect(result.isError).not.toBe(true);
+      expect(renderedBefore).toContain("Add extra context after selection");
+      expect(helpText).toContain("add text");
+      expect(result.details.response).toEqual({
+         kind: "selection",
+         selections: ["Alpha"],
+         comment: "appended note",
+      });
+   });
+
+   test("top-level ESC cancels with reason 'user' and surfaces it to the event + details", async () => {
+      const tool = await setupTool();
+
+      const result = await tool.execute(
+         "tool-call-id",
+         {
+            question: "Which option should we use?",
+            options: ["Alpha", "Beta"],
+         },
+         undefined,
+         undefined,
+         {
+            hasUI: true,
+            ui: {
+               custom: async (factory: any) => {
+                  let resolved: any;
+                  const component = factory(
+                     { requestRender() { }, terminal: { rows: 24 } },
+                     createTheme(),
+                     createKeybindings(),
+                     (value: any) => {
+                        resolved = value;
+                     },
+                  );
+
+                  // Top-level (select-mode) ESC is the abort trigger.
+                  component.handleInput("escape");
+                  return resolved ?? null;
+               },
+            },
+         },
+      );
+
+      expect(result.isError).not.toBe(true);
+      expect(result.details.cancelled).toBe(true);
+      expect(result.details.response).toBeNull();
+      expect(result.details.cancelReason).toBe("user");
+
+      const cancelledEvent = emittedEvents.find((event) => event.name === "ask:cancelled");
+      expect(cancelledEvent?.payload.reason).toBe("user");
+   });
+
+   test("ESC inside the editor returns to select mode without cancelling", async () => {
+      const tool = await setupTool();
+      let modeAfterEsc = "";
+      let resolvedAfterEsc: any = "sentinel";
+
+      await tool.execute(
+         "tool-call-id",
+         {
+            question: "Which option should we use?",
+            options: ["Alpha", "Beta"],
+         },
+         undefined,
+         undefined,
+         {
+            hasUI: true,
+            ui: {
+               custom: async (factory: any) => {
+                  let resolved: any;
+                  const component = factory(
+                     { requestRender() { }, terminal: { rows: 24 } },
+                     createTheme(),
+                     createKeybindings(),
+                     (value: any) => {
+                        resolved = value;
+                     },
+                  );
+
+                  // Enter comment editor, then press ESC — should go back to
+                  // select mode (NOT cancel the turn).
+                  component.handleInput("ctrl+g");
+                  component.handleInput("enter");
+                  component.handleInput("escape");
+                  modeAfterEsc = (component as any).mode;
+                  resolvedAfterEsc = resolved;
+                  // Now a genuine top-level ESC from select mode cancels.
+                  component.handleInput("escape");
+                  return resolved ?? null;
+               },
+            },
+         },
+      );
+
+      // Editor ESC must return to select mode and NOT resolve (no cancel).
+      expect(modeAfterEsc).toBe("select");
+      expect(resolvedAfterEsc).toBeUndefined();
+   });
+
+   test("timeout cancellation reports reason 'timeout' and does not look like a user cancel", async () => {
+      const tool = await setupTool();
+
+      const result = await tool.execute(
+         "tool-call-id",
+         {
+            question: "Which option should we use?",
+            options: ["Alpha", "Beta"],
+            timeout: 5,
+         },
+         undefined,
+         undefined,
+         {
+            hasUI: true,
+            ui: {
+               custom: async (factory: any) => {
+                  let resolved: any;
+                  factory(
+                     { requestRender() { }, terminal: { rows: 24 } },
+                     createTheme(),
+                     createKeybindings(),
+                     (value: any) => {
+                        resolved = value;
+                     },
+                  );
+                  // Let the timeout fire.
+                  await new Promise((r) => setTimeout(r, 20));
+                  return resolved ?? null;
+               },
+            },
+         },
+      );
+
+      expect(result.isError).not.toBe(true);
+      expect(result.details.cancelled).toBe(true);
+      expect(result.details.cancelReason).toBe("timeout");
+
+      const cancelledEvent = emittedEvents.find((event) => event.name === "ask:cancelled");
+      expect(cancelledEvent?.payload.reason).toBe("timeout");
+      expect(cancelledEvent?.payload.reason).not.toBe("user");
+   });
+
+   test("explicit allowComment: false still suppresses comment mode", async () => {
+      const tool = await setupTool();
+      let renderedBefore = "";
+
+      const result = await tool.execute(
+         "tool-call-id",
+         {
+            question: "Which option should we use?",
+            options: ["Alpha", "Beta"],
+            allowComment: false,
+         },
+         undefined,
+         undefined,
+         {
+            hasUI: true,
+            ui: {
+               custom: async (factory: any) => {
+                  let resolved: any;
+                  const component = factory(
+                     { requestRender() { }, terminal: { rows: 24 } },
+                     createTheme(),
+                     createKeybindings(),
+                     (value: any) => {
+                        resolved = value;
+                     },
+                  );
+
+                  renderedBefore = ((component as any).singleSelectList as any).render(80).join("\n");
+                  // ctrl+g must be ignored; enter selects immediately.
+                  component.handleInput("ctrl+g");
+                  component.handleInput("enter");
+                  return resolved ?? null;
+               },
+            },
+         },
+      );
+
+      expect(result.isError).not.toBe(true);
+      expect(renderedBefore).not.toContain("Add extra context after selection");
+      expect(result.details.response).toEqual({ kind: "selection", selections: ["Alpha"] });
    });
 
 
@@ -1869,6 +2098,7 @@ describe("ask_user", () => {
                question: "Pick colors",
                options: ["Red", "Blue", "Green"],
                allowMultiple: true,
+               allowComment: false,
             },
             undefined,
             undefined,

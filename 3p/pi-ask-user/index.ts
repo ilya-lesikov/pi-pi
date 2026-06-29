@@ -1003,7 +1003,6 @@ class WrappedSingleSelectList implements Component {
  */
 class AskComponent extends Container {
    private question: string;
-   private context?: string;
    private options: QuestionOption[];
    private allowMultiple: boolean;
    private allowFreeform: boolean;
@@ -1023,7 +1022,6 @@ class AskComponent extends Container {
    // Static layout components
    private titleText: Text;
    private questionText: Text;
-   private contextComponent?: Component;
    private modeContainer: Container;
    private helpText: Text;
 
@@ -1061,7 +1059,6 @@ class AskComponent extends Container {
       super();
 
       this.question = question;
-      this.context = context;
       this.options = options;
       this.allowMultiple = allowMultiple;
       this.allowFreeform = allowFreeform;
@@ -1087,17 +1084,9 @@ class AskComponent extends Container {
 
       this.questionText = new Text("", 1, 0);
       this.addChild(this.questionText);
-
-      if (this.context) {
-         this.addChild(new Spacer(1));
-         const mdTheme = safeMarkdownTheme();
-         if (mdTheme) {
-            this.contextComponent = new Markdown("", 1, 0, mdTheme);
-         } else {
-            this.contextComponent = new Text("", 1, 0);
-         }
-         this.addChild(this.contextComponent);
-      }
+      // The interactive dialogue intentionally omits a separate context block:
+      // the model output rendered above carries the detail. Only a short, dimmed
+      // question line is shown here to keep the prompt scannable (see LOCKED #2).
 
       this.addChild(new Spacer(1));
 
@@ -1160,29 +1149,19 @@ class AskComponent extends Container {
    private countStaticLines(width: number): number {
       const titleLines = 1;
       const questionLines = this.countWrappedLines(this.question, width);
-      const contextLines = this.context ? 1 + this.countWrappedLines(this.context, width) : 0;
       const helpLines = 1;
       const borderLines = 2;
-      const spacerLines = this.context ? 6 : 5;
-      return borderLines + spacerLines + titleLines + questionLines + contextLines + helpLines;
+      const spacerLines = 5;
+      return borderLines + spacerLines + titleLines + questionLines + helpLines;
    }
 
    private updateStaticText(): void {
       const theme = this.theme;
       const title = this.mode === "comment" ? "Optional comment" : "Question";
       this.titleText.setText(theme.fg("accent", theme.bold(title)));
-      this.questionText.setText(theme.fg("text", theme.bold(this.question)));
-      if (this.contextComponent && this.context) {
-         if (this.contextComponent instanceof Markdown) {
-            (this.contextComponent as Markdown).setText(
-               `**Context:**\n${this.context}`,
-            );
-         } else {
-            (this.contextComponent as Text).setText(
-               `${theme.fg("accent", theme.bold("Context:"))}\n${theme.fg("dim", this.context)}`,
-            );
-         }
-      }
+      // Dimmed, non-bold so it stays visually subordinate to the "Question" title
+      // (accent+bold) above and the richer model output rendered before the dialogue.
+      this.questionText.setText(theme.fg("dim", this.question));
    }
 
    private updateHelpText(): void {
