@@ -1835,7 +1835,20 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     return;
   });
 
-  pi.on("tool_result", async (event, _ctx) => {
+  pi.on("tool_result", async (event, ctx) => {
+    // ESC in an ask_user dialogue must stop the LLM's turn (treat ESC as
+    // "stop, I want to type"). Only a deliberate user cancel aborts — timeout
+    // and programmatic signal-aborts carry a non-"user" reason and must not.
+    // The benign tool result has already been produced, so abort() yields a
+    // clean stop rather than an error in the agent loop.
+    if (event.toolName === "ask_user") {
+      const cancelReason = (event.details as { cancelReason?: string } | undefined)?.cancelReason;
+      if (cancelReason === "user") {
+        getLogger().debug({ s: "hook", hook: "tool_result", tool: "ask_user" }, "user cancelled ask_user — aborting turn");
+        ctx.abort?.();
+      }
+    }
+
     if (!orchestrator.active) return;
 
     if ((event.toolName === "edit" || event.toolName === "write") && !event.isError) {

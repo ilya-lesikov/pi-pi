@@ -180,3 +180,69 @@ describe("tool_result implementation tracking", () => {
     expect(orchestrator.active.modifiedFiles.has("/project/src/bar.ts")).toBe(true);
   });
 });
+
+describe("ask_user ESC aborts the turn", () => {
+  it("aborts the turn when the user cancels (reason 'user')", async () => {
+    const handler = getHandler("tool_result");
+    const ctx = { abort: vi.fn() };
+    await handler(
+      {
+        toolName: "ask_user",
+        input: {},
+        isError: false,
+        content: [{ type: "text", text: "User cancelled the question" }],
+        details: { cancelled: true, response: null, cancelReason: "user" },
+      },
+      ctx,
+    );
+    expect(ctx.abort).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT abort on a timeout cancellation", async () => {
+    const handler = getHandler("tool_result");
+    const ctx = { abort: vi.fn() };
+    await handler(
+      {
+        toolName: "ask_user",
+        input: {},
+        isError: false,
+        content: [{ type: "text", text: "User cancelled the question" }],
+        details: { cancelled: true, response: null, cancelReason: "timeout" },
+      },
+      ctx,
+    );
+    expect(ctx.abort).not.toHaveBeenCalled();
+  });
+
+  it("does NOT abort on a programmatic signal cancellation", async () => {
+    const handler = getHandler("tool_result");
+    const ctx = { abort: vi.fn() };
+    await handler(
+      {
+        toolName: "ask_user",
+        input: {},
+        isError: false,
+        content: [{ type: "text", text: "User cancelled the question" }],
+        details: { cancelled: true, response: null, cancelReason: "signal" },
+      },
+      ctx,
+    );
+    expect(ctx.abort).not.toHaveBeenCalled();
+  });
+
+  it("does NOT abort when the user actually answered", async () => {
+    const handler = getHandler("tool_result");
+    const ctx = { abort: vi.fn() };
+    await handler(
+      {
+        toolName: "ask_user",
+        input: {},
+        isError: false,
+        content: [{ type: "text", text: "User answered: Alpha" }],
+        details: { cancelled: false, response: { kind: "selection", selections: ["Alpha"] } },
+      },
+      ctx,
+    );
+    expect(ctx.abort).not.toHaveBeenCalled();
+  });
+});
