@@ -2587,10 +2587,10 @@ async function showSettingsMenu(orchestrator: Orchestrator, ctx: any): Promise<t
   }
 }
 
-function autonomousPhasesForTask(type: TaskType, includeFirstPhase: boolean): string[] {
-  if (type === "implement") return includeFirstPhase ? ["brainstorm", "plan", "implement"] : ["plan", "implement"];
-  if (type === "debug") return includeFirstPhase ? ["debug", "plan", "implement"] : ["plan", "implement"];
-  if (type === "review") return includeFirstPhase ? ["review", "plan", "implement"] : ["plan", "implement"];
+// First phases (brainstorm/debug/review) are always interactive and can never run
+// autonomously — autonomous configs only ever cover plan/implement.
+function autonomousPhasesForTask(type: TaskType): string[] {
+  if (type === "implement" || type === "debug" || type === "review") return ["plan", "implement"];
   return [];
 }
 
@@ -2599,8 +2599,8 @@ function defaultAutonomousReviewPreset(type: TaskType, phase: string): string {
   return "regular";
 }
 
-function buildDefaultAutonomousConfig(type: TaskType, includeFirstPhase: boolean): AutonomousConfig {
-  const phases = autonomousPhasesForTask(type, includeFirstPhase);
+function buildDefaultAutonomousConfig(type: TaskType): AutonomousConfig {
+  const phases = autonomousPhasesForTask(type);
   const out: AutonomousConfig = { phases: {} };
   for (const phase of phases) {
     out.phases[phase] = {
@@ -2696,10 +2696,9 @@ async function showAutonomousSettings(
   orchestrator: Orchestrator,
   ctx: any,
   type: TaskType,
-  includeFirstPhase: boolean,
 ): Promise<AutonomousConfig | null> {
-  const config = buildDefaultAutonomousConfig(type, includeFirstPhase);
-  const phases = autonomousPhasesForTask(type, includeFirstPhase);
+  const config = buildDefaultAutonomousConfig(type);
+  const phases = autonomousPhasesForTask(type);
 
   while (true) {
     const options: OptionInput[] = [
@@ -2721,13 +2720,12 @@ async function pickModeForTaskStart(
   orchestrator: Orchestrator,
   ctx: any,
   type: TaskType,
-  includeFirstPhase: boolean,
 ): Promise<{ mode: TaskMode; autonomousConfig?: AutonomousConfig } | null> {
   while (true) {
     const mode = await showTaskModePicker(ctx);
     if (mode === "back") return null;
     if (mode === "guided") return { mode: "guided" };
-    const autonomousConfig = await showAutonomousSettings(orchestrator, ctx, type, includeFirstPhase);
+    const autonomousConfig = await showAutonomousSettings(orchestrator, ctx, type);
     if (!autonomousConfig) continue;
     return { mode: "autonomous", autonomousConfig };
   }
@@ -2802,7 +2800,7 @@ async function showFromMenu(orchestrator: Orchestrator, ctx: any): Promise<typeo
     const selected = tasks.find((t) => fromOptionTitle(t) === choice);
     if (!selected) continue;
 
-    const modeSelection = await pickModeForTaskStart(orchestrator, ctx, "implement", false);
+    const modeSelection = await pickModeForTaskStart(orchestrator, ctx, "implement");
     if (!modeSelection) continue;
     await orchestrator.startTask(ctx, "implement", "implement", selected.dir, true, modeSelection.mode);
     if (orchestrator.active) {
@@ -2824,7 +2822,7 @@ async function showImplementMenu(orchestrator: Orchestrator, ctx: any): Promise<
     if (!choice || choice === "Back") return BACK;
 
     if (choice === "New") {
-      const modeSelection = await pickModeForTaskStart(orchestrator, ctx, "implement", true);
+      const modeSelection = await pickModeForTaskStart(orchestrator, ctx, "implement");
       if (!modeSelection) continue;
       await orchestrator.startTask(ctx, "implement", "implement", undefined, undefined, modeSelection.mode);
       if (orchestrator.active) {
@@ -3016,7 +3014,7 @@ async function showReviewMenu(orchestrator: Orchestrator, ctx: any): Promise<typ
         resContent = appendResearchOpenQuestions(resContent, `PR context:\n${prContextBlocks}`);
       }
 
-      const modeSelection = await pickModeForTaskStart(orchestrator, ctx, "review", true);
+      const modeSelection = await pickModeForTaskStart(orchestrator, ctx, "review");
       if (!modeSelection) continue;
       const description = "review-current-branch";
       return startReviewTask(orchestrator, ctx, urContent, resContent, description, modeSelection.mode, modeSelection.autonomousConfig);
@@ -3035,7 +3033,7 @@ async function showReviewMenu(orchestrator: Orchestrator, ctx: any): Promise<typ
         "Focus on correctness, edge cases, style, missing tests, potential bugs.",
         "",
       ].join("\n");
-      const modeSelection = await pickModeForTaskStart(orchestrator, ctx, "review", true);
+      const modeSelection = await pickModeForTaskStart(orchestrator, ctx, "review");
       if (!modeSelection) continue;
       return startReviewTask(orchestrator, ctx, urContent, null, "review-last-commit", modeSelection.mode, modeSelection.autonomousConfig);
     }
@@ -3065,7 +3063,7 @@ async function showReviewMenu(orchestrator: Orchestrator, ctx: any): Promise<typ
         "Focus on correctness, edge cases, style, missing tests, potential bugs.",
         "",
       ].join("\n");
-      const modeSelection = await pickModeForTaskStart(orchestrator, ctx, "review", true);
+      const modeSelection = await pickModeForTaskStart(orchestrator, ctx, "review");
       if (!modeSelection) continue;
       return startReviewTask(orchestrator, ctx, urContent, null, "review-since-commit", modeSelection.mode, modeSelection.autonomousConfig);
     }
@@ -3083,7 +3081,7 @@ async function showReviewMenu(orchestrator: Orchestrator, ctx: any): Promise<typ
         "Focus on correctness, edge cases, style, missing tests, potential bugs.",
         "",
       ].join("\n");
-      const modeSelection = await pickModeForTaskStart(orchestrator, ctx, "review", true);
+      const modeSelection = await pickModeForTaskStart(orchestrator, ctx, "review");
       if (!modeSelection) continue;
       return startReviewTask(orchestrator, ctx, urContent, null, "review-uncommitted", modeSelection.mode, modeSelection.autonomousConfig);
     }
@@ -3094,7 +3092,7 @@ async function showReviewMenu(orchestrator: Orchestrator, ctx: any): Promise<typ
     const description = trimmed || "review";
 
     const urContent = `# User Request\n${description}\n\n## Problem\n${description}\n\n## Constraints\nFocus on correctness, edge cases, style, missing tests, potential bugs.\n`;
-    const modeSelection = await pickModeForTaskStart(orchestrator, ctx, "review", true);
+    const modeSelection = await pickModeForTaskStart(orchestrator, ctx, "review");
     if (!modeSelection) continue;
     return startReviewTask(orchestrator, ctx, urContent, null, description, modeSelection.mode, modeSelection.autonomousConfig);
   }
@@ -3117,7 +3115,7 @@ async function showTaskTypeMenu(
       let mode: TaskMode | undefined;
       let autonomousConfig: AutonomousConfig | undefined;
       if (type === "debug") {
-        const modeSelection = await pickModeForTaskStart(orchestrator, ctx, type, true);
+        const modeSelection = await pickModeForTaskStart(orchestrator, ctx, type);
         if (!modeSelection) continue;
         mode = modeSelection.mode;
         autonomousConfig = modeSelection.autonomousConfig;
@@ -3300,7 +3298,6 @@ export async function showActiveTaskMenu(
 
     if (effectiveMode === "autonomous") {
       const autoChoice = await selectOption(ctx, `/pp\n\nTask: ${task.type}\nPhase: ${phase}${summary !== "/pp" ? `\n\n${summary}` : ""}`, [
-        opt("Switch to Guided", "Return to gated phase transitions"),
         opt("Complete task", "Mark task as done and clean up"),
         opt("Pause task", "Suspend task to resume later"),
         opt("Info", "Subagents, usage, and task status"),
@@ -3316,11 +3313,6 @@ export async function showActiveTaskMenu(
         await showSettingsMenu(orchestrator, ctx);
         continue;
       }
-      if (autoChoice === "Switch to Guided") {
-        task.state.effectiveMode = "guided";
-        saveTask(task.dir, task.state);
-        continue;
-      }
       if (autoChoice === "Complete task") {
         const text = await finishTask(orchestrator, ctx);
         return mode === "tool" ? text : "";
@@ -3333,9 +3325,6 @@ export async function showActiveTaskMenu(
     options.push(opt("Next", "Complete, pause, or continue to next phase"));
     if (!waiting) {
       options.push(opt("Review", "Auto review, Plannotator, or manual review"));
-    }
-    if (task.state.autonomousConfig) {
-      options.push(opt("Switch to Autonomous", "Run with automatic phase transitions"));
     }
     options.push(opt("Info", "Subagents, usage, and task status"));
     options.push(opt("Settings", "Flant AI and other configuration"));
@@ -3357,12 +3346,6 @@ export async function showActiveTaskMenu(
       await showSettingsMenu(orchestrator, ctx);
       continue;
     }
-    if (choice === "Switch to Autonomous") {
-      task.state.effectiveMode = "autonomous";
-      saveTask(task.dir, task.state);
-      continue;
-    }
-
     if (mode === "command") {
       await abortCurrentWork(orchestrator, ctx);
     }
@@ -3394,7 +3377,7 @@ export async function showActiveTaskMenu(
         next === "plan" &&
         task.type === "brainstorm"
       ) {
-        const modeSelection = await pickModeForTaskStart(orchestrator, ctx, "implement", false);
+        const modeSelection = await pickModeForTaskStart(orchestrator, ctx, "implement");
         if (!modeSelection) continue;
         task.state.mode = modeSelection.mode;
         task.state.effectiveMode = undefined;
