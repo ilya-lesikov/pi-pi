@@ -550,7 +550,7 @@ export async function resumeTask(
 
     if (cycle.kind === "auto" && (cycle.step === "spawn_reviewers" || cycle.step === "await_reviewers")) {
       const outputs = loadPhaseReviewOutputs(orchestrator.active.dir, phase, cycle.pass);
-      if (reviewerCount === 0 || (outputs.length >= reviewerCount && outputs.length === 0)) {
+      if (reviewerCount === 0) {
         orchestrator.active.state.reviewCycle = null;
         orchestrator.active.state.step = "llm_work";
         saveTask(orchestrator.active.dir, orchestrator.active.state);
@@ -632,6 +632,14 @@ export async function resumeTask(
             kind: "reviewer",
             logScope: "review",
             logMessage: "spawn reviewers failed",
+            onSettled: (result) => {
+              if (result?.spawned === 0 && orchestrator.active?.state.reviewCycle?.step === "await_reviewers") {
+                orchestrator.active.state.reviewCycle = null;
+                orchestrator.active.state.step = "llm_work";
+                saveTask(orchestrator.active.dir, orchestrator.active.state);
+                orchestrator.safeSendUserMessage("[PI-PI] No reviewer outputs were produced — nothing to review. Continue working.");
+              }
+            },
           });
           cycle.step = "await_reviewers";
           orchestrator.active.state.step = "await_reviewers";
@@ -2614,7 +2622,7 @@ async function showTaskModePicker(ctx: any): Promise<TaskMode | "back"> {
   return mode === "Autonomous" ? "autonomous" : "guided";
 }
 
-async function pickMaxReviewPasses(ctx: any, current: number): Promise<number | null> {
+export async function pickMaxReviewPasses(ctx: any, current: number): Promise<number | null> {
   const currentLabel = current >= 999 ? "-" : String(current);
   while (true) {
     const input = await ctx.ui.input(
@@ -2624,8 +2632,12 @@ async function pickMaxReviewPasses(ctx: any, current: number): Promise<number | 
     const trimmed = String(input).trim();
     if (trimmed === "") return null;
     if (trimmed === "-") return 999;
+    if (!/^\d+$/.test(trimmed)) {
+      ctx.ui.notify('Please enter a positive integer, or "-" for unlimited.', "warning");
+      continue;
+    }
     const parsed = Number.parseInt(trimmed, 10);
-    if (!Number.isFinite(parsed) || parsed <= 0) {
+    if (parsed <= 0) {
       ctx.ui.notify('Please enter a positive integer, or "-" for unlimited.', "warning");
       continue;
     }

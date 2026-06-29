@@ -194,7 +194,9 @@ function tryCompleteReviewCycle(orchestrator: Orchestrator, spawnedReviewers?: n
   orchestrator.active.state.step = "apply_feedback";
   saveTask(orchestrator.active.dir, orchestrator.active.state);
 
-  const rendered = outputs.map((o) => `=== ${o.name} ===\n${o.content}`).join("\n\n");
+  const rendered = outputs.length
+    ? outputs.map((o) => `=== ${o.name} ===\n${o.content}`).join("\n\n")
+    : "All reviewers failed to produce output. Review the work yourself and decide whether to approve or request changes.";
 
   pi.sendMessage(
     {
@@ -2102,7 +2104,9 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
               cycle.step = "apply_feedback";
               orchestrator.active.state.step = "apply_feedback";
               saveTask(orchestrator.active.dir, orchestrator.active.state);
-              const rendered = outputs.map((o) => `=== ${o.name} ===\n${o.content}`).join("\n\n");
+              const rendered = outputs.length
+                ? outputs.map((o) => `=== ${o.name} ===\n${o.content}`).join("\n\n")
+                : "All reviewers failed to produce output. Review the work yourself and decide whether to approve or request changes.";
               pi.sendMessage(
                 { customType: "pp-review-ready", content: `[PI-PI] Reviewer outputs are ready.\n\n${rendered}`, display: false },
                 { deliverAs: "followUp" },

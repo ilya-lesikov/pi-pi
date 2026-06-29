@@ -3,7 +3,7 @@ import { join } from "path";
 import { getDefaultConfig, GLOBAL_CONFIG_PATH, parseDuration } from "./config.js";
 import * as configModule from "./config.js";
 import * as flantInfra from "./flant-infra.js";
-import { formatDuration, formatSourceTags, getConfigSourceInfo } from "./pp-menu.js";
+import { formatDuration, formatSourceTags, getConfigSourceInfo, pickMaxReviewPasses } from "./pp-menu.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -97,5 +97,38 @@ describe("settings helpers", () => {
     expect(info.flantValue).toBe(false);
     expect(info.globalValue).toBeUndefined();
     expect(info.projectValue).toBeUndefined();
+  });
+});
+
+describe("pickMaxReviewPasses", () => {
+  function makeInputCtx(responses: (string | undefined)[]) {
+    let i = 0;
+    return {
+      ui: {
+        input: vi.fn(async () => responses[i++]),
+        notify: vi.fn(),
+      },
+    } as any;
+  }
+
+  it('returns 999 for "-" (unlimited)', async () => {
+    const ctx = makeInputCtx(["-"]);
+    expect(await pickMaxReviewPasses(ctx, 3)).toBe(999);
+  });
+
+  it("returns the entered positive integer", async () => {
+    const ctx = makeInputCtx(["5"]);
+    expect(await pickMaxReviewPasses(ctx, 3)).toBe(5);
+  });
+
+  it("re-prompts on non-integer junk then accepts a valid integer", async () => {
+    const ctx = makeInputCtx(["3abc", "1.5", "4"]);
+    expect(await pickMaxReviewPasses(ctx, 3)).toBe(4);
+    expect(ctx.ui.notify).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns null when input is cancelled or empty", async () => {
+    expect(await pickMaxReviewPasses(makeInputCtx([undefined]), 3)).toBeNull();
+    expect(await pickMaxReviewPasses(makeInputCtx([""]), 3)).toBeNull();
   });
 });
