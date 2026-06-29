@@ -3035,7 +3035,7 @@ describe("error retry", () => {
     expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Retrying in 2s"), "warning");
 
     await vi.advanceTimersByTimeAsync(2000);
-    expect(pi.sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("Previous request failed"));
+    expect(pi.sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("Previous request failed"), { deliverAs: "followUp" });
     vi.useRealTimers();
   });
 
@@ -3085,7 +3085,7 @@ describe("error retry", () => {
     await turnEnd({ message: { stopReason: "stop", content: [] }, toolResults: [] }, ctx);
 
     expect(orchestrator.nudgeTimestamps.length).toBe(1);
-    expect(pi.sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("Continue the implement phase"));
+    expect(pi.sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("Continue the implement phase"), { deliverAs: "followUp" });
   });
 
   it("nudge halts after repeated interruptions", async () => {

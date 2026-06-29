@@ -106,6 +106,21 @@ describe("Orchestrator.safeSendUserMessage", () => {
     expect(notify.mock.calls[0][1]).toBe("error");
     vi.useRealTimers();
   });
+
+  it("queues as a follow-up so it never throws 'Agent is already processing'", () => {
+    // Regression: during an autonomous phase transition pp_phase_complete is
+    // still in-flight when the post-compaction 'Begin working' message is sent.
+    // Without deliverAs the runtime throws and the implement phase never starts.
+    const sendUserMessage = vi.fn();
+    const orchestrator = new Orchestrator(makePi({ sendUserMessage }));
+
+    orchestrator.safeSendUserMessage("[PI-PI] Entered implement phase. Begin working.");
+
+    expect(sendUserMessage).toHaveBeenCalledWith(
+      "[PI-PI] Entered implement phase. Begin working.",
+      { deliverAs: "followUp" },
+    );
+  });
 });
 
 describe("Orchestrator.switchModel thinking level", () => {

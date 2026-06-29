@@ -160,7 +160,7 @@ describe("pp command", () => {
     const pp = pi._commands.get("pp");
     expect(pp).toBeTruthy();
     await pp!.handler(undefined, ctx);
-    expect(pi.sendUserMessage).toHaveBeenCalledWith("[PI-PI] User wants to continue. Run /pp when ready to advance.");
+    expect(pi.sendUserMessage).toHaveBeenCalledWith("[PI-PI] User wants to continue. Run /pp when ready to advance.", { deliverAs: "followUp" });
   });
 
   it("registers pp command", () => {

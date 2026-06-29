@@ -102,7 +102,14 @@ export class Orchestrator {
     const log = getLogger();
     const attempt = (retries: number) => {
       try {
-        this.pi.sendUserMessage(text);
+        // Always queue as a follow-up turn. Without an explicit deliverAs, the
+        // runtime throws "Agent is already processing" when this is called while
+        // a tool (e.g. pp_phase_complete) is still in-flight — which is exactly
+        // the case during an autonomous phase transition (and when compaction
+        // fails synchronously with "Nothing to compact"). followUp queues the
+        // message and triggers a turn once the current one settles, or runs
+        // immediately when the agent is idle.
+        this.pi.sendUserMessage(text, { deliverAs: "followUp" });
         log.debug({ s: "orchestrator", retries, text: text.slice(0, 200) }, "safeSend sent");
       } catch (err: any) {
         if (retries < 30) {
