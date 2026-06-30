@@ -58,6 +58,7 @@ function createConfig() {
         debug: { model: "openai/gpt-latest", thinking: "high" },
         brainstorm: { model: "anthropic/claude-opus-latest", thinking: "high" },
         review: { model: "anthropic/claude-opus-latest", thinking: "high" },
+        quick: { model: "anthropic/claude-opus-latest", thinking: "high" },
       },
       subagents: {
         simple: {

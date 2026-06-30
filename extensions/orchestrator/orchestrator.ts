@@ -445,6 +445,7 @@ export class Orchestrator {
       type === "debug" ? "debug"
       : type === "brainstorm" ? "brainstorm"
       : type === "review" ? "review"
+      : type === "quick" ? "quick"
       : "implement"
     ];
     const modelOk = await this.switchModel(ctx, modelConfig.model, modelConfig.thinking);

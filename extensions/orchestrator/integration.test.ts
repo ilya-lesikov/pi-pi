@@ -63,6 +63,7 @@ vi.mock("./config.js", async (importOriginal) => {
         debug: { model: "test/model", thinking: "high" },
         brainstorm: { model: "test/model", thinking: "high" },
         review: { model: "test/model", thinking: "high" },
+        quick: { model: "test/model", thinking: "high" },
       },
       subagents: {
         simple: {
@@ -215,6 +216,7 @@ function makeConfig() {
         debug: { model: "test/model", thinking: "high" },
         brainstorm: { model: "test/model", thinking: "high" },
         review: { model: "test/model", thinking: "high" },
+        quick: { model: "test/model", thinking: "high" },
       },
       subagents: {
         simple: {

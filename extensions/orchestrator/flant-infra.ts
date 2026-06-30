@@ -388,6 +388,7 @@ export function generateFlantConfig(models: string[]): Partial<PiPiConfig> {
         debug: { model: modelSpec(debugModel), thinking: "high" },
         brainstorm: { model: modelSpec(brainstormModel), thinking: "high" },
         review: { model: modelSpec(implementModel), thinking: "high" },
+        quick: { model: modelSpec(implementModel), thinking: "high" },
       },
       subagents: {
         simple: {

@@ -1085,6 +1085,7 @@ const ORCHESTRATOR_ROLES: Array<{ role: MainModelRole; label: string; descriptio
   { role: "plan", label: "Planner", description: "agents.orchestrators.plan" },
   { role: "debug", label: "Debugger", description: "agents.orchestrators.debug" },
   { role: "review", label: "Reviewer", description: "agents.orchestrators.review" },
+  { role: "quick", label: "Quick", description: "agents.orchestrators.quick" },
 ];
 
 const SUBAGENT_ROLES: Array<{ role: AgentRole; label: string; description: string }> = [
