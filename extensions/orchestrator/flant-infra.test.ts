@@ -172,6 +172,79 @@ describe("flant-infra", () => {
     expect(config.agents.subagents.presetGroups.planners.presets.regular.agents.gemini.model).toBe("pp-flant-openai/gemini-3-1-pro");
   });
 
+  it("generateFlantConfig routes Claude roles through subs when subscription active", async () => {
+    const dir = makeTempDir();
+    const mod = await loadFlantInfraModule(dir);
+
+    const config = mod.generateFlantConfig(
+      ["claude-opus-4-8", "claude-haiku-4-5", "gpt-5-4", "gemini-3-1-pro", "gemini-3-1-flash"],
+      true,
+    ) as any;
+
+    // Claude roles -> sub provider
+    expect(config.agents.orchestrators.implement.model).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
+    expect(config.agents.orchestrators.plan.model).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
+    expect(config.agents.orchestrators.brainstorm.model).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
+    expect(config.agents.subagents.simple.task.model).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
+    expect(config.agents.subagents.presetGroups.planners.presets.regular.agents.opus.model).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
+    // Non-Claude roles stay on the openai (company-billed) provider
+    expect(config.agents.orchestrators.debug.model).toBe("pp-flant-openai/gpt-5-4");
+    expect(config.agents.subagents.simple.explore.model).toBe("pp-flant-openai/gemini-3-1-flash");
+    expect(config.agents.subagents.presetGroups.planners.presets.regular.agents.gpt.model).toBe("pp-flant-openai/gpt-5-4");
+  });
+
+  it("generateFlantConfig keeps Claude roles on the company provider when subscription inactive", async () => {
+    const dir = makeTempDir();
+    const mod = await loadFlantInfraModule(dir);
+
+    const config = mod.generateFlantConfig(["claude-opus-4-8", "gpt-5-4"], false) as any;
+    expect(config.agents.orchestrators.implement.model).toBe("pp-flant-anthropic/claude-opus-4-8");
+  });
+
+  it("isSubscriptionActive requires flag + oauth token + gateway key", async () => {
+    const dir = makeTempDir();
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "auth.json"),
+      JSON.stringify({ anthropic: { access: "sk-ant-oat01-test", expires: Date.now() + 3_600_000 } }),
+      "utf-8",
+    );
+    const settingsDir = join(dir, "extensions", "pp", "cache");
+    mkdirSync(settingsDir, { recursive: true });
+    writeFileSync(join(settingsDir, "flant-models.json"), JSON.stringify({ enabled: true, subscription: true }), "utf-8");
+    const prevKey = process.env.LLM_API_KEY;
+    process.env.LLM_API_KEY = "sk-gateway-test";
+    try {
+      const mod = await loadFlantInfraModule(dir);
+      expect(mod.isSubscriptionActive()).toBe(true);
+      expect(mod.isSubscriptionActive({ subscription: false } as any)).toBe(false);
+    } finally {
+      if (prevKey === undefined) delete process.env.LLM_API_KEY;
+      else process.env.LLM_API_KEY = prevKey;
+    }
+  });
+
+  it("isSubscriptionActive is false without a gateway key", async () => {
+    const dir = makeTempDir();
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "auth.json"),
+      JSON.stringify({ anthropic: { access: "sk-ant-oat01-test", expires: Date.now() + 3_600_000 } }),
+      "utf-8",
+    );
+    const prevKey = process.env.LLM_API_KEY;
+    const prevFlant = process.env.FLANT_API_KEY;
+    delete process.env.LLM_API_KEY;
+    delete process.env.FLANT_API_KEY;
+    try {
+      const mod = await loadFlantInfraModule(dir);
+      expect(mod.isSubscriptionActive({ subscription: true } as any)).toBe(false);
+    } finally {
+      if (prevKey !== undefined) process.env.LLM_API_KEY = prevKey;
+      if (prevFlant !== undefined) process.env.FLANT_API_KEY = prevFlant;
+    }
+  });
+
   it("generateFlantConfig returns empty object for empty models", async () => {
     const dir = makeTempDir();
     const mod = await loadFlantInfraModule(dir);

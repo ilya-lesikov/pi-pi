@@ -890,8 +890,8 @@ async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise
       } else {
         ctx.ui.notify(
           turningOn
-            ? "Personal Claude subscription ON — pp-flant-anthropic-sub registered (sub/claude-* billed to your subscription)."
-            : "Personal Claude subscription OFF.",
+            ? "Personal Claude subscription ON — Claude roles now route through sub/claude-* (billed to your subscription); non-Claude roles stay on llm-api.flant.ru."
+            : "Personal Claude subscription OFF — Claude roles reverted to pp-flant-anthropic.",
           "info",
         );
       }

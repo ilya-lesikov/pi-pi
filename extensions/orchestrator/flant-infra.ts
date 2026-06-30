@@ -305,9 +305,24 @@ export async function fetchOpenRouterMetadata(modelIds: string[]): Promise<Recor
   return out;
 }
 
-function modelSpec(modelId: string): string {
-  const provider = modelId.startsWith("claude-") ? "pp-flant-anthropic" : "pp-flant-openai";
-  return `${provider}/${modelId}`;
+/**
+ * Returns true when the personal-subscription Claude path is fully usable:
+ * the setting is enabled AND both credentials (Claude OAuth token + gateway
+ * key) are present. Mirrors the gate in registerFlantProviders so we never
+ * generate `sub/` role assignments that cannot resolve to a real provider.
+ */
+export function isSubscriptionActive(settings?: FlantSettings): boolean {
+  const s = settings ?? loadFlantSettings();
+  return s.subscription && !!readClaudeOAuthToken() && !!readGatewayApiKey();
+}
+
+function modelSpec(modelId: string, subscriptionActive = false): string {
+  if (modelId.startsWith("claude-")) {
+    return subscriptionActive
+      ? `${SUB_PROVIDER}/${SUB_MODEL_PREFIX}${modelId}`
+      : `pp-flant-anthropic/${modelId}`;
+  }
+  return `pp-flant-openai/${modelId}`;
 }
 
 function buildProviderModelConfig(
@@ -420,18 +435,19 @@ function pickCheapestFastModel(models: string[]): string | null {
   return pickLatest(models.filter((m) => /^claude-haiku-/.test(m)));
 }
 
-function makeVariant(modelId: string | null, fallbackModelId: string): { enabled: boolean; model: string; thinking: string } {
-  if (!modelId) return { enabled: false, model: modelSpec(fallbackModelId), thinking: "high" };
-  return { enabled: true, model: modelSpec(modelId), thinking: "high" };
+function makeVariant(modelId: string | null, fallbackModelId: string, sub = false): { enabled: boolean; model: string; thinking: string } {
+  if (!modelId) return { enabled: false, model: modelSpec(fallbackModelId, sub), thinking: "high" };
+  return { enabled: true, model: modelSpec(modelId, sub), thinking: "high" };
 }
 
 function makeVariantWithThinking(
   modelId: string | null,
   fallbackModelId: string,
   thinking: string,
+  sub = false,
 ): { enabled: boolean; model: string; thinking: string } {
-  if (!modelId) return { enabled: false, model: modelSpec(fallbackModelId), thinking };
-  return { enabled: true, model: modelSpec(modelId), thinking };
+  if (!modelId) return { enabled: false, model: modelSpec(fallbackModelId, sub), thinking };
+  return { enabled: true, model: modelSpec(modelId, sub), thinking };
 }
 
 function buildPresetGroup(
@@ -441,9 +457,10 @@ function buildPresetGroup(
   return { default: defaultPreset, presets };
 }
 
-export function generateFlantConfig(models: string[]): Partial<PiPiConfig> {
+export function generateFlantConfig(models: string[], subscriptionActive = false): Partial<PiPiConfig> {
   const uniqueModels = [...new Set(models)];
   if (uniqueModels.length === 0) return {};
+  const sub = subscriptionActive;
 
   const latestOpus = pickLatest(uniqueModels.filter((m) => /^claude-opus-/.test(m)));
   const latestClaude = pickLatest(uniqueModels.filter((m) => /^claude-/.test(m)));
@@ -464,74 +481,74 @@ export function generateFlantConfig(models: string[]): Partial<PiPiConfig> {
   return {
     agents: {
       orchestrators: {
-        implement: { model: modelSpec(implementModel), thinking: "high" },
-        plan: { model: modelSpec(implementModel), thinking: "high" },
-        debug: { model: modelSpec(debugModel), thinking: "high" },
-        brainstorm: { model: modelSpec(brainstormModel), thinking: "high" },
-        review: { model: modelSpec(implementModel), thinking: "high" },
-        quick: { model: modelSpec(implementModel), thinking: "high" },
+        implement: { model: modelSpec(implementModel, sub), thinking: "high" },
+        plan: { model: modelSpec(implementModel, sub), thinking: "high" },
+        debug: { model: modelSpec(debugModel, sub), thinking: "high" },
+        brainstorm: { model: modelSpec(brainstormModel, sub), thinking: "high" },
+        review: { model: modelSpec(implementModel, sub), thinking: "high" },
+        quick: { model: modelSpec(implementModel, sub), thinking: "high" },
       },
       subagents: {
         simple: {
-          explore: { model: modelSpec(fastModel), thinking: "low" },
-          librarian: { model: modelSpec(fastModel), thinking: "medium" },
-          task: { model: modelSpec(taskModel), thinking: "medium" },
+          explore: { model: modelSpec(fastModel, sub), thinking: "low" },
+          librarian: { model: modelSpec(fastModel, sub), thinking: "medium" },
+          task: { model: modelSpec(taskModel, sub), thinking: "medium" },
         },
         presetGroups: {
           planners: buildPresetGroup({
             regular: {
               agents: {
-                opus: makeVariant(latestOpus, fallback),
-                gpt: makeVariant(latestGpt, fallback),
-                gemini: makeVariant(latestGeminiPro, fallback),
+                opus: makeVariant(latestOpus, fallback, sub),
+                gpt: makeVariant(latestGpt, fallback, sub),
+                gemini: makeVariant(latestGeminiPro, fallback, sub),
               },
             },
           }),
           planReviewers: buildPresetGroup({
             regular: {
               agents: {
-                opus: makeVariant(latestOpus, fallback),
-                gpt: makeVariant(latestGpt, fallback),
-                gemini: makeVariantWithThinking(latestGeminiPro, fallback, "xhigh"),
+                opus: makeVariant(latestOpus, fallback, sub),
+                gpt: makeVariant(latestGpt, fallback, sub),
+                gemini: makeVariantWithThinking(latestGeminiPro, fallback, "xhigh", sub),
               },
             },
             deep: {
               agents: {
-                opus: makeVariantWithThinking(latestOpus, fallback, "xhigh"),
-                gpt: makeVariantWithThinking(latestGpt, fallback, "xhigh"),
-                gemini: makeVariantWithThinking(latestGeminiPro, fallback, "xhigh"),
+                opus: makeVariantWithThinking(latestOpus, fallback, "xhigh", sub),
+                gpt: makeVariantWithThinking(latestGpt, fallback, "xhigh", sub),
+                gemini: makeVariantWithThinking(latestGeminiPro, fallback, "xhigh", sub),
               },
             },
           }),
           codeReviewers: buildPresetGroup({
             regular: {
               agents: {
-                opus: makeVariant(latestOpus, fallback),
-                gpt: makeVariant(latestGpt, fallback),
-                gemini: makeVariantWithThinking(latestGeminiPro, fallback, "xhigh"),
+                opus: makeVariant(latestOpus, fallback, sub),
+                gpt: makeVariant(latestGpt, fallback, sub),
+                gemini: makeVariantWithThinking(latestGeminiPro, fallback, "xhigh", sub),
               },
             },
             deep: {
               agents: {
-                opus: makeVariantWithThinking(latestOpus, fallback, "xhigh"),
-                gpt: makeVariantWithThinking(latestGpt, fallback, "xhigh"),
-                gemini: makeVariantWithThinking(latestGeminiPro, fallback, "xhigh"),
+                opus: makeVariantWithThinking(latestOpus, fallback, "xhigh", sub),
+                gpt: makeVariantWithThinking(latestGpt, fallback, "xhigh", sub),
+                gemini: makeVariantWithThinking(latestGeminiPro, fallback, "xhigh", sub),
               },
             },
           }),
           brainstormReviewers: buildPresetGroup({
             regular: {
               agents: {
-                opus: makeVariant(latestOpus, fallback),
-                gpt: makeVariant(latestGpt, fallback),
-                gemini: makeVariantWithThinking(latestGeminiPro, fallback, "xhigh"),
+                opus: makeVariant(latestOpus, fallback, sub),
+                gpt: makeVariant(latestGpt, fallback, sub),
+                gemini: makeVariantWithThinking(latestGeminiPro, fallback, "xhigh", sub),
               },
             },
             deep: {
               agents: {
-                opus: makeVariantWithThinking(latestOpus, fallback, "xhigh"),
-                gpt: makeVariantWithThinking(latestGpt, fallback, "xhigh"),
-                gemini: makeVariantWithThinking(latestGeminiPro, fallback, "xhigh"),
+                opus: makeVariantWithThinking(latestOpus, fallback, "xhigh", sub),
+                gpt: makeVariantWithThinking(latestGpt, fallback, "xhigh", sub),
+                gemini: makeVariantWithThinking(latestGeminiPro, fallback, "xhigh", sub),
               },
             },
           }),
@@ -604,7 +621,7 @@ export async function updateFlantInfra(
 
   try {
     registerFlantProviders(pi, models, metadata);
-    generatedFlantConfig = generateFlantConfig(models);
+    generatedFlantConfig = generateFlantConfig(models, isSubscriptionActive(settings));
     if (!refreshed && settings.cachedFlantModels && settings.cachedOpenRouterData && !settings.lastUpdated) {
       settings.lastUpdated = new Date().toISOString();
       saveFlantSettings(settings);
@@ -626,7 +643,7 @@ export function initFlantSync(pi: ExtensionAPI): void {
   }
   if (settings.cachedFlantModels && settings.cachedOpenRouterData) {
     registerFlantProviders(pi, settings.cachedFlantModels, settings.cachedOpenRouterData);
-    generatedFlantConfig = generateFlantConfig(settings.cachedFlantModels);
+    generatedFlantConfig = generateFlantConfig(settings.cachedFlantModels, isSubscriptionActive(settings));
   }
 }
 
