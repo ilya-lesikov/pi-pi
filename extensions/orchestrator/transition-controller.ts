@@ -38,15 +38,21 @@ export interface TransitionRequest {
 
 export type ControllerState = "running" | "pending" | "compacting" | "resuming";
 
-// Minimal surface the controller needs from the Orchestrator. Kept as an
-// interface so the controller is unit-testable with a fake host and so phase
-// modules can depend on `send` without importing the orchestrator (avoids
-// circular imports).
+// The raw main-session messaging surface (satisfied by ExtensionAPI / pi). The
+// controller calls these directly so it is literally the only code that calls
+// sendUserMessage/sendMessage — a whole-tree grep finds zero raw sends elsewhere.
+export interface MainSession {
+  sendUserMessage(content: string, options?: { deliverAs?: "steer" | "followUp" }): void;
+  sendMessage(
+    message: { customType: string; content: string; display: boolean; details?: unknown },
+    options?: { deliverAs?: "steer" | "followUp" | "nextTurn" },
+  ): void;
+}
+
+// Live-session surface the controller needs from the Orchestrator (the bits that
+// depend on the current ExtensionContext / persisted state). Kept as an interface
+// so the controller is unit-testable with a fake host.
 export interface TransitionHost {
-  // Outbound primitives — the controller is the ONLY caller of these for the
-  // main session. `send` fans out to these based on role.
-  rawSendUserMessage(text: string, deliverAs: "steer" | "followUp"): void;
-  rawSendMessage(message: { customType: string; content: string; display: boolean; details?: unknown }, deliverAs: "steer" | "followUp" | "nextTurn"): void;
   // Compaction + idle probe come from the live ExtensionContext (lastCtx).
   compact(options: { customInstructions?: string; onComplete?: () => void; onError?: (err: Error) => void }): boolean;
   isIdle(): boolean;
@@ -75,7 +81,12 @@ export class TransitionController {
   // Resolvers for callers that await the transition (done/stop/new-task paths).
   private waiters: Array<() => void> = [];
 
-  constructor(private readonly host: TransitionHost) {}
+  constructor(
+    private readonly host: TransitionHost,
+    // The raw main-session messaging surface (pi). The controller calls it
+    // directly so no other code issues raw sendUserMessage/sendMessage.
+    private readonly session: MainSession,
+  ) {}
 
   // Pre-bound PhaseSend handed to standalone spawn functions so they route every
   // outbound message through the controller without importing the orchestrator.
@@ -110,6 +121,13 @@ export class TransitionController {
     return true;
   }
 
+  // Abort the in-flight main-agent turn ahead of an interactive pause/stop/finish
+  // cleanup. Routed through the controller so it is the sole owner of main-session
+  // aborts; the caller then performs cleanup and requests a done transition.
+  abortMainAgent(abort: (() => void) | undefined): void {
+    abort?.();
+  }
+
   // True while a transition is mid-flight (pending/compacting/resuming) — i.e.
   // the controller initiated the current compaction. Used by session_before_compact
   // to decide between supplying the transition summary vs. re-injecting artifacts
@@ -133,7 +151,7 @@ export class TransitionController {
     if (role === "context") {
       throw new Error("send(context) would start a turn; use sendCustom for non-turn-starting context");
     }
-    this.host.rawSendUserMessage(text, "followUp");
+    this.session.sendUserMessage(text, { deliverAs: "followUp" });
   }
 
   // Custom (non-LLM) messages (pp-context / pp-artifact). "context" => steer
@@ -141,7 +159,7 @@ export class TransitionController {
   // (queues + starts a turn while streaming; callers that need a guaranteed turn
   // when idle pair this with a send(...) instruction).
   sendCustom(message: { customType: string; content: string; display: boolean; details?: unknown }, role: SendRole): void {
-    this.host.rawSendMessage(message, role === "context" ? "steer" : "followUp");
+    this.session.sendMessage(message, { deliverAs: role === "context" ? "steer" : "followUp" });
   }
 
   // Request a transition. Returns a promise that resolves once the transition

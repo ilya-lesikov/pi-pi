@@ -229,7 +229,7 @@ function showStatus(orchestrator: Orchestrator, ctx: any): void {
 
 async function abortCurrentWork(orchestrator: Orchestrator, ctx: any): Promise<void> {
   orchestrator.abortAllSubagents();
-  ctx.abort?.();
+  orchestrator.transitionController.abortMainAgent(ctx.abort?.bind(ctx));
   await ctx.waitForIdle?.();
   const taskStore = (globalThis as any)[Symbol.for("pi-tasks:store")];
   taskStore?.clearAll?.();
@@ -241,7 +241,7 @@ async function pauseTask(orchestrator: Orchestrator, ctx: any): Promise<string> 
 
   cancelPendingPlannotatorWait(orchestrator);
   orchestrator.abortAllSubagents();
-  ctx.abort?.();
+  orchestrator.transitionController.abortMainAgent(ctx.abort?.bind(ctx));
   await ctx.waitForIdle?.();
 
   const name = orchestrator.active.description;
@@ -274,7 +274,7 @@ async function finishTask(orchestrator: Orchestrator, ctx: any): Promise<string>
 
   cancelPendingPlannotatorWait(orchestrator);
   orchestrator.abortAllSubagents();
-  ctx.abort?.();
+  orchestrator.transitionController.abortMainAgent(ctx.abort?.bind(ctx));
   await ctx.waitForIdle?.();
 
   const name = orchestrator.active.description;

@@ -101,19 +101,14 @@ export class Orchestrator {
   readonly transitionController: TransitionController;
 
   constructor(readonly pi: ExtensionAPI) {
-    this.transitionController = new TransitionController(this.makeTransitionHost());
+    // The controller calls pi (the main session) directly for sends, and uses the
+    // host only for live-ctx-dependent bits (compact/isIdle/currentStep).
+    this.transitionController = new TransitionController(this.makeTransitionHost(), this.pi);
   }
 
-  // Minimal host the TransitionController uses to reach the live session. Kept
-  // private so the controller is the sole caller of these main-session primitives.
+  // Live-session host the TransitionController uses for compaction/idle/step.
   private makeTransitionHost(): TransitionHost {
     return {
-      rawSendUserMessage: (text, deliverAs) => {
-        this.pi.sendUserMessage(text, { deliverAs });
-      },
-      rawSendMessage: (message, deliverAs) => {
-        this.pi.sendMessage(message, { deliverAs });
-      },
       compact: (options) => {
         const compact = this.lastCtx?.compact;
         if (!compact) return false;
