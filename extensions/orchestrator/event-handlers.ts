@@ -36,7 +36,7 @@ import { openPlannotator, waitForPlannotatorResult, cancelPendingPlannotatorWait
 import { Orchestrator, type ActiveTask } from "./orchestrator.js";
 import { createCustomFooter, setFooterContext, setFooterTracker } from "./custom-footer.js";
 import { createUsageTracker, dumpUsageSummary, loadUsageSummary, type UsageTracker } from "./usage-tracker.js";
-import { askUser } from "../../3p/pi-ask-user/index.js";
+import { askUser, isCancel } from "../../3p/pi-ask-user/index.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { findRootRepo, normalizeRepoPath, resolveRepoForFile, type RepoInfo } from "./repo-utils.js";
 
@@ -96,7 +96,7 @@ export async function selectOption(ctx: any, question: string, options: string[]
     allowComment: false,
     allowMultiple: false,
   });
-  if (!result || result.kind !== "selection") return undefined;
+  if (!result || isCancel(result) || result.kind !== "selection") return undefined;
   return result.selections[0];
 }
 

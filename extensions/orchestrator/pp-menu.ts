@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, writeFileSync } from "fs";
 import { join, relative } from "path";
 import { isDeepStrictEqual } from "util";
-import { askUser } from "../../3p/pi-ask-user/index.js";
+import { askUser, isCancel } from "../../3p/pi-ask-user/index.js";
 import { unregisterAgentDefinitions } from "./agents/registry.js";
 import {
   type AfterEditCommandConfig,
@@ -88,7 +88,7 @@ async function selectOption(ctx: any, question: string, options: OptionInput[]):
     allowComment: false,
     allowMultiple: false,
   });
-  if (!result || result.kind !== "selection") return undefined;
+  if (!result || isCancel(result) || result.kind !== "selection") return undefined;
   return result.selections[0];
 }
 

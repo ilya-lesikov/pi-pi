@@ -126,7 +126,7 @@ function makeCancel(reason: CancelReason): AskCancel {
    return { __cancel: true, reason };
 }
 
-function isCancel(value: unknown): value is AskCancel {
+export function isCancel(value: unknown): value is AskCancel {
    return typeof value === "object" && value !== null && (value as AskCancel).__cancel === true;
 }
 
@@ -1603,11 +1603,12 @@ export default function(pi: ExtensionAPI) {
       name: "ask_user",
       label: "Ask User",
       description:
-         "Ask the user a question with optional multiple-choice answers. Use this to gather information interactively. Ask exactly one focused question per call. Before calling, gather context with tools (read/web/ref) and pass a short summary via the context field.",
+         "Ask the user a question with optional multiple-choice answers. Use this to gather information interactively. Ask exactly one focused question per call. Keep the `question` SHORT — one scannable line; put any reasoning, findings, or detail in your message BEFORE the call, not in the question itself.",
       promptSnippet:
-         "Ask the user one focused question with optional multiple-choice answers to gather information interactively",
+         "Ask the user one short, focused question with optional multiple-choice answers to gather information interactively",
       promptGuidelines: [
-         "Before calling ask_user, gather context with tools (read/web/ref) and pass a short summary via the context field.",
+         "Keep the `question` field SHORT — a single scannable line (ideally under ~100 chars). The dialogue de-emphasizes it; the user reads your detail from the message rendered above the dialogue.",
+         "Put context, reasoning, and findings in your assistant message BEFORE calling ask_user — do NOT pack them into the `question` field.",
          "Use ask_user when the user's intent is ambiguous, when a decision requires explicit user input, or when multiple valid options exist.",
          "Ask exactly one focused question per ask_user call.",
          "Do not combine multiple numbered, multipart, or unrelated questions into one ask_user prompt.",
@@ -1617,7 +1618,7 @@ export default function(pi: ExtensionAPI) {
       // (potentially with side effects) before the user sees the prompt.
       executionMode: "sequential",
       parameters: Type.Object({
-         question: Type.String({ description: "The question to ask the user" }),
+         question: Type.String({ description: "The question to ask the user. Keep it SHORT — one scannable line. Put detail/reasoning in your message above the dialogue, not here." }),
          context: Type.Optional(
             Type.String({
                description: "Relevant context to show before the question (summary of findings)",

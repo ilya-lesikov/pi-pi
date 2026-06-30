@@ -20,6 +20,8 @@ let menu: ReturnType<typeof createAskUserHarness>;
 vi.mock("../../3p/pi-ask-user/index.js", () => {
   return {
     askUser: async (_ctx: any, opts: any) => menu.handle(opts),
+    isCancel: (value: any) =>
+      typeof value === "object" && value !== null && value.__cancel === true,
   };
 });
 
