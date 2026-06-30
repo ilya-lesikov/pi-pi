@@ -1771,10 +1771,16 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     }
     if (!orchestrator.active || orchestrator.active.state.phase === "done") return;
 
-    // A fresh agent start means the user (or a real handoff) re-engaged the loop
-    // — clear the nudge guard.
-    orchestrator.nudgeHalted = false;
-    orchestrator.consecutiveNudges = 0;
+    // Clear the nudge guard ONLY on a genuine user re-engagement. Controller-
+    // injected prompts (nudges, "Begin working" handoffs, planner-error prompts)
+    // are all "[PI-PI]"-prefixed and themselves restart the loop via followUp;
+    // resetting on those would make consecutiveNudges oscillate 0->1->0 and the
+    // halt could never fire. A nudge-induced restart must NOT clear the guard.
+    const isControllerInjected = (event.prompt ?? "").startsWith("[PI-PI]");
+    if (!isControllerInjected) {
+      orchestrator.nudgeHalted = false;
+      orchestrator.consecutiveNudges = 0;
+    }
     orchestrator.updateStatus(ctx);
 
     const phasePrompt = orchestrator.getPhasePrompt(ctx);

@@ -3159,6 +3159,50 @@ describe("error retry", () => {
     vi.useRealTimers();
   });
 
+  it("halt still fires when nudge-induced before_agent_start interleaves (production sequence)", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "nudge halt prod", undefined, undefined, "autonomous");
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "llm_work";
+    const turnEnd = pi._handlers.get("turn_end")!;
+    const beforeStart = pi._handlers.get("before_agent_start")!;
+
+    // Real production loop: each nudge restarts the agent with a [PI-PI] prompt,
+    // firing before_agent_start. That controller-injected start must NOT reset
+    // the consecutive-nudge guard, so the halt eventually fires.
+    for (let i = 0; i < 10; i += 1) {
+      await turnEnd({ message: { stopReason: "stop", content: [] }, toolResults: [] }, ctx);
+      await beforeStart({ systemPrompt: "base", prompt: "[PI-PI] Continue the implement phase." }, ctx);
+    }
+
+    expect(orchestrator.nudgeHalted).toBe(true);
+    expect(pi.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ customType: "pp-continuation-halted" }),
+      { deliverAs: "steer" },
+    );
+  });
+
+  it("a genuine (non-[PI-PI]) user before_agent_start clears the nudge halt", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "nudge clear", undefined, undefined, "autonomous");
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "llm_work";
+    orchestrator.nudgeHalted = true;
+    orchestrator.consecutiveNudges = 6;
+
+    const beforeStart = pi._handlers.get("before_agent_start")!;
+    await beforeStart({ systemPrompt: "base", prompt: "please continue, I have a new idea" }, ctx);
+
+    expect(orchestrator.nudgeHalted).toBe(false);
+    expect(orchestrator.consecutiveNudges).toBe(0);
+  });
+
   it("repeated text-only stops re-nudge instead of latching once", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);
