@@ -24,6 +24,7 @@ export interface ModelFamilyDefinition {
   patterns: RegExp[];
   aliasTemplate: string;
   providers: ProviderPrefix[];
+  nativeLatestProviders?: ProviderPrefix[];
 }
 
 export interface ModelFamilyInfo {
@@ -44,6 +45,7 @@ export const MODEL_FAMILIES: ModelFamilyDefinition[] = [
     patterns: [/^(anthropic|pp-flant-anthropic)\/claude-opus-[a-z0-9.-]+$/],
     aliasTemplate: "claude-opus-latest",
     providers: ["anthropic", "pp-flant-anthropic"],
+    nativeLatestProviders: ["anthropic"],
   },
   {
     vendor: "anthropic",
@@ -53,6 +55,7 @@ export const MODEL_FAMILIES: ModelFamilyDefinition[] = [
     patterns: [/^(anthropic|pp-flant-anthropic)\/claude-sonnet-[a-z0-9.-]+$/],
     aliasTemplate: "claude-sonnet-latest",
     providers: ["anthropic", "pp-flant-anthropic"],
+    nativeLatestProviders: ["anthropic"],
   },
   {
     vendor: "anthropic",
@@ -62,6 +65,7 @@ export const MODEL_FAMILIES: ModelFamilyDefinition[] = [
     patterns: [/^(anthropic|pp-flant-anthropic)\/claude-haiku-[a-z0-9.-]+$/],
     aliasTemplate: "claude-haiku-latest",
     providers: ["anthropic", "pp-flant-anthropic"],
+    nativeLatestProviders: ["anthropic"],
   },
   {
     vendor: "openai",
@@ -137,30 +141,20 @@ export const MODEL_FAMILIES: ModelFamilyDefinition[] = [
   },
 ];
 
-const DEFAULT_ALIAS_MAP: Record<string, string> = {
-  "anthropic/claude-opus-latest": "anthropic/claude-opus-4-6",
-  "anthropic/claude-sonnet-latest": "anthropic/claude-sonnet-4-6",
-  "anthropic/claude-haiku-latest": "anthropic/claude-haiku-3-5",
-  "openai/gpt-latest": "openai/gpt-5.4",
-  "openai/gpt-mini-latest": "openai/gpt-5.4-mini",
-  "google/gemini-pro-latest": "google/gemini-3.1-pro",
-  "google/gemini-flash-latest": "google/gemini-3.1-flash",
-  "deepseek/deepseek-latest": "deepseek/deepseek-v3",
-  "x-ai/grok-latest": "x-ai/grok-4",
-  "qwen/qwen-latest": "qwen/qwen3-coder",
-  "pp-flant-anthropic/claude-opus-latest": "pp-flant-anthropic/claude-opus-4-6",
-  "pp-flant-anthropic/claude-sonnet-latest": "pp-flant-anthropic/claude-sonnet-4-6",
-  "pp-flant-anthropic/claude-haiku-latest": "pp-flant-anthropic/claude-haiku-3-5",
-  "pp-flant-openai/gpt-latest": "pp-flant-openai/gpt-5.4",
-  "pp-flant-openai/gpt-mini-latest": "pp-flant-openai/gpt-5.4-mini",
-  "pp-flant-openai/gemini-pro-latest": "pp-flant-openai/gemini-3.1-pro",
-  "pp-flant-openai/gemini-flash-latest": "pp-flant-openai/gemini-3.1-flash",
-  "pp-flant-openai/deepseek-latest": "pp-flant-openai/deepseek-v3",
-  "pp-flant-openai/grok-latest": "pp-flant-openai/grok-4",
-  "pp-flant-openai/qwen-latest": "pp-flant-openai/qwen3-coder",
-};
+function buildNativeLatestAliases(): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const family of MODEL_FAMILIES) {
+    const nativeSet = new Set(family.nativeLatestProviders ?? []);
+    for (const provider of family.providers) {
+      if (!nativeSet.has(provider)) continue;
+      const alias = toAlias(provider, family.aliasTemplate);
+      map[alias] = alias;
+    }
+  }
+  return map;
+}
 
-let aliasMap: Record<string, string> = { ...DEFAULT_ALIAS_MAP };
+let aliasMap: Record<string, string> = buildNativeLatestAliases();
 
 function pickLatest(models: string[]): string | null {
   if (models.length === 0) return null;
@@ -244,11 +238,13 @@ export function getModelInfo(modelId: string): ModelInfo {
 export function updateRegistryFromAvailableModels(availableModels: string[]): void {
   const log = getLogger();
   const normalizedModels = collectNormalizedModels(availableModels).filter((modelId) => !modelId.endsWith("-latest"));
-  const nextAliasMap: Record<string, string> = { ...DEFAULT_ALIAS_MAP };
+  const nextAliasMap: Record<string, string> = buildNativeLatestAliases();
 
   let updatedCount = 0;
   for (const family of MODEL_FAMILIES) {
+    const nativeSet = new Set(family.nativeLatestProviders ?? []);
     for (const provider of family.providers) {
+      if (nativeSet.has(provider)) continue;
       const alias = toAlias(provider, family.aliasTemplate);
       const candidates = normalizedModels.filter((modelId) => {
         if (!modelId.startsWith(`${provider}/`)) return false;
@@ -257,7 +253,7 @@ export function updateRegistryFromAvailableModels(availableModels: string[]): vo
       const latest = pickLatest(candidates);
       if (latest) {
         nextAliasMap[alias] = latest;
-        if (latest !== DEFAULT_ALIAS_MAP[alias]) updatedCount++;
+        updatedCount++;
       }
     }
   }

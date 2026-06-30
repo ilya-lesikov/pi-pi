@@ -144,6 +144,7 @@ function createCtx() {
     },
     modelRegistry: {
       getAvailable: vi.fn(() => [
+        { provider: "anthropic", id: "claude-opus-latest" },
         { provider: "anthropic", id: "claude-opus-4-6" },
         { provider: "openai", id: "gpt-5.4" },
         { provider: "google", id: "gemini-3.1-flash" },
@@ -155,7 +156,7 @@ function createCtx() {
 
 beforeEach(() => {
   const aliasMap: Record<string, string> = {
-    "anthropic/claude-opus-latest": "anthropic/claude-opus-4-6",
+    "anthropic/claude-opus-latest": "anthropic/claude-opus-latest",
     "openai/gpt-latest": "openai/gpt-5.4",
     "google/gemini-flash-latest": "google/gemini-3.1-flash",
     "google/gemini-pro-latest": "google/gemini-3.1-pro",

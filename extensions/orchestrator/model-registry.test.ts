@@ -19,16 +19,23 @@ describe("model-registry", () => {
     updateRegistryFromAvailableModels([]);
   });
 
-  it("resolveModel resolves known aliases", () => {
-    expect(resolveModel("anthropic/claude-sonnet-latest")).toBe("anthropic/claude-sonnet-4-6");
-    expect(resolveModel("openai/gpt-mini-latest")).toBe("openai/gpt-5.4-mini");
+  it("resolveModel passes through native-latest aliases", () => {
+    expect(resolveModel("anthropic/claude-sonnet-latest")).toBe("anthropic/claude-sonnet-latest");
+    expect(resolveModel("anthropic/claude-opus-latest")).toBe("anthropic/claude-opus-latest");
+    expect(resolveModel("anthropic/claude-haiku-latest")).toBe("anthropic/claude-haiku-latest");
+  });
+
+  it("resolveModel returns input unchanged for non-native aliases without available models", () => {
+    expect(resolveModel("openai/gpt-mini-latest")).toBe("openai/gpt-mini-latest");
+    expect(resolveModel("pp-flant-anthropic/claude-opus-latest")).toBe("pp-flant-anthropic/claude-opus-latest");
   });
 
   it("resolveModel passes through unknown aliases", () => {
     expect(resolveModel("custom/provider-model")).toBe("custom/provider-model");
   });
 
-  it("resolveModel resolves flant aliases", () => {
+  it("resolveModel resolves flant aliases after updateRegistry", () => {
+    updateRegistryFromAvailableModels(["claude-opus-4-6", "gemini-3.1-pro"]);
     expect(resolveModel("pp-flant-anthropic/claude-opus-latest")).toBe("pp-flant-anthropic/claude-opus-4-6");
     expect(resolveModel("pp-flant-openai/gemini-pro-latest")).toBe("pp-flant-openai/gemini-3.1-pro");
   });
@@ -153,11 +160,11 @@ describe("model-registry", () => {
     expect(resolveModel("openai/gpt-latest")).toBe("openai/gpt-5.6");
   });
 
-  it("updateRegistryFromAvailableModels keeps defaults for missing families", () => {
+  it("updateRegistryFromAvailableModels keeps native-latest for missing families", () => {
     updateRegistryFromAvailableModels(["openai/gpt-9.1"]);
 
     expect(resolveModel("openai/gpt-latest")).toBe("openai/gpt-9.1");
-    expect(resolveModel("anthropic/claude-opus-latest")).toBe("anthropic/claude-opus-4-6");
+    expect(resolveModel("anthropic/claude-opus-latest")).toBe("anthropic/claude-opus-latest");
   });
 
   it("updateRegistryFromAvailableModels ignores aliases ending with -latest", () => {
@@ -168,7 +175,7 @@ describe("model-registry", () => {
     ]);
 
     expect(resolveModel("openai/gpt-latest")).toBe("openai/gpt-5.4");
-    expect(resolveModel("pp-flant-anthropic/claude-opus-latest")).toBe("pp-flant-anthropic/claude-opus-4-6");
+    expect(resolveModel("pp-flant-anthropic/claude-opus-latest")).toBe("pp-flant-anthropic/claude-opus-latest");
   });
 
   it("updateRegistryFromAvailableModels handles empty input", () => {
@@ -176,14 +183,14 @@ describe("model-registry", () => {
     expect(resolveModel("openai/gpt-latest")).toBe("openai/gpt-9.9");
 
     updateRegistryFromAvailableModels([]);
-    expect(resolveModel("openai/gpt-latest")).toBe("openai/gpt-5.4");
+    expect(resolveModel("openai/gpt-latest")).toBe("openai/gpt-latest");
   });
 
   it("updateRegistryFromAvailableModels ignores unknown bare ids", () => {
     updateRegistryFromAvailableModels(["custom-model-1", "another-custom-model"]);
 
-    expect(resolveModel("openai/gpt-latest")).toBe("openai/gpt-5.4");
-    expect(resolveModel("anthropic/claude-opus-latest")).toBe("anthropic/claude-opus-4-6");
+    expect(resolveModel("openai/gpt-latest")).toBe("openai/gpt-latest");
+    expect(resolveModel("anthropic/claude-opus-latest")).toBe("anthropic/claude-opus-latest");
   });
 
   it("updateRegistryFromAvailableModels chooses highest among flant openai versions", () => {
@@ -197,16 +204,25 @@ describe("model-registry", () => {
   });
 
   it("getAllAliases returns a copy", () => {
+    updateRegistryFromAvailableModels(["openai/gpt-5.4"]);
     const aliases = getAllAliases();
     aliases["openai/gpt-latest"] = "openai/gpt-0.0";
 
     expect(resolveModel("openai/gpt-latest")).toBe("openai/gpt-5.4");
   });
 
-  it("getAllAliases contains known defaults", () => {
+  it("getAllAliases contains native-latest identity mappings", () => {
     const aliases = getAllAliases();
 
-    expect(aliases["anthropic/claude-opus-latest"]).toBe("anthropic/claude-opus-4-6");
+    expect(aliases["anthropic/claude-opus-latest"]).toBe("anthropic/claude-opus-latest");
+    expect(aliases["anthropic/claude-sonnet-latest"]).toBe("anthropic/claude-sonnet-latest");
+    expect(aliases["anthropic/claude-haiku-latest"]).toBe("anthropic/claude-haiku-latest");
+  });
+
+  it("getAllAliases contains resolved aliases after updateRegistry", () => {
+    updateRegistryFromAvailableModels(["grok-4"]);
+    const aliases = getAllAliases();
+
     expect(aliases["pp-flant-openai/grok-latest"]).toBe("pp-flant-openai/grok-4");
   });
 
