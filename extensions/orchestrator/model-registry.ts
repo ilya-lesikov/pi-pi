@@ -11,7 +11,7 @@ export interface ModelInfo {
   displayName: string;
 }
 
-type ProviderPrefix = "anthropic" | "openai" | "google" | "deepseek" | "x-ai" | "qwen" | "pp-flant-anthropic" | "pp-flant-openai";
+type ProviderPrefix = "anthropic" | "openai" | "google" | "deepseek" | "x-ai" | "qwen" | "pp-flant-anthropic" | "pp-flant-anthropic-sub" | "pp-flant-openai";
 type KnownVendor = "anthropic" | "openai" | "google" | "deepseek" | "xai" | "qwen";
 type KnownFamily = "opus" | "sonnet" | "haiku" | "gpt" | "gpt-mini" | "gemini-pro" | "gemini-flash" | "deepseek" | "grok" | "qwen";
 type KnownTier = "stupid" | "regular" | "smart" | "xsmart";
@@ -42,9 +42,9 @@ export const MODEL_FAMILIES: ModelFamilyDefinition[] = [
     family: "opus",
     tier: "smart",
     displayName: "Claude Opus",
-    patterns: [/^(anthropic|pp-flant-anthropic)\/claude-opus-[a-z0-9.-]+$/],
+    patterns: [/^(anthropic|pp-flant-anthropic)\/claude-opus-[a-z0-9.-]+$/, /^pp-flant-anthropic-sub\/sub\/claude-opus-[a-z0-9.-]+$/],
     aliasTemplate: "claude-opus-latest",
-    providers: ["anthropic", "pp-flant-anthropic"],
+    providers: ["anthropic", "pp-flant-anthropic", "pp-flant-anthropic-sub"],
     nativeLatestProviders: ["anthropic"],
   },
   {
@@ -52,9 +52,9 @@ export const MODEL_FAMILIES: ModelFamilyDefinition[] = [
     family: "sonnet",
     tier: "regular",
     displayName: "Claude Sonnet",
-    patterns: [/^(anthropic|pp-flant-anthropic)\/claude-sonnet-[a-z0-9.-]+$/],
+    patterns: [/^(anthropic|pp-flant-anthropic)\/claude-sonnet-[a-z0-9.-]+$/, /^pp-flant-anthropic-sub\/sub\/claude-sonnet-[a-z0-9.-]+$/],
     aliasTemplate: "claude-sonnet-latest",
-    providers: ["anthropic", "pp-flant-anthropic"],
+    providers: ["anthropic", "pp-flant-anthropic", "pp-flant-anthropic-sub"],
     nativeLatestProviders: ["anthropic"],
   },
   {
@@ -62,9 +62,9 @@ export const MODEL_FAMILIES: ModelFamilyDefinition[] = [
     family: "haiku",
     tier: "stupid",
     displayName: "Claude Haiku",
-    patterns: [/^(anthropic|pp-flant-anthropic)\/claude-haiku-[a-z0-9.-]+$/],
+    patterns: [/^(anthropic|pp-flant-anthropic)\/claude-haiku-[a-z0-9.-]+$/, /^pp-flant-anthropic-sub\/sub\/claude-haiku-[a-z0-9.-]+$/],
     aliasTemplate: "claude-haiku-latest",
-    providers: ["anthropic", "pp-flant-anthropic"],
+    providers: ["anthropic", "pp-flant-anthropic", "pp-flant-anthropic-sub"],
     nativeLatestProviders: ["anthropic"],
   },
   {

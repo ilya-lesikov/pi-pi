@@ -53,6 +53,8 @@ import {
   clearFlantGeneratedConfig,
   getFlantGeneratedConfig,
   loadFlantSettings,
+  readClaudeOAuthToken,
+  readGatewayApiKey,
   saveFlantSettings,
   unregisterFlantProviders,
   updateFlantInfra,
@@ -783,6 +785,20 @@ function flantStatusText(settings: FlantSettings): string {
     `Last updated: ${settings.lastUpdated ?? "never"}`,
     `Providers: pp-flant-anthropic (${providers.anthropic} models), pp-flant-openai (${providers.openai} models)`,
   ];
+  if (settings.subscription) {
+    const hasOAuth = !!readClaudeOAuthToken();
+    const hasGatewayKey = !!readGatewayApiKey();
+    const subActive = hasOAuth && hasGatewayKey;
+    lines.push(
+      `Personal subscription: on (${subActive ? `active — pp-flant-anthropic-sub, ${providers.anthropic} models` : "inactive"})`,
+    );
+    if (!subActive) {
+      if (!hasOAuth) lines.push("  - missing Claude OAuth token (run pi /login for Anthropic)");
+      if (!hasGatewayKey) lines.push("  - missing gateway key (set LLM_API_KEY or FLANT_API_KEY)");
+    }
+  } else {
+    lines.push("Personal subscription: off");
+  }
   if (assignments.length === 0) {
     lines.push("Role assignments: none");
   } else {
@@ -812,10 +828,12 @@ async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise
     const settings = loadFlantSettings();
     const enableLabel = `Enable: ${settings.enabled ? "ON" : "OFF"}`;
     const options: OptionInput[] = [enableLabel];
+    const subscriptionLabel = `Personal Claude subscription: ${settings.subscription ? "ON" : "OFF"}`;
     if (settings.enabled) {
       options.push(
         `Auto-update on startup: ${settings.autoUpdate ? "ON" : "OFF"}`,
         `Cache period: ${settings.cacheTTLDays} ${settings.cacheTTLDays === 1 ? "day" : "days"}`,
+        subscriptionLabel,
         "Update now",
         "Current status",
       );
@@ -849,6 +867,34 @@ async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise
     if (choice.startsWith("Auto-update on startup:")) {
       saveFlantSettings({ ...settings, autoUpdate: !settings.autoUpdate });
       ctx.ui.notify(`Auto-update on startup: ${!settings.autoUpdate ? "ON" : "OFF"}`, "info");
+      continue;
+    }
+
+    if (choice === subscriptionLabel) {
+      const turningOn = !settings.subscription;
+      if (turningOn) {
+        if (!readClaudeOAuthToken()) {
+          ctx.ui.notify("No Claude OAuth token found. Log in to your personal Claude subscription in pi first (/login → Anthropic), then retry.", "warning");
+          continue;
+        }
+        if (!readGatewayApiKey()) {
+          ctx.ui.notify("Set LLM_API_KEY (or FLANT_API_KEY) for the gateway first.", "warning");
+          continue;
+        }
+      }
+      const next = { ...settings, subscription: turningOn };
+      saveFlantSettings(next);
+      const result = await updateFlantInfra(orchestrator.pi);
+      if (!result.ok) {
+        ctx.ui.notify(`Personal subscription ${turningOn ? "enable" : "disable"} failed: ${result.error ?? "unknown error"}`, "error");
+      } else {
+        ctx.ui.notify(
+          turningOn
+            ? "Personal Claude subscription ON — pp-flant-anthropic-sub registered (sub/claude-* billed to your subscription)."
+            : "Personal Claude subscription OFF.",
+          "info",
+        );
+      }
       continue;
     }
 

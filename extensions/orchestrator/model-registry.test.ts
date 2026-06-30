@@ -41,6 +41,22 @@ describe("model-registry", () => {
     expect(resolveModel("pp-flant-openai/gemini-pro-latest")).toBe("pp-flant-openai/gemini-3.1-pro");
   });
 
+  it("getModelInfo detects personal-subscription Claude models", () => {
+    expect(getModelInfo("pp-flant-anthropic-sub/sub/claude-opus-4-8")).toMatchObject({ vendor: "anthropic", family: "opus", tier: "smart" });
+    expect(getModelInfo("pp-flant-anthropic-sub/sub/claude-sonnet-4-6")).toMatchObject({ vendor: "anthropic", family: "sonnet", tier: "regular" });
+    expect(getModelInfo("pp-flant-anthropic-sub/sub/claude-haiku-4-5")).toMatchObject({ vendor: "anthropic", family: "haiku", tier: "stupid" });
+  });
+
+  it("resolveModel resolves subscription aliases to sub/ specs after updateRegistry", () => {
+    updateRegistryFromAvailableModels([
+      "pp-flant-anthropic-sub/sub/claude-opus-4-7",
+      "pp-flant-anthropic-sub/sub/claude-opus-4-8",
+      "pp-flant-anthropic-sub/sub/claude-haiku-4-5",
+    ]);
+    expect(resolveModel("pp-flant-anthropic-sub/claude-opus-latest")).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
+    expect(resolveModel("pp-flant-anthropic-sub/claude-haiku-latest")).toBe("pp-flant-anthropic-sub/sub/claude-haiku-4-5");
+  });
+
   it("getModelInfo detects all configured families", () => {
     expect(getModelInfo("anthropic/claude-opus-4-6")).toMatchObject({ vendor: "anthropic", family: "opus", tier: "smart" });
     expect(getModelInfo("anthropic/claude-sonnet-4-6")).toMatchObject({ vendor: "anthropic", family: "sonnet", tier: "regular" });

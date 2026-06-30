@@ -57,6 +57,84 @@ describe("flant-infra", () => {
     expect([...registered.keys()].sort()).toEqual(["pp-flant-anthropic", "pp-flant-openai"]);
   });
 
+  it("does not register the sub provider when subscription is disabled", async () => {
+    const dir = makeTempDir();
+    const mod = await loadFlantInfraModule(dir);
+    const registered = new Map<string, unknown>();
+    const pi = {
+      registerProvider: vi.fn((name: string, config: unknown) => registered.set(name, config)),
+      unregisterProvider: vi.fn((name: string) => registered.delete(name)),
+    } as any;
+
+    mod.registerFlantProviders(pi, ["claude-opus-4-8", "gpt-5"], {}, { subscription: false });
+    expect([...registered.keys()].sort()).toEqual(["pp-flant-anthropic", "pp-flant-openai"]);
+  });
+
+  it("registers the sub provider with sub/ models when subscription enabled and credentials present", async () => {
+    const dir = makeTempDir();
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "auth.json"),
+      JSON.stringify({ anthropic: { type: "oauth", access: "sk-ant-oat01-test-token", expires: Date.now() + 3_600_000 } }),
+      "utf-8",
+    );
+    const prevKey = process.env.LLM_API_KEY;
+    process.env.LLM_API_KEY = "sk-gateway-test";
+    try {
+      const mod = await loadFlantInfraModule(dir);
+      const registered = new Map<string, any>();
+      const pi = {
+        registerProvider: vi.fn((name: string, config: any) => registered.set(name, config)),
+        unregisterProvider: vi.fn((name: string) => registered.delete(name)),
+      } as any;
+
+      mod.registerFlantProviders(pi, ["claude-opus-4-8", "claude-haiku-4-5", "gpt-5"], {}, { subscription: true });
+
+      expect([...registered.keys()].sort()).toEqual(["pp-flant-anthropic", "pp-flant-anthropic-sub", "pp-flant-openai"]);
+      const sub = registered.get("pp-flant-anthropic-sub");
+      expect(sub.api).toBe("anthropic-messages");
+      expect(sub.baseUrl).toBe("https://llm-api.flant.ru");
+      expect(sub.apiKey).toBe("sk-ant-oat01-test-token");
+      expect(sub.headers["x-litellm-api-key"]).toBe("Bearer sk-gateway-test");
+      expect(sub.models.map((m: any) => m.id).sort()).toEqual(["sub/claude-haiku-4-5", "sub/claude-opus-4-8"]);
+    } finally {
+      if (prevKey === undefined) delete process.env.LLM_API_KEY;
+      else process.env.LLM_API_KEY = prevKey;
+    }
+  });
+
+  it("skips the sub provider when subscription enabled but OAuth token missing", async () => {
+    const dir = makeTempDir();
+    const prevKey = process.env.LLM_API_KEY;
+    process.env.LLM_API_KEY = "sk-gateway-test";
+    try {
+      const mod = await loadFlantInfraModule(dir);
+      const registered = new Map<string, unknown>();
+      const pi = {
+        registerProvider: vi.fn((name: string, config: unknown) => registered.set(name, config)),
+        unregisterProvider: vi.fn((name: string) => registered.delete(name)),
+      } as any;
+
+      mod.registerFlantProviders(pi, ["claude-opus-4-8"], {}, { subscription: true });
+      expect(registered.has("pp-flant-anthropic-sub")).toBe(false);
+    } finally {
+      if (prevKey === undefined) delete process.env.LLM_API_KEY;
+      else process.env.LLM_API_KEY = prevKey;
+    }
+  });
+
+  it("readClaudeOAuthToken returns null for expired token", async () => {
+    const dir = makeTempDir();
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "auth.json"),
+      JSON.stringify({ anthropic: { access: "sk-ant-oat01-old", expires: Date.now() - 1000 } }),
+      "utf-8",
+    );
+    const mod = await loadFlantInfraModule(dir);
+    expect(mod.readClaudeOAuthToken()).toBeNull();
+  });
+
   it("generateDisplayName formats model ids", async () => {
     const dir = makeTempDir();
     const mod = await loadFlantInfraModule(dir);
@@ -143,6 +221,7 @@ describe("flant-infra", () => {
       enabled: false,
       autoUpdate: true,
       cacheTTLDays: 7,
+      subscription: false,
       lastUpdated: null,
       cachedFlantModels: null,
       cachedOpenRouterData: null,
@@ -180,6 +259,7 @@ describe("flant-infra", () => {
       enabled: true,
       autoUpdate: false,
       cacheTTLDays: 3,
+      subscription: false,
       lastUpdated: "2026-01-02T03:04:05.000Z",
       cachedFlantModels: ["gpt-5-4", "claude-opus-4-6"],
       cachedOpenRouterData: {
@@ -202,6 +282,7 @@ describe("flant-infra", () => {
       enabled: true,
       autoUpdate: true,
       cacheTTLDays: 14,
+      subscription: true,
       lastUpdated: "2026-02-01T00:00:00.000Z",
       cachedFlantModels: ["claude-opus-4-6", "gpt-5-4"],
       cachedOpenRouterData: {

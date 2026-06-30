@@ -12,7 +12,7 @@ import {
   PRESET_GROUPS,
 } from "./config.js";
 import { resolveModel, getAllAliases } from "./model-registry.js";
-import { loadFlantSettings } from "./flant-infra.js";
+import { loadFlantSettings, readClaudeOAuthToken, readGatewayApiKey } from "./flant-infra.js";
 import type { Orchestrator } from "./orchestrator.js";
 
 type Severity = "pass" | "warning" | "failure";
@@ -470,7 +470,7 @@ export async function runDoctor(orchestrator: Orchestrator, ctx: any): Promise<v
 
   await safeCheck(async () => {
     const settings = loadFlantSettings();
-    const shouldCheck = Boolean(process.env.FLANT_API_KEY) || settings.enabled || !!settings.cachedFlantModels || !!settings.cachedOpenRouterData;
+    const shouldCheck = Boolean(process.env.FLANT_API_KEY) || settings.enabled || settings.subscription || !!settings.cachedFlantModels || !!settings.cachedOpenRouterData;
     if (!shouldCheck) {
       addLine({ severity: "pass", text: "Skipped: FLANT_API_KEY not set and no Flant configuration detected" });
       return;
@@ -525,6 +525,44 @@ export async function runDoctor(orchestrator: Orchestrator, ctx: any): Promise<v
       }
     } catch (error) {
       addLine({ severity: "failure", text: `OpenRouter probe failed: ${toErrorMessage(error)}` });
+    }
+
+    if (settings.subscription) {
+      const oauthToken = readClaudeOAuthToken();
+      const gatewayKey = readGatewayApiKey();
+      if (!oauthToken) {
+        addLine({ severity: "warning", text: "Personal subscription enabled, but no valid Claude OAuth token found (log in to your subscription in pi)" });
+      } else if (!gatewayKey) {
+        addLine({ severity: "warning", text: "Personal subscription enabled, but no gateway key (LLM_API_KEY / FLANT_API_KEY)" });
+      } else {
+        const started = Date.now();
+        try {
+          const response = await timedFetch("https://llm-api.flant.ru/v1/messages", {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "anthropic-version": "2023-06-01",
+              "anthropic-beta": "claude-code-20250219,oauth-2025-04-20",
+              "user-agent": "claude-cli/1.0.0",
+              "x-app": "cli",
+              Authorization: `Bearer ${oauthToken}`,
+              "x-litellm-api-key": `Bearer ${gatewayKey}`,
+            },
+            body: JSON.stringify({
+              model: "sub/claude-haiku-4-5",
+              max_tokens: 4,
+              messages: [{ role: "user", content: "ping" }],
+            }),
+          }, 15000);
+          if (!response.ok) {
+            addLine({ severity: "failure", text: `Personal subscription probe failed with HTTP ${response.status}` });
+          } else {
+            addLine({ severity: "pass", text: `Personal subscription reachable (sub/claude-*, ${Date.now() - started}ms)` });
+          }
+        } catch (error) {
+          addLine({ severity: "failure", text: `Personal subscription probe failed: ${toErrorMessage(error)}` });
+        }
+      }
     }
   }, "Flant checks failed");
 

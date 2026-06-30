@@ -28,6 +28,12 @@ export interface FlantSettings {
   lastUpdated: string | null;
   cachedFlantModels: string[] | null;
   cachedOpenRouterData: Record<string, OpenRouterModelData> | null;
+  /**
+   * When true, additionally register the `pp-flant-anthropic-sub` provider,
+   * which routes Claude requests through the gateway using the user's personal
+   * Claude OAuth token (billed against their personal Claude subscription).
+   */
+  subscription: boolean;
 }
 
 const GEMINI_MAP: Record<string, string> = {
@@ -56,7 +62,42 @@ const DEFAULT_SETTINGS: FlantSettings = {
   lastUpdated: null,
   cachedFlantModels: null,
   cachedOpenRouterData: null,
+  subscription: false,
 };
+
+/** Provider name for the personal-subscription Claude routing. */
+export const SUB_PROVIDER = "pp-flant-anthropic-sub";
+
+/** Prefix the gateway expects for personal-subscription Claude models. */
+const SUB_MODEL_PREFIX = "sub/";
+
+/**
+ * Read the Claude OAuth access token persisted by pi's built-in `anthropic`
+ * OAuth provider. Returns null when absent or expired. The gateway uses this
+ * token (forwarded as `Authorization: Bearer ...`) to bill the user's personal
+ * Claude subscription; pi-ai automatically adds the Claude Code identity
+ * headers because the token has the `sk-ant-oat` prefix.
+ */
+export function readClaudeOAuthToken(): string | null {
+  const authPath = join(resolveAgentDir(), "auth.json");
+  if (!existsSync(authPath)) return null;
+  try {
+    const raw = JSON.parse(readFileSync(authPath, "utf-8")) as {
+      anthropic?: { access?: unknown; expires?: unknown };
+    };
+    const anthropic = raw.anthropic;
+    if (!anthropic || typeof anthropic.access !== "string" || !anthropic.access) return null;
+    if (typeof anthropic.expires === "number" && anthropic.expires <= Date.now()) return null;
+    return anthropic.access;
+  } catch {
+    return null;
+  }
+}
+
+/** Resolve the gateway API key (LLM_API_KEY preferred, FLANT_API_KEY fallback). */
+export function readGatewayApiKey(): string | null {
+  return process.env.LLM_API_KEY ?? process.env.FLANT_API_KEY ?? null;
+}
 
 let piRef: ExtensionAPI | null = null;
 let generatedFlantConfig: Partial<PiPiConfig> | null = null;
@@ -74,6 +115,7 @@ export function unregisterFlantProviders(pi?: ExtensionAPI): void {
   if (!api) return;
   api.unregisterProvider("pp-flant-anthropic");
   api.unregisterProvider("pp-flant-openai");
+  api.unregisterProvider(SUB_PROVIDER);
 }
 
 function ensureSettingsDir(): void {
@@ -99,6 +141,7 @@ function normalizeSettings(raw: unknown): FlantSettings {
     enabled: !!value.enabled,
     autoUpdate: value.autoUpdate === undefined ? true : !!value.autoUpdate,
     cacheTTLDays,
+    subscription: !!value.subscription,
     lastUpdated: typeof value.lastUpdated === "string" ? value.lastUpdated : null,
     cachedFlantModels: Array.isArray(value.cachedFlantModels)
       ? value.cachedFlantModels.filter((m): m is string => typeof m === "string")
@@ -289,16 +332,21 @@ function buildProviderModelConfig(
   };
 }
 
+export interface RegisterFlantOptions {
+  /** Whether to also register the personal-subscription provider. Defaults to loadFlantSettings().subscription. */
+  subscription?: boolean;
+}
+
 export function registerFlantProviders(
   pi: ExtensionAPI,
   models: string[],
   metadata: Record<string, OpenRouterModelData>,
+  options: RegisterFlantOptions = {},
 ): void {
   const log = getLogger();
   const uniqueModels = [...new Set(models)];
   const anthropicModels = uniqueModels.filter((m) => m.startsWith("claude-"));
   const openaiModels = uniqueModels.filter((m) => !m.startsWith("claude-"));
-  log.debug({ s: "flant", total: uniqueModels.length, anthropic: anthropicModels.length, openai: openaiModels.length }, "registering flant providers");
 
   unregisterFlantProviders(pi);
 
@@ -316,10 +364,43 @@ export function registerFlantProviders(
     models: openaiModels.map((m) => buildProviderModelConfig(m, metadata)),
   });
 
-  updateRegistryFromAvailableModels([
+  const availableSpecs = [
     ...anthropicModels.map((id) => `pp-flant-anthropic/${id}`),
     ...openaiModels.map((id) => `pp-flant-openai/${id}`),
-  ]);
+  ];
+
+  const subscription = options.subscription ?? loadFlantSettings().subscription;
+  let subModels: string[] = [];
+  if (subscription) {
+    const oauthToken = readClaudeOAuthToken();
+    const gatewayKey = readGatewayApiKey();
+    if (oauthToken && gatewayKey) {
+      subModels = anthropicModels.map((m) => `${SUB_MODEL_PREFIX}${m}`);
+      pi.registerProvider(SUB_PROVIDER, {
+        name: "Flant (personal Claude subscription)",
+        api: "anthropic-messages",
+        baseUrl: "https://llm-api.flant.ru",
+        // The OAuth token (sk-ant-oat...) triggers pi-ai's Claude Code identity
+        // headers and is forwarded as `Authorization: Bearer ...`.
+        apiKey: oauthToken,
+        // Gateway key travels in a side header so it does not clobber the OAuth auth.
+        headers: { "x-litellm-api-key": `Bearer ${gatewayKey}` },
+        // Model id carries the `sub/` prefix the gateway expects, while pricing/
+        // metadata is looked up by the bare claude-* id.
+        models: anthropicModels.map((m) => {
+          const cfg = buildProviderModelConfig(m, metadata);
+          return { ...cfg, id: `${SUB_MODEL_PREFIX}${m}` };
+        }),
+      });
+      availableSpecs.push(...subModels.map((id) => `${SUB_PROVIDER}/${id}`));
+    } else {
+      log.debug({ s: "flant", hasOAuth: !!oauthToken, hasGatewayKey: !!gatewayKey }, "subscription enabled but credentials missing; skipping sub provider");
+    }
+  }
+
+  log.debug({ s: "flant", total: uniqueModels.length, anthropic: anthropicModels.length, openai: openaiModels.length, sub: subModels.length }, "registering flant providers");
+
+  updateRegistryFromAvailableModels(availableSpecs);
 }
 
 function pickLatest(models: string[]): string | null {
