@@ -8,6 +8,15 @@ import { getLogger } from "./log.js";
 //     (or runs immediately when idle). Never throws "Agent is already processing".
 export type SendRole = "context" | "instruction";
 
+// Dependency passed to standalone phase-module spawn functions so they can emit
+// status/context messages WITHOUT importing the orchestrator (avoids circular
+// imports) while still routing every send through the controller. Bound to
+// TransitionController.sendCustom by the caller.
+export type PhaseSend = (
+  message: { customType: string; content: string; display: boolean; details?: unknown },
+  role: SendRole,
+) => void;
+
 // The kind of transition the controller is coordinating. Phase transitions resume
 // the main loop with a "Begin working" instruction; done/stop transitions finish
 // the task (cleanup already performed by the caller) and resolve their awaitable.
@@ -67,6 +76,10 @@ export class TransitionController {
   private waiters: Array<() => void> = [];
 
   constructor(private readonly host: TransitionHost) {}
+
+  // Pre-bound PhaseSend handed to standalone spawn functions so they route every
+  // outbound message through the controller without importing the orchestrator.
+  readonly phaseSend: PhaseSend = (message, role) => this.sendCustom(message, role);
 
   getState(): ControllerState {
     return this.state;

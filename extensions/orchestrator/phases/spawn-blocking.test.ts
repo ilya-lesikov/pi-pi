@@ -50,7 +50,8 @@ describe("spawn blocks until completion (review-cycle invariant)", () => {
     const config = getDefaultConfig();
     const variants = { only: { model: "anthropic/claude-test", enabled: true } } as any;
 
-    const promise = spawnPlanners(makePi(), taskDir, taskDir, "1", config, variants);
+    const send = vi.fn();
+    const promise = spawnPlanners(makePi(), taskDir, taskDir, "1", config, send, variants);
 
     let settled = false;
     promise.then(() => {

@@ -6,6 +6,7 @@ import { registerAgentDefinitions, spawnViaRpc, waitForCompletion } from "../age
 import { createCodeReviewerAgent } from "../agents/code-reviewer.js";
 import { getContextDirs, getLatestSynthesizedPlan } from "../context.js";
 import type { RepoInfo } from "../repo-utils.js";
+import type { PhaseSend } from "../transition-controller.js";
 
 function isEnabled(value: { enabled?: boolean } | undefined): boolean {
   return value?.enabled !== false;
@@ -72,15 +73,16 @@ export async function spawnCodeReviewers(
   config: PiPiConfig,
   round: number,
   phase: string,
+  send: PhaseSend,
   variants?: Record<string, VariantConfig>,
   repos: RepoInfo[] = [],
 ): Promise<{ spawned: number; agentIds: string[]; failedVariants: string[] }> {
   const urPath = join(taskDir, "USER_REQUEST.md");
   const resPath = join(taskDir, "RESEARCH.md");
   if (!existsSync(urPath) || !existsSync(resPath)) {
-    pi.sendMessage(
+    send(
       { customType: "pp-code-reviews-error", content: "Cannot start code review: USER_REQUEST.md or RESEARCH.md is missing.", display: true },
-      { deliverAs: "steer" },
+      "context",
     );
     return { spawned: 0, agentIds: [], failedVariants: [] };
   }
@@ -89,9 +91,9 @@ export async function spawnCodeReviewers(
   const research = readFileSync(resPath, "utf-8");
   const synthesizedPlan = getLatestSynthesizedPlan(taskDir);
   if (!synthesizedPlan) {
-    pi.sendMessage(
+    send(
       { customType: "pp-code-reviews-error", content: "Cannot start code review: no synthesized plan found.", display: true },
-      { deliverAs: "steer" },
+      "context",
     );
     return { spawned: 0, agentIds: [], failedVariants: [] };
   }
@@ -139,13 +141,13 @@ export async function spawnCodeReviewers(
           await waitForCompletion(pi, id);
         } catch (err: any) {
           failedVariants.push(variant);
-          pi.sendMessage(
+          send(
             {
               customType: "pp-code-reviewer-error",
               content: `Code reviewer variant "${variant}" failed: ${err.message}`,
               display: true,
             },
-            { deliverAs: "steer" },
+            "context",
           );
         }
       })(),
@@ -159,7 +161,7 @@ export async function spawnCodeReviewers(
     : [];
 
   if (reviewFiles.length > 0) {
-    pi.sendMessage(
+    send(
       {
         customType: "pp-code-reviews-done",
         content: [
@@ -170,10 +172,10 @@ export async function spawnCodeReviewers(
         ].join("\n"),
         display: true,
       },
-      { deliverAs: "steer" },
+      "context",
     );
   } else {
-    pi.sendMessage(
+    send(
       {
         customType: "pp-code-reviews-error",
         content: [
@@ -182,7 +184,7 @@ export async function spawnCodeReviewers(
         ].join("\n"),
         display: true,
       },
-      { deliverAs: "steer" },
+      "context",
     );
   }
 

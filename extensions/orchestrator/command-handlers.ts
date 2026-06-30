@@ -125,6 +125,7 @@ export async function transitionToNextPhase(
         orchestrator.active.dir,
         orchestrator.active.taskId,
         orchestrator.config,
+        orchestrator.transitionController.phaseSend,
         plannerVariants,
         orchestrator.active?.state.repos ?? [],
       ),

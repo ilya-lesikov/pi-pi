@@ -199,13 +199,13 @@ function tryCompleteReviewCycle(orchestrator: Orchestrator, spawnedReviewers?: n
     ? outputs.map((o) => `=== ${o.name} ===\n${o.content}`).join("\n\n")
     : "All reviewers failed to produce output. Review the work yourself and decide whether to approve or request changes.";
 
-  pi.sendMessage(
+  orchestrator.transitionController.sendCustom(
     {
       customType: "pp-review-ready",
       content: `[PI-PI] Reviewer outputs are ready.\n\n${rendered}`,
       display: false,
     },
-    { deliverAs: "followUp" },
+    "instruction",
   );
   orchestrator.safeSendUserMessage(reviewReadyMessage(phase));
 }
@@ -309,6 +309,7 @@ export async function enterReviewCycle(
         orchestrator.active!.taskId,
         orchestrator.config,
         pass,
+        orchestrator.transitionController.phaseSend,
         reviewers,
         orchestrator.active?.state.repos ?? [],
       )
@@ -320,6 +321,7 @@ export async function enterReviewCycle(
         orchestrator.active!.taskId,
         orchestrator.config,
         pass,
+        orchestrator.transitionController.phaseSend,
         reviewers,
         orchestrator.active?.state.repos ?? [],
       )
@@ -331,6 +333,7 @@ export async function enterReviewCycle(
         orchestrator.config,
         pass,
         phase,
+        orchestrator.transitionController.phaseSend,
         reviewers,
         orchestrator.active?.state.repos ?? [],
       );
@@ -1074,13 +1077,13 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
           orchestrator.agentSpawnTimes.delete(id);
           orchestrator.agentDescriptions.delete(id);
           orchestrator.agentLifecycle.delete(id);
-          pi.sendMessage(
+          orchestrator.transitionController.sendCustom(
             {
               customType: "pp-agent-stale",
               content: `Aborted stale agent "${desc}" — no completion after ${Math.round(staleMs / 1000)}s.`,
               display: true,
             },
-            { deliverAs: "steer" },
+            "context",
           );
         }
       }
@@ -1169,6 +1172,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
               orchestrator.active!.dir,
               orchestrator.active!.taskId,
               orchestrator.config,
+              orchestrator.transitionController.phaseSend,
               scopedPlanners,
               orchestrator.active?.state.repos ?? [],
             ),
@@ -1188,13 +1192,13 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       orchestrator.active.state.plannerFailureAutoRetried = false;
       saveTask(orchestrator.active.dir, orchestrator.active.state);
       if (!hasPlanFiles) {
-        pi.sendMessage(
+        orchestrator.transitionController.sendCustom(
           {
             customType: "pp-planners-error",
             content: "All planner subagents failed. Continue without planner outputs and synthesize the plan yourself.",
             display: true,
           },
-          { deliverAs: "followUp" },
+          "instruction",
         );
       } else {
         orchestrator.safeSendUserMessage("[PI-PI] Some planners failed. Continue with available planner outputs.");
@@ -1242,6 +1246,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
                   orchestrator.active!.dir,
                   orchestrator.active!.taskId,
                   orchestrator.config,
+                  orchestrator.transitionController.phaseSend,
                   scopedPlanners,
                   orchestrator.active?.state.repos ?? [],
                 ),
@@ -1274,13 +1279,13 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     }
 
     if (!hasPlanFiles) {
-      pi.sendMessage(
+      orchestrator.transitionController.sendCustom(
         {
           customType: "pp-planners-error",
           content: "All planner subagents finished but no plan files were produced. You must create the plan yourself based on USER_REQUEST.md and RESEARCH.md.",
           display: true,
         },
-        { deliverAs: "followUp" },
+        "instruction",
       );
       orchestrator.active.state.step = "synthesize";
       saveTask(orchestrator.active.dir, orchestrator.active.state);
@@ -1330,6 +1335,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
               orchestrator.active!.taskId,
               orchestrator.config,
               cycle.pass,
+              orchestrator.transitionController.phaseSend,
               scopedReviewers,
               orchestrator.active?.state.repos ?? [],
             )
@@ -1341,6 +1347,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
               orchestrator.active!.taskId,
               orchestrator.config,
               cycle.pass,
+              orchestrator.transitionController.phaseSend,
               scopedReviewers,
               orchestrator.active?.state.repos ?? [],
             )
@@ -1352,6 +1359,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
               orchestrator.config,
               cycle.pass,
               phase,
+              orchestrator.transitionController.phaseSend,
               scopedReviewers,
               orchestrator.active?.state.repos ?? [],
             );
@@ -1423,6 +1431,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
                     orchestrator.active!.taskId,
                     orchestrator.config,
                     pass,
+                    orchestrator.transitionController.phaseSend,
                     scopedReviewers,
                     orchestrator.active?.state.repos ?? [],
                   )
@@ -1434,6 +1443,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
                     orchestrator.active!.taskId,
                     orchestrator.config,
                     pass,
+                    orchestrator.transitionController.phaseSend,
                     scopedReviewers,
                     orchestrator.active?.state.repos ?? [],
                   )
@@ -1445,6 +1455,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
                     orchestrator.config,
                     pass,
                     phase,
+                    orchestrator.transitionController.phaseSend,
                     scopedReviewers,
                     orchestrator.active?.state.repos ?? [],
                   );
@@ -1523,13 +1534,13 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     const tokens = data.tokens?.total ? `${data.tokens.total} tok` : "";
     const stats = [duration, tokens].filter(Boolean).join(", ");
 
-    pi.sendMessage(
+    orchestrator.transitionController.sendCustom(
       {
         customType: "pp-subagent-result",
         content: `${desc} completed${stats ? ` (${stats})` : ""}. Use get_subagent_result to read the output.`,
         display: false,
       },
-      { deliverAs: "steer" },
+      "context",
     );
 
     checkPlannerCompletion();
@@ -1556,7 +1567,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       orchestrator.abortAllSubagents();
     }
 
-    pi.sendMessage(
+    orchestrator.transitionController.sendCustom(
       {
         customType: "pp-subagent-error",
         content: isApiError
@@ -1564,7 +1575,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
           : `**${desc}** failed: ${data.error || "unknown error"}. Do NOT retry — continue with available information.`,
         display: true,
       },
-      { deliverAs: "steer" },
+      "context",
     );
 
     checkPlannerCompletion();
@@ -1992,13 +2003,13 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       .map((a) => `=== ${a.name} ===\n${a.content}`)
       .join("\n\n");
 
-    pi.sendMessage(
+    orchestrator.transitionController.sendCustom(
       {
         customType: "pp-artifact-reinject",
         content: `[PI-PI ARTIFACTS — re-injected after compaction]\n\n${artifactText}`,
         display: false,
       },
-      { deliverAs: "steer" },
+      "context",
     );
 
     return;
@@ -2031,13 +2042,13 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       !orchestrator.commitReminderSent
     ) {
       orchestrator.commitReminderSent = true;
-      pi.sendMessage(
+      orchestrator.transitionController.sendCustom(
         {
           customType: "pp-commit-reminder",
           content: `You have ${orchestrator.active.modifiedFiles.size} uncommitted file(s). If you've completed a logical unit of work, call pp_commit with a descriptive message. Prefix it with a conventional-commit type (fix:, feat:, or chore:) unless the user asked for a different commit style.`,
           display: false,
         },
-        { deliverAs: "steer" },
+        "context",
       );
     }
 
@@ -2151,9 +2162,9 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
               const rendered = outputs.length
                 ? outputs.map((o) => `=== ${o.name} ===\n${o.content}`).join("\n\n")
                 : "All reviewers failed to produce output. Review the work yourself and decide whether to approve or request changes.";
-              pi.sendMessage(
+              orchestrator.transitionController.sendCustom(
                 { customType: "pp-review-ready", content: `[PI-PI] Reviewer outputs are ready.\n\n${rendered}`, display: false },
-                { deliverAs: "followUp" },
+                "instruction",
               );
               orchestrator.safeSendUserMessage(reviewReadyMessage(phase));
             }
@@ -2235,24 +2246,24 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
         orchestrator.nudgeHalted = true;
         orchestrator.nudgeTimestamps = [];
         orchestrator.cooldownHits = [];
-        pi.sendMessage(
+        orchestrator.transitionController.sendCustom(
           {
             customType: "pp-continuation-halted",
             content: "Agent has been repeatedly interrupted. Auto-continuation paused. Send any message to resume nudging.",
             display: true,
           },
-          { deliverAs: "steer" },
+          "context",
         );
         return;
       }
 
-      pi.sendMessage(
+      orchestrator.transitionController.sendCustom(
         {
           customType: "pp-continuation-cooldown",
           content: "Agent interrupted repeatedly. Waiting 60 seconds before retrying.",
           display: true,
         },
-        { deliverAs: "steer" },
+        "context",
       );
       orchestrator.nudgeTimestamps = [];
       const cooldownToken = orchestrator.activeTaskToken;

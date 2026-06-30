@@ -507,6 +507,7 @@ export async function resumeTask(
           orchestrator.active.dir,
           orchestrator.active.taskId,
           orchestrator.config,
+          orchestrator.transitionController.phaseSend,
           missingConfig,
           orchestrator.active?.state.repos ?? [],
         );
@@ -561,13 +562,13 @@ export async function resumeTask(
         orchestrator.active.state.step = "apply_feedback";
         saveTask(orchestrator.active.dir, orchestrator.active.state);
         const rendered = outputs.map((o) => `=== ${o.name} ===\n${o.content}`).join("\n\n");
-        pi.sendMessage(
+        orchestrator.transitionController.sendCustom(
           {
             customType: "pp-review-ready",
             content: `[PI-PI] Reviewer outputs are ready.\n\n${rendered}`,
             display: false,
           },
-          { deliverAs: "steer" },
+          "context",
         );
       } else {
         const completedVariants = new Set(
@@ -581,13 +582,13 @@ export async function resumeTask(
           orchestrator.active.state.step = "apply_feedback";
           saveTask(orchestrator.active.dir, orchestrator.active.state);
           const rendered = outputs.map((o) => `=== ${o.name} ===\n${o.content}`).join("\n\n");
-          pi.sendMessage(
+          orchestrator.transitionController.sendCustom(
             {
               customType: "pp-review-ready",
               content: `[PI-PI] Reviewer outputs are ready.\n\n${rendered}`,
               display: false,
             },
-            { deliverAs: "steer" },
+            "context",
           );
         } else {
           const missingReviewerConfig: typeof reviewers = {};
@@ -603,6 +604,7 @@ export async function resumeTask(
               orchestrator.active!.taskId,
               orchestrator.config,
               cycle.pass,
+              orchestrator.transitionController.phaseSend,
               missingReviewerConfig,
               orchestrator.active?.state.repos ?? [],
             )
@@ -614,6 +616,7 @@ export async function resumeTask(
               orchestrator.active!.taskId,
               orchestrator.config,
               cycle.pass,
+              orchestrator.transitionController.phaseSend,
               missingReviewerConfig,
               orchestrator.active?.state.repos ?? [],
             )
@@ -625,6 +628,7 @@ export async function resumeTask(
               orchestrator.config,
               cycle.pass,
               phase,
+              orchestrator.transitionController.phaseSend,
               missingReviewerConfig,
               orchestrator.active?.state.repos ?? [],
             );
@@ -650,13 +654,13 @@ export async function resumeTask(
     } else if (cycle.step === "apply_feedback") {
       const outputs = loadPhaseReviewOutputs(orchestrator.active.dir, phase, cycle.pass);
       const rendered = outputs.map((o) => `=== ${o.name} ===\n${o.content}`).join("\n\n");
-      pi.sendMessage(
+      orchestrator.transitionController.sendCustom(
         {
           customType: "pp-review-ready",
           content: `[PI-PI] Review cycle is in apply_feedback step.\n\n${rendered}`,
           display: false,
         },
-        { deliverAs: "steer" },
+        "context",
       );
     }
   }

@@ -130,14 +130,11 @@ export class Orchestrator {
     const log = getLogger();
     const attempt = (retries: number) => {
       try {
-        // Always queue as a follow-up turn. Without an explicit deliverAs, the
-        // runtime throws "Agent is already processing" when this is called while
-        // a tool (e.g. pp_phase_complete) is still in-flight — which is exactly
-        // the case during an autonomous phase transition (and when compaction
-        // fails synchronously with "Nothing to compact"). followUp queues the
-        // message and triggers a turn once the current one settles, or runs
-        // immediately when the agent is idle.
-        this.pi.sendUserMessage(text, { deliverAs: "followUp" });
+        // Route through the controller's single send path. "instruction" maps to
+        // followUp: queues the message and triggers a turn once the current one
+        // settles (or runs immediately when idle), so it never throws "Agent is
+        // already processing" when called mid-tool (e.g. during a transition).
+        this.transitionController.send(text, "instruction");
         log.debug({ s: "orchestrator", retries, text: text.slice(0, 200) }, "safeSend sent");
       } catch (err: any) {
         if (retries < 30) {
@@ -511,6 +508,7 @@ export class Orchestrator {
           this.active.dir,
           this.active.taskId,
           this.config,
+          this.transitionController.phaseSend,
           plannerVariants,
           this.active?.state.repos ?? [],
         ),
@@ -651,16 +649,16 @@ export class Orchestrator {
       getModelInfo(activeModelSpec),
     );
     for (const cf of contextFiles) {
-      this.pi.sendMessage(
+      this.transitionController.sendCustom(
         { customType: "pp-context", content: cf.content, display: false },
-        { deliverAs: "steer" },
+        "context",
       );
     }
     const artifacts = getPhaseArtifacts(taskDir, phase);
     for (const artifact of artifacts) {
-      this.pi.sendMessage(
+      this.transitionController.sendCustom(
         { customType: "pp-artifact", content: `=== ${artifact.name} ===\n${artifact.content}`, display: false },
-        { deliverAs: "steer" },
+        "context",
       );
     }
   }

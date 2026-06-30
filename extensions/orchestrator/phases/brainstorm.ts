@@ -7,6 +7,7 @@ import { createBrainstormReviewerAgent } from "../agents/brainstorm-reviewer.js"
 import { getContextDirs } from "../context.js";
 import type { RepoInfo } from "../repo-utils.js";
 import type { TaskType } from "../state.js";
+import type { PhaseSend } from "../transition-controller.js";
 
 function isEnabled(value: { enabled?: boolean } | undefined): boolean {
   return value?.enabled !== false;
@@ -170,6 +171,7 @@ export async function spawnBrainstormReviewers(
   taskId: string,
   config: PiPiConfig,
   round: number,
+  send: PhaseSend,
   variants?: Record<string, VariantConfig>,
   repos: RepoInfo[] = [],
 ): Promise<{ spawned: number; files: string[]; agentIds: string[]; failedVariants: string[] }> {
@@ -232,13 +234,13 @@ export async function spawnBrainstormReviewers(
           await waitForCompletion(pi, id);
         } catch (err: any) {
           failedVariants.push(variant);
-          pi.sendMessage(
+          send(
             {
               customType: "pp-brainstorm-reviewer-error",
               content: `Brainstorm reviewer variant "${variant}" failed: ${err.message}`,
               display: true,
             },
-            { deliverAs: "steer" },
+            "context",
           );
         }
       })(),
@@ -252,7 +254,7 @@ export async function spawnBrainstormReviewers(
     : [];
 
   if (reviewOutputFiles.length > 0) {
-    pi.sendMessage(
+    send(
       {
         customType: "pp-brainstorm-reviews-done",
         content: [
@@ -263,10 +265,10 @@ export async function spawnBrainstormReviewers(
         ].join("\n"),
         display: true,
       },
-      { deliverAs: "steer" },
+      "context",
     );
   } else if (enabledVariants.length > 0) {
-    pi.sendMessage(
+    send(
       {
         customType: "pp-brainstorm-reviews-error",
         content: [
@@ -275,7 +277,7 @@ export async function spawnBrainstormReviewers(
         ].join("\n"),
         display: true,
       },
-      { deliverAs: "steer" },
+      "context",
     );
   }
 

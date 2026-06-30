@@ -9,6 +9,7 @@ import { getContextDirs, getLatestSynthesizedPlan } from "../context.js";
 import type { RepoInfo } from "../repo-utils.js";
 import { validatePlan } from "../validate-artifacts.js";
 import type { TaskMode } from "../state.js";
+import type { PhaseSend } from "../transition-controller.js";
 
 function isEnabled(value: { enabled?: boolean } | undefined): boolean {
   return value?.enabled !== false;
@@ -57,6 +58,7 @@ export async function spawnPlanners(
   taskDir: string,
   taskId: string,
   config: PiPiConfig,
+  send: PhaseSend,
   variants?: Record<string, VariantConfig>,
   repos: RepoInfo[] = [],
 ): Promise<{ spawned: number; agentIds: string[]; failedVariants: string[] }> {
@@ -109,25 +111,25 @@ export async function spawnPlanners(
             const planContent = readFileSync(outputPath, "utf-8");
             const validation = validatePlan(planContent);
             if (!validation.ok) {
-              pi.sendMessage(
+              send(
                 {
                   customType: "pp-planner-error",
                   content: `Planner "${variant}" produced invalid plan (errors were shown to the agent but it did not fix them): ${validation.errors.join("; ")}`,
                   display: true,
                 },
-                { deliverAs: "steer" },
+                "context",
               );
             }
           }
         } catch (err: any) {
           failedVariants.push(variant);
-          pi.sendMessage(
+          send(
             {
               customType: "pp-planner-error",
               content: `Planner variant "${variant}" failed: ${err.message}`,
               display: true,
             },
-            { deliverAs: "steer" },
+            "context",
           );
         }
       })(),
@@ -138,7 +140,7 @@ export async function spawnPlanners(
 
   const planFiles = existsSync(plansDir) ? readdirSync(plansDir).filter((f) => !f.includes("synthesized") && !f.includes("review_")) : [];
   if (planFiles.length > 0) {
-    pi.sendMessage(
+    send(
       {
         customType: "pp-planners-done",
         content: [
@@ -149,10 +151,10 @@ export async function spawnPlanners(
         ].join("\n"),
         display: true,
       },
-      { deliverAs: "steer" },
+      "context",
     );
   } else {
-    pi.sendMessage(
+    send(
       {
         customType: "pp-planners-error",
         content: [
@@ -161,7 +163,7 @@ export async function spawnPlanners(
         ].join("\n"),
         display: true,
       },
-      { deliverAs: "steer" },
+      "context",
     );
   }
 
@@ -175,6 +177,7 @@ export async function spawnPlanReviewers(
   taskId: string,
   config: PiPiConfig,
   pass: number,
+  send: PhaseSend,
   variants?: Record<string, VariantConfig>,
   repos: RepoInfo[] = [],
 ): Promise<{ spawned: number; files: string[]; agentIds: string[]; failedVariants: string[] }> {
@@ -232,13 +235,13 @@ export async function spawnPlanReviewers(
           await waitForCompletion(pi, id);
         } catch (err: any) {
           failedVariants.push(variant);
-          pi.sendMessage(
+          send(
             {
               customType: "pp-plan-reviewer-error",
               content: `Plan reviewer variant "${variant}" failed: ${err.message}`,
               display: true,
             },
-            { deliverAs: "steer" },
+            "context",
           );
         }
       })(),
@@ -252,7 +255,7 @@ export async function spawnPlanReviewers(
     : [];
 
   if (actualReviewFiles.length > 0) {
-    pi.sendMessage(
+    send(
       {
           customType: "pp-plan-reviews-done",
           content: [
@@ -263,16 +266,16 @@ export async function spawnPlanReviewers(
         ].join("\n"),
         display: true,
       },
-      { deliverAs: "steer" },
+      "context",
     );
   } else if (enabledVariants.length > 0) {
-    pi.sendMessage(
+    send(
       {
         customType: "pp-plan-reviews-error",
         content: "All plan reviewer variants failed — no reviews were produced. Proceeding without plan review.",
         display: true,
       },
-      { deliverAs: "steer" },
+      "context",
     );
   }
 
