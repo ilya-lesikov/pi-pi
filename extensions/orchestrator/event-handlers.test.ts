@@ -26,6 +26,11 @@ function makePi() {
     setSessionName: vi.fn(),
     _handlers: handlers,
     _eventHandlers: eventHandlers,
+    // Drive a synthetic lifecycle/session event by invoking the pi.on-registered
+    // handler (NOT pi.events.emit, which is only for extension/subagent events).
+    emitAgentEnd: (event: any = { type: "agent_end" }, ctx: any = {}) => handlers.get("agent_end")?.(event, ctx),
+    emitSessionCompact: (event: any = { type: "session_compact", fromExtension: true }, ctx: any = {}) =>
+      handlers.get("session_compact")?.(event, ctx),
   };
 }
 

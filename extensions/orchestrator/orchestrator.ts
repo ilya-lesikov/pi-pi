@@ -28,6 +28,7 @@ import { resolveModel, getModelInfo } from "./model-registry.js";
 import { buildRepoContext } from "./agents/repo-context.js";
 import { getLogger, addTaskDestination, removeTaskDestination, setLogLevel } from "./log.js";
 import { handleSpawnResult } from "./spawn-cleanup.js";
+import { TransitionController, type TransitionHost } from "./transition-controller.js";
 
 function isEnabled(value: { enabled?: boolean } | undefined): boolean {
   return value?.enabled !== false;
@@ -95,8 +96,35 @@ export class Orchestrator {
   plannotatorUnsub: (() => void) | null = null;
   plannotatorTimer: ReturnType<typeof setTimeout> | null = null;
   transitionToNextPhase: (ctx: any, plannerPreset?: string) => Promise<{ ok: boolean; error?: string }> = async () => ({ ok: false, error: "not initialized" });
+  readonly transitionController: TransitionController;
 
-  constructor(readonly pi: ExtensionAPI) {}
+  constructor(readonly pi: ExtensionAPI) {
+    this.transitionController = new TransitionController(this.makeTransitionHost());
+  }
+
+  // Minimal host the TransitionController uses to reach the live session. Kept
+  // private so the controller is the sole caller of these main-session primitives.
+  private makeTransitionHost(): TransitionHost {
+    return {
+      rawSendUserMessage: (text, deliverAs) => {
+        this.pi.sendUserMessage(text, { deliverAs });
+      },
+      rawSendMessage: (message, deliverAs) => {
+        this.pi.sendMessage(message, { deliverAs });
+      },
+      compact: (options) => {
+        const compact = this.lastCtx?.compact;
+        if (!compact) return false;
+        compact(options);
+        return true;
+      },
+      isIdle: () => {
+        const idle = this.lastCtx?.isIdle;
+        return typeof idle === "function" ? !!idle.call(this.lastCtx) : false;
+      },
+      currentStep: () => this.active?.state.step ?? null,
+    };
+  }
 
   safeSendUserMessage(text: string): void {
     const log = getLogger();
