@@ -99,7 +99,12 @@ export async function transitionToNextPhase(
     unregisterAgentDefinitions(orchestrator.pi);
     await orchestrator.cleanupActive();
     orchestrator.updateStatus(ctx);
-    ctx.compact();
+    orchestrator.lastCtx = ctx;
+    // Route the task-done compaction through the controller as a "done" target.
+    void orchestrator.transitionController.requestTransition({
+      kind: "done",
+      summary: orchestrator.taskDoneCompactionSummary,
+    });
     ctx.ui.notify("Task completed!", "info");
     return { ok: true };
   }

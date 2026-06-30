@@ -183,6 +183,7 @@ describe("transitionToNextPhase", () => {
         notify: vi.fn(),
         setStatus: vi.fn(),
       },
+      isIdle: vi.fn().mockReturnValue(true),
       compact: vi.fn(),
     };
   }

@@ -362,16 +362,18 @@ export async function stopTask(orchestrator: Orchestrator): Promise<string> {
   const taskStore = (globalThis as any)[Symbol.for("pi-tasks:store")];
   taskStore?.clearAll?.();
 
+  // Route the stop/pause compaction through the controller as a "done" target.
+  // taskDoneCompactionPending drives the session_before_compact summary; the
+  // controller's awaitable resolves at every terminus (session_compact, no-op
+  // skip, already-idle), so this await never hangs and never resolves early.
   orchestrator.taskDoneCompactionPending = true;
   orchestrator.taskDoneCompactionSummary = `Task "${desc}" (${type}) stopped/paused.`;
-  await new Promise<void>((resolve) => {
-    const compact = orchestrator.lastCtx?.compact;
-    if (!compact) { orchestrator.taskDoneCompactionPending = false; orchestrator.taskDoneCompactionSummary = ""; resolve(); return; }
-    compact({
-      onComplete: () => { orchestrator.taskDoneCompactionPending = false; resolve(); },
-      onError: () => { orchestrator.taskDoneCompactionPending = false; orchestrator.taskDoneCompactionSummary = ""; resolve(); },
-    });
+  await orchestrator.transitionController.requestTransition({
+    kind: "done",
+    summary: `Task "${desc}" (${type}) stopped/paused.`,
   });
+  orchestrator.taskDoneCompactionPending = false;
+  orchestrator.taskDoneCompactionSummary = "";
 
   return `Task "${desc}" stopped. Use /pp → Resume to continue.`;
 }
@@ -719,7 +721,12 @@ function registerSpecifyReviewsTool(orchestrator: Orchestrator): void {
       try {
         const { showActiveTaskMenu } = await import("./pp-menu.js");
         const text = await showActiveTaskMenu(orchestrator, ctx, `Plannotator review complete.\n\n${summary}`, "tool");
-        if (orchestrator.phaseCompactionPending || orchestrator.taskDoneCompactionPending) {
+        // A transition may have started while the menu was open. The controller
+        // is the source of truth; abort the agent's pending turn so it doesn't
+        // race the transition. (Interactive-UX abort — stays local, not routed.)
+        // The legacy-flag OR covers interactive menu paths (finishTask/pauseTask)
+        // not yet routed through the controller (slice 5).
+        if (!orchestrator.transitionController.isRunning() || orchestrator.phaseCompactionPending || orchestrator.taskDoneCompactionPending) {
           ctx.abort?.();
           return { content: [{ type: "text" as const, text: "" }], details: {} };
         }
@@ -911,14 +918,19 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
       try {
         const { showActiveTaskMenu } = await import("./pp-menu.js");
         const text = await showActiveTaskMenu(orchestrator, ctx, params.summary, "tool");
-        if (orchestrator.phaseCompactionPending || orchestrator.taskDoneCompactionPending) {
-          ctx.abort?.();
-          return { content: [{ type: "text" as const, text: "" }], details: {} };
-        }
+        // A transition or await may have started while the menu was open. The
+        // controller is the source of truth; abort the pending turn so it can't
+        // race. (Interactive-UX abort — stays local, not routed.)
         const curStep = orchestrator.active?.state.step;
         if (curStep === "await_planners" || curStep === "await_reviewers") {
           ctx.abort?.();
           return { content: [{ type: "text" as const, text: `Waiting for ${curStep === "await_planners" ? "planners" : "reviewers"} to complete. Do NOT proceed until notified.` }], details: {} };
+        }
+        // Legacy-flag OR covers interactive menu paths (finishTask/pauseTask) not
+        // yet routed through the controller (slice 5).
+        if (!orchestrator.transitionController.isRunning() || orchestrator.phaseCompactionPending || orchestrator.taskDoneCompactionPending) {
+          ctx.abort?.();
+          return { content: [{ type: "text" as const, text: "" }], details: {} };
         }
         if (!text) {
           return { content: [{ type: "text" as const, text: "User dismissed the menu. Wait for the user's next message. When you resume work, update USER_REQUEST.md and RESEARCH.md with any new findings before calling pp_phase_complete." }], details: {} };
@@ -1747,19 +1759,16 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   pi.on("before_agent_start", async (event, ctx) => {
     orchestrator.lastCtx = ctx;
     const log = getLogger();
-    if (orchestrator.taskDoneCompactionPending || orchestrator.phaseCompactionPending) {
-      log.debug({ s: "hook", hook: "before_agent_start", reason: "compaction_pending" }, "aborting agent start");
+    // The controller is the single source of truth for "may the agent loop
+    // start?". It is not running during a pending/compacting/resuming transition
+    // (subsuming the old phase/taskDone compaction-pending checks) or while
+    // awaiting subagents (step === await_planners/await_reviewers).
+    if (orchestrator.transitionController.shouldBlockAgentStart()) {
+      log.debug({ s: "hook", hook: "before_agent_start", state: orchestrator.transitionController.getState(), step: orchestrator.active?.state.step }, "aborting agent start (controller not running)");
       ctx.abort();
       return;
     }
     if (!orchestrator.active || orchestrator.active.state.phase === "done") return;
-
-    const step = orchestrator.active.state.step;
-    if (step === "await_planners" || step === "await_reviewers") {
-      log.debug({ s: "hook", hook: "before_agent_start", step }, "aborting agent start (waiting for subagents)");
-      ctx.abort();
-      return;
-    }
 
     orchestrator.nudgeHalted = false;
     orchestrator.updateStatus(ctx);

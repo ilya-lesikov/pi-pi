@@ -359,16 +359,16 @@ export class Orchestrator {
     }
 
     if (hadActive) {
+      // Route new-task compaction through the controller as a "done" target.
+      this.lastCtx = ctx;
       this.taskDoneCompactionPending = true;
       this.taskDoneCompactionSummary = `Starting new ${type} task. Previous conversation discarded.`;
-      await new Promise<void>((resolve) => {
-        const compact = (ctx as any).compact;
-        if (!compact) { this.taskDoneCompactionPending = false; this.taskDoneCompactionSummary = ""; resolve(); return; }
-        compact({
-          onComplete: () => { this.taskDoneCompactionPending = false; resolve(); },
-          onError: () => { this.taskDoneCompactionPending = false; this.taskDoneCompactionSummary = ""; resolve(); },
-        });
+      await this.transitionController.requestTransition({
+        kind: "done",
+        summary: `Starting new ${type} task. Previous conversation discarded.`,
       });
+      this.taskDoneCompactionPending = false;
+      this.taskDoneCompactionSummary = "";
     }
 
     try {
