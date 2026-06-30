@@ -24,7 +24,7 @@ import { registerAgentDefinitions, unregisterAgentDefinitions } from "./agents/r
 import { createExploreAgent } from "./agents/explore.js";
 import { createLibrarianAgent } from "./agents/librarian.js";
 import { createTaskAgent } from "./agents/task.js";
-import { resolveModel, getModelInfo } from "./model-registry.js";
+import { resolveModel, getModelInfo, findLatestFamilyMatch } from "./model-registry.js";
 import { buildRepoContext } from "./agents/repo-context.js";
 import { getLogger, addTaskDestination, removeTaskDestination, setLogLevel } from "./log.js";
 import { handleSpawnResult } from "./spawn-cleanup.js";
@@ -174,6 +174,16 @@ export class Orchestrator {
         resolved = allModels.find(
           (m) => m.provider.toLowerCase() === provider && m.id.toLowerCase() === modelId,
         );
+      }
+      if (!resolved) {
+        const allSpecs = allModels.map((m) => `${m.provider}/${m.id}`);
+        const familyMatch = findLatestFamilyMatch(spec, allSpecs);
+        if (familyMatch) {
+          const fmLower = familyMatch.toLowerCase();
+          resolved = allModels.find(
+            (m) => `${m.provider.toLowerCase()}/${m.id.toLowerCase()}` === fmLower,
+          );
+        }
       }
       if (!resolved) {
         const pattern = spec.toLowerCase();

@@ -266,6 +266,26 @@ export function getAllAliases(): Record<string, string> {
   return { ...aliasMap };
 }
 
+export function findLatestFamilyMatch(
+  modelSpec: string,
+  availableSpecs: string[],
+): string | null {
+  const family = findFamily(modelSpec);
+  if (!family) return null;
+
+  const slashIdx = modelSpec.indexOf("/");
+  if (slashIdx === -1) return null;
+  const requestedProvider = modelSpec.substring(0, slashIdx).trim().toLowerCase();
+
+  const candidates = availableSpecs.filter((spec) => {
+    const specLower = spec.toLowerCase();
+    if (!specLower.startsWith(`${requestedProvider}/`)) return false;
+    return family.patterns.some((p) => p.test(specLower));
+  });
+
+  return pickLatest(candidates);
+}
+
 export function getModelFamilies(): ModelFamilyInfo[] {
   return MODEL_FAMILIES.map((family) => ({
     vendor: family.vendor,

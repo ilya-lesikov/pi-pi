@@ -7,6 +7,7 @@ vi.mock("./log.js", () => ({
 }));
 
 import {
+  findLatestFamilyMatch,
   getAllAliases,
   getModelFamilies,
   getModelInfo,
@@ -250,5 +251,36 @@ describe("model-registry", () => {
 
     expect(families.find((f) => f.family === "haiku")).toMatchObject({ vendor: "anthropic", tier: "stupid" });
     expect(families.find((f) => f.family === "gemini-pro")).toMatchObject({ vendor: "google", tier: "regular" });
+  });
+
+  describe("findLatestFamilyMatch", () => {
+    it("returns latest versioned model for a native-latest alias", () => {
+      const available = [
+        "anthropic/claude-opus-4-0-20250514",
+        "anthropic/claude-opus-4-6",
+        "anthropic/claude-sonnet-4-6",
+      ];
+      expect(findLatestFamilyMatch("anthropic/claude-opus-latest", available)).toBe("anthropic/claude-opus-4-6");
+    });
+
+    it("returns null for unknown model spec", () => {
+      expect(findLatestFamilyMatch("custom/unknown-model", ["anthropic/claude-opus-4-6"])).toBeNull();
+    });
+
+    it("returns null when no candidates match the provider", () => {
+      expect(findLatestFamilyMatch("anthropic/claude-opus-latest", ["openai/gpt-5.4"])).toBeNull();
+    });
+
+    it("returns null for spec without provider", () => {
+      expect(findLatestFamilyMatch("claude-opus-latest", ["anthropic/claude-opus-4-6"])).toBeNull();
+    });
+
+    it("returns the only candidate when there is one", () => {
+      expect(findLatestFamilyMatch("openai/gpt-latest", ["openai/gpt-5.4"])).toBe("openai/gpt-5.4");
+    });
+
+    it("returns null for empty available list", () => {
+      expect(findLatestFamilyMatch("anthropic/claude-opus-latest", [])).toBeNull();
+    });
   });
 });
