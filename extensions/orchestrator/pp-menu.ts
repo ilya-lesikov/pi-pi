@@ -256,18 +256,20 @@ async function pauseTask(orchestrator: Orchestrator, ctx: any): Promise<string> 
   taskStore?.clearAll?.();
   taskStore?.refreshWidget?.(ctx.ui);
 
+  orchestrator.lastCtx = ctx;
   orchestrator.taskDoneCompactionPending = true;
   orchestrator.taskDoneCompactionSummary = `Task "${name}" (${type}) paused.`;
 
   orchestrator.updateStatus(ctx);
-  await new Promise<void>((resolve) => {
-    const compact = ctx.compact;
-    if (!compact) { orchestrator.taskDoneCompactionPending = false; orchestrator.taskDoneCompactionSummary = ""; resolve(); return; }
-    compact({
-      onComplete: () => { orchestrator.taskDoneCompactionPending = false; resolve(); },
-      onError: () => { orchestrator.taskDoneCompactionPending = false; orchestrator.taskDoneCompactionSummary = ""; resolve(); },
-    });
+  // Route through the controller as a "done" target (same coordinator as every
+  // other compaction). The agent was aborted above, so this compacts via the
+  // already-idle path; the awaitable resolves at every terminus.
+  await orchestrator.transitionController.requestTransition({
+    kind: "done",
+    summary: `Task "${name}" (${type}) paused.`,
   });
+  orchestrator.taskDoneCompactionPending = false;
+  orchestrator.taskDoneCompactionSummary = "";
   ctx.ui.notify(`Task "${name}" paused. Use /pp → Resume to continue.`, "info");
   return `Task "${name}" paused.`;
 }
@@ -284,6 +286,7 @@ async function finishTask(orchestrator: Orchestrator, ctx: any): Promise<string>
   const type = orchestrator.active.type;
   const dir = orchestrator.active.dir;
 
+  orchestrator.lastCtx = ctx;
   orchestrator.taskDoneCompactionPending = true;
   orchestrator.taskDoneCompactionSummary = `Task "${name}" (${type}) completed.`;
 
@@ -298,7 +301,12 @@ async function finishTask(orchestrator: Orchestrator, ctx: any): Promise<string>
   taskStore?.refreshWidget?.(ctx.ui);
 
   orchestrator.updateStatus(ctx);
-  ctx.compact?.();
+  // Route through the controller as a "done" target (fire-and-forget: the task
+  // is over, nothing awaits this compaction).
+  void orchestrator.transitionController.requestTransition({
+    kind: "done",
+    summary: `Task "${name}" (${type}) completed.`,
+  });
 
   const urExists = existsSync(join(dir, "USER_REQUEST.md"));
   const resExists = existsSync(join(dir, "RESEARCH.md"));
@@ -3401,9 +3409,8 @@ export async function showActiveTaskMenu(
       finalizeReviewCycle(task);
       const result = await orchestrator.transitionToNextPhase(ctx, plannerPreset);
       if (!result.ok) return `Transition blocked: ${result.error}`;
-      if (orchestrator.phaseCompactionPending || orchestrator.taskDoneCompactionPending) return "";
-      const curStep = orchestrator.active?.state.step;
-      if (curStep === "await_planners" || curStep === "await_reviewers") return "";
+      // Transition is now owned by the controller (state ≠ running) or we're
+      // awaiting subagents; either way the menu returns empty.
       return "";
     }
 
