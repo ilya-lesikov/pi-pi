@@ -132,7 +132,7 @@ export async function transitionToNextPhase(
         plannerVariants,
         orchestrator.active?.state.repos ?? [],
       ),
-      { kind: "planner", logScope: "planner", logMessage: "spawnPlanners failed" },
+      { kind: "planner", logScope: "planner", logMessage: "spawnPlanners failed", onSettled: (result) => { if (!result?.spawned) orchestrator.checkPlannerCompletion(); } },
     );
   } : undefined;
 

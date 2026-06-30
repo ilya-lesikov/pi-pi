@@ -1,0 +1,1996 @@
+diff --git a/extensions/orchestrator/command-handlers.test.ts b/extensions/orchestrator/command-handlers.test.ts
+index e21c59c..9c8e0e6 100644
+--- a/extensions/orchestrator/command-handlers.test.ts
++++ b/extensions/orchestrator/command-handlers.test.ts
+@@ -183,6 +183,7 @@ describe("transitionToNextPhase", () => {
+         notify: vi.fn(),
+         setStatus: vi.fn(),
+       },
++      isIdle: vi.fn().mockReturnValue(true),
+       compact: vi.fn(),
+     };
+   }
+@@ -460,7 +461,7 @@ describe("transitionToNextPhase", () => {
+ 
+     expect(result).toEqual({ ok: true });
+     expect(cleanupSpy).toHaveBeenCalledTimes(1);
+-    expect(orchestrator.taskDoneCompactionPending).toBe(true);
++    // Done transition routes through the controller; idle ctx -> compacts now.
+     expect(ctx.compact).toHaveBeenCalledTimes(1);
+   });
+ 
+diff --git a/extensions/orchestrator/command-handlers.ts b/extensions/orchestrator/command-handlers.ts
+index d8bded2..cb8f457 100644
+--- a/extensions/orchestrator/command-handlers.ts
++++ b/extensions/orchestrator/command-handlers.ts
+@@ -92,20 +92,23 @@ export async function transitionToNextPhase(
+   if (next === "done") {
+     const name = orchestrator.active.description;
+     const type = orchestrator.active.type;
+-    orchestrator.taskDoneCompactionPending = true;
+-    orchestrator.taskDoneCompactionSummary = `Task "${name}" (${type}) completed.`;
+ 
+     orchestrator.abortAllSubagents();
+     unregisterAgentDefinitions(orchestrator.pi);
+     await orchestrator.cleanupActive();
+     orchestrator.updateStatus(ctx);
+-    ctx.compact();
++    orchestrator.lastCtx = ctx;
++    // Route the task-done compaction through the controller as a "done" target.
++    void orchestrator.transitionController.requestTransition({
++      kind: "done",
++      summary: `Task "${name}" (${type}) completed.`,
++    });
+     ctx.ui.notify("Task completed!", "info");
+     return { ok: true };
+   }
+ 
+   orchestrator.updateStatus(ctx);
+-  orchestrator.phaseCompactionSummary = `Phase "${currentPhase}" completed. Now entering "${next}" phase.`;
++  const phaseSummary = `Phase "${currentPhase}" completed. Now entering "${next}" phase.`;
+ 
+   if (next === "plan") {
+     orchestrator.active.state.step = "await_planners";
+@@ -125,6 +128,7 @@ export async function transitionToNextPhase(
+         orchestrator.active.dir,
+         orchestrator.active.taskId,
+         orchestrator.config,
++        orchestrator.transitionController.phaseSend,
+         plannerVariants,
+         orchestrator.active?.state.repos ?? [],
+       ),
+@@ -132,7 +136,7 @@ export async function transitionToNextPhase(
+     );
+   } : undefined;
+ 
+-  orchestrator.compactAndTransition(ctx, orchestrator.active.dir, orchestrator.active.state.phase, onReady);
++  orchestrator.compactAndTransition(ctx, orchestrator.active.dir, orchestrator.active.state.phase, onReady, phaseSummary);
+ 
+   return { ok: true };
+ }
+diff --git a/extensions/orchestrator/event-handlers.test.ts b/extensions/orchestrator/event-handlers.test.ts
+index 45a3c74..df6a907 100644
+--- a/extensions/orchestrator/event-handlers.test.ts
++++ b/extensions/orchestrator/event-handlers.test.ts
+@@ -26,6 +26,11 @@ function makePi() {
+     setSessionName: vi.fn(),
+     _handlers: handlers,
+     _eventHandlers: eventHandlers,
++    // Drive a synthetic lifecycle/session event by invoking the pi.on-registered
++    // handler (NOT pi.events.emit, which is only for extension/subagent events).
++    emitAgentEnd: (event: any = { type: "agent_end" }, ctx: any = {}) => handlers.get("agent_end")?.(event, ctx),
++    emitSessionCompact: (event: any = { type: "session_compact", fromExtension: true }, ctx: any = {}) =>
++      handlers.get("session_compact")?.(event, ctx),
+   };
+ }
+ 
+diff --git a/extensions/orchestrator/event-handlers.ts b/extensions/orchestrator/event-handlers.ts
+index 1669109..0b0810a 100644
+--- a/extensions/orchestrator/event-handlers.ts
++++ b/extensions/orchestrator/event-handlers.ts
+@@ -174,15 +174,14 @@ function tryCompleteReviewCycle(orchestrator: Orchestrator, spawnedReviewers?: n
+     orchestrator.pendingSubagentSpawns > 0
+   ) return;
+ 
+-  if (orchestrator.reviewTransitionToken === orchestrator.activeTaskToken) return;
+-
++  // Idempotent by state: the first call mutates reviewCycle.step away from
++  // "await_reviewers" (or nulls reviewCycle), so the guard above no-ops any
++  // subsequent caller. No separate dedup token needed.
+   const cycle = orchestrator.active.state.reviewCycle;
+   const phase = orchestrator.active.state.phase;
+   const outputs = loadPhaseReviewOutputs(orchestrator.active.dir, phase, cycle.pass);
+   const pi = orchestrator.pi;
+ 
+-  orchestrator.reviewTransitionToken = orchestrator.activeTaskToken;
+-
+   if (spawnedReviewers === 0 && outputs.length === 0) {
+     orchestrator.active.state.reviewCycle = null;
+     orchestrator.active.state.step = "llm_work";
+@@ -199,13 +198,13 @@ function tryCompleteReviewCycle(orchestrator: Orchestrator, spawnedReviewers?: n
+     ? outputs.map((o) => `=== ${o.name} ===\n${o.content}`).join("\n\n")
+     : "All reviewers failed to produce output. Review the work yourself and decide whether to approve or request changes.";
+ 
+-  pi.sendMessage(
++  orchestrator.transitionController.sendCustom(
+     {
+       customType: "pp-review-ready",
+       content: `[PI-PI] Reviewer outputs are ready.\n\n${rendered}`,
+       display: false,
+     },
+-    { deliverAs: "followUp" },
++    "instruction",
+   );
+   orchestrator.safeSendUserMessage(reviewReadyMessage(phase));
+ }
+@@ -299,7 +298,6 @@ export async function enterReviewCycle(
+     return `No ${label} reviewers enabled. Choose another option.`;
+   }
+ 
+-  orchestrator.reviewTransitionToken = -1;
+   orchestrator.pendingSubagentSpawns = enabledCount;
+     const spawnFn = phase === "brainstorm"
+       ? () => spawnBrainstormReviewers(
+@@ -309,6 +307,7 @@ export async function enterReviewCycle(
+         orchestrator.active!.taskId,
+         orchestrator.config,
+         pass,
++        orchestrator.transitionController.phaseSend,
+         reviewers,
+         orchestrator.active?.state.repos ?? [],
+       )
+@@ -320,6 +319,7 @@ export async function enterReviewCycle(
+         orchestrator.active!.taskId,
+         orchestrator.config,
+         pass,
++        orchestrator.transitionController.phaseSend,
+         reviewers,
+         orchestrator.active?.state.repos ?? [],
+       )
+@@ -331,6 +331,7 @@ export async function enterReviewCycle(
+         orchestrator.config,
+         pass,
+         phase,
++        orchestrator.transitionController.phaseSend,
+         reviewers,
+         orchestrator.active?.state.repos ?? [],
+       );
+@@ -359,15 +360,13 @@ export async function stopTask(orchestrator: Orchestrator): Promise<string> {
+   const taskStore = (globalThis as any)[Symbol.for("pi-tasks:store")];
+   taskStore?.clearAll?.();
+ 
+-  orchestrator.taskDoneCompactionPending = true;
+-  orchestrator.taskDoneCompactionSummary = `Task "${desc}" (${type}) stopped/paused.`;
+-  await new Promise<void>((resolve) => {
+-    const compact = orchestrator.lastCtx?.compact;
+-    if (!compact) { orchestrator.taskDoneCompactionPending = false; orchestrator.taskDoneCompactionSummary = ""; resolve(); return; }
+-    compact({
+-      onComplete: () => { orchestrator.taskDoneCompactionPending = false; resolve(); },
+-      onError: () => { orchestrator.taskDoneCompactionPending = false; orchestrator.taskDoneCompactionSummary = ""; resolve(); },
+-    });
++  // Route the stop/pause compaction through the controller as a "done" target.
++  // The controller supplies the summary to session_before_compact and its
++  // awaitable resolves at every terminus (session_compact, no-op skip,
++  // already-idle), so this await never hangs and never resolves early.
++  await orchestrator.transitionController.requestTransition({
++    kind: "done",
++    summary: `Task "${desc}" (${type}) stopped/paused.`,
+   });
+ 
+   return `Task "${desc}" stopped. Use /pp → Resume to continue.`;
+@@ -716,7 +715,10 @@ function registerSpecifyReviewsTool(orchestrator: Orchestrator): void {
+       try {
+         const { showActiveTaskMenu } = await import("./pp-menu.js");
+         const text = await showActiveTaskMenu(orchestrator, ctx, `Plannotator review complete.\n\n${summary}`, "tool");
+-        if (orchestrator.phaseCompactionPending || orchestrator.taskDoneCompactionPending) {
++        // A transition may have started while the menu was open. The controller
++        // is the source of truth; abort the agent's pending turn so it doesn't
++        // race the transition. (Interactive-UX abort — stays local, not routed.)
++        if (!orchestrator.transitionController.isRunning()) {
+           ctx.abort?.();
+           return { content: [{ type: "text" as const, text: "" }], details: {} };
+         }
+@@ -908,15 +910,18 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
+       try {
+         const { showActiveTaskMenu } = await import("./pp-menu.js");
+         const text = await showActiveTaskMenu(orchestrator, ctx, params.summary, "tool");
+-        if (orchestrator.phaseCompactionPending || orchestrator.taskDoneCompactionPending) {
+-          ctx.abort?.();
+-          return { content: [{ type: "text" as const, text: "" }], details: {} };
+-        }
++        // A transition or await may have started while the menu was open. The
++        // controller is the source of truth; abort the pending turn so it can't
++        // race. (Interactive-UX abort — stays local, not routed.)
+         const curStep = orchestrator.active?.state.step;
+         if (curStep === "await_planners" || curStep === "await_reviewers") {
+           ctx.abort?.();
+           return { content: [{ type: "text" as const, text: `Waiting for ${curStep === "await_planners" ? "planners" : "reviewers"} to complete. Do NOT proceed until notified.` }], details: {} };
+         }
++        if (!orchestrator.transitionController.isRunning()) {
++          ctx.abort?.();
++          return { content: [{ type: "text" as const, text: "" }], details: {} };
++        }
+         if (!text) {
+           return { content: [{ type: "text" as const, text: "User dismissed the menu. Wait for the user's next message. When you resume work, update USER_REQUEST.md and RESEARCH.md with any new findings before calling pp_phase_complete." }], details: {} };
+         }
+@@ -988,6 +993,23 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
+ 
+   registerMainTraceHooks(orchestrator);
+ 
++  // TransitionController drivers. These are the reliable idle/completion signals:
++  //   - agent_end: the main loop went idle. If a transition is pending, this is
++  //     when the controller fires compaction.
++  //   - session_compact: compaction finished. The controller resumes (injects
++  //     context/artifacts + sends the next instruction).
++  // The SDK supports multiple handlers per event, so these coexist with the
++  // trace-only hooks registered above. registerEventHandlers is never called on
++  // the subagent branch, so these only ever see root-session events.
++  pi.on("agent_end", async (_event, ctx) => {
++    if (ctx) orchestrator.lastCtx = ctx;
++    orchestrator.transitionController.onAgentEnd();
++  });
++  pi.on("session_compact", async (_event, ctx) => {
++    if (ctx) orchestrator.lastCtx = ctx;
++    orchestrator.transitionController.onSessionCompact();
++  });
++
+   function getUsageTracker(): UsageTracker | undefined {
+     return (globalThis as any)[USAGE_TRACKER_KEY] as UsageTracker | undefined;
+   }
+@@ -1074,13 +1096,13 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
+           orchestrator.agentSpawnTimes.delete(id);
+           orchestrator.agentDescriptions.delete(id);
+           orchestrator.agentLifecycle.delete(id);
+-          pi.sendMessage(
++          orchestrator.transitionController.sendCustom(
+             {
+               customType: "pp-agent-stale",
+               content: `Aborted stale agent "${desc}" — no completion after ${Math.round(staleMs / 1000)}s.`,
+               display: true,
+             },
+-            { deliverAs: "steer" },
++            "context",
+           );
+         }
+       }
+@@ -1136,7 +1158,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
+       orchestrator.active.state.step !== "await_planners" ||
+       orchestrator.spawnedAgentIds.size > 0 ||
+       orchestrator.pendingSubagentSpawns > 0 ||
+-      orchestrator.phaseCompactionPending
++      orchestrator.transitionController.isTransitioning()
+     ) return;
+ 
+     const plansDir = join(orchestrator.active.dir, "plans");
+@@ -1169,6 +1191,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
+               orchestrator.active!.dir,
+               orchestrator.active!.taskId,
+               orchestrator.config,
++              orchestrator.transitionController.phaseSend,
+               scopedPlanners,
+               orchestrator.active?.state.repos ?? [],
+             ),
+@@ -1188,14 +1211,19 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
+       orchestrator.active.state.plannerFailureAutoRetried = false;
+       saveTask(orchestrator.active.dir, orchestrator.active.state);
+       if (!hasPlanFiles) {
+-        pi.sendMessage(
++        // Custom (sendMessage) followUp does NOT start a turn when the agent is
++        // idle (SDK agent-session.js) — emit the payload as display context and
++        // start the synthesizer turn via safeSendUserMessage (sendUserMessage
++        // always triggers a turn).
++        orchestrator.transitionController.sendCustom(
+           {
+             customType: "pp-planners-error",
+             content: "All planner subagents failed. Continue without planner outputs and synthesize the plan yourself.",
+             display: true,
+           },
+-          { deliverAs: "followUp" },
++          "context",
+         );
++        orchestrator.safeSendUserMessage("[PI-PI] All planners failed. Synthesize the plan yourself based on USER_REQUEST.md and RESEARCH.md.");
+       } else {
+         orchestrator.safeSendUserMessage("[PI-PI] Some planners failed. Continue with available planner outputs.");
+       }
+@@ -1242,6 +1270,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
+                   orchestrator.active!.dir,
+                   orchestrator.active!.taskId,
+                   orchestrator.config,
++                  orchestrator.transitionController.phaseSend,
+                   scopedPlanners,
+                   orchestrator.active?.state.repos ?? [],
+                 ),
+@@ -1274,16 +1303,19 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
+     }
+ 
+     if (!hasPlanFiles) {
+-      pi.sendMessage(
++      // Display payload as context; start the synthesizer turn via safeSendUserMessage
++      // (a custom followUp message does not start an idle turn).
++      orchestrator.transitionController.sendCustom(
+         {
+           customType: "pp-planners-error",
+           content: "All planner subagents finished but no plan files were produced. You must create the plan yourself based on USER_REQUEST.md and RESEARCH.md.",
+           display: true,
+         },
+-        { deliverAs: "followUp" },
++        "context",
+       );
+       orchestrator.active.state.step = "synthesize";
+       saveTask(orchestrator.active.dir, orchestrator.active.state);
++      orchestrator.safeSendUserMessage("[PI-PI] No plan files were produced. Create the plan yourself based on USER_REQUEST.md and RESEARCH.md.");
+       return;
+     }
+ 
+@@ -1302,7 +1334,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
+       orchestrator.active.state.reviewCycle.step !== "await_reviewers" ||
+       orchestrator.spawnedAgentIds.size > 0 ||
+       orchestrator.pendingSubagentSpawns > 0 ||
+-      orchestrator.phaseCompactionPending
++      orchestrator.transitionController.isTransitioning()
+     ) return;
+ 
+     const failedReviewerVariants = [...orchestrator.failedReviewerVariants];
+@@ -1330,6 +1362,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
+               orchestrator.active!.taskId,
+               orchestrator.config,
+               cycle.pass,
++              orchestrator.transitionController.phaseSend,
+               scopedReviewers,
+               orchestrator.active?.state.repos ?? [],
+             )
+@@ -1341,6 +1374,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
+               orchestrator.active!.taskId,
+               orchestrator.config,
+               cycle.pass,
++              orchestrator.transitionController.phaseSend,
+               scopedReviewers,
+               orchestrator.active?.state.repos ?? [],
+             )
+@@ -1352,6 +1386,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
+               orchestrator.config,
+               cycle.pass,
+               phase,
++              orchestrator.transitionController.phaseSend,
+               scopedReviewers,
+               orchestrator.active?.state.repos ?? [],
+             );
+@@ -1423,6 +1458,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
+                     orchestrator.active!.taskId,
+                     orchestrator.config,
+                     pass,
++                    orchestrator.transitionController.phaseSend,
+                     scopedReviewers,
+                     orchestrator.active?.state.repos ?? [],
+                   )
+@@ -1434,6 +1470,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
+                     orchestrator.active!.taskId,
+                     orchestrator.config,
+                     pass,
++                    orchestrator.transitionController.phaseSend,
+                     scopedReviewers,
+                     orchestrator.active?.state.repos ?? [],
+                   )
+@@ -1445,6 +1482,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
+                     orchestrator.config,
+                     pass,
+                     phase,
++                    orchestrator.transitionController.phaseSend,
+                     scopedReviewers,
+                     orchestrator.active?.state.repos ?? [],
+                   );
+@@ -1523,13 +1561,13 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
+     const tokens = data.tokens?.total ? `${data.tokens.total} tok` : "";
+     const stats = [duration, tokens].filter(Boolean).join(", ");
+ 
+-    pi.sendMessage(
++    orchestrator.transitionController.sendCustom(
+       {
+         customType: "pp-subagent-result",
+         content: `${desc} completed${stats ? ` (${stats})` : ""}. Use get_subagent_result to read the output.`,
+         display: false,
+       },
+-      { deliverAs: "steer" },
++      "context",
+     );
+ 
+     checkPlannerCompletion();
+@@ -1556,7 +1594,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
+       orchestrator.abortAllSubagents();
+     }
+ 
+-    pi.sendMessage(
++    orchestrator.transitionController.sendCustom(
+       {
+         customType: "pp-subagent-error",
+         content: isApiError
+@@ -1564,7 +1602,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
+           : `**${desc}** failed: ${data.error || "unknown error"}. Do NOT retry — continue with available information.`,
+         display: true,
+       },
+-      { deliverAs: "steer" },
++      "context",
+     );
+ 
+     checkPlannerCompletion();
+@@ -1719,21 +1757,21 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
+   pi.on("before_agent_start", async (event, ctx) => {
+     orchestrator.lastCtx = ctx;
+     const log = getLogger();
+-    if (orchestrator.taskDoneCompactionPending || orchestrator.phaseCompactionPending) {
+-      log.debug({ s: "hook", hook: "before_agent_start", reason: "compaction_pending" }, "aborting agent start");
++    // The controller is the single source of truth for "may the agent loop
++    // start?". It is not running during a pending/compacting/resuming transition
++    // (subsuming the old phase/taskDone compaction-pending checks) or while
++    // awaiting subagents (step === await_planners/await_reviewers).
++    if (orchestrator.transitionController.shouldBlockAgentStart()) {
++      log.debug({ s: "hook", hook: "before_agent_start", state: orchestrator.transitionController.getState(), step: orchestrator.active?.state.step }, "aborting agent start (controller not running)");
+       ctx.abort();
+       return;
+     }
+     if (!orchestrator.active || orchestrator.active.state.phase === "done") return;
+ 
+-    const step = orchestrator.active.state.step;
+-    if (step === "await_planners" || step === "await_reviewers") {
+-      log.debug({ s: "hook", hook: "before_agent_start", step }, "aborting agent start (waiting for subagents)");
+-      ctx.abort();
+-      return;
+-    }
+-
++    // A fresh agent start means the user (or a real handoff) re-engaged the loop
++    // — clear the nudge guard.
+     orchestrator.nudgeHalted = false;
++    orchestrator.consecutiveNudges = 0;
+     orchestrator.updateStatus(ctx);
+ 
+     const phasePrompt = orchestrator.getPhasePrompt(ctx);
+@@ -1957,11 +1995,13 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
+   });
+ 
+   pi.on("session_before_compact", async (event, _ctx) => {
+-    getLogger().debug({ s: "hook", hook: "session_before_compact", taskDonePending: orchestrator.taskDoneCompactionPending, phasePending: orchestrator.phaseCompactionPending }, "before compact");
+-    if (orchestrator.taskDoneCompactionPending) {
+-      const summary = orchestrator.taskDoneCompactionSummary;
+-      orchestrator.taskDoneCompactionPending = false;
+-      orchestrator.taskDoneCompactionSummary = "";
++    const transitioning = orchestrator.transitionController.isTransitioning();
++    getLogger().debug({ s: "hook", hook: "session_before_compact", transitioning, state: orchestrator.transitionController.getState() }, "before compact");
++    // Controller-initiated compaction (phase transition or task done/stop/new-task):
++    // supply the transition summary. The controller is the single source of truth,
++    // so this works whether or not `active` is still set (done cleanup nulls it).
++    if (transitioning) {
++      const summary = orchestrator.transitionController.currentSummary() || "Phase transition in progress.";
+       return {
+         compaction: {
+           summary,
+@@ -1971,20 +2011,10 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
+       };
+     }
+ 
++    // Natural (user-triggered) compaction: re-inject phase artifacts so context
++    // survives.
+     if (!orchestrator.active || orchestrator.active.state.phase === "done") return;
+ 
+-    if (orchestrator.phaseCompactionPending) {
+-      const summary = orchestrator.phaseCompactionSummary || "Phase transition in progress.";
+-      orchestrator.phaseCompactionSummary = "";
+-      return {
+-        compaction: {
+-          summary,
+-          firstKeptEntryId: event.preparation.firstKeptEntryId,
+-          tokensBefore: event.preparation.tokensBefore,
+-        },
+-      };
+-    }
+-
+     const artifacts = getPhaseArtifacts(orchestrator.active.dir, orchestrator.active.state.phase);
+     if (artifacts.length === 0) return;
+ 
+@@ -1992,13 +2022,13 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
+       .map((a) => `=== ${a.name} ===\n${a.content}`)
+       .join("\n\n");
+ 
+-    pi.sendMessage(
++    orchestrator.transitionController.sendCustom(
+       {
+         customType: "pp-artifact-reinject",
+         content: `[PI-PI ARTIFACTS — re-injected after compaction]\n\n${artifactText}`,
+         display: false,
+       },
+-      { deliverAs: "steer" },
++      "context",
+     );
+ 
+     return;
+@@ -2021,7 +2051,9 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
+     }
+ 
+     if (!orchestrator.active || orchestrator.active.state.phase === "done") return;
+-    if (orchestrator.phaseCompactionPending || orchestrator.taskDoneCompactionPending) return;
++    // A transition is in flight (controller owns the loop) — skip orthogonal
++    // turn_end work (commit reminder / nudges) until it resumes.
++    if (orchestrator.transitionController.isTransitioning()) return;
+     orchestrator.updateStatus(ctx);
+ 
+     if (
+@@ -2031,13 +2063,13 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
+       !orchestrator.commitReminderSent
+     ) {
+       orchestrator.commitReminderSent = true;
+-      pi.sendMessage(
++      orchestrator.transitionController.sendCustom(
+         {
+           customType: "pp-commit-reminder",
+           content: `You have ${orchestrator.active.modifiedFiles.size} uncommitted file(s). If you've completed a logical unit of work, call pp_commit with a descriptive message. Prefix it with a conventional-commit type (fix:, feat:, or chore:) unless the user asked for a different commit style.`,
+           display: false,
+         },
+-        { deliverAs: "steer" },
++        "context",
+       );
+     }
+ 
+@@ -2088,87 +2120,14 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
+       return;
+     }
+ 
++    // While awaiting subagents, completion is driven entirely by the event-driven
++    // owners (checkPlannerCompletion / checkReviewCycleCompletion / tryCompleteReviewCycle,
++    // wired to subagents:completed/failed and the blocking spawn promise's onSettled).
++    // The old 5s setInterval poller was a redundant fallback and has been removed;
++    // turn_end simply returns here (no nudge, no poll) while in an await_* step.
+     if (orchestrator.active.state.step === "await_planners" || orchestrator.active.state.step === "await_reviewers") {
+-      if (!orchestrator.awaitPollTimer) {
+-        orchestrator.awaitPollTimer = setInterval(() => {
+-          if (!orchestrator.active) {
+-            clearInterval(orchestrator.awaitPollTimer!);
+-            orchestrator.awaitPollTimer = null;
+-            return;
+-          }
+-          if (orchestrator.phaseCompactionPending) return;
+-          const taskDir = orchestrator.active.dir;
+-          if (orchestrator.active.state.step === "await_planners") {
+-            const plansDir = join(taskDir, "plans");
+-            const presetName = normalizeStoredPlannerPresetName(orchestrator);
+-            const plannerVariants = resolvePreset(orchestrator.config, "planners", presetName);
+-            const enabledVariantNames = Object.entries(plannerVariants)
+-              .filter(([, v]) => isEnabled(v))
+-              .map(([name]) => name);
+-            if (existsSync(plansDir)) {
+-              const planFiles = readdirSync(plansDir).filter((f) => f.endsWith(".md") && !f.includes("synthesized") && !f.includes("review_"));
+-              const completedVariants = new Set(planFiles.map((f) => f.replace(/^\d+_/, "").replace(/\.md$/, "")));
+-              const hasAllEnabledVariants = enabledVariantNames.every((name) => completedVariants.has(name));
+-              if (hasAllEnabledVariants) {
+-                clearInterval(orchestrator.awaitPollTimer!);
+-                orchestrator.awaitPollTimer = null;
+-                markAllAgentsConsumed();
+-                orchestrator.spawnedAgentIds.clear();
+-                orchestrator.pendingSubagentSpawns = 0;
+-                orchestrator.active.state.step = "synthesize";
+-                saveTask(orchestrator.active.dir, orchestrator.active.state);
+-                orchestrator.safeSendUserMessage("[PI-PI] All planners completed. Read their outputs and synthesize the plan.");
+-              }
+-            }
+-          } else if (orchestrator.active.state.step === "await_reviewers" && orchestrator.active.state.reviewCycle) {
+-            const cycle = orchestrator.active.state.reviewCycle;
+-            const phase = orchestrator.active.state.phase;
+-            const presetName = normalizeStoredReviewPresetName(orchestrator, phase);
+-            const reviewers = resolveReviewers(orchestrator, phase, presetName);
+-            const reviewerCount = Object.values(reviewers).filter((v) => isEnabled(v)).length;
+-            const outputs = loadPhaseReviewOutputs(taskDir, phase, cycle.pass);
+-            if (outputs.length >= reviewerCount) {
+-              clearInterval(orchestrator.awaitPollTimer!);
+-              orchestrator.awaitPollTimer = null;
+-              markAllAgentsConsumed();
+-              orchestrator.spawnedAgentIds.clear();
+-              orchestrator.pendingSubagentSpawns = 0;
+-
+-              if (orchestrator.reviewTransitionToken === orchestrator.activeTaskToken) return;
+-              orchestrator.reviewTransitionToken = orchestrator.activeTaskToken;
+-
+-              if (outputs.length === 0) {
+-                orchestrator.active.state.reviewCycle = null;
+-                orchestrator.active.state.step = "llm_work";
+-                saveTask(orchestrator.active.dir, orchestrator.active.state);
+-                orchestrator.safeSendUserMessage("[PI-PI] No reviewer outputs were produced — nothing to review. Continue working.");
+-                return;
+-              }
+-
+-              cycle.step = "apply_feedback";
+-              orchestrator.active.state.step = "apply_feedback";
+-              saveTask(orchestrator.active.dir, orchestrator.active.state);
+-              const rendered = outputs.length
+-                ? outputs.map((o) => `=== ${o.name} ===\n${o.content}`).join("\n\n")
+-                : "All reviewers failed to produce output. Review the work yourself and decide whether to approve or request changes.";
+-              pi.sendMessage(
+-                { customType: "pp-review-ready", content: `[PI-PI] Reviewer outputs are ready.\n\n${rendered}`, display: false },
+-                { deliverAs: "followUp" },
+-              );
+-              orchestrator.safeSendUserMessage(reviewReadyMessage(phase));
+-            }
+-          } else {
+-            clearInterval(orchestrator.awaitPollTimer!);
+-            orchestrator.awaitPollTimer = null;
+-          }
+-        }, 5000);
+-      }
+       return;
+     }
+-    if (orchestrator.awaitPollTimer) {
+-      clearInterval(orchestrator.awaitPollTimer);
+-      orchestrator.awaitPollTimer = null;
+-    }
+ 
+     const contentParts = Array.isArray(msg?.content) ? msg.content : [];
+     const hasText = contentParts.some((c: any) => c.type === "text" && c.text?.trim());
+@@ -2179,91 +2138,48 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
+     const isAutonomous = getEffectivePhaseMode(orchestrator.active.state) === "autonomous";
+ 
+     // Nudges fire ONLY for plan/implement. brainstorm/debug/review (and quick) are
+-    // interactive by nature — stopping there is normal, not a stall.
+-    const nudgesEnabled = phase === "plan" || phase === "implement";
+-
+-    const buildNudge = () =>
+-      isAutonomous
+-        ? `[PI-PI] Continue the ${phase} phase. ${phaseConstraint(phase as Phase)} If the phase's objectives are met, call pp_phase_complete now; otherwise call the next tool. Do NOT apologize or reply with text only — respond with a tool call.`
+-        : `[PI-PI] Continue the ${phase} phase where you left off.`;
+-
+-    if (!turnWasEmpty) {
+-      const lastPart = contentParts.length > 0 ? contentParts[contentParts.length - 1] : null;
+-      const endsWithText = lastPart?.type === "text" && lastPart?.text?.trim();
+-      if (hasText && (!hasToolCalls || endsWithText)) {
+-        const step = orchestrator.active.state.step;
+-        if (nudgesEnabled && step !== "await_planners" && step !== "await_reviewers") {
+-          const now = Date.now();
+-          orchestrator.textStopTimestamps.push(now);
+-          orchestrator.textStopTimestamps = orchestrator.textStopTimestamps.filter((t) => now - t < 5 * 60 * 1000);
+-          if (orchestrator.textStopTimestamps.length <= 6) {
+-            orchestrator.safeSendUserMessage(buildNudge());
+-          }
+-        }
+-      } else {
+-        orchestrator.textStopTimestamps = [];
+-      }
+-      return;
+-    }
+-    orchestrator.textStopTimestamps = [];
+-    if (!nudgesEnabled) return;
+-    if (orchestrator.nudgeHalted) return;
+-    if (orchestrator.spawnedAgentIds.size > 0 || orchestrator.pendingSubagentSpawns > 0) return;
+-
+-    const step = orchestrator.active.state.step;
+-    if (step === "await_planners" || step === "await_reviewers") return;
+-
+-    const now = Date.now();
+-
+-    orchestrator.nudgeTimestamps.push(now);
+-    orchestrator.nudgeTimestamps = orchestrator.nudgeTimestamps.filter((t) => now - t < 60000);
+-
+-    const sendNudge = () => {
+-      orchestrator.safeSendUserMessage(buildNudge());
+-    };
+-
+-    if (orchestrator.nudgeTimestamps.length <= 3) {
+-      sendNudge();
++    // interactive by nature — stopping there is normal, not a stall. They are also
++    // suppressed whenever the controller is not running (a transition handoff or
++    // await is in progress — that pause is plumbing, not a genuine model stop).
++    const nudgesEnabled = (phase === "plan" || phase === "implement") && orchestrator.transitionController.isRunning();
++
++    // A genuine model stop is a turn that produced no forward progress: either a
++    // text-only reply (no tool call, or one that trails into text) or a fully
++    // empty turn. A turn that ended on a tool call IS progress and resets the guard.
++    const lastPart = contentParts.length > 0 ? contentParts[contentParts.length - 1] : null;
++    const endsWithText = lastPart?.type === "text" && !!lastPart?.text?.trim();
++    const isGenuineStop = turnWasEmpty || (hasText && (!hasToolCalls || endsWithText));
++
++    if (!isGenuineStop) {
++      // Forward progress — clear the consecutive-nudge guard.
++      orchestrator.consecutiveNudges = 0;
+       return;
+     }
+ 
+-    if (orchestrator.nudgeTimestamps.length >= 5) {
+-      orchestrator.cooldownHits.push(now);
+-      orchestrator.cooldownHits = orchestrator.cooldownHits.filter((t) => now - t < 20 * 60 * 1000);
+-
+-      if (orchestrator.cooldownHits.length >= 5) {
+-        orchestrator.nudgeHalted = true;
+-        orchestrator.nudgeTimestamps = [];
+-        orchestrator.cooldownHits = [];
+-        pi.sendMessage(
+-          {
+-            customType: "pp-continuation-halted",
+-            content: "Agent has been repeatedly interrupted. Auto-continuation paused. Send any message to resume nudging.",
+-            display: true,
+-          },
+-          { deliverAs: "steer" },
+-        );
+-        return;
+-      }
++    if (!nudgesEnabled || orchestrator.nudgeHalted) return;
+ 
+-      pi.sendMessage(
++    // Single consecutive-nudge guard: nudge up to MAX_CONSECUTIVE_NUDGES times in
++    // a row, then halt with one notification until the user re-engages (a fresh
++    // before_agent_start resets the counter).
++    const MAX_CONSECUTIVE_NUDGES = 6;
++    if (orchestrator.consecutiveNudges >= MAX_CONSECUTIVE_NUDGES) {
++      orchestrator.nudgeHalted = true;
++      orchestrator.transitionController.sendCustom(
+         {
+-          customType: "pp-continuation-cooldown",
+-          content: "Agent interrupted repeatedly. Waiting 60 seconds before retrying.",
++          customType: "pp-continuation-halted",
++          content: "Agent has been repeatedly interrupted without making progress. Auto-continuation paused. Send any message to resume.",
+           display: true,
+         },
+-        { deliverAs: "steer" },
++        "context",
+       );
+-      orchestrator.nudgeTimestamps = [];
+-      const cooldownToken = orchestrator.activeTaskToken;
+-      setTimeout(() => {
+-        if (orchestrator.activeTaskToken !== cooldownToken || !orchestrator.active) return;
+-        sendNudge();
+-      }, 60000);
+       return;
+     }
+ 
+-    sendNudge();
++    orchestrator.consecutiveNudges++;
++    const nudge = isAutonomous
++      ? `[PI-PI] Continue the ${phase} phase. ${phaseConstraint(phase as Phase)} If the phase's objectives are met, call pp_phase_complete now; otherwise call the next tool. Do NOT apologize or reply with text only — respond with a tool call.`
++      : `[PI-PI] Continue the ${phase} phase where you left off.`;
++    orchestrator.safeSendUserMessage(nudge);
+   });
+ 
+ 
+diff --git a/extensions/orchestrator/integration.test.ts b/extensions/orchestrator/integration.test.ts
+index 2d1f87a..0d53948 100644
+--- a/extensions/orchestrator/integration.test.ts
++++ b/extensions/orchestrator/integration.test.ts
+@@ -265,6 +265,7 @@ function makeCtx(overrides: Record<string, any> = {}) {
+     },
+     abort: vi.fn(),
+     waitForIdle: vi.fn().mockResolvedValue(undefined),
++    isIdle: vi.fn().mockReturnValue(true),
+     compact: vi.fn((opts?: any) => {
+       if (opts?.onComplete) setTimeout(opts.onComplete, 0);
+     }),
+@@ -3086,10 +3087,34 @@ describe("error retry", () => {
+ 
+     await turnEnd({ message: { stopReason: "stop", content: [] }, toolResults: [] }, ctx);
+ 
+-    expect(orchestrator.nudgeTimestamps.length).toBe(1);
++    expect(orchestrator.consecutiveNudges).toBe(1);
+     expect(pi.sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("Continue the implement phase"), { deliverAs: "followUp" });
+   });
+ 
++  it("suppresses nudges while the controller is transitioning (not running)", async () => {
++    const cwd = makeTempDir();
++    const { pi, orchestrator } = await setupOrchestrator(cwd);
++    const ctx = makeCtx();
++
++    await orchestrator.startTask(ctx as any, "implement", "nudge suppress test");
++    orchestrator.active!.state.phase = "implement";
++    orchestrator.active!.state.step = "llm_work";
++    // Put the controller mid-transition (not running) with a non-idle ctx.
++    orchestrator.lastCtx = makeCtx({ isIdle: vi.fn().mockReturnValue(false) });
++    void orchestrator.transitionController.requestTransition({ kind: "phase", summary: "x" });
++    expect(orchestrator.transitionController.isRunning()).toBe(false);
++
++    const before = (pi.sendUserMessage as any).mock.calls.length;
++    const turnEnd = pi._handlers.get("turn_end")!;
++    await turnEnd({ message: { stopReason: "stop", content: [] }, toolResults: [] }, ctx);
++
++    const nudged = (pi.sendUserMessage as any).mock.calls.slice(before).some((c: any[]) =>
++      String(c[0]).includes("Continue the implement phase"),
++    );
++    expect(nudged).toBe(false);
++    expect(orchestrator.consecutiveNudges).toBe(0);
++  });
++
+   it("nudge halts after repeated interruptions", async () => {
+     vi.useFakeTimers();
+     const cwd = makeTempDir();
+@@ -3136,7 +3161,7 @@ describe("error retry", () => {
+     expect(orchestrator.nudgeHalted).toBe(false);
+   });
+ 
+-  it("text-only stalls never trip the permanent halt", async () => {
++  it("repeated text-only stops eventually halt via the single consecutive guard", async () => {
+     const cwd = makeTempDir();
+     const { pi, orchestrator } = await setupOrchestrator(cwd);
+     const ctx = makeCtx();
+@@ -3151,10 +3176,16 @@ describe("error retry", () => {
+       await turnEnd(textTurn, ctx);
+     }
+ 
+-    expect(orchestrator.nudgeHalted).toBe(false);
++    // The collapsed guard treats text-only stops like any other genuine stop:
++    // after the consecutive cap it halts exactly once.
++    expect(orchestrator.nudgeHalted).toBe(true);
++    expect(pi.sendMessage).toHaveBeenCalledWith(
++      expect.objectContaining({ customType: "pp-continuation-halted" }),
++      { deliverAs: "steer" },
++    );
+   });
+ 
+-  it("a tool-call turn resets the text-stop rate limit", async () => {
++  it("a tool-call turn resets the consecutive-nudge guard", async () => {
+     const cwd = makeTempDir();
+     const { pi, orchestrator } = await setupOrchestrator(cwd);
+     const ctx = makeCtx();
+@@ -3165,9 +3196,10 @@ describe("error retry", () => {
+     const turnEnd = pi._handlers.get("turn_end")!;
+ 
+     await turnEnd({ message: { stopReason: "stop", content: [{ type: "text", text: "a" }] }, toolResults: [] }, ctx);
+-    expect(orchestrator.textStopTimestamps.length).toBe(1);
++    expect(orchestrator.consecutiveNudges).toBe(1);
++    // A turn ending on a tool call is forward progress -> guard resets.
+     await turnEnd({ message: { stopReason: "stop", content: [{ type: "toolCall" }] }, toolResults: [] }, ctx);
+-    expect(orchestrator.textStopTimestamps.length).toBe(0);
++    expect(orchestrator.consecutiveNudges).toBe(0);
+   });
+ });
+ 
+@@ -3186,25 +3218,60 @@ describe("compaction", () => {
+     expect(compactSpy).toHaveBeenCalledWith(expect.objectContaining({ customInstructions: expect.stringContaining("Phase transition") }));
+   });
+ 
+-  it("session_before_compact returns phase summary when pending", async () => {
++  it("defers compaction until agent_end when not idle, then delivers Begin working", async () => {
++    const cwd = makeTempDir();
++    const { pi, orchestrator } = await setupOrchestrator(cwd);
++    const compactCbs: Array<{ onComplete?: () => void; onError?: (e: Error) => void }> = [];
++    // Agent is mid-turn (tool in-flight): not idle, and compaction is deferred.
++    const compactSpy = vi.fn((opts?: any) => { compactCbs.push(opts); });
++    const ctx = makeCtx({ isIdle: vi.fn().mockReturnValue(false), compact: compactSpy });
++
++    await orchestrator.startTask(ctx as any, "implement", "deferred compaction");
++    orchestrator.compactAndTransition(ctx as any, orchestrator.active!.dir, "implement");
++
++    // Not idle -> no compaction yet; controller is pending.
++    expect(compactSpy).not.toHaveBeenCalled();
++
++    // Agent goes idle: agent_end fires compaction.
++    await pi._handlers.get("agent_end")!({ type: "agent_end", messages: [] }, ctx);
++    expect(compactSpy).toHaveBeenCalledTimes(1);
++
++    // Compaction throws the "too small" no-op: must still resume + deliver.
++    compactCbs[0]!.onError!(new Error("Nothing to compact (session too small)"));
++
++    await vi.waitFor(() => {
++      const sentBeginWorking = pi.sendUserMessage.mock.calls.some(
++        (c: any[]) => c[0] === "[PI-PI] Entered implement phase. Begin working." && c[1]?.deliverAs === "followUp",
++      );
++      expect(sentBeginWorking).toBe(true);
++    });
++    expect(orchestrator.transitionController.getState()).toBe("running");
++  });
++
++  it("session_before_compact returns the controller's transition summary", async () => {
+     const cwd = makeTempDir();
+     const { pi, orchestrator } = await setupOrchestrator(cwd);
+     await orchestrator.startTask(makeCtx() as any, "implement", "phase compact test");
++    orchestrator.lastCtx = makeCtx({ isIdle: vi.fn().mockReturnValue(false) });
++
++    // Put the controller mid-compaction (not idle -> pending -> agent_end -> compacting).
++    void orchestrator.transitionController.requestTransition({ kind: "phase", summary: "Phase summary text" });
++    orchestrator.transitionController.onAgentEnd();
++    expect(orchestrator.transitionController.isTransitioning()).toBe(true);
+ 
+-    orchestrator.phaseCompactionPending = true;
+-    orchestrator.phaseCompactionSummary = "Phase summary text";
+     const beforeCompact = pi._handlers.get("session_before_compact")!;
+     const result = await beforeCompact({ preparation: { firstKeptEntryId: "e1", tokensBefore: 123 } }, {});
+ 
+     expect(result.compaction.summary).toBe("Phase summary text");
+   });
+ 
+-  it("session_before_compact returns task done summary when pending", async () => {
++  it("session_before_compact returns task done summary when transitioning", async () => {
+     const cwd = makeTempDir();
+     const { pi, orchestrator } = await setupOrchestrator(cwd);
++    orchestrator.lastCtx = makeCtx({ isIdle: vi.fn().mockReturnValue(false) });
+ 
+-    orchestrator.taskDoneCompactionPending = true;
+-    orchestrator.taskDoneCompactionSummary = "Task done summary";
++    void orchestrator.transitionController.requestTransition({ kind: "done", summary: "Task done summary" });
++    orchestrator.transitionController.onAgentEnd();
+     const beforeCompact = pi._handlers.get("session_before_compact")!;
+     const result = await beforeCompact({ preparation: { firstKeptEntryId: "e2", tokensBefore: 456 } }, {});
+ 
+diff --git a/extensions/orchestrator/orchestrator.ts b/extensions/orchestrator/orchestrator.ts
+index 95ab173..58a84b4 100644
+--- a/extensions/orchestrator/orchestrator.ts
++++ b/extensions/orchestrator/orchestrator.ts
+@@ -28,6 +28,7 @@ import { resolveModel, getModelInfo } from "./model-registry.js";
+ import { buildRepoContext } from "./agents/repo-context.js";
+ import { getLogger, addTaskDestination, removeTaskDestination, setLogLevel } from "./log.js";
+ import { handleSpawnResult } from "./spawn-cleanup.js";
++import { TransitionController, type TransitionHost } from "./transition-controller.js";
+ 
+ function isEnabled(value: { enabled?: boolean } | undefined): boolean {
+   return value?.enabled !== false;
+@@ -69,23 +70,18 @@ export class Orchestrator {
+     step?: string;
+   }>();
+   staleAgentTimer: ReturnType<typeof setInterval> | null = null;
+-  phaseCompactionPending = false;
+-  phaseCompactionSummary = "";
+-  taskDoneCompactionPending = false;
+-  taskDoneCompactionSummary = "";
+-  nudgeTimestamps: number[] = [];
+-  cooldownHits: number[] = [];
++  // Single consecutive-nudge guard (replaces the old multi-tier throttle). Reset
++  // to 0 on any productive turn; once it reaches the cap the nudges halt with one
++  // user notification.
++  consecutiveNudges = 0;
+   nudgeHalted = false;
+   pendingSubagentSpawns = 0;
+   errorRetryCount = 0;
+   commitReminderSent = false;
+-  textStopTimestamps: number[] = [];
+   phaseStartTime = 0;
+-  awaitPollTimer: ReturnType<typeof setInterval> | null = null;
+   pendingRetryTimer: ReturnType<typeof setTimeout> | null = null;
+   activeTaskToken = 0;
+   userGatePending = false;
+-  reviewTransitionToken = -1;
+   lastCtx: any = null;
+   failedPlannerVariants: string[] = [];
+   failedReviewerVariants: string[] = [];
+@@ -95,21 +91,45 @@ export class Orchestrator {
+   plannotatorUnsub: (() => void) | null = null;
+   plannotatorTimer: ReturnType<typeof setTimeout> | null = null;
+   transitionToNextPhase: (ctx: any, plannerPreset?: string) => Promise<{ ok: boolean; error?: string }> = async () => ({ ok: false, error: "not initialized" });
++  readonly transitionController: TransitionController;
+ 
+-  constructor(readonly pi: ExtensionAPI) {}
++  constructor(readonly pi: ExtensionAPI) {
++    this.transitionController = new TransitionController(this.makeTransitionHost());
++  }
++
++  // Minimal host the TransitionController uses to reach the live session. Kept
++  // private so the controller is the sole caller of these main-session primitives.
++  private makeTransitionHost(): TransitionHost {
++    return {
++      rawSendUserMessage: (text, deliverAs) => {
++        this.pi.sendUserMessage(text, { deliverAs });
++      },
++      rawSendMessage: (message, deliverAs) => {
++        this.pi.sendMessage(message, { deliverAs });
++      },
++      compact: (options) => {
++        const compact = this.lastCtx?.compact;
++        if (!compact) return false;
++        compact(options);
++        return true;
++      },
++      isIdle: () => {
++        const idle = this.lastCtx?.isIdle;
++        return typeof idle === "function" ? !!idle.call(this.lastCtx) : false;
++      },
++      currentStep: () => this.active?.state.step ?? null,
++    };
++  }
+ 
+   safeSendUserMessage(text: string): void {
+     const log = getLogger();
+     const attempt = (retries: number) => {
+       try {
+-        // Always queue as a follow-up turn. Without an explicit deliverAs, the
+-        // runtime throws "Agent is already processing" when this is called while
+-        // a tool (e.g. pp_phase_complete) is still in-flight — which is exactly
+-        // the case during an autonomous phase transition (and when compaction
+-        // fails synchronously with "Nothing to compact"). followUp queues the
+-        // message and triggers a turn once the current one settles, or runs
+-        // immediately when the agent is idle.
+-        this.pi.sendUserMessage(text, { deliverAs: "followUp" });
++        // Route through the controller's single send path. "instruction" maps to
++        // followUp: queues the message and triggers a turn once the current one
++        // settles (or runs immediately when idle), so it never throws "Agent is
++        // already processing" when called mid-tool (e.g. during a transition).
++        this.transitionController.send(text, "instruction");
+         log.debug({ s: "orchestrator", retries, text: text.slice(0, 200) }, "safeSend sent");
+       } catch (err: any) {
+         if (retries < 30) {
+@@ -334,15 +354,11 @@ export class Orchestrator {
+     }
+ 
+     if (hadActive) {
+-      this.taskDoneCompactionPending = true;
+-      this.taskDoneCompactionSummary = `Starting new ${type} task. Previous conversation discarded.`;
+-      await new Promise<void>((resolve) => {
+-        const compact = (ctx as any).compact;
+-        if (!compact) { this.taskDoneCompactionPending = false; this.taskDoneCompactionSummary = ""; resolve(); return; }
+-        compact({
+-          onComplete: () => { this.taskDoneCompactionPending = false; resolve(); },
+-          onError: () => { this.taskDoneCompactionPending = false; this.taskDoneCompactionSummary = ""; resolve(); },
+-        });
++      // Route new-task compaction through the controller as a "done" target.
++      this.lastCtx = ctx;
++      await this.transitionController.requestTransition({
++        kind: "done",
++        summary: `Starting new ${type} task. Previous conversation discarded.`,
+       });
+     }
+ 
+@@ -483,6 +499,7 @@ export class Orchestrator {
+           this.active.dir,
+           this.active.taskId,
+           this.config,
++          this.transitionController.phaseSend,
+           plannerVariants,
+           this.active?.state.repos ?? [],
+         ),
+@@ -510,23 +527,14 @@ export class Orchestrator {
+     this.pendingSubagentSpawns = 0;
+     this.errorRetryCount = 0;
+     this.commitReminderSent = false;
+-    this.textStopTimestamps = [];
+-    this.nudgeTimestamps = [];
+-    this.cooldownHits = [];
++    this.consecutiveNudges = 0;
+     this.nudgeHalted = false;
+-    this.phaseCompactionPending = false;
+-    this.phaseCompactionSummary = "";
+     this.phaseStartTime = 0;
+     this.userGatePending = false;
+-    this.reviewTransitionToken = -1;
+     this.failedPlannerVariants = [];
+     this.failedReviewerVariants = [];
+     this.plannerFailureDialogPending = false;
+     this.reviewerFailureDialogPending = false;
+-    if (this.awaitPollTimer) {
+-      clearInterval(this.awaitPollTimer);
+-      this.awaitPollTimer = null;
+-    }
+     if (this.pendingRetryTimer) {
+       clearTimeout(this.pendingRetryTimer);
+       this.pendingRetryTimer = null;
+@@ -623,47 +631,43 @@ export class Orchestrator {
+       getModelInfo(activeModelSpec),
+     );
+     for (const cf of contextFiles) {
+-      this.pi.sendMessage(
++      this.transitionController.sendCustom(
+         { customType: "pp-context", content: cf.content, display: false },
+-        { deliverAs: "steer" },
++        "context",
+       );
+     }
+     const artifacts = getPhaseArtifacts(taskDir, phase);
+     for (const artifact of artifacts) {
+-      this.pi.sendMessage(
++      this.transitionController.sendCustom(
+         { customType: "pp-artifact", content: `=== ${artifact.name} ===\n${artifact.content}`, display: false },
+-        { deliverAs: "steer" },
++        "context",
+       );
+     }
+   }
+ 
+-  compactAndTransition(ctx: ExtensionContext, taskDir: string, phase: Phase, onReady?: () => void): void {
++  compactAndTransition(ctx: ExtensionContext, taskDir: string, phase: Phase, onReady?: () => void, summary?: string): void {
+     getLogger().info({ s: "phase", taskDir, phase }, "compact and transition");
+-    this.phaseCompactionPending = true;
+-    const finalize = async () => {
+-      this.phaseStartTime = Date.now();
+-      if (this.active && (phase === "plan" || phase === "implement")) {
+-        const modelConfig = phase === "plan" ? this.config.agents.orchestrators.plan : this.config.agents.orchestrators.implement;
+-        await this.switchModel(ctx, modelConfig.model, modelConfig.thinking);
+-      }
+-      this.injectContextAndArtifacts(taskDir, phase);
+-      onReady?.();
+-      if (this.active?.state.phase === "plan" && this.active.state.step === "await_planners") {
+-        ctx.ui.notify("Entered plan phase. Waiting for planners to complete before synthesis.", "info");
+-      } else {
+-        this.safeSendUserMessage(`[PI-PI] Entered ${phase} phase. Begin working.`);
+-      }
+-    };
+-    ctx.compact({
+-      customInstructions: "Phase transition — discard all prior conversation. Produce a one-line summary: 'Previous phase completed.'",
+-      onComplete: () => {
+-        this.phaseCompactionPending = false;
+-        void finalize();
+-      },
+-      onError: () => {
+-        this.phaseCompactionPending = false;
+-        void finalize();
++    // Ensure the controller's host can reach this live ctx for compact/isIdle.
++    this.lastCtx = ctx;
++    // Notify-only case: entering plan and immediately awaiting planners. No
++    // "Begin working" instruction is sent — the agent waits for onSubagentsDone.
++    const notifyOnly = this.active?.state.phase === "plan" && this.active.state.step === "await_planners";
++    void this.transitionController.requestTransition({
++      kind: "phase",
++      summary: summary || "Phase transition — previous phase completed.",
++      onResume: async () => {
++        this.phaseStartTime = Date.now();
++        if (this.active && (phase === "plan" || phase === "implement")) {
++          const modelConfig = phase === "plan" ? this.config.agents.orchestrators.plan : this.config.agents.orchestrators.implement;
++          await this.switchModel(ctx, modelConfig.model, modelConfig.thinking);
++        }
++        this.injectContextAndArtifacts(taskDir, phase);
++        onReady?.();
++        if (notifyOnly) {
++          ctx.ui.notify("Entered plan phase. Waiting for planners to complete before synthesis.", "info");
++        }
+       },
++      instruction: notifyOnly ? undefined : `[PI-PI] Entered ${phase} phase. Begin working.`,
+     });
+   }
+ 
+diff --git a/extensions/orchestrator/phases/brainstorm.ts b/extensions/orchestrator/phases/brainstorm.ts
+index 59dc461..6cb3656 100644
+--- a/extensions/orchestrator/phases/brainstorm.ts
++++ b/extensions/orchestrator/phases/brainstorm.ts
+@@ -7,6 +7,7 @@ import { createBrainstormReviewerAgent } from "../agents/brainstorm-reviewer.js"
+ import { getContextDirs } from "../context.js";
+ import type { RepoInfo } from "../repo-utils.js";
+ import type { TaskType } from "../state.js";
++import type { PhaseSend } from "../transition-controller.js";
+ 
+ function isEnabled(value: { enabled?: boolean } | undefined): boolean {
+   return value?.enabled !== false;
+@@ -170,6 +171,7 @@ export async function spawnBrainstormReviewers(
+   taskId: string,
+   config: PiPiConfig,
+   round: number,
++  send: PhaseSend,
+   variants?: Record<string, VariantConfig>,
+   repos: RepoInfo[] = [],
+ ): Promise<{ spawned: number; files: string[]; agentIds: string[]; failedVariants: string[] }> {
+@@ -232,13 +234,13 @@ export async function spawnBrainstormReviewers(
+           await waitForCompletion(pi, id);
+         } catch (err: any) {
+           failedVariants.push(variant);
+-          pi.sendMessage(
++          send(
+             {
+               customType: "pp-brainstorm-reviewer-error",
+               content: `Brainstorm reviewer variant "${variant}" failed: ${err.message}`,
+               display: true,
+             },
+-            { deliverAs: "steer" },
++            "context",
+           );
+         }
+       })(),
+@@ -252,7 +254,7 @@ export async function spawnBrainstormReviewers(
+     : [];
+ 
+   if (reviewOutputFiles.length > 0) {
+-    pi.sendMessage(
++    send(
+       {
+         customType: "pp-brainstorm-reviews-done",
+         content: [
+@@ -263,10 +265,10 @@ export async function spawnBrainstormReviewers(
+         ].join("\n"),
+         display: true,
+       },
+-      { deliverAs: "steer" },
++      "context",
+     );
+   } else if (enabledVariants.length > 0) {
+-    pi.sendMessage(
++    send(
+       {
+         customType: "pp-brainstorm-reviews-error",
+         content: [
+@@ -275,7 +277,7 @@ export async function spawnBrainstormReviewers(
+         ].join("\n"),
+         display: true,
+       },
+-      { deliverAs: "steer" },
++      "context",
+     );
+   }
+ 
+diff --git a/extensions/orchestrator/phases/planning.ts b/extensions/orchestrator/phases/planning.ts
+index 7755591..0d86846 100644
+--- a/extensions/orchestrator/phases/planning.ts
++++ b/extensions/orchestrator/phases/planning.ts
+@@ -9,6 +9,7 @@ import { getContextDirs, getLatestSynthesizedPlan } from "../context.js";
+ import type { RepoInfo } from "../repo-utils.js";
+ import { validatePlan } from "../validate-artifacts.js";
+ import type { TaskMode } from "../state.js";
++import type { PhaseSend } from "../transition-controller.js";
+ 
+ function isEnabled(value: { enabled?: boolean } | undefined): boolean {
+   return value?.enabled !== false;
+@@ -57,6 +58,7 @@ export async function spawnPlanners(
+   taskDir: string,
+   taskId: string,
+   config: PiPiConfig,
++  send: PhaseSend,
+   variants?: Record<string, VariantConfig>,
+   repos: RepoInfo[] = [],
+ ): Promise<{ spawned: number; agentIds: string[]; failedVariants: string[] }> {
+@@ -109,25 +111,25 @@ export async function spawnPlanners(
+             const planContent = readFileSync(outputPath, "utf-8");
+             const validation = validatePlan(planContent);
+             if (!validation.ok) {
+-              pi.sendMessage(
++              send(
+                 {
+                   customType: "pp-planner-error",
+                   content: `Planner "${variant}" produced invalid plan (errors were shown to the agent but it did not fix them): ${validation.errors.join("; ")}`,
+                   display: true,
+                 },
+-                { deliverAs: "steer" },
++                "context",
+               );
+             }
+           }
+         } catch (err: any) {
+           failedVariants.push(variant);
+-          pi.sendMessage(
++          send(
+             {
+               customType: "pp-planner-error",
+               content: `Planner variant "${variant}" failed: ${err.message}`,
+               display: true,
+             },
+-            { deliverAs: "steer" },
++            "context",
+           );
+         }
+       })(),
+@@ -138,7 +140,7 @@ export async function spawnPlanners(
+ 
+   const planFiles = existsSync(plansDir) ? readdirSync(plansDir).filter((f) => !f.includes("synthesized") && !f.includes("review_")) : [];
+   if (planFiles.length > 0) {
+-    pi.sendMessage(
++    send(
+       {
+         customType: "pp-planners-done",
+         content: [
+@@ -149,10 +151,10 @@ export async function spawnPlanners(
+         ].join("\n"),
+         display: true,
+       },
+-      { deliverAs: "steer" },
++      "context",
+     );
+   } else {
+-    pi.sendMessage(
++    send(
+       {
+         customType: "pp-planners-error",
+         content: [
+@@ -161,7 +163,7 @@ export async function spawnPlanners(
+         ].join("\n"),
+         display: true,
+       },
+-      { deliverAs: "steer" },
++      "context",
+     );
+   }
+ 
+@@ -175,6 +177,7 @@ export async function spawnPlanReviewers(
+   taskId: string,
+   config: PiPiConfig,
+   pass: number,
++  send: PhaseSend,
+   variants?: Record<string, VariantConfig>,
+   repos: RepoInfo[] = [],
+ ): Promise<{ spawned: number; files: string[]; agentIds: string[]; failedVariants: string[] }> {
+@@ -232,13 +235,13 @@ export async function spawnPlanReviewers(
+           await waitForCompletion(pi, id);
+         } catch (err: any) {
+           failedVariants.push(variant);
+-          pi.sendMessage(
++          send(
+             {
+               customType: "pp-plan-reviewer-error",
+               content: `Plan reviewer variant "${variant}" failed: ${err.message}`,
+               display: true,
+             },
+-            { deliverAs: "steer" },
++            "context",
+           );
+         }
+       })(),
+@@ -252,7 +255,7 @@ export async function spawnPlanReviewers(
+     : [];
+ 
+   if (actualReviewFiles.length > 0) {
+-    pi.sendMessage(
++    send(
+       {
+           customType: "pp-plan-reviews-done",
+           content: [
+@@ -263,16 +266,16 @@ export async function spawnPlanReviewers(
+         ].join("\n"),
+         display: true,
+       },
+-      { deliverAs: "steer" },
++      "context",
+     );
+   } else if (enabledVariants.length > 0) {
+-    pi.sendMessage(
++    send(
+       {
+         customType: "pp-plan-reviews-error",
+         content: "All plan reviewer variants failed — no reviews were produced. Proceeding without plan review.",
+         display: true,
+       },
+-      { deliverAs: "steer" },
++      "context",
+     );
+   }
+ 
+diff --git a/extensions/orchestrator/phases/review.ts b/extensions/orchestrator/phases/review.ts
+index 89bf8bd..f527ddc 100644
+--- a/extensions/orchestrator/phases/review.ts
++++ b/extensions/orchestrator/phases/review.ts
+@@ -6,6 +6,7 @@ import { registerAgentDefinitions, spawnViaRpc, waitForCompletion } from "../age
+ import { createCodeReviewerAgent } from "../agents/code-reviewer.js";
+ import { getContextDirs, getLatestSynthesizedPlan } from "../context.js";
+ import type { RepoInfo } from "../repo-utils.js";
++import type { PhaseSend } from "../transition-controller.js";
+ 
+ function isEnabled(value: { enabled?: boolean } | undefined): boolean {
+   return value?.enabled !== false;
+@@ -72,15 +73,16 @@ export async function spawnCodeReviewers(
+   config: PiPiConfig,
+   round: number,
+   phase: string,
++  send: PhaseSend,
+   variants?: Record<string, VariantConfig>,
+   repos: RepoInfo[] = [],
+ ): Promise<{ spawned: number; agentIds: string[]; failedVariants: string[] }> {
+   const urPath = join(taskDir, "USER_REQUEST.md");
+   const resPath = join(taskDir, "RESEARCH.md");
+   if (!existsSync(urPath) || !existsSync(resPath)) {
+-    pi.sendMessage(
++    send(
+       { customType: "pp-code-reviews-error", content: "Cannot start code review: USER_REQUEST.md or RESEARCH.md is missing.", display: true },
+-      { deliverAs: "steer" },
++      "context",
+     );
+     return { spawned: 0, agentIds: [], failedVariants: [] };
+   }
+@@ -89,9 +91,9 @@ export async function spawnCodeReviewers(
+   const research = readFileSync(resPath, "utf-8");
+   const synthesizedPlan = getLatestSynthesizedPlan(taskDir);
+   if (!synthesizedPlan) {
+-    pi.sendMessage(
++    send(
+       { customType: "pp-code-reviews-error", content: "Cannot start code review: no synthesized plan found.", display: true },
+-      { deliverAs: "steer" },
++      "context",
+     );
+     return { spawned: 0, agentIds: [], failedVariants: [] };
+   }
+@@ -139,13 +141,13 @@ export async function spawnCodeReviewers(
+           await waitForCompletion(pi, id);
+         } catch (err: any) {
+           failedVariants.push(variant);
+-          pi.sendMessage(
++          send(
+             {
+               customType: "pp-code-reviewer-error",
+               content: `Code reviewer variant "${variant}" failed: ${err.message}`,
+               display: true,
+             },
+-            { deliverAs: "steer" },
++            "context",
+           );
+         }
+       })(),
+@@ -159,7 +161,7 @@ export async function spawnCodeReviewers(
+     : [];
+ 
+   if (reviewFiles.length > 0) {
+-    pi.sendMessage(
++    send(
+       {
+         customType: "pp-code-reviews-done",
+         content: [
+@@ -170,10 +172,10 @@ export async function spawnCodeReviewers(
+         ].join("\n"),
+         display: true,
+       },
+-      { deliverAs: "steer" },
++      "context",
+     );
+   } else {
+-    pi.sendMessage(
++    send(
+       {
+         customType: "pp-code-reviews-error",
+         content: [
+@@ -182,7 +184,7 @@ export async function spawnCodeReviewers(
+         ].join("\n"),
+         display: true,
+       },
+-      { deliverAs: "steer" },
++      "context",
+     );
+   }
+ 
+diff --git a/extensions/orchestrator/phases/spawn-blocking.test.ts b/extensions/orchestrator/phases/spawn-blocking.test.ts
+index 5966876..a9bdc73 100644
+--- a/extensions/orchestrator/phases/spawn-blocking.test.ts
++++ b/extensions/orchestrator/phases/spawn-blocking.test.ts
+@@ -50,7 +50,8 @@ describe("spawn blocks until completion (review-cycle invariant)", () => {
+     const config = getDefaultConfig();
+     const variants = { only: { model: "anthropic/claude-test", enabled: true } } as any;
+ 
+-    const promise = spawnPlanners(makePi(), taskDir, taskDir, "1", config, variants);
++    const send = vi.fn();
++    const promise = spawnPlanners(makePi(), taskDir, taskDir, "1", config, send, variants);
+ 
+     let settled = false;
+     promise.then(() => {
+diff --git a/extensions/orchestrator/pp-menu.ts b/extensions/orchestrator/pp-menu.ts
+index 361ee9f..35c78db 100644
+--- a/extensions/orchestrator/pp-menu.ts
++++ b/extensions/orchestrator/pp-menu.ts
+@@ -256,17 +256,14 @@ async function pauseTask(orchestrator: Orchestrator, ctx: any): Promise<string>
+   taskStore?.clearAll?.();
+   taskStore?.refreshWidget?.(ctx.ui);
+ 
+-  orchestrator.taskDoneCompactionPending = true;
+-  orchestrator.taskDoneCompactionSummary = `Task "${name}" (${type}) paused.`;
+-
++  orchestrator.lastCtx = ctx;
+   orchestrator.updateStatus(ctx);
+-  await new Promise<void>((resolve) => {
+-    const compact = ctx.compact;
+-    if (!compact) { orchestrator.taskDoneCompactionPending = false; orchestrator.taskDoneCompactionSummary = ""; resolve(); return; }
+-    compact({
+-      onComplete: () => { orchestrator.taskDoneCompactionPending = false; resolve(); },
+-      onError: () => { orchestrator.taskDoneCompactionPending = false; orchestrator.taskDoneCompactionSummary = ""; resolve(); },
+-    });
++  // Route through the controller as a "done" target (same coordinator as every
++  // other compaction). The agent was aborted above, so this compacts via the
++  // already-idle path; the awaitable resolves at every terminus.
++  await orchestrator.transitionController.requestTransition({
++    kind: "done",
++    summary: `Task "${name}" (${type}) paused.`,
+   });
+   ctx.ui.notify(`Task "${name}" paused. Use /pp → Resume to continue.`, "info");
+   return `Task "${name}" paused.`;
+@@ -284,8 +281,7 @@ async function finishTask(orchestrator: Orchestrator, ctx: any): Promise<string>
+   const type = orchestrator.active.type;
+   const dir = orchestrator.active.dir;
+ 
+-  orchestrator.taskDoneCompactionPending = true;
+-  orchestrator.taskDoneCompactionSummary = `Task "${name}" (${type}) completed.`;
++  orchestrator.lastCtx = ctx;
+ 
+   orchestrator.active.state.phase = "done";
+   orchestrator.active.state.reviewCycle = null;
+@@ -298,7 +294,12 @@ async function finishTask(orchestrator: Orchestrator, ctx: any): Promise<string>
+   taskStore?.refreshWidget?.(ctx.ui);
+ 
+   orchestrator.updateStatus(ctx);
+-  ctx.compact?.();
++  // Route through the controller as a "done" target (fire-and-forget: the task
++  // is over, nothing awaits this compaction).
++  void orchestrator.transitionController.requestTransition({
++    kind: "done",
++    summary: `Task "${name}" (${type}) completed.`,
++  });
+ 
+   const urExists = existsSync(join(dir, "USER_REQUEST.md"));
+   const resExists = existsSync(join(dir, "RESEARCH.md"));
+@@ -507,6 +508,7 @@ export async function resumeTask(
+           orchestrator.active.dir,
+           orchestrator.active.taskId,
+           orchestrator.config,
++          orchestrator.transitionController.phaseSend,
+           missingConfig,
+           orchestrator.active?.state.repos ?? [],
+         );
+@@ -561,13 +563,13 @@ export async function resumeTask(
+         orchestrator.active.state.step = "apply_feedback";
+         saveTask(orchestrator.active.dir, orchestrator.active.state);
+         const rendered = outputs.map((o) => `=== ${o.name} ===\n${o.content}`).join("\n\n");
+-        pi.sendMessage(
++        orchestrator.transitionController.sendCustom(
+           {
+             customType: "pp-review-ready",
+             content: `[PI-PI] Reviewer outputs are ready.\n\n${rendered}`,
+             display: false,
+           },
+-          { deliverAs: "steer" },
++          "context",
+         );
+       } else {
+         const completedVariants = new Set(
+@@ -581,13 +583,13 @@ export async function resumeTask(
+           orchestrator.active.state.step = "apply_feedback";
+           saveTask(orchestrator.active.dir, orchestrator.active.state);
+           const rendered = outputs.map((o) => `=== ${o.name} ===\n${o.content}`).join("\n\n");
+-          pi.sendMessage(
++          orchestrator.transitionController.sendCustom(
+             {
+               customType: "pp-review-ready",
+               content: `[PI-PI] Reviewer outputs are ready.\n\n${rendered}`,
+               display: false,
+             },
+-            { deliverAs: "steer" },
++            "context",
+           );
+         } else {
+           const missingReviewerConfig: typeof reviewers = {};
+@@ -603,6 +605,7 @@ export async function resumeTask(
+               orchestrator.active!.taskId,
+               orchestrator.config,
+               cycle.pass,
++              orchestrator.transitionController.phaseSend,
+               missingReviewerConfig,
+               orchestrator.active?.state.repos ?? [],
+             )
+@@ -614,6 +617,7 @@ export async function resumeTask(
+               orchestrator.active!.taskId,
+               orchestrator.config,
+               cycle.pass,
++              orchestrator.transitionController.phaseSend,
+               missingReviewerConfig,
+               orchestrator.active?.state.repos ?? [],
+             )
+@@ -625,6 +629,7 @@ export async function resumeTask(
+               orchestrator.config,
+               cycle.pass,
+               phase,
++              orchestrator.transitionController.phaseSend,
+               missingReviewerConfig,
+               orchestrator.active?.state.repos ?? [],
+             );
+@@ -650,13 +655,13 @@ export async function resumeTask(
+     } else if (cycle.step === "apply_feedback") {
+       const outputs = loadPhaseReviewOutputs(orchestrator.active.dir, phase, cycle.pass);
+       const rendered = outputs.map((o) => `=== ${o.name} ===\n${o.content}`).join("\n\n");
+-      pi.sendMessage(
++      orchestrator.transitionController.sendCustom(
+         {
+           customType: "pp-review-ready",
+           content: `[PI-PI] Review cycle is in apply_feedback step.\n\n${rendered}`,
+           display: false,
+         },
+-        { deliverAs: "steer" },
++        "context",
+       );
+     }
+   }
+@@ -3290,7 +3295,10 @@ export async function showActiveTaskMenu(
+     const step = task.state.step;
+     const effectiveMode = getEffectivePhaseMode(task.state);
+ 
+-    const waiting = step === "await_planners" || step === "await_reviewers";
++    // Suppress phase-advancing/review actions while a transition is in flight
++    // (controller pending/compacting/resuming) OR while awaiting subagents. The
++    // controller's isRunning() predicate already folds in the await_* steps.
++    const waiting = !orchestrator.transitionController.isRunning();
+     const { autoLabel } = getReviewLabels(orchestrator);
+     const isReviewPhase = phase === "review";
+     const hasPlannotator = phase === "plan" || phase === "implement" || isReviewPhase;
+@@ -3397,9 +3405,8 @@ export async function showActiveTaskMenu(
+       finalizeReviewCycle(task);
+       const result = await orchestrator.transitionToNextPhase(ctx, plannerPreset);
+       if (!result.ok) return `Transition blocked: ${result.error}`;
+-      if (orchestrator.phaseCompactionPending || orchestrator.taskDoneCompactionPending) return "";
+-      const curStep = orchestrator.active?.state.step;
+-      if (curStep === "await_planners" || curStep === "await_reviewers") return "";
++      // Transition is now owned by the controller (state ≠ running) or we're
++      // awaiting subagents; either way the menu returns empty.
+       return "";
+     }
+ 
+diff --git a/extensions/orchestrator/transition-controller.test.ts b/extensions/orchestrator/transition-controller.test.ts
+new file mode 100644
+index 0000000..0e3c922
+--- /dev/null
++++ b/extensions/orchestrator/transition-controller.test.ts
+@@ -0,0 +1,177 @@
++import { describe, expect, it, vi } from "vitest";
++import { TransitionController, type TransitionHost } from "./transition-controller.js";
++
++// Fake host: records outbound primitives and lets tests control idle + compaction.
++function makeHost(opts: { idle?: boolean; step?: string | null; canCompact?: boolean } = {}) {
++  let compactCb: { onComplete?: () => void; onError?: (e: Error) => void } | null = null;
++  const calls = {
++    userMessages: [] as Array<{ text: string; deliverAs: string }>,
++    customMessages: [] as Array<{ customType: string; deliverAs: string }>,
++    compactStarted: 0,
++  };
++  const host: TransitionHost = {
++    rawSendUserMessage: (text, deliverAs) => calls.userMessages.push({ text, deliverAs }),
++    rawSendMessage: (message, deliverAs) => calls.customMessages.push({ customType: message.customType, deliverAs }),
++    compact: (options) => {
++      if (opts.canCompact === false) return false;
++      calls.compactStarted++;
++      compactCb = options;
++      return true;
++    },
++    isIdle: () => opts.idle ?? false,
++    currentStep: () => opts.step ?? "llm_work",
++  };
++  return {
++    host,
++    calls,
++    // Simulate the SDK firing the compaction completion event.
++    completeCompaction: () => compactCb?.onComplete?.(),
++    failCompaction: (msg: string) => compactCb?.onError?.(new Error(msg)),
++  };
++}
++
++describe("TransitionController.send", () => {
++  it("delivers context as steer and instruction as followUp", () => {
++    const { host, calls } = makeHost();
++    const c = new TransitionController(host);
++    c.send("ctx", "context");
++    c.send("go", "instruction");
++    expect(calls.userMessages).toEqual([
++      { text: "ctx", deliverAs: "steer" },
++      { text: "go", deliverAs: "followUp" },
++    ]);
++  });
++
++  it("sendCustom maps roles to delivery modes", () => {
++    const { host, calls } = makeHost();
++    const c = new TransitionController(host);
++    c.sendCustom({ customType: "pp-context", content: "x", display: false }, "context");
++    c.sendCustom({ customType: "pp-artifact", content: "y", display: false }, "instruction");
++    expect(calls.customMessages).toEqual([
++      { customType: "pp-context", deliverAs: "steer" },
++      { customType: "pp-artifact", deliverAs: "followUp" },
++    ]);
++  });
++});
++
++describe("TransitionController.isRunning / shouldBlockAgentStart", () => {
++  it("running with llm_work step is running and does not block", () => {
++    const { host } = makeHost({ step: "llm_work" });
++    const c = new TransitionController(host);
++    expect(c.isRunning()).toBe(true);
++    expect(c.shouldBlockAgentStart()).toBe(false);
++  });
++
++  it("await_planners and await_reviewers steps are not running (block)", () => {
++    for (const step of ["await_planners", "await_reviewers"]) {
++      const { host } = makeHost({ step });
++      const c = new TransitionController(host);
++      expect(c.isRunning()).toBe(false);
++      expect(c.shouldBlockAgentStart()).toBe(true);
++    }
++  });
++});
++
++describe("TransitionController phase transition flow", () => {
++  it("waits for agent_end when not idle, then compacts and resumes", async () => {
++    const { host, calls, completeCompaction } = makeHost({ idle: false });
++    const c = new TransitionController(host);
++    const onResume = vi.fn();
++    const p = c.requestTransition({ kind: "phase", summary: "s", onResume, instruction: "Begin working." });
++    expect(c.getState()).toBe("pending");
++    expect(calls.compactStarted).toBe(0); // not idle -> waits
++
++    c.onAgentEnd();
++    expect(c.getState()).toBe("compacting");
++    expect(calls.compactStarted).toBe(1);
++
++    completeCompaction();
++    await p;
++    expect(onResume).toHaveBeenCalledOnce();
++    expect(c.getState()).toBe("running");
++    expect(calls.userMessages).toEqual([{ text: "Begin working.", deliverAs: "followUp" }]);
++  });
++
++  it("already-idle path compacts immediately without agent_end", async () => {
++    const { host, calls, completeCompaction } = makeHost({ idle: true });
++    const c = new TransitionController(host);
++    const p = c.requestTransition({ kind: "done", summary: "done" });
++    expect(c.getState()).toBe("compacting");
++    expect(calls.compactStarted).toBe(1);
++    completeCompaction();
++    await p;
++    expect(c.getState()).toBe("running");
++  });
++
++  it("treats compact no-op errors as a clean resume", async () => {
++    for (const msg of ["Nothing to compact (session too small)", "Already compacted"]) {
++      const { host, failCompaction } = makeHost({ idle: true });
++      const c = new TransitionController(host);
++      const onResume = vi.fn();
++      const p = c.requestTransition({ kind: "phase", onResume, instruction: "go" });
++      failCompaction(msg);
++      await p;
++      expect(onResume).toHaveBeenCalledOnce();
++      expect(c.getState()).toBe("running");
++    }
++  });
++
++  it("resumes via session_compact event", async () => {
++    const { host } = makeHost({ idle: false });
++    const c = new TransitionController(host);
++    const onResume = vi.fn();
++    const p = c.requestTransition({ kind: "phase", onResume, instruction: "go" });
++    c.onAgentEnd();
++    c.onSessionCompact();
++    await p;
++    expect(onResume).toHaveBeenCalledOnce();
++    expect(c.getState()).toBe("running");
++  });
++
++  it("ignores agent_end while running (no self-trigger loop)", () => {
++    const { host, calls } = makeHost({ idle: false });
++    const c = new TransitionController(host);
++    c.onAgentEnd();
++    c.onAgentEnd();
++    expect(calls.compactStarted).toBe(0);
++    expect(c.getState()).toBe("running");
++  });
++
++  it("ignores session_compact while running (no spurious resume)", () => {
++    const { host, calls } = makeHost();
++    const c = new TransitionController(host);
++    c.onSessionCompact();
++    expect(calls.userMessages).toHaveLength(0);
++    expect(c.getState()).toBe("running");
++  });
++
++  it("resolves the awaitable even when no live ctx can compact", async () => {
++    const { host, calls } = makeHost({ idle: true, canCompact: false });
++    const c = new TransitionController(host);
++    const onResume = vi.fn();
++    await c.requestTransition({ kind: "done", onResume });
++    expect(onResume).toHaveBeenCalledOnce();
++    expect(calls.compactStarted).toBe(0);
++    expect(c.getState()).toBe("running");
++  });
++
++  it("does not send an instruction when none is provided (await_planners notify-only)", async () => {
++    const { host, calls, completeCompaction } = makeHost({ idle: true });
++    const c = new TransitionController(host);
++    const p = c.requestTransition({ kind: "phase", onResume: () => {} });
++    completeCompaction();
++    await p;
++    expect(calls.userMessages).toHaveLength(0);
++  });
++
++  it("compaction completion is idempotent across onComplete and session_compact", async () => {
++    const { host, completeCompaction } = makeHost({ idle: true });
++    const c = new TransitionController(host);
++    const onResume = vi.fn();
++    const p = c.requestTransition({ kind: "phase", onResume, instruction: "go" });
++    completeCompaction();
++    c.onSessionCompact(); // second terminus — must be a no-op
++    await p;
++    expect(onResume).toHaveBeenCalledOnce();
++  });
++});
+diff --git a/extensions/orchestrator/transition-controller.ts b/extensions/orchestrator/transition-controller.ts
+new file mode 100644
+index 0000000..7ce4026
+--- /dev/null
++++ b/extensions/orchestrator/transition-controller.ts
+@@ -0,0 +1,220 @@
++import { getLogger } from "./log.js";
++
++// Role of an outbound message. Drives the SDK delivery mode:
++//   - "context": injected background context/artifacts. Delivered as "steer" so
++//     it never starts a turn (the agent is or will be working).
++//   - "instruction": a handoff that should make the agent act. Delivered as
++//     "followUp" so it queues and triggers a turn once the current one settles
++//     (or runs immediately when idle). Never throws "Agent is already processing".
++export type SendRole = "context" | "instruction";
++
++// Dependency passed to standalone phase-module spawn functions so they can emit
++// status/context messages WITHOUT importing the orchestrator (avoids circular
++// imports) while still routing every send through the controller. Bound to
++// TransitionController.sendCustom by the caller.
++export type PhaseSend = (
++  message: { customType: string; content: string; display: boolean; details?: unknown },
++  role: SendRole,
++) => void;
++
++// The kind of transition the controller is coordinating. Phase transitions resume
++// the main loop with a "Begin working" instruction; done/stop transitions finish
++// the task (cleanup already performed by the caller) and resolve their awaitable.
++export type TransitionKind = "phase" | "done";
++
++export interface TransitionRequest {
++  kind: TransitionKind;
++  // Compaction summary used by the session_before_compact handler.
++  summary?: string;
++  // Runs after compaction completes (or is skipped), before the resume message.
++  // Used for phase transitions to switch model + inject context/artifacts and to
++  // spawn planners at the right moment. Throwing here is logged, not fatal.
++  onResume?: () => void | Promise<void>;
++  // For phase transitions: the instruction sent after onResume. When omitted
++  // (e.g. plan/await_planners which only notifies, or done transitions), no
++  // instruction is sent.
++  instruction?: string;
++}
++
++export type ControllerState = "running" | "pending" | "compacting" | "resuming";
++
++// Minimal surface the controller needs from the Orchestrator. Kept as an
++// interface so the controller is unit-testable with a fake host and so phase
++// modules can depend on `send` without importing the orchestrator (avoids
++// circular imports).
++export interface TransitionHost {
++  // Outbound primitives — the controller is the ONLY caller of these for the
++  // main session. `send` fans out to these based on role.
++  rawSendUserMessage(text: string, deliverAs: "steer" | "followUp"): void;
++  rawSendMessage(message: { customType: string; content: string; display: boolean; details?: unknown }, deliverAs: "steer" | "followUp" | "nextTurn"): void;
++  // Compaction + idle probe come from the live ExtensionContext (lastCtx).
++  compact(options: { customInstructions?: string; onComplete?: () => void; onError?: (err: Error) => void }): boolean;
++  isIdle(): boolean;
++  // Persisted step, used to derive the await_* "not running" predicate.
++  currentStep(): string | null;
++}
++
++const COMPACT_NOOP_MESSAGES = [
++  "Nothing to compact (session too small)",
++  "Already compacted",
++];
++
++function isCompactNoop(err: unknown): boolean {
++  const msg = err instanceof Error ? err.message : String(err ?? "");
++  return COMPACT_NOOP_MESSAGES.some((m) => msg.includes(m));
++}
++
++// Single event-driven owner of phase/task transitions and main-session
++// compaction + outbound messaging. See transition-controller flow in the plan:
++//   requestTransition -> pending; agent_end (or already-idle) -> compact ->
++//   compacting; session_compact / compact no-op / error -> resuming -> onResume
++//   -> send(instruction) -> running.
++export class TransitionController {
++  private state: ControllerState = "running";
++  private active: TransitionRequest | null = null;
++  // Resolvers for callers that await the transition (done/stop/new-task paths).
++  private waiters: Array<() => void> = [];
++
++  constructor(private readonly host: TransitionHost) {}
++
++  // Pre-bound PhaseSend handed to standalone spawn functions so they route every
++  // outbound message through the controller without importing the orchestrator.
++  readonly phaseSend: PhaseSend = (message, role) => this.sendCustom(message, role);
++
++  getState(): ControllerState {
++    return this.state;
++  }
++
++  // True only when the controller is idle (running) AND not waiting on subagents.
++  // The await_* states live in persisted step, not the enum. Every consumer of
++  // "may the agent loop start / may we nudge / may the menu proceed" reads THIS.
++  isRunning(): boolean {
++    if (this.state !== "running") return false;
++    const step = this.host.currentStep();
++    return step !== "await_planners" && step !== "await_reviewers";
++  }
++
++  // Inverse predicate used by before_agent_start / in-tool aborts: the agent
++  // loop must NOT start while a transition is in flight or we're awaiting subagents.
++  shouldBlockAgentStart(): boolean {
++    return !this.isRunning();
++  }
++
++  // True while a transition is mid-flight (pending/compacting/resuming) — i.e.
++  // the controller initiated the current compaction. Used by session_before_compact
++  // to decide between supplying the transition summary vs. re-injecting artifacts
++  // after a natural (user-triggered) compaction.
++  isTransitioning(): boolean {
++    return this.state !== "running";
++  }
++
++  // Compaction summary for the in-flight transition (empty when not transitioning).
++  currentSummary(): string {
++    return this.active?.summary ?? "";
++  }
++
++  // Outbound message fan-out. The ONLY path for main-session messaging.
++  send(text: string, role: SendRole): void {
++    if (role === "context") {
++      this.host.rawSendUserMessage(text, "steer");
++    } else {
++      this.host.rawSendUserMessage(text, "followUp");
++    }
++  }
++
++  // Like send, but for custom (non-LLM) messages (pp-context / pp-artifact).
++  sendCustom(message: { customType: string; content: string; display: boolean; details?: unknown }, role: SendRole): void {
++    this.host.rawSendMessage(message, role === "context" ? "steer" : "followUp");
++  }
++
++  // Request a transition. Returns a promise that resolves once the transition
++  // has resumed (or finished, for done/stop). If the agent is already idle the
++  // controller compacts immediately; otherwise it waits for agent_end.
++  requestTransition(req: TransitionRequest): Promise<void> {
++    const log = getLogger();
++    if (this.state !== "running") {
++      // A transition is already in flight. Coalesce: ignore the new request but
++      // still attach the waiter so the caller is released when this settles.
++      log.debug({ s: "controller", state: this.state, kind: req.kind }, "requestTransition while not running — coalescing");
++      return new Promise<void>((resolve) => this.waiters.push(resolve));
++    }
++    this.active = req;
++    this.state = "pending";
++    log.debug({ s: "controller", kind: req.kind }, "transition pending");
++    const promise = new Promise<void>((resolve) => this.waiters.push(resolve));
++    // Already-idle path: no agent turn is in flight, so no agent_end will fire.
++    // Compact immediately rather than waiting forever.
++    if (this.host.isIdle()) {
++      this.beginCompaction();
++    }
++    return promise;
++  }
++
++  // agent_end fires when the main loop goes idle. If a transition is pending,
++  // this is the moment to compact. Repeated agent_end while running is a no-op
++  // (prevents the self-trigger loop from injected followUp messages).
++  onAgentEnd(): void {
++    if (this.state !== "pending") return;
++    this.beginCompaction();
++  }
++
++  // session_compact fires after compaction completes. Only advance the transition
++  // we initiated (state must be compacting) — an unrelated/manual compaction
++  // while running must not resume the wrong transition.
++  onSessionCompact(): void {
++    if (this.state !== "compacting") return;
++    void this.resume();
++  }
++
++  private beginCompaction(): void {
++    const req = this.active;
++    if (!req) {
++      this.state = "running";
++      return;
++    }
++    this.state = "compacting";
++    getLogger().debug({ s: "controller", kind: req.kind }, "compacting");
++    const started = this.host.compact({
++      customInstructions: req.summary,
++      // onComplete is a fallback resume terminus; the authoritative one is the
++      // session_compact event. Whichever lands first wins (resume is idempotent).
++      onComplete: () => {
++        if (this.state === "compacting") void this.resume();
++      },
++      onError: (err: Error) => {
++        if (this.state !== "compacting") return;
++        if (isCompactNoop(err)) {
++          getLogger().debug({ s: "controller", err: err.message }, "compact no-op — resuming");
++          void this.resume();
++        } else {
++          getLogger().error({ s: "controller", err: err.message }, "compact error — resuming anyway");
++          void this.resume();
++        }
++      },
++    });
++    // host.compact returns false when no ctx is available (e.g. no live session);
++    // treat as a no-op and resume so awaiting callers don't hang.
++    if (!started) {
++      void this.resume();
++    }
++  }
++
++  private async resume(): Promise<void> {
++    const req = this.active;
++    this.state = "resuming";
++    getLogger().debug({ s: "controller", kind: req?.kind }, "resuming");
++    try {
++      await req?.onResume?.();
++    } catch (err: any) {
++      getLogger().error({ s: "controller", err: err?.message ?? String(err) }, "onResume failed");
++    }
++    if (req?.instruction) {
++      this.send(req.instruction, "instruction");
++    }
++    this.active = null;
++    this.state = "running";
++    const waiters = this.waiters;
++    this.waiters = [];
++    for (const w of waiters) w();
++  }
++}

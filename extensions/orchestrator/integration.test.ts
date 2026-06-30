@@ -888,6 +888,27 @@ describe("planner completion tracking", () => {
     expect(orchestrator.active!.state.step).toBe("synthesize");
   });
 
+  it("onSettled with zero spawned planners advances await_planners (poller-removal safety net)", async () => {
+    const cwd = makeTempDir();
+    const { orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "Zero planners");
+    const taskDir = orchestrator.active!.dir;
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+    orchestrator.active!.state.phase = "plan";
+    orchestrator.active!.state.step = "await_planners";
+    orchestrator.pendingSubagentSpawns = 0;
+    orchestrator.spawnedAgentIds.clear();
+
+    // With the poller gone, the spawn promise's onSettled(spawned=0) is the only
+    // thing that can advance when no subagents:completed/failed event ever fires.
+    orchestrator.checkPlannerCompletion();
+
+    expect(orchestrator.active!.state.step).toBe("synthesize");
+  });
+
   it("plan transition sets await_planners before compaction callback runs", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);

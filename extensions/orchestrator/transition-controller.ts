@@ -94,10 +94,20 @@ export class TransitionController {
     return step !== "await_planners" && step !== "await_reviewers";
   }
 
-  // Inverse predicate used by before_agent_start / in-tool aborts: the agent
-  // loop must NOT start while a transition is in flight or we're awaiting subagents.
+  // Inverse predicate used by in-tool / menu code to decide whether to abort.
   shouldBlockAgentStart(): boolean {
     return !this.isRunning();
+  }
+
+  // The transition/await abort gate, owned by the controller. before_agent_start
+  // delegates here: the controller decides AND issues the abort (via the passed
+  // abort fn from the live ctx) so it is the sole owner of transition aborts.
+  // Returns true if the agent start was aborted.
+  gateAgentStart(abort: () => void): boolean {
+    if (this.isRunning()) return false;
+    getLogger().debug({ s: "controller", state: this.state }, "aborting agent start (not running)");
+    abort();
+    return true;
   }
 
   // True while a transition is mid-flight (pending/compacting/resuming) — i.e.
@@ -113,16 +123,23 @@ export class TransitionController {
     return this.active?.summary ?? "";
   }
 
-  // Outbound message fan-out. The ONLY path for main-session messaging.
+  // Outbound plain user-message. The ONLY path for main-session user messaging.
+  // Plain user messages (pi.sendUserMessage) ALWAYS start a turn — even with
+  // deliverAs:"steer" when idle (SDK prompt()) — so this only serves the
+  // "instruction" role (queue + start a turn via followUp). A non-turn-starting
+  // "context" payload must use sendCustom (a custom message that only appends
+  // when idle), so passing "context" here is a misuse and is rejected.
   send(text: string, role: SendRole): void {
     if (role === "context") {
-      this.host.rawSendUserMessage(text, "steer");
-    } else {
-      this.host.rawSendUserMessage(text, "followUp");
+      throw new Error("send(context) would start a turn; use sendCustom for non-turn-starting context");
     }
+    this.host.rawSendUserMessage(text, "followUp");
   }
 
-  // Like send, but for custom (non-LLM) messages (pp-context / pp-artifact).
+  // Custom (non-LLM) messages (pp-context / pp-artifact). "context" => steer
+  // (append-only when idle, never starts a turn); "instruction" => followUp
+  // (queues + starts a turn while streaming; callers that need a guaranteed turn
+  // when idle pair this with a send(...) instruction).
   sendCustom(message: { customType: string; content: string; display: boolean; details?: unknown }, role: SendRole): void {
     this.host.rawSendMessage(message, role === "context" ? "steer" : "followUp");
   }

@@ -1010,6 +1010,12 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     orchestrator.transitionController.onSessionCompact();
   });
 
+  // Expose the event-driven planner-completion check so initial plan-entry
+  // spawns (in command-handlers / orchestrator) can wire it as their onSettled
+  // safety net (the deleted poller's former role). checkPlannerCompletion is a
+  // hoisted function declaration below.
+  orchestrator.checkPlannerCompletion = () => checkPlannerCompletion();
+
   function getUsageTracker(): UsageTracker | undefined {
     return (globalThis as any)[USAGE_TRACKER_KEY] as UsageTracker | undefined;
   }
@@ -1756,14 +1762,11 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
 
   pi.on("before_agent_start", async (event, ctx) => {
     orchestrator.lastCtx = ctx;
-    const log = getLogger();
-    // The controller is the single source of truth for "may the agent loop
-    // start?". It is not running during a pending/compacting/resuming transition
-    // (subsuming the old phase/taskDone compaction-pending checks) or while
-    // awaiting subagents (step === await_planners/await_reviewers).
-    if (orchestrator.transitionController.shouldBlockAgentStart()) {
-      log.debug({ s: "hook", hook: "before_agent_start", state: orchestrator.transitionController.getState(), step: orchestrator.active?.state.step }, "aborting agent start (controller not running)");
-      ctx.abort();
+    // The controller owns the transition/await abort gate: it decides whether the
+    // agent loop may start (not running during a pending/compacting/resuming
+    // transition, subsuming the old compaction-pending checks, or while awaiting
+    // subagents) AND issues the abort itself.
+    if (orchestrator.transitionController.gateAgentStart(() => ctx.abort())) {
       return;
     }
     if (!orchestrator.active || orchestrator.active.state.phase === "done") return;

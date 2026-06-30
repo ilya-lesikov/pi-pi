@@ -91,6 +91,13 @@ export class Orchestrator {
   plannotatorUnsub: (() => void) | null = null;
   plannotatorTimer: ReturnType<typeof setTimeout> | null = null;
   transitionToNextPhase: (ctx: any, plannerPreset?: string) => Promise<{ ok: boolean; error?: string }> = async () => ({ ok: false, error: "not initialized" });
+  // Assigned by registerEventHandlers. Wired into planner spawn onSettled as the
+  // safety net the deleted 5s poller used to provide: when a spawn settles having
+  // produced ZERO agents (zero enabled planners, or all spawns failed before any
+  // subagents:completed/failed event), nothing else would advance await_planners.
+  // For spawned>0 the lifecycle events drive completion, so onSettled passes the
+  // spawned count and this only force-checks the zero case.
+  checkPlannerCompletion: () => void = () => {};
   readonly transitionController: TransitionController;
 
   constructor(readonly pi: ExtensionAPI) {
@@ -503,7 +510,7 @@ export class Orchestrator {
           plannerVariants,
           this.active?.state.repos ?? [],
         ),
-        { kind: "planner", logScope: "planner", logMessage: "spawnPlanners failed" },
+        { kind: "planner", logScope: "planner", logMessage: "spawnPlanners failed", onSettled: (result) => { if (!result?.spawned) this.checkPlannerCompletion(); } },
       );
     }
   }

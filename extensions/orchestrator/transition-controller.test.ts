@@ -31,15 +31,18 @@ function makeHost(opts: { idle?: boolean; step?: string | null; canCompact?: boo
 }
 
 describe("TransitionController.send", () => {
-  it("delivers context as steer and instruction as followUp", () => {
+  it("delivers instruction as followUp (always starts a turn)", () => {
     const { host, calls } = makeHost();
     const c = new TransitionController(host);
-    c.send("ctx", "context");
     c.send("go", "instruction");
-    expect(calls.userMessages).toEqual([
-      { text: "ctx", deliverAs: "steer" },
-      { text: "go", deliverAs: "followUp" },
-    ]);
+    expect(calls.userMessages).toEqual([{ text: "go", deliverAs: "followUp" }]);
+  });
+
+  it("rejects context role (plain user messages always start a turn)", () => {
+    const { host, calls } = makeHost();
+    const c = new TransitionController(host);
+    expect(() => c.send("ctx", "context")).toThrow(/sendCustom/);
+    expect(calls.userMessages).toHaveLength(0);
   });
 
   it("sendCustom maps roles to delivery modes", () => {
@@ -69,6 +72,20 @@ describe("TransitionController.isRunning / shouldBlockAgentStart", () => {
       expect(c.isRunning()).toBe(false);
       expect(c.shouldBlockAgentStart()).toBe(true);
     }
+  });
+
+  it("gateAgentStart aborts and reports when not running, no-op when running", () => {
+    const running = makeHost({ step: "llm_work" });
+    const rc = new TransitionController(running.host);
+    const abort1 = vi.fn();
+    expect(rc.gateAgentStart(abort1)).toBe(false);
+    expect(abort1).not.toHaveBeenCalled();
+
+    const waiting = makeHost({ step: "await_planners" });
+    const wc = new TransitionController(waiting.host);
+    const abort2 = vi.fn();
+    expect(wc.gateAgentStart(abort2)).toBe(true);
+    expect(abort2).toHaveBeenCalledOnce();
   });
 });
 
