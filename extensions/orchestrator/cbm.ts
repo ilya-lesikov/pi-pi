@@ -98,6 +98,9 @@ export class CbmDaemon {
       capabilities: {},
       clientInfo: { name: "pi-pi", version: "1.0" },
     });
+    if (this.proc?.stdin?.writable) {
+      this.proc.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }) + "\n");
+    }
     this.initialized = true;
   }
 
