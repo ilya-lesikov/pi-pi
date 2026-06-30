@@ -2125,86 +2125,13 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       return;
     }
 
+    // While awaiting subagents, completion is driven entirely by the event-driven
+    // owners (checkPlannerCompletion / checkReviewCycleCompletion / tryCompleteReviewCycle,
+    // wired to subagents:completed/failed and the blocking spawn promise's onSettled).
+    // The old 5s setInterval poller was a redundant fallback and has been removed;
+    // turn_end simply returns here (no nudge, no poll) while in an await_* step.
     if (orchestrator.active.state.step === "await_planners" || orchestrator.active.state.step === "await_reviewers") {
-      if (!orchestrator.awaitPollTimer) {
-        orchestrator.awaitPollTimer = setInterval(() => {
-          if (!orchestrator.active) {
-            clearInterval(orchestrator.awaitPollTimer!);
-            orchestrator.awaitPollTimer = null;
-            return;
-          }
-          if (orchestrator.phaseCompactionPending) return;
-          const taskDir = orchestrator.active.dir;
-          if (orchestrator.active.state.step === "await_planners") {
-            const plansDir = join(taskDir, "plans");
-            const presetName = normalizeStoredPlannerPresetName(orchestrator);
-            const plannerVariants = resolvePreset(orchestrator.config, "planners", presetName);
-            const enabledVariantNames = Object.entries(plannerVariants)
-              .filter(([, v]) => isEnabled(v))
-              .map(([name]) => name);
-            if (existsSync(plansDir)) {
-              const planFiles = readdirSync(plansDir).filter((f) => f.endsWith(".md") && !f.includes("synthesized") && !f.includes("review_"));
-              const completedVariants = new Set(planFiles.map((f) => f.replace(/^\d+_/, "").replace(/\.md$/, "")));
-              const hasAllEnabledVariants = enabledVariantNames.every((name) => completedVariants.has(name));
-              if (hasAllEnabledVariants) {
-                clearInterval(orchestrator.awaitPollTimer!);
-                orchestrator.awaitPollTimer = null;
-                markAllAgentsConsumed();
-                orchestrator.spawnedAgentIds.clear();
-                orchestrator.pendingSubagentSpawns = 0;
-                orchestrator.active.state.step = "synthesize";
-                saveTask(orchestrator.active.dir, orchestrator.active.state);
-                orchestrator.safeSendUserMessage("[PI-PI] All planners completed. Read their outputs and synthesize the plan.");
-              }
-            }
-          } else if (orchestrator.active.state.step === "await_reviewers" && orchestrator.active.state.reviewCycle) {
-            const cycle = orchestrator.active.state.reviewCycle;
-            const phase = orchestrator.active.state.phase;
-            const presetName = normalizeStoredReviewPresetName(orchestrator, phase);
-            const reviewers = resolveReviewers(orchestrator, phase, presetName);
-            const reviewerCount = Object.values(reviewers).filter((v) => isEnabled(v)).length;
-            const outputs = loadPhaseReviewOutputs(taskDir, phase, cycle.pass);
-            if (outputs.length >= reviewerCount) {
-              clearInterval(orchestrator.awaitPollTimer!);
-              orchestrator.awaitPollTimer = null;
-              markAllAgentsConsumed();
-              orchestrator.spawnedAgentIds.clear();
-              orchestrator.pendingSubagentSpawns = 0;
-
-              if (orchestrator.reviewTransitionToken === orchestrator.activeTaskToken) return;
-              orchestrator.reviewTransitionToken = orchestrator.activeTaskToken;
-
-              if (outputs.length === 0) {
-                orchestrator.active.state.reviewCycle = null;
-                orchestrator.active.state.step = "llm_work";
-                saveTask(orchestrator.active.dir, orchestrator.active.state);
-                orchestrator.safeSendUserMessage("[PI-PI] No reviewer outputs were produced — nothing to review. Continue working.");
-                return;
-              }
-
-              cycle.step = "apply_feedback";
-              orchestrator.active.state.step = "apply_feedback";
-              saveTask(orchestrator.active.dir, orchestrator.active.state);
-              const rendered = outputs.length
-                ? outputs.map((o) => `=== ${o.name} ===\n${o.content}`).join("\n\n")
-                : "All reviewers failed to produce output. Review the work yourself and decide whether to approve or request changes.";
-              orchestrator.transitionController.sendCustom(
-                { customType: "pp-review-ready", content: `[PI-PI] Reviewer outputs are ready.\n\n${rendered}`, display: false },
-                "instruction",
-              );
-              orchestrator.safeSendUserMessage(reviewReadyMessage(phase));
-            }
-          } else {
-            clearInterval(orchestrator.awaitPollTimer!);
-            orchestrator.awaitPollTimer = null;
-          }
-        }, 5000);
-      }
       return;
-    }
-    if (orchestrator.awaitPollTimer) {
-      clearInterval(orchestrator.awaitPollTimer);
-      orchestrator.awaitPollTimer = null;
     }
 
     const contentParts = Array.isArray(msg?.content) ? msg.content : [];

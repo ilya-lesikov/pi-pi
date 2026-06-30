@@ -82,7 +82,6 @@ export class Orchestrator {
   commitReminderSent = false;
   textStopTimestamps: number[] = [];
   phaseStartTime = 0;
-  awaitPollTimer: ReturnType<typeof setInterval> | null = null;
   pendingRetryTimer: ReturnType<typeof setTimeout> | null = null;
   activeTaskToken = 0;
   userGatePending = false;
@@ -549,10 +548,6 @@ export class Orchestrator {
     this.failedReviewerVariants = [];
     this.plannerFailureDialogPending = false;
     this.reviewerFailureDialogPending = false;
-    if (this.awaitPollTimer) {
-      clearInterval(this.awaitPollTimer);
-      this.awaitPollTimer = null;
-    }
     if (this.pendingRetryTimer) {
       clearTimeout(this.pendingRetryTimer);
       this.pendingRetryTimer = null;
