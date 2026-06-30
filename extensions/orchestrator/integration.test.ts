@@ -265,6 +265,7 @@ function makeCtx(overrides: Record<string, any> = {}) {
     },
     abort: vi.fn(),
     waitForIdle: vi.fn().mockResolvedValue(undefined),
+    isIdle: vi.fn().mockReturnValue(true),
     compact: vi.fn((opts?: any) => {
       if (opts?.onComplete) setTimeout(opts.onComplete, 0);
     }),
@@ -3184,6 +3185,36 @@ describe("compaction", () => {
     orchestrator.compactAndTransition(ctx as any, orchestrator.active!.dir, "plan");
 
     expect(compactSpy).toHaveBeenCalledWith(expect.objectContaining({ customInstructions: expect.stringContaining("Phase transition") }));
+  });
+
+  it("defers compaction until agent_end when not idle, then delivers Begin working", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const compactCbs: Array<{ onComplete?: () => void; onError?: (e: Error) => void }> = [];
+    // Agent is mid-turn (tool in-flight): not idle, and compaction is deferred.
+    const compactSpy = vi.fn((opts?: any) => { compactCbs.push(opts); });
+    const ctx = makeCtx({ isIdle: vi.fn().mockReturnValue(false), compact: compactSpy });
+
+    await orchestrator.startTask(ctx as any, "implement", "deferred compaction");
+    orchestrator.compactAndTransition(ctx as any, orchestrator.active!.dir, "implement");
+
+    // Not idle -> no compaction yet; controller is pending.
+    expect(compactSpy).not.toHaveBeenCalled();
+
+    // Agent goes idle: agent_end fires compaction.
+    await pi._handlers.get("agent_end")!({ type: "agent_end", messages: [] }, ctx);
+    expect(compactSpy).toHaveBeenCalledTimes(1);
+
+    // Compaction throws the "too small" no-op: must still resume + deliver.
+    compactCbs[0]!.onError!(new Error("Nothing to compact (session too small)"));
+
+    await vi.waitFor(() => {
+      const sentBeginWorking = pi.sendUserMessage.mock.calls.some(
+        (c: any[]) => c[0] === "[PI-PI] Entered implement phase. Begin working." && c[1]?.deliverAs === "followUp",
+      );
+      expect(sentBeginWorking).toBe(true);
+    });
+    expect(orchestrator.transitionController.getState()).toBe("running");
   });
 
   it("session_before_compact returns phase summary when pending", async () => {

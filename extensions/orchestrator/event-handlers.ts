@@ -991,6 +991,23 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
 
   registerMainTraceHooks(orchestrator);
 
+  // TransitionController drivers. These are the reliable idle/completion signals:
+  //   - agent_end: the main loop went idle. If a transition is pending, this is
+  //     when the controller fires compaction.
+  //   - session_compact: compaction finished. The controller resumes (injects
+  //     context/artifacts + sends the next instruction).
+  // The SDK supports multiple handlers per event, so these coexist with the
+  // trace-only hooks registered above. registerEventHandlers is never called on
+  // the subagent branch, so these only ever see root-session events.
+  pi.on("agent_end", async (_event, ctx) => {
+    if (ctx) orchestrator.lastCtx = ctx;
+    orchestrator.transitionController.onAgentEnd();
+  });
+  pi.on("session_compact", async (_event, ctx) => {
+    if (ctx) orchestrator.lastCtx = ctx;
+    orchestrator.transitionController.onSessionCompact();
+  });
+
   function getUsageTracker(): UsageTracker | undefined {
     return (globalThis as any)[USAGE_TRACKER_KEY] as UsageTracker | undefined;
   }

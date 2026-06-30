@@ -665,31 +665,34 @@ export class Orchestrator {
 
   compactAndTransition(ctx: ExtensionContext, taskDir: string, phase: Phase, onReady?: () => void): void {
     getLogger().info({ s: "phase", taskDir, phase }, "compact and transition");
+    // Ensure the controller's host can reach this live ctx for compact/isIdle.
+    this.lastCtx = ctx;
+    // Keep the legacy flag set for the duration of the transition so the existing
+    // before_agent_start gate and turn_end early-returns still hold until the
+    // controller fully owns gating (slice 4). The controller drives the actual
+    // compaction + resume off agent_end / session_compact.
     this.phaseCompactionPending = true;
-    const finalize = async () => {
-      this.phaseStartTime = Date.now();
-      if (this.active && (phase === "plan" || phase === "implement")) {
-        const modelConfig = phase === "plan" ? this.config.agents.orchestrators.plan : this.config.agents.orchestrators.implement;
-        await this.switchModel(ctx, modelConfig.model, modelConfig.thinking);
-      }
-      this.injectContextAndArtifacts(taskDir, phase);
-      onReady?.();
-      if (this.active?.state.phase === "plan" && this.active.state.step === "await_planners") {
-        ctx.ui.notify("Entered plan phase. Waiting for planners to complete before synthesis.", "info");
-      } else {
-        this.safeSendUserMessage(`[PI-PI] Entered ${phase} phase. Begin working.`);
-      }
-    };
-    ctx.compact({
-      customInstructions: "Phase transition — discard all prior conversation. Produce a one-line summary: 'Previous phase completed.'",
-      onComplete: () => {
-        this.phaseCompactionPending = false;
-        void finalize();
+    // Notify-only case: entering plan and immediately awaiting planners. No
+    // "Begin working" instruction is sent — the agent waits for onSubagentsDone.
+    const notifyOnly = this.active?.state.phase === "plan" && this.active.state.step === "await_planners";
+    void this.transitionController.requestTransition({
+      kind: "phase",
+      summary: "Phase transition — discard all prior conversation. Produce a one-line summary: 'Previous phase completed.'",
+      onResume: async () => {
+        this.phaseStartTime = Date.now();
+        if (this.active && (phase === "plan" || phase === "implement")) {
+          const modelConfig = phase === "plan" ? this.config.agents.orchestrators.plan : this.config.agents.orchestrators.implement;
+          await this.switchModel(ctx, modelConfig.model, modelConfig.thinking);
+        }
+        this.injectContextAndArtifacts(taskDir, phase);
+        onReady?.();
+        if (notifyOnly) {
+          ctx.ui.notify("Entered plan phase. Waiting for planners to complete before synthesis.", "info");
+        }
       },
-      onError: () => {
-        this.phaseCompactionPending = false;
-        void finalize();
-      },
+      instruction: notifyOnly ? undefined : `[PI-PI] Entered ${phase} phase. Begin working.`,
+    }).then(() => {
+      this.phaseCompactionPending = false;
     });
   }
 
