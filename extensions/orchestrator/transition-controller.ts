@@ -170,7 +170,11 @@ export class TransitionController {
     if (this.state !== "running") {
       // A transition is already in flight. Coalesce: ignore the new request but
       // still attach the waiter so the caller is released when this settles.
-      log.debug({ s: "controller", state: this.state, kind: req.kind }, "requestTransition while not running — coalescing");
+      if (req.kind === "phase") {
+        log.warn({ s: "controller", state: this.state }, "phase transition coalesced while not running — onResume/instruction dropped");
+      } else {
+        log.debug({ s: "controller", state: this.state, kind: req.kind }, "requestTransition while not running — coalescing");
+      }
       return new Promise<void>((resolve) => this.waiters.push(resolve));
     }
     this.active = req;
