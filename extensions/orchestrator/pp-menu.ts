@@ -3295,7 +3295,10 @@ export async function showActiveTaskMenu(
     const step = task.state.step;
     const effectiveMode = getEffectivePhaseMode(task.state);
 
-    const waiting = step === "await_planners" || step === "await_reviewers";
+    // Suppress phase-advancing/review actions while a transition is in flight
+    // (controller pending/compacting/resuming) OR while awaiting subagents. The
+    // controller's isRunning() predicate already folds in the await_* steps.
+    const waiting = !orchestrator.transitionController.isRunning();
     const { autoLabel } = getReviewLabels(orchestrator);
     const isReviewPhase = phase === "review";
     const hasPlannotator = phase === "plan" || phase === "implement" || isReviewPhase;

@@ -82,7 +82,6 @@ export class Orchestrator {
   pendingRetryTimer: ReturnType<typeof setTimeout> | null = null;
   activeTaskToken = 0;
   userGatePending = false;
-  reviewTransitionToken = -1;
   lastCtx: any = null;
   failedPlannerVariants: string[] = [];
   failedReviewerVariants: string[] = [];
@@ -532,7 +531,6 @@ export class Orchestrator {
     this.nudgeHalted = false;
     this.phaseStartTime = 0;
     this.userGatePending = false;
-    this.reviewTransitionToken = -1;
     this.failedPlannerVariants = [];
     this.failedReviewerVariants = [];
     this.plannerFailureDialogPending = false;

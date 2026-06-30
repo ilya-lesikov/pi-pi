@@ -174,14 +174,13 @@ function tryCompleteReviewCycle(orchestrator: Orchestrator, spawnedReviewers?: n
     orchestrator.pendingSubagentSpawns > 0
   ) return;
 
-  if (orchestrator.reviewTransitionToken === orchestrator.activeTaskToken) return;
-
+  // Idempotent by state: the first call mutates reviewCycle.step away from
+  // "await_reviewers" (or nulls reviewCycle), so the guard above no-ops any
+  // subsequent caller. No separate dedup token needed.
   const cycle = orchestrator.active.state.reviewCycle;
   const phase = orchestrator.active.state.phase;
   const outputs = loadPhaseReviewOutputs(orchestrator.active.dir, phase, cycle.pass);
   const pi = orchestrator.pi;
-
-  orchestrator.reviewTransitionToken = orchestrator.activeTaskToken;
 
   if (spawnedReviewers === 0 && outputs.length === 0) {
     orchestrator.active.state.reviewCycle = null;
@@ -299,7 +298,6 @@ export async function enterReviewCycle(
     return `No ${label} reviewers enabled. Choose another option.`;
   }
 
-  orchestrator.reviewTransitionToken = -1;
   orchestrator.pendingSubagentSpawns = enabledCount;
     const spawnFn = phase === "brainstorm"
       ? () => spawnBrainstormReviewers(
@@ -1213,14 +1211,19 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       orchestrator.active.state.plannerFailureAutoRetried = false;
       saveTask(orchestrator.active.dir, orchestrator.active.state);
       if (!hasPlanFiles) {
+        // Custom (sendMessage) followUp does NOT start a turn when the agent is
+        // idle (SDK agent-session.js) — emit the payload as display context and
+        // start the synthesizer turn via safeSendUserMessage (sendUserMessage
+        // always triggers a turn).
         orchestrator.transitionController.sendCustom(
           {
             customType: "pp-planners-error",
             content: "All planner subagents failed. Continue without planner outputs and synthesize the plan yourself.",
             display: true,
           },
-          "instruction",
+          "context",
         );
+        orchestrator.safeSendUserMessage("[PI-PI] All planners failed. Synthesize the plan yourself based on USER_REQUEST.md and RESEARCH.md.");
       } else {
         orchestrator.safeSendUserMessage("[PI-PI] Some planners failed. Continue with available planner outputs.");
       }
@@ -1300,16 +1303,19 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     }
 
     if (!hasPlanFiles) {
+      // Display payload as context; start the synthesizer turn via safeSendUserMessage
+      // (a custom followUp message does not start an idle turn).
       orchestrator.transitionController.sendCustom(
         {
           customType: "pp-planners-error",
           content: "All planner subagents finished but no plan files were produced. You must create the plan yourself based on USER_REQUEST.md and RESEARCH.md.",
           display: true,
         },
-        "instruction",
+        "context",
       );
       orchestrator.active.state.step = "synthesize";
       saveTask(orchestrator.active.dir, orchestrator.active.state);
+      orchestrator.safeSendUserMessage("[PI-PI] No plan files were produced. Create the plan yourself based on USER_REQUEST.md and RESEARCH.md.");
       return;
     }
 
