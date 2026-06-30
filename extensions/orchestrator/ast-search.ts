@@ -69,7 +69,8 @@ export function registerAstSearchTool(pi: ExtensionAPI, cwd: string): boolean {
         const lines: string[] = [];
         for (const match of results) {
           const file = match.file ?? "?";
-          const startLine = match.range?.start?.line ?? match.start?.line ?? "?";
+          const start = match.range?.start?.line;
+          const startLine = typeof start === "number" ? start + 1 : "?";
           const text = match.text ?? match.matchedCode ?? "";
           lines.push(`${file}:${startLine}: ${text.trim()}`);
         }
