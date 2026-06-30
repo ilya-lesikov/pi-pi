@@ -40,10 +40,14 @@ export async function callExa(toolName: string, args: Record<string, unknown>): 
   try {
     json = JSON.parse(raw);
   } catch {
+    if (!res.ok) throw new Error(`Exa HTTP ${res.status}: ${raw.slice(0, 200)}`);
     return raw;
   }
   if (json.error) throw new Error(json.error.message ?? JSON.stringify(json.error));
-  return json.result?.content?.[0]?.text ?? raw;
+  const text = json.result?.content?.[0]?.text;
+  if (text != null) return text;
+  if (!res.ok) throw new Error(`Exa HTTP ${res.status}: ${raw.slice(0, 200)}`);
+  return raw;
 }
 
 function ok(text: string) {

@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { callExa } from "./exa.js";
 
-function mockFetchText(text: string) {
+function mockFetchText(text: string, init: { ok?: boolean; status?: number } = {}) {
   return vi.spyOn(globalThis, "fetch").mockResolvedValue({
+    ok: init.ok ?? true,
+    status: init.status ?? 200,
     text: async () => text,
   } as Response);
 }
@@ -32,8 +34,13 @@ describe("callExa error handling", () => {
     await expect(callExa("web_search_exa", {})).rejects.toThrow("quota reached");
   });
 
-  it("falls through and returns the raw body for a non-JSON response", async () => {
-    mockFetchText("not json at all");
+  it("falls through and returns the raw body for a non-JSON OK response", async () => {
+    mockFetchText("not json at all", { ok: true, status: 200 });
     await expect(callExa("web_search_exa", {})).resolves.toBe("not json at all");
+  });
+
+  it("throws on a non-JSON body when the HTTP response is not ok", async () => {
+    mockFetchText("rate limited", { ok: false, status: 429 });
+    await expect(callExa("web_search_exa", {})).rejects.toThrow("Exa HTTP 429");
   });
 });
