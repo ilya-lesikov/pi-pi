@@ -70,17 +70,14 @@ export class Orchestrator {
     step?: string;
   }>();
   staleAgentTimer: ReturnType<typeof setInterval> | null = null;
-  phaseCompactionPending = false;
-  phaseCompactionSummary = "";
-  taskDoneCompactionPending = false;
-  taskDoneCompactionSummary = "";
-  nudgeTimestamps: number[] = [];
-  cooldownHits: number[] = [];
+  // Single consecutive-nudge guard (replaces the old multi-tier throttle). Reset
+  // to 0 on any productive turn; once it reaches the cap the nudges halt with one
+  // user notification.
+  consecutiveNudges = 0;
   nudgeHalted = false;
   pendingSubagentSpawns = 0;
   errorRetryCount = 0;
   commitReminderSent = false;
-  textStopTimestamps: number[] = [];
   phaseStartTime = 0;
   pendingRetryTimer: ReturnType<typeof setTimeout> | null = null;
   activeTaskToken = 0;
@@ -360,14 +357,10 @@ export class Orchestrator {
     if (hadActive) {
       // Route new-task compaction through the controller as a "done" target.
       this.lastCtx = ctx;
-      this.taskDoneCompactionPending = true;
-      this.taskDoneCompactionSummary = `Starting new ${type} task. Previous conversation discarded.`;
       await this.transitionController.requestTransition({
         kind: "done",
         summary: `Starting new ${type} task. Previous conversation discarded.`,
       });
-      this.taskDoneCompactionPending = false;
-      this.taskDoneCompactionSummary = "";
     }
 
     try {
@@ -535,12 +528,8 @@ export class Orchestrator {
     this.pendingSubagentSpawns = 0;
     this.errorRetryCount = 0;
     this.commitReminderSent = false;
-    this.textStopTimestamps = [];
-    this.nudgeTimestamps = [];
-    this.cooldownHits = [];
+    this.consecutiveNudges = 0;
     this.nudgeHalted = false;
-    this.phaseCompactionPending = false;
-    this.phaseCompactionSummary = "";
     this.phaseStartTime = 0;
     this.userGatePending = false;
     this.reviewTransitionToken = -1;
@@ -658,21 +647,16 @@ export class Orchestrator {
     }
   }
 
-  compactAndTransition(ctx: ExtensionContext, taskDir: string, phase: Phase, onReady?: () => void): void {
+  compactAndTransition(ctx: ExtensionContext, taskDir: string, phase: Phase, onReady?: () => void, summary?: string): void {
     getLogger().info({ s: "phase", taskDir, phase }, "compact and transition");
     // Ensure the controller's host can reach this live ctx for compact/isIdle.
     this.lastCtx = ctx;
-    // Keep the legacy flag set for the duration of the transition so the existing
-    // before_agent_start gate and turn_end early-returns still hold until the
-    // controller fully owns gating (slice 4). The controller drives the actual
-    // compaction + resume off agent_end / session_compact.
-    this.phaseCompactionPending = true;
     // Notify-only case: entering plan and immediately awaiting planners. No
     // "Begin working" instruction is sent — the agent waits for onSubagentsDone.
     const notifyOnly = this.active?.state.phase === "plan" && this.active.state.step === "await_planners";
     void this.transitionController.requestTransition({
       kind: "phase",
-      summary: "Phase transition — discard all prior conversation. Produce a one-line summary: 'Previous phase completed.'",
+      summary: summary || "Phase transition — previous phase completed.",
       onResume: async () => {
         this.phaseStartTime = Date.now();
         if (this.active && (phase === "plan" || phase === "implement")) {
@@ -686,8 +670,6 @@ export class Orchestrator {
         }
       },
       instruction: notifyOnly ? undefined : `[PI-PI] Entered ${phase} phase. Begin working.`,
-    }).then(() => {
-      this.phaseCompactionPending = false;
     });
   }
 

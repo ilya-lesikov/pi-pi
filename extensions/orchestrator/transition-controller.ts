@@ -100,6 +100,19 @@ export class TransitionController {
     return !this.isRunning();
   }
 
+  // True while a transition is mid-flight (pending/compacting/resuming) — i.e.
+  // the controller initiated the current compaction. Used by session_before_compact
+  // to decide between supplying the transition summary vs. re-injecting artifacts
+  // after a natural (user-triggered) compaction.
+  isTransitioning(): boolean {
+    return this.state !== "running";
+  }
+
+  // Compaction summary for the in-flight transition (empty when not transitioning).
+  currentSummary(): string {
+    return this.active?.summary ?? "";
+  }
+
   // Outbound message fan-out. The ONLY path for main-session messaging.
   send(text: string, role: SendRole): void {
     if (role === "context") {

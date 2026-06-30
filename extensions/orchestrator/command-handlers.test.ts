@@ -461,7 +461,7 @@ describe("transitionToNextPhase", () => {
 
     expect(result).toEqual({ ok: true });
     expect(cleanupSpy).toHaveBeenCalledTimes(1);
-    expect(orchestrator.taskDoneCompactionPending).toBe(true);
+    // Done transition routes through the controller; idle ctx -> compacts now.
     expect(ctx.compact).toHaveBeenCalledTimes(1);
   });
 

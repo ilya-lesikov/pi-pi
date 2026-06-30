@@ -363,17 +363,13 @@ export async function stopTask(orchestrator: Orchestrator): Promise<string> {
   taskStore?.clearAll?.();
 
   // Route the stop/pause compaction through the controller as a "done" target.
-  // taskDoneCompactionPending drives the session_before_compact summary; the
-  // controller's awaitable resolves at every terminus (session_compact, no-op
-  // skip, already-idle), so this await never hangs and never resolves early.
-  orchestrator.taskDoneCompactionPending = true;
-  orchestrator.taskDoneCompactionSummary = `Task "${desc}" (${type}) stopped/paused.`;
+  // The controller supplies the summary to session_before_compact and its
+  // awaitable resolves at every terminus (session_compact, no-op skip,
+  // already-idle), so this await never hangs and never resolves early.
   await orchestrator.transitionController.requestTransition({
     kind: "done",
     summary: `Task "${desc}" (${type}) stopped/paused.`,
   });
-  orchestrator.taskDoneCompactionPending = false;
-  orchestrator.taskDoneCompactionSummary = "";
 
   return `Task "${desc}" stopped. Use /pp → Resume to continue.`;
 }
@@ -724,9 +720,7 @@ function registerSpecifyReviewsTool(orchestrator: Orchestrator): void {
         // A transition may have started while the menu was open. The controller
         // is the source of truth; abort the agent's pending turn so it doesn't
         // race the transition. (Interactive-UX abort — stays local, not routed.)
-        // The legacy-flag OR covers interactive menu paths (finishTask/pauseTask)
-        // not yet routed through the controller (slice 5).
-        if (!orchestrator.transitionController.isRunning() || orchestrator.phaseCompactionPending || orchestrator.taskDoneCompactionPending) {
+        if (!orchestrator.transitionController.isRunning()) {
           ctx.abort?.();
           return { content: [{ type: "text" as const, text: "" }], details: {} };
         }
@@ -926,9 +920,7 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
           ctx.abort?.();
           return { content: [{ type: "text" as const, text: `Waiting for ${curStep === "await_planners" ? "planners" : "reviewers"} to complete. Do NOT proceed until notified.` }], details: {} };
         }
-        // Legacy-flag OR covers interactive menu paths (finishTask/pauseTask) not
-        // yet routed through the controller (slice 5).
-        if (!orchestrator.transitionController.isRunning() || orchestrator.phaseCompactionPending || orchestrator.taskDoneCompactionPending) {
+        if (!orchestrator.transitionController.isRunning()) {
           ctx.abort?.();
           return { content: [{ type: "text" as const, text: "" }], details: {} };
         }
@@ -1168,7 +1160,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       orchestrator.active.state.step !== "await_planners" ||
       orchestrator.spawnedAgentIds.size > 0 ||
       orchestrator.pendingSubagentSpawns > 0 ||
-      orchestrator.phaseCompactionPending
+      orchestrator.transitionController.isTransitioning()
     ) return;
 
     const plansDir = join(orchestrator.active.dir, "plans");
@@ -1336,7 +1328,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       orchestrator.active.state.reviewCycle.step !== "await_reviewers" ||
       orchestrator.spawnedAgentIds.size > 0 ||
       orchestrator.pendingSubagentSpawns > 0 ||
-      orchestrator.phaseCompactionPending
+      orchestrator.transitionController.isTransitioning()
     ) return;
 
     const failedReviewerVariants = [...orchestrator.failedReviewerVariants];
@@ -1770,7 +1762,10 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     }
     if (!orchestrator.active || orchestrator.active.state.phase === "done") return;
 
+    // A fresh agent start means the user (or a real handoff) re-engaged the loop
+    // — clear the nudge guard.
     orchestrator.nudgeHalted = false;
+    orchestrator.consecutiveNudges = 0;
     orchestrator.updateStatus(ctx);
 
     const phasePrompt = orchestrator.getPhasePrompt(ctx);
@@ -1994,11 +1989,13 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   });
 
   pi.on("session_before_compact", async (event, _ctx) => {
-    getLogger().debug({ s: "hook", hook: "session_before_compact", taskDonePending: orchestrator.taskDoneCompactionPending, phasePending: orchestrator.phaseCompactionPending }, "before compact");
-    if (orchestrator.taskDoneCompactionPending) {
-      const summary = orchestrator.taskDoneCompactionSummary;
-      orchestrator.taskDoneCompactionPending = false;
-      orchestrator.taskDoneCompactionSummary = "";
+    const transitioning = orchestrator.transitionController.isTransitioning();
+    getLogger().debug({ s: "hook", hook: "session_before_compact", transitioning, state: orchestrator.transitionController.getState() }, "before compact");
+    // Controller-initiated compaction (phase transition or task done/stop/new-task):
+    // supply the transition summary. The controller is the single source of truth,
+    // so this works whether or not `active` is still set (done cleanup nulls it).
+    if (transitioning) {
+      const summary = orchestrator.transitionController.currentSummary() || "Phase transition in progress.";
       return {
         compaction: {
           summary,
@@ -2008,19 +2005,9 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       };
     }
 
+    // Natural (user-triggered) compaction: re-inject phase artifacts so context
+    // survives.
     if (!orchestrator.active || orchestrator.active.state.phase === "done") return;
-
-    if (orchestrator.phaseCompactionPending) {
-      const summary = orchestrator.phaseCompactionSummary || "Phase transition in progress.";
-      orchestrator.phaseCompactionSummary = "";
-      return {
-        compaction: {
-          summary,
-          firstKeptEntryId: event.preparation.firstKeptEntryId,
-          tokensBefore: event.preparation.tokensBefore,
-        },
-      };
-    }
 
     const artifacts = getPhaseArtifacts(orchestrator.active.dir, orchestrator.active.state.phase);
     if (artifacts.length === 0) return;
@@ -2058,7 +2045,9 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     }
 
     if (!orchestrator.active || orchestrator.active.state.phase === "done") return;
-    if (orchestrator.phaseCompactionPending || orchestrator.taskDoneCompactionPending) return;
+    // A transition is in flight (controller owns the loop) — skip orthogonal
+    // turn_end work (commit reminder / nudges) until it resumes.
+    if (orchestrator.transitionController.isTransitioning()) return;
     orchestrator.updateStatus(ctx);
 
     if (
@@ -2143,91 +2132,48 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     const isAutonomous = getEffectivePhaseMode(orchestrator.active.state) === "autonomous";
 
     // Nudges fire ONLY for plan/implement. brainstorm/debug/review (and quick) are
-    // interactive by nature — stopping there is normal, not a stall.
-    const nudgesEnabled = phase === "plan" || phase === "implement";
+    // interactive by nature — stopping there is normal, not a stall. They are also
+    // suppressed whenever the controller is not running (a transition handoff or
+    // await is in progress — that pause is plumbing, not a genuine model stop).
+    const nudgesEnabled = (phase === "plan" || phase === "implement") && orchestrator.transitionController.isRunning();
 
-    const buildNudge = () =>
-      isAutonomous
-        ? `[PI-PI] Continue the ${phase} phase. ${phaseConstraint(phase as Phase)} If the phase's objectives are met, call pp_phase_complete now; otherwise call the next tool. Do NOT apologize or reply with text only — respond with a tool call.`
-        : `[PI-PI] Continue the ${phase} phase where you left off.`;
+    // A genuine model stop is a turn that produced no forward progress: either a
+    // text-only reply (no tool call, or one that trails into text) or a fully
+    // empty turn. A turn that ended on a tool call IS progress and resets the guard.
+    const lastPart = contentParts.length > 0 ? contentParts[contentParts.length - 1] : null;
+    const endsWithText = lastPart?.type === "text" && !!lastPart?.text?.trim();
+    const isGenuineStop = turnWasEmpty || (hasText && (!hasToolCalls || endsWithText));
 
-    if (!turnWasEmpty) {
-      const lastPart = contentParts.length > 0 ? contentParts[contentParts.length - 1] : null;
-      const endsWithText = lastPart?.type === "text" && lastPart?.text?.trim();
-      if (hasText && (!hasToolCalls || endsWithText)) {
-        const step = orchestrator.active.state.step;
-        if (nudgesEnabled && step !== "await_planners" && step !== "await_reviewers") {
-          const now = Date.now();
-          orchestrator.textStopTimestamps.push(now);
-          orchestrator.textStopTimestamps = orchestrator.textStopTimestamps.filter((t) => now - t < 5 * 60 * 1000);
-          if (orchestrator.textStopTimestamps.length <= 6) {
-            orchestrator.safeSendUserMessage(buildNudge());
-          }
-        }
-      } else {
-        orchestrator.textStopTimestamps = [];
-      }
-      return;
-    }
-    orchestrator.textStopTimestamps = [];
-    if (!nudgesEnabled) return;
-    if (orchestrator.nudgeHalted) return;
-    if (orchestrator.spawnedAgentIds.size > 0 || orchestrator.pendingSubagentSpawns > 0) return;
-
-    const step = orchestrator.active.state.step;
-    if (step === "await_planners" || step === "await_reviewers") return;
-
-    const now = Date.now();
-
-    orchestrator.nudgeTimestamps.push(now);
-    orchestrator.nudgeTimestamps = orchestrator.nudgeTimestamps.filter((t) => now - t < 60000);
-
-    const sendNudge = () => {
-      orchestrator.safeSendUserMessage(buildNudge());
-    };
-
-    if (orchestrator.nudgeTimestamps.length <= 3) {
-      sendNudge();
+    if (!isGenuineStop) {
+      // Forward progress — clear the consecutive-nudge guard.
+      orchestrator.consecutiveNudges = 0;
       return;
     }
 
-    if (orchestrator.nudgeTimestamps.length >= 5) {
-      orchestrator.cooldownHits.push(now);
-      orchestrator.cooldownHits = orchestrator.cooldownHits.filter((t) => now - t < 20 * 60 * 1000);
+    if (!nudgesEnabled || orchestrator.nudgeHalted) return;
 
-      if (orchestrator.cooldownHits.length >= 5) {
-        orchestrator.nudgeHalted = true;
-        orchestrator.nudgeTimestamps = [];
-        orchestrator.cooldownHits = [];
-        orchestrator.transitionController.sendCustom(
-          {
-            customType: "pp-continuation-halted",
-            content: "Agent has been repeatedly interrupted. Auto-continuation paused. Send any message to resume nudging.",
-            display: true,
-          },
-          "context",
-        );
-        return;
-      }
-
+    // Single consecutive-nudge guard: nudge up to MAX_CONSECUTIVE_NUDGES times in
+    // a row, then halt with one notification until the user re-engages (a fresh
+    // before_agent_start resets the counter).
+    const MAX_CONSECUTIVE_NUDGES = 6;
+    if (orchestrator.consecutiveNudges >= MAX_CONSECUTIVE_NUDGES) {
+      orchestrator.nudgeHalted = true;
       orchestrator.transitionController.sendCustom(
         {
-          customType: "pp-continuation-cooldown",
-          content: "Agent interrupted repeatedly. Waiting 60 seconds before retrying.",
+          customType: "pp-continuation-halted",
+          content: "Agent has been repeatedly interrupted without making progress. Auto-continuation paused. Send any message to resume.",
           display: true,
         },
         "context",
       );
-      orchestrator.nudgeTimestamps = [];
-      const cooldownToken = orchestrator.activeTaskToken;
-      setTimeout(() => {
-        if (orchestrator.activeTaskToken !== cooldownToken || !orchestrator.active) return;
-        sendNudge();
-      }, 60000);
       return;
     }
 
-    sendNudge();
+    orchestrator.consecutiveNudges++;
+    const nudge = isAutonomous
+      ? `[PI-PI] Continue the ${phase} phase. ${phaseConstraint(phase as Phase)} If the phase's objectives are met, call pp_phase_complete now; otherwise call the next tool. Do NOT apologize or reply with text only — respond with a tool call.`
+      : `[PI-PI] Continue the ${phase} phase where you left off.`;
+    orchestrator.safeSendUserMessage(nudge);
   });
 
 

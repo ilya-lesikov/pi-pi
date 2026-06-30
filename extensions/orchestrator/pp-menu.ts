@@ -257,9 +257,6 @@ async function pauseTask(orchestrator: Orchestrator, ctx: any): Promise<string> 
   taskStore?.refreshWidget?.(ctx.ui);
 
   orchestrator.lastCtx = ctx;
-  orchestrator.taskDoneCompactionPending = true;
-  orchestrator.taskDoneCompactionSummary = `Task "${name}" (${type}) paused.`;
-
   orchestrator.updateStatus(ctx);
   // Route through the controller as a "done" target (same coordinator as every
   // other compaction). The agent was aborted above, so this compacts via the
@@ -268,8 +265,6 @@ async function pauseTask(orchestrator: Orchestrator, ctx: any): Promise<string> 
     kind: "done",
     summary: `Task "${name}" (${type}) paused.`,
   });
-  orchestrator.taskDoneCompactionPending = false;
-  orchestrator.taskDoneCompactionSummary = "";
   ctx.ui.notify(`Task "${name}" paused. Use /pp → Resume to continue.`, "info");
   return `Task "${name}" paused.`;
 }
@@ -287,8 +282,6 @@ async function finishTask(orchestrator: Orchestrator, ctx: any): Promise<string>
   const dir = orchestrator.active.dir;
 
   orchestrator.lastCtx = ctx;
-  orchestrator.taskDoneCompactionPending = true;
-  orchestrator.taskDoneCompactionSummary = `Task "${name}" (${type}) completed.`;
 
   orchestrator.active.state.phase = "done";
   orchestrator.active.state.reviewCycle = null;

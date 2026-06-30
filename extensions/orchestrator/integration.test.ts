@@ -3087,8 +3087,32 @@ describe("error retry", () => {
 
     await turnEnd({ message: { stopReason: "stop", content: [] }, toolResults: [] }, ctx);
 
-    expect(orchestrator.nudgeTimestamps.length).toBe(1);
+    expect(orchestrator.consecutiveNudges).toBe(1);
     expect(pi.sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("Continue the implement phase"), { deliverAs: "followUp" });
+  });
+
+  it("suppresses nudges while the controller is transitioning (not running)", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "nudge suppress test");
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "llm_work";
+    // Put the controller mid-transition (not running) with a non-idle ctx.
+    orchestrator.lastCtx = makeCtx({ isIdle: vi.fn().mockReturnValue(false) });
+    void orchestrator.transitionController.requestTransition({ kind: "phase", summary: "x" });
+    expect(orchestrator.transitionController.isRunning()).toBe(false);
+
+    const before = (pi.sendUserMessage as any).mock.calls.length;
+    const turnEnd = pi._handlers.get("turn_end")!;
+    await turnEnd({ message: { stopReason: "stop", content: [] }, toolResults: [] }, ctx);
+
+    const nudged = (pi.sendUserMessage as any).mock.calls.slice(before).some((c: any[]) =>
+      String(c[0]).includes("Continue the implement phase"),
+    );
+    expect(nudged).toBe(false);
+    expect(orchestrator.consecutiveNudges).toBe(0);
   });
 
   it("nudge halts after repeated interruptions", async () => {
@@ -3137,7 +3161,7 @@ describe("error retry", () => {
     expect(orchestrator.nudgeHalted).toBe(false);
   });
 
-  it("text-only stalls never trip the permanent halt", async () => {
+  it("repeated text-only stops eventually halt via the single consecutive guard", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);
     const ctx = makeCtx();
@@ -3152,10 +3176,16 @@ describe("error retry", () => {
       await turnEnd(textTurn, ctx);
     }
 
-    expect(orchestrator.nudgeHalted).toBe(false);
+    // The collapsed guard treats text-only stops like any other genuine stop:
+    // after the consecutive cap it halts exactly once.
+    expect(orchestrator.nudgeHalted).toBe(true);
+    expect(pi.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ customType: "pp-continuation-halted" }),
+      { deliverAs: "steer" },
+    );
   });
 
-  it("a tool-call turn resets the text-stop rate limit", async () => {
+  it("a tool-call turn resets the consecutive-nudge guard", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);
     const ctx = makeCtx();
@@ -3166,9 +3196,10 @@ describe("error retry", () => {
     const turnEnd = pi._handlers.get("turn_end")!;
 
     await turnEnd({ message: { stopReason: "stop", content: [{ type: "text", text: "a" }] }, toolResults: [] }, ctx);
-    expect(orchestrator.textStopTimestamps.length).toBe(1);
+    expect(orchestrator.consecutiveNudges).toBe(1);
+    // A turn ending on a tool call is forward progress -> guard resets.
     await turnEnd({ message: { stopReason: "stop", content: [{ type: "toolCall" }] }, toolResults: [] }, ctx);
-    expect(orchestrator.textStopTimestamps.length).toBe(0);
+    expect(orchestrator.consecutiveNudges).toBe(0);
   });
 });
 
@@ -3217,25 +3248,30 @@ describe("compaction", () => {
     expect(orchestrator.transitionController.getState()).toBe("running");
   });
 
-  it("session_before_compact returns phase summary when pending", async () => {
+  it("session_before_compact returns the controller's transition summary", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);
     await orchestrator.startTask(makeCtx() as any, "implement", "phase compact test");
+    orchestrator.lastCtx = makeCtx({ isIdle: vi.fn().mockReturnValue(false) });
 
-    orchestrator.phaseCompactionPending = true;
-    orchestrator.phaseCompactionSummary = "Phase summary text";
+    // Put the controller mid-compaction (not idle -> pending -> agent_end -> compacting).
+    void orchestrator.transitionController.requestTransition({ kind: "phase", summary: "Phase summary text" });
+    orchestrator.transitionController.onAgentEnd();
+    expect(orchestrator.transitionController.isTransitioning()).toBe(true);
+
     const beforeCompact = pi._handlers.get("session_before_compact")!;
     const result = await beforeCompact({ preparation: { firstKeptEntryId: "e1", tokensBefore: 123 } }, {});
 
     expect(result.compaction.summary).toBe("Phase summary text");
   });
 
-  it("session_before_compact returns task done summary when pending", async () => {
+  it("session_before_compact returns task done summary when transitioning", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);
+    orchestrator.lastCtx = makeCtx({ isIdle: vi.fn().mockReturnValue(false) });
 
-    orchestrator.taskDoneCompactionPending = true;
-    orchestrator.taskDoneCompactionSummary = "Task done summary";
+    void orchestrator.transitionController.requestTransition({ kind: "done", summary: "Task done summary" });
+    orchestrator.transitionController.onAgentEnd();
     const beforeCompact = pi._handlers.get("session_before_compact")!;
     const result = await beforeCompact({ preparation: { firstKeptEntryId: "e2", tokensBefore: 456 } }, {});
 

@@ -92,8 +92,6 @@ export async function transitionToNextPhase(
   if (next === "done") {
     const name = orchestrator.active.description;
     const type = orchestrator.active.type;
-    orchestrator.taskDoneCompactionPending = true;
-    orchestrator.taskDoneCompactionSummary = `Task "${name}" (${type}) completed.`;
 
     orchestrator.abortAllSubagents();
     unregisterAgentDefinitions(orchestrator.pi);
@@ -103,14 +101,14 @@ export async function transitionToNextPhase(
     // Route the task-done compaction through the controller as a "done" target.
     void orchestrator.transitionController.requestTransition({
       kind: "done",
-      summary: orchestrator.taskDoneCompactionSummary,
+      summary: `Task "${name}" (${type}) completed.`,
     });
     ctx.ui.notify("Task completed!", "info");
     return { ok: true };
   }
 
   orchestrator.updateStatus(ctx);
-  orchestrator.phaseCompactionSummary = `Phase "${currentPhase}" completed. Now entering "${next}" phase.`;
+  const phaseSummary = `Phase "${currentPhase}" completed. Now entering "${next}" phase.`;
 
   if (next === "plan") {
     orchestrator.active.state.step = "await_planners";
@@ -138,7 +136,7 @@ export async function transitionToNextPhase(
     );
   } : undefined;
 
-  orchestrator.compactAndTransition(ctx, orchestrator.active.dir, orchestrator.active.state.phase, onReady);
+  orchestrator.compactAndTransition(ctx, orchestrator.active.dir, orchestrator.active.state.phase, onReady, phaseSummary);
 
   return { ok: true };
 }
