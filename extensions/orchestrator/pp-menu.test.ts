@@ -3,10 +3,54 @@ import { join } from "path";
 import { getDefaultConfig, GLOBAL_CONFIG_PATH, parseDuration } from "./config.js";
 import * as configModule from "./config.js";
 import * as flantInfra from "./flant-infra.js";
-import { formatDuration, formatSourceTags, getConfigSourceInfo, pickMaxReviewPasses } from "./pp-menu.js";
+import { formatDuration, formatSourceTags, getConfigSourceInfo, pickMaxReviewPasses, showUsage } from "./pp-menu.js";
+import { createUsageTracker } from "./usage-tracker.js";
+
+const USAGE_TRACKER_SYMBOL = Symbol.for("pi-pi:usage-tracker");
 
 afterEach(() => {
   vi.restoreAllMocks();
+  delete (globalThis as any)[USAGE_TRACKER_SYMBOL];
+});
+
+function renderUsage(tracker: ReturnType<typeof createUsageTracker>): string {
+  (globalThis as any)[USAGE_TRACKER_SYMBOL] = tracker;
+  let captured = "";
+  showUsage({ ui: { notify: (text: string) => { captured = text; } } });
+  return captured;
+}
+
+describe("showUsage subscription rendering", () => {
+  it("labels subscription model and agent rows and excludes their dollars", () => {
+    const tracker = createUsageTracker();
+    tracker.recordTurn("openai/gpt-5", "openai", 100, 50, 0, 0, 0.4, false);
+    tracker.recordTurn("sub/claude-opus-4-6", "pp-flant-anthropic-sub", 200, 100, 0, 0, 9.9, false);
+    tracker.recordSubagentCompletion({ input: 30, output: 10 } as any, 5.0, {
+      description: "Explore", agentType: "explore", modelId: "sub/claude-haiku-4-5",
+    });
+
+    const out = renderUsage(tracker);
+
+    expect(out).toContain("sub/claude-opus-4-6:");
+    expect(out).toContain("subscription");
+    expect(out).toContain("explore");
+    expect(out).toContain("$0.40");
+    expect(out).not.toContain("$9.90");
+    expect(out).not.toContain("$5.00");
+    expect(out).toContain("Cost: $0.40");
+  });
+
+  it("does not inflate paid model share when a subscription model is present", () => {
+    const tracker = createUsageTracker();
+    tracker.recordTurn("openai/gpt-5", "openai", 100, 0, 0, 0, 0.5, false);
+    tracker.recordTurn("sub/claude-opus-4-6", "pp-flant-anthropic-sub", 100, 0, 0, 0, 2.0, false);
+
+    const out = renderUsage(tracker);
+
+    expect(out).toContain("openai/gpt-5:");
+    expect(out).toContain("$0.50");
+    expect(out).not.toContain("$0.25");
+  });
 });
 
 describe("settings helpers", () => {

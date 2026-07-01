@@ -945,7 +945,7 @@ function formatElapsedDuration(ms: number): string {
   return remMin > 0 ? `${hr}h ${remMin}m` : `${hr}h`;
 }
 
-function showUsage(ctx: any): void {
+export function showUsage(ctx: any): void {
   const tracker = (globalThis as any)[Symbol.for("pi-pi:usage-tracker")] as
     | {
         getTotalInputTokens(): number; getTotalOutputTokens(): number;
