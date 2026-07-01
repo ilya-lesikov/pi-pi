@@ -130,6 +130,66 @@ describe("flant-infra", () => {
     }
   });
 
+  it("refreshSubProvider re-registers the sub provider when the token changes", async () => {
+    const dir = makeTempDir();
+    mkdirSync(dir, { recursive: true });
+    const authPath = join(dir, "auth.json");
+    // Start with an expired token that has a refresh token available.
+    writeFileSync(
+      authPath,
+      JSON.stringify({ anthropic: { type: "oauth", access: "sk-ant-oat01-old", refresh: "rt-old", expires: Date.now() - 1000 } }),
+      "utf-8",
+    );
+    const prevKey = process.env.LLM_API_KEY;
+    process.env.LLM_API_KEY = "sk-gateway-test";
+    try {
+      const mod = await loadFlantInfraModule(dir);
+      const registered = new Map<string, any>();
+      const pi = {
+        registerProvider: vi.fn((name: string, config: any) => registered.set(name, config)),
+        unregisterProvider: vi.fn((name: string) => registered.delete(name)),
+      } as any;
+
+      // Refresh yields a fresh token, which is what the initial registration reads.
+      refreshAnthropicTokenMock.mockResolvedValueOnce({ access: "sk-ant-oat01-fresh", refresh: "rt-fresh", expires: Date.now() + 3_600_000 });
+      await mod.refreshClaudeOAuthToken();
+      mod.registerFlantProviders(pi, ["claude-opus-4-8"], {}, { subscription: true });
+      expect(registered.get("pp-flant-anthropic-sub").apiKey).toBe("sk-ant-oat01-fresh");
+
+      // A no-op refresh (token unchanged) must not re-register.
+      const callsBefore = pi.registerProvider.mock.calls.length;
+      await mod.refreshSubProvider(pi);
+      expect(pi.registerProvider.mock.calls.length).toBe(callsBefore);
+
+      // Simulate the token expiring and a refresh minting a new one: the sub
+      // provider is re-registered with the new token.
+      writeFileSync(
+        authPath,
+        JSON.stringify({ anthropic: { type: "oauth", access: "sk-ant-oat01-expired", refresh: "rt-fresh", expires: Date.now() - 1000 } }),
+        "utf-8",
+      );
+      refreshAnthropicTokenMock.mockResolvedValueOnce({ access: "sk-ant-oat01-rotated", refresh: "rt-rotated", expires: Date.now() + 3_600_000 });
+      await mod.refreshSubProvider(pi);
+      expect(registered.get("pp-flant-anthropic-sub").apiKey).toBe("sk-ant-oat01-rotated");
+    } finally {
+      if (prevKey === undefined) delete process.env.LLM_API_KEY;
+      else process.env.LLM_API_KEY = prevKey;
+    }
+  });
+
+  it("refreshSubProvider is a no-op when subscription routing is inactive", async () => {
+    const dir = makeTempDir();
+    const mod = await loadFlantInfraModule(dir);
+    const pi = {
+      registerProvider: vi.fn(),
+      unregisterProvider: vi.fn(),
+    } as any;
+    // No registerFlantProviders({ subscription: true }) call happened, so there
+    // is no cached sub-provider context: refresh must do nothing.
+    await mod.refreshSubProvider(pi);
+    expect(pi.registerProvider).not.toHaveBeenCalled();
+  });
+
   it("readClaudeOAuthToken returns null for expired token", async () => {
     const dir = makeTempDir();
     mkdirSync(dir, { recursive: true });

@@ -196,6 +196,20 @@ export function readGatewayApiKey(): string | null {
 let piRef: ExtensionAPI | null = null;
 let generatedFlantConfig: Partial<PiPiConfig> | null = null;
 
+/**
+ * Inputs needed to (re)register the personal-subscription Claude provider.
+ * Cached at the last registerFlantProviders call so refreshSubProvider can
+ * rebuild the provider with a freshly-read OAuth token without re-discovering
+ * models. Null when subscription routing is not active.
+ */
+interface SubProviderContext {
+  anthropicModels: string[];
+  metadata: Record<string, OpenRouterModelData>;
+}
+let subProviderContext: SubProviderContext | null = null;
+/** The OAuth access token the sub provider was last registered with. */
+let lastSubToken: string | null = null;
+
 export function setPI(pi: ExtensionAPI): void {
   piRef = pi;
 }
@@ -481,35 +495,89 @@ export function registerFlantProviders(
   const subscription = options.subscription ?? loadFlantSettings().subscription;
   let subModels: string[] = [];
   if (subscription) {
-    const oauthToken = readClaudeOAuthToken();
-    const gatewayKey = readGatewayApiKey();
-    if (oauthToken && gatewayKey) {
-      subModels = anthropicModels.map((m) => `${SUB_MODEL_PREFIX}${m}`);
-      pi.registerProvider(SUB_PROVIDER, {
-        name: "Flant (personal Claude subscription)",
-        api: "anthropic-messages",
-        baseUrl: "https://llm-api.flant.ru",
-        // The OAuth token (sk-ant-oat...) triggers pi-ai's Claude Code identity
-        // headers and is forwarded as `Authorization: Bearer ...`.
-        apiKey: oauthToken,
-        // Gateway key travels in a side header so it does not clobber the OAuth auth.
-        headers: { "x-litellm-api-key": `Bearer ${gatewayKey}` },
-        // Model id carries the `sub/` prefix the gateway expects, while pricing/
-        // metadata is looked up by the bare claude-* id.
-        models: anthropicModels.map((m) => {
-          const cfg = buildProviderModelConfig(m, metadata);
-          return { ...cfg, id: `${SUB_MODEL_PREFIX}${m}` };
-        }),
-      });
-      availableSpecs.push(...subModels.map((id) => `${SUB_PROVIDER}/${id}`));
-    } else {
-      log.debug({ s: "flant", hasOAuth: !!oauthToken, hasGatewayKey: !!gatewayKey }, "subscription enabled but credentials missing; skipping sub provider");
-    }
+    // Remember the models/metadata so refreshSubProvider can rebuild the
+    // provider with a fresh OAuth token on each turn (see below).
+    subProviderContext = { anthropicModels, metadata };
+    subModels = registerSubProvider(pi, anthropicModels, metadata);
+    availableSpecs.push(...subModels.map((id) => `${SUB_PROVIDER}/${id}`));
+  } else {
+    subProviderContext = null;
+    lastSubToken = null;
   }
 
   log.debug({ s: "flant", total: uniqueModels.length, anthropic: anthropicModels.length, openai: openaiModels.length, sub: subModels.length }, "registering flant providers");
 
   updateRegistryFromAvailableModels(availableSpecs);
+}
+
+/**
+ * Register (or re-register) the personal-subscription Claude provider using the
+ * OAuth access token currently persisted in auth.json. Returns the list of
+ * `sub/`-prefixed model ids registered (empty when credentials are missing).
+ *
+ * The provider is registered with a literal `apiKey` (the resolved token), so
+ * the value is a static snapshot for the lifetime of the registration. Because
+ * the OAuth token expires within a few hours, refreshSubProvider must be called
+ * periodically (on each turn) to rebuild the provider with a fresh token;
+ * otherwise long-lived sessions send a stale token and the gateway returns 401.
+ */
+function registerSubProvider(
+  pi: ExtensionAPI,
+  anthropicModels: string[],
+  metadata: Record<string, OpenRouterModelData>,
+): string[] {
+  const log = getLogger();
+  const oauthToken = readClaudeOAuthToken();
+  const gatewayKey = readGatewayApiKey();
+  if (!oauthToken || !gatewayKey) {
+    log.debug({ s: "flant", hasOAuth: !!oauthToken, hasGatewayKey: !!gatewayKey }, "subscription enabled but credentials missing; skipping sub provider");
+    lastSubToken = null;
+    return [];
+  }
+  pi.registerProvider(SUB_PROVIDER, {
+    name: "Flant (personal Claude subscription)",
+    api: "anthropic-messages",
+    baseUrl: "https://llm-api.flant.ru",
+    // The OAuth token (sk-ant-oat...) triggers pi-ai's Claude Code identity
+    // headers and is forwarded as `Authorization: Bearer ...`.
+    apiKey: oauthToken,
+    // Gateway key travels in a side header so it does not clobber the OAuth auth.
+    headers: { "x-litellm-api-key": `Bearer ${gatewayKey}` },
+    // Model id carries the `sub/` prefix the gateway expects, while pricing/
+    // metadata is looked up by the bare claude-* id.
+    models: anthropicModels.map((m) => {
+      const cfg = buildProviderModelConfig(m, metadata);
+      return { ...cfg, id: `${SUB_MODEL_PREFIX}${m}` };
+    }),
+  });
+  lastSubToken = oauthToken;
+  return anthropicModels.map((m) => `${SUB_MODEL_PREFIX}${m}`);
+}
+
+/**
+ * Ensure the personal-subscription Claude provider is registered with a
+ * non-expired OAuth token. Refreshes the token (persisting it to auth.json when
+ * needed) and, when it changed since the last registration, re-registers the
+ * provider so subsequent LLM calls pick up the fresh token.
+ *
+ * Called on each turn for the root session. No-op when subscription routing is
+ * not active. Cheap when the token is unchanged (only a token read + compare).
+ */
+export async function refreshSubProvider(pi?: ExtensionAPI): Promise<void> {
+  const ctx = subProviderContext;
+  if (!ctx) return;
+  const api = pi ?? piRef;
+  if (!api) return;
+
+  await refreshClaudeOAuthToken();
+  const token = readClaudeOAuthToken();
+  // Only re-register when the token actually changed; registerProvider takes
+  // effect immediately, so re-registering every turn would be wasteful churn.
+  if (token && token === lastSubToken) return;
+
+  const log = getLogger();
+  registerSubProvider(api, ctx.anthropicModels, ctx.metadata);
+  log.debug({ s: "flant", changed: token !== lastSubToken }, "refreshed sub provider oauth token");
 }
 
 function pickLatest(models: string[]): string | null {

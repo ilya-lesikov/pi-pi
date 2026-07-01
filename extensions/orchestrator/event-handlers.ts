@@ -1019,6 +1019,21 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
 
   registerMainTraceHooks(orchestrator);
 
+  // Personal-subscription Claude routing registers the sub provider with a
+  // literal OAuth token (a static snapshot). That token expires within a few
+  // hours, so a long-lived session would keep sending a stale token and the
+  // gateway would return 401. Refresh (and re-register on change) before each
+  // turn's LLM call. Cheap no-op when subscription routing is inactive or the
+  // token is unchanged. registerEventHandlers runs only on the root session.
+  pi.on("turn_start", async () => {
+    try {
+      const { refreshSubProvider } = await import("./flant-infra.js");
+      await refreshSubProvider(pi);
+    } catch (err: any) {
+      getLogger().debug({ s: "flant", err: err?.message }, "sub provider refresh failed");
+    }
+  });
+
   // TransitionController drivers. These are the reliable idle/completion signals:
   //   - agent_end: the main loop went idle. If a transition is pending, this is
   //     when the controller fires compaction.
