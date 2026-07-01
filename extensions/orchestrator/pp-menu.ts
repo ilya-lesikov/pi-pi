@@ -995,6 +995,15 @@ export function showUsage(ctx: any): void {
     return processed > 0 ? cacheRead / processed : 0;
   };
 
+  // Compact one-line input part: total processed input with an inline
+  // uncached / cache read / cache write breakdown, e.g. "↑1.3k (u84 r1.0k w200)".
+  const inputPart = (uncached: number, cacheRead: number, cacheWrite: number, cacheSupported: boolean): string => {
+    const processed = uncached + cacheRead + cacheWrite;
+    const head = `↑${formatTokenCount(processed)}`;
+    if (!cacheSupported) return head;
+    return `${head} (u${formatTokenCount(uncached)} r${formatTokenCount(cacheRead)} w${formatTokenCount(cacheWrite)})`;
+  };
+
   const totalUncachedInput = tracker.getTotalInputTokens();
   const totalOutput = tracker.getTotalOutputTokens();
   const totalCacheRead = tracker.getTotalCacheReadTokens();
@@ -1063,19 +1072,11 @@ export function showUsage(ctx: any): void {
     lines.push("By model:");
     for (const [modelId, m] of byModel) {
       const cr = Math.round(hitRate(m.input, m.cacheRead, m.cacheWrite) * 100);
-      const processed = m.input + m.cacheRead + m.cacheWrite;
-      const parts = [`↑${formatTokenCount(processed)}`, `↓${formatTokenCount(m.output)}`];
+      const parts = [inputPart(m.input, m.cacheRead, m.cacheWrite, m.cacheSupported), `↓${formatTokenCount(m.output)}`];
       if (m.cacheSupported) parts.push(`⚡${cr}%`);
       if (m.subscription) parts.push("subscription");
       else if (m.cost > 0) parts.push(`$${m.cost.toFixed(2)}`);
       lines.push(`  ${modelId}: ${parts.join("  ")}`);
-      // Same input breakdown as the total, so ↑1 (processed) is decomposed
-      // into its uncached / cache read / cache write parts per model.
-      if (m.cacheSupported) {
-        lines.push(`    • uncached:    ${formatTokenCount(m.input)}`);
-        lines.push(`    • cache read:  ${formatTokenCount(m.cacheRead)}`);
-        lines.push(`    • cache write: ${formatTokenCount(m.cacheWrite)}`);
-      }
     }
   }
 
@@ -1085,8 +1086,7 @@ export function showUsage(ctx: any): void {
   if (agentModelNames.length > 0) {
     const mainCacheSupported = mainModelEntries.some(([, u]) => u.cacheSupported);
     const mainAllSubscription = mainModelEntries.every(([, u]) => u.subscription);
-    const mainProcessed = mainInput + mainCacheRead + mainCacheWrite;
-    const mainParts = [`↑${formatTokenCount(mainProcessed)}`, `↓${formatTokenCount(mainOutput)}`];
+    const mainParts = [inputPart(mainInput, mainCacheRead, mainCacheWrite, mainCacheSupported), `↓${formatTokenCount(mainOutput)}`];
     const mainCR = Math.round(hitRate(mainInput, mainCacheRead, mainCacheWrite) * 100);
     if (mainCacheSupported) mainParts.push(`⚡${mainCR}%`);
     if (mainAllSubscription) mainParts.push("subscription");
@@ -1118,8 +1118,7 @@ export function showUsage(ctx: any): void {
   }
   for (const [agentType, agg] of byAgentType) {
     const saCR = Math.round(hitRate(agg.input, agg.cacheRead, agg.cacheWrite) * 100);
-    const processed = agg.input + agg.cacheRead + agg.cacheWrite;
-    const parts = [`↑${formatTokenCount(processed)}`, `↓${formatTokenCount(agg.output)}`];
+    const parts = [inputPart(agg.input, agg.cacheRead, agg.cacheWrite, agg.cacheSupported), `↓${formatTokenCount(agg.output)}`];
     if (agg.cacheSupported) parts.push(`⚡${saCR}%`);
     // All runs subscription-routed → flat-rate label; otherwise show the
     // paid-only summed cost (subscription runs already contribute $0).
