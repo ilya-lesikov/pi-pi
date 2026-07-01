@@ -1795,6 +1795,52 @@ describe("task modes and quick task", () => {
     expect(finalState.reviewPassByKind?.implement?.auto).toBe(1);
   });
 
+  it("autonomous PLAN review cycle: apply feedback (clean approve) advances to implement", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "plan review advance", undefined, undefined, "autonomous");
+    const taskDir = orchestrator.active!.dir;
+    orchestrator.active!.state.phase = "plan";
+    orchestrator.active!.state.step = "synthesize";
+    orchestrator.active!.state.reviewPass = 0;
+    orchestrator.active!.state.reviewPassByKind = {};
+    orchestrator.active!.state.autonomousConfig = {
+      phases: { plan: { plannerPreset: "regular", reviewPreset: "regular", maxReviewPasses: 3 } },
+    };
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+    const plansDir = join(taskDir, "plans");
+    mkdirSync(plansDir, { recursive: true });
+    writeFileSync(
+      join(plansDir, "1_synthesized.md"),
+      makeValidPlan(["- [x] P1. Plan ready — Done when: synthesized plan exists"]),
+      "utf-8",
+    );
+
+    const ppPhaseComplete = getTool(pi, "pp_phase_complete");
+    // First call: plan phase is autonomous, no clean approval yet → starts a review cycle.
+    const first = await ppPhaseComplete.execute("plan-rev-1", { summary: "plan done" }, undefined, undefined, ctx);
+    expect(first.content[0].text).toMatch(/Reviews are running|Started review cycle pass/);
+
+    // Plan reviewers write to plan-reviews/ (not code-reviews/).
+    const planReviewsDir = join(taskDir, "plan-reviews");
+    mkdirSync(planReviewsDir, { recursive: true });
+    const round = orchestrator.active!.state.reviewCycle!.pass;
+    for (const v of ["opus", "gpt", "gemini"]) {
+      writeFileSync(join(planReviewsDir, `1_${v}_round-${round}.md`), "VERDICT: APPROVE\n- CRITICAL: none", "utf-8");
+    }
+    emitSubagentCreated(pi, "plan-reviewer-1", "Plan reviewer (test)");
+    emitSubagentCompleted(pi, "plan-reviewer-1", "Plan reviewer (test)");
+
+    // Second call: finalize the clean-approved pass and advance to implement (single transition).
+    const second = await ppPhaseComplete.execute("plan-rev-2", { summary: "feedback applied" }, undefined, undefined, ctx);
+    expect(second.content[0].text).toBe("");
+    expect(orchestrator.active!.state.phase).toBe("implement");
+    expect(menu.transcript.filter((entry) => entry.question.startsWith("/pp"))).toHaveLength(0);
+  });
+
   it("clean-approved review is not re-run on a later checklist-repair re-entry", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);

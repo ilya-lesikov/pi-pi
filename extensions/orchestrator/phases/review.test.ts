@@ -23,6 +23,20 @@ describe("reviewSystemPrompt apply_feedback wording", () => {
     expect(auto).not.toContain("pp_phase_complete");
   });
 
+  it("autonomous plan feedback folds into a new synthesized plan, not a separate fix-plan file", () => {
+    // Re-review and the transition read only the latest `*synthesized*` plan, so
+    // plan-phase feedback must land there.
+    const plan = reviewSystemPrompt("/tmp/task", 1, "plan", "autonomous");
+    expect(plan).toContain("synthesized.md");
+    expect(plan).not.toContain("do NOT modify the original synthesized plan");
+
+    // The implement phase keeps the fix-plan/implement pattern (synthesized plan
+    // is code guidance there, not the reviewed artifact).
+    const impl = reviewSystemPrompt("/tmp/task", 1, "implement", "autonomous");
+    expect(impl).toContain("Create a fix plan");
+    expect(impl).toContain("Implement the fixes");
+  });
+
   it("points each phase at the directory its reviewers actually write to", () => {
     // plan reviewers write to plan-reviews (planning.ts) and outputs load from
     // plan-reviews (context.ts); the prompt must match, not code-reviews.

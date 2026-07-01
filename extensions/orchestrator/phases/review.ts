@@ -57,16 +57,29 @@ export function reviewSystemPrompt(taskDir: string, pass: number, phase?: string
       ? "3. Call pp_phase_complete again to finalize this review pass. The phase is NOT complete until you do — do NOT stop or wait for the user"
       : "3. Present the synthesis to the user";
 
+  // In the plan phase the synthesized plan IS the reviewed artifact: re-review
+  // and the phase transition both read only the LATEST `*synthesized*` file (see
+  // getLatestSynthesizedPlan). So autonomous plan feedback must be folded into a
+  // new synthesized plan, NOT a separate fix-plan file (which those readers
+  // ignore). In the implement phase the synthesized plan is code guidance, so
+  // the fix-plan/implement/afterImplement pattern is correct there.
   const tail =
     mode === "autonomous"
-      ? [
-          "",
-          "If changes are needed:",
-          `1. Create a fix plan at ${plansDir}/<timestamp>_<description>.md (do NOT modify the original synthesized plan)`,
-          "2. Implement the fixes",
-          "3. Run afterImplement commands",
-          "4. Then call pp_phase_complete again — the extension will start a new review pass or advance the phase as appropriate. Do NOT wait for the user.",
-        ]
+      ? phase === "plan"
+        ? [
+            "",
+            "If the reviewers require changes:",
+            `1. Fold the required changes into a NEW synthesized plan at ${plansDir}/<timestamp>_synthesized.md (re-review and the phase transition read only the latest \`*synthesized*\` plan, so the fixes MUST land there — do not write them to a separate fix-plan file)`,
+            "2. Then call pp_phase_complete again — the extension will start a new review pass or advance the phase as appropriate. Do NOT wait for the user.",
+          ]
+        : [
+            "",
+            "If changes are needed:",
+            `1. Create a fix plan at ${plansDir}/<timestamp>_<description>.md (do NOT modify the original synthesized plan)`,
+            "2. Implement the fixes",
+            "3. Run afterImplement commands",
+            "4. Then call pp_phase_complete again — the extension will start a new review pass or advance the phase as appropriate. Do NOT wait for the user.",
+          ]
       : [
           "",
           "If changes are needed:",
