@@ -96,6 +96,7 @@ describe("usage-tracker", () => {
         cacheWriteTokens: 0,
         cacheSupported: false,
         turns: 1,
+        subscription: false,
       },
       "anthropic/claude-opus-4-6": {
         inputTokens: 7,
@@ -104,6 +105,7 @@ describe("usage-tracker", () => {
         cacheWriteTokens: 0,
         cacheSupported: false,
         turns: 1,
+        subscription: false,
       },
     });
   });
@@ -186,6 +188,7 @@ describe("usage-tracker", () => {
         cost: 0.2,
         durationMs: 900,
         toolUses: 3,
+        subscription: false,
       },
     ]);
   });
@@ -380,6 +383,80 @@ describe("usage-tracker", () => {
     expect(roundTrip.totals).toEqual((mid as any).totals);
     expect(roundTrip.models).toEqual((mid as any).models);
     expect(roundTrip.subagents).toEqual((mid as any).subagents);
+  });
+
+  it("subscription main turns count tokens but contribute zero cost", () => {
+    const tracker = createUsageTracker();
+
+    // Detected via the sub/ model id prefix...
+    tracker.recordTurn("sub/claude-opus-4-6", "anthropic", 100, 50, 10, 5, 1.23, true);
+    // ...or via the subscription provider.
+    tracker.recordTurn("claude-opus-4-6", "pp-flant-anthropic-sub", 20, 10, 0, 0, 0.5, true);
+
+    expect(tracker.getMainInputTokens()).toBe(120);
+    expect(tracker.getMainOutputTokens()).toBe(60);
+    expect(tracker.getMainCacheReadTokens()).toBe(10);
+    expect(tracker.getMainCost()).toBe(0);
+    expect(tracker.getTotalCost()).toBe(0);
+    expect(tracker.getPerModelUsage()["sub/claude-opus-4-6"]?.subscription).toBe(true);
+    expect(tracker.getPerModelUsage()["claude-opus-4-6"]?.subscription).toBe(true);
+  });
+
+  it("subscription subagents count tokens but contribute zero cost", () => {
+    const tracker = createUsageTracker();
+
+    tracker.recordSubagentCompletion({ input: 30, output: 15 } as any, 0.9, {
+      description: "Explore", agentType: "explore", modelId: "sub/claude-haiku-4-5",
+    });
+
+    expect(tracker.getSubagentTotals()).toEqual({ inputTokens: 30, outputTokens: 15, cost: 0 });
+    expect(tracker.getSubagentList()[0]?.subscription).toBe(true);
+    expect(tracker.getSubagentList()[0]?.cost).toBe(0);
+  });
+
+  it("mixed paid and subscription session totals only the paid portion", () => {
+    const tracker = createUsageTracker();
+
+    tracker.recordTurn("openai/gpt-5", "openai", 10, 5, 0, 0, 0.4, false);
+    tracker.recordTurn("sub/claude-opus-4-6", "pp-flant-anthropic-sub", 10, 5, 0, 0, 2.0, false);
+    tracker.recordSubagentCompletion({ input: 5, output: 2 } as any, 0.1, { modelId: "openai/gpt-5" });
+    tracker.recordSubagentCompletion({ input: 5, output: 2 } as any, 3.0, { modelId: "sub/claude-haiku-4-5" });
+
+    expect(tracker.getMainCost()).toBeCloseTo(0.4);
+    expect(tracker.getSubagentTotals().cost).toBeCloseTo(0.1);
+    expect(tracker.getTotalCost()).toBeCloseTo(0.5);
+  });
+
+  it("subscription marker survives JSON round-trip and stays paid-only", () => {
+    const source = createUsageTracker();
+    source.recordTurn("sub/claude-opus-4-6", "pp-flant-anthropic-sub", 10, 5, 0, 0, 2.0, true);
+    source.recordSubagentCompletion({ input: 5, output: 2 } as any, 3.0, { modelId: "sub/claude-haiku-4-5" });
+
+    const mid = source.toSummary() as Record<string, unknown>;
+    const restored = createUsageTracker();
+    restored.loadFromSummary(mid);
+
+    const roundTrip = restored.toSummary() as any;
+    expect(restored.getTotalCost()).toBe(0);
+    expect(restored.getPerModelUsage()["sub/claude-opus-4-6"]?.subscription).toBe(true);
+    expect(restored.getSubagentList()[0]?.subscription).toBe(true);
+    expect(roundTrip.totals).toEqual((mid as any).totals);
+    expect(roundTrip.models).toEqual((mid as any).models);
+    expect(roundTrip.subagents).toEqual((mid as any).subagents);
+  });
+
+  it("legacy summaries without subscription field default to non-subscription", () => {
+    const tracker = createUsageTracker();
+    tracker.loadFromSummary({
+      totals: { inputTokens: 10, outputTokens: 5, cost: 1.5, turns: 1 },
+      models: { "openai/gpt-5": { inputTokens: 10, outputTokens: 5, turns: 1 } },
+      subagents: [{ description: "a", agentType: "x", modelId: "m", inputTokens: 3, outputTokens: 1, cost: 0.2 }],
+    });
+
+    expect(tracker.getPerModelUsage()["openai/gpt-5"]?.subscription).toBe(false);
+    expect(tracker.getSubagentList()[0]?.subscription).toBe(false);
+    expect(tracker.getMainCost()).toBe(1.5);
+    expect(tracker.getSubagentTotals().cost).toBeCloseTo(0.2);
   });
 
   it("reset clears all state", () => {
