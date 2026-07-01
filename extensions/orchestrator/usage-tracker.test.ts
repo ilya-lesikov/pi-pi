@@ -459,6 +459,20 @@ describe("usage-tracker", () => {
     expect(tracker.getSubagentTotals().cost).toBeCloseTo(0.2);
   });
 
+  it("loadFromSummary recovers subscription from sub/ prefix when flag is absent", () => {
+    const tracker = createUsageTracker();
+    tracker.loadFromSummary({
+      totals: { inputTokens: 10, outputTokens: 5, cost: 0, turns: 1 },
+      models: { "sub/claude-opus-4-6": { inputTokens: 10, outputTokens: 5, turns: 1 } },
+      subagents: [{ description: "a", agentType: "x", modelId: "sub/claude-haiku-4-5", inputTokens: 3, outputTokens: 1, cost: 2.5 }],
+    });
+
+    expect(tracker.getPerModelUsage()["sub/claude-opus-4-6"]?.subscription).toBe(true);
+    expect(tracker.getSubagentList()[0]?.subscription).toBe(true);
+    expect(tracker.getSubagentList()[0]?.cost).toBe(0);
+    expect(tracker.getSubagentTotals().cost).toBe(0);
+  });
+
   it("reset clears all state", () => {
     const tracker = createUsageTracker();
     tracker.recordTurn("openai/gpt-5", "openai", 1, 2, 3, 4, 0.2, true);

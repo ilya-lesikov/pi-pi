@@ -211,19 +211,23 @@ export function createUsageTracker(): UsageTracker {
         state.subagentOutputTokens = 0;
         state.subagentCost = 0;
         for (const sa of summary.subagents as Record<string, unknown>[]) {
+          const modelId = typeof sa.modelId === "string" ? sa.modelId : "unknown";
+          // Pre-change summaries lack the flag; recover it from the sub/ prefix
+          // so legacy subscription rows are not restored as paid.
+          const subscription = sa.subscription === true || isSubscriptionRouted(modelId);
           const entry: SubagentUsage = {
             description: typeof sa.description === "string" ? sa.description : "unknown",
             agentType: typeof sa.agentType === "string" ? sa.agentType : "unknown",
-            modelId: typeof sa.modelId === "string" ? sa.modelId : "unknown",
+            modelId,
             inputTokens: toFiniteNumber(sa.inputTokens),
             outputTokens: toFiniteNumber(sa.outputTokens),
             cacheReadTokens: toFiniteNumber(sa.cacheReadTokens),
             cacheWriteTokens: toFiniteNumber(sa.cacheWriteTokens),
             cacheSupported: sa.cacheSupported === true,
-            cost: toFiniteNumber(sa.cost),
+            cost: subscription ? 0 : toFiniteNumber(sa.cost),
             durationMs: toFiniteNumber(sa.durationMs),
             toolUses: toFiniteNumber(sa.toolUses),
-            subscription: sa.subscription === true,
+            subscription,
           };
           state.subagents.push(entry);
           state.subagentInputTokens += entry.inputTokens;
@@ -240,7 +244,7 @@ export function createUsageTracker(): UsageTracker {
             cacheWriteTokens: toFiniteNumber(usage.cacheWriteTokens),
             cacheSupported: (usage as any).cacheSupported === true,
             turns: toFiniteNumber(usage.turns),
-            subscription: (usage as any).subscription === true,
+            subscription: (usage as any).subscription === true || isSubscriptionRouted(modelId),
           });
         }
       }
