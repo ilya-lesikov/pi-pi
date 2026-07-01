@@ -954,8 +954,8 @@ function showUsage(ctx: any): void {
         getMainInputTokens(): number; getMainOutputTokens(): number;
         getMainCacheReadTokens(): number; getMainCacheWriteTokens(): number;
         getMainCost(): number;
-        getPerModelUsage(): Record<string, { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; cacheSupported: boolean; turns: number }>;
-        getSubagentList(): Array<{ description: string; agentType: string; modelId: string; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; cacheSupported: boolean; cost: number; durationMs: number; toolUses: number }>;
+        getPerModelUsage(): Record<string, { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; cacheSupported: boolean; turns: number; subscription: boolean }>;
+        getSubagentList(): Array<{ description: string; agentType: string; modelId: string; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; cacheSupported: boolean; cost: number; durationMs: number; toolUses: number; subscription: boolean }>;
       }
     | undefined;
 
@@ -979,15 +979,19 @@ function showUsage(ctx: any): void {
   const models = tracker.getPerModelUsage();
   const subagents = tracker.getSubagentList();
 
-  const byModel = new Map<string, { input: number; output: number; cacheRead: number; cacheWrite: number; cacheSupported: boolean; cost: number }>();
+  const byModel = new Map<string, { input: number; output: number; cacheRead: number; cacheWrite: number; cacheSupported: boolean; cost: number; subscription: boolean }>();
   const mainModelEntries = Object.entries(models);
-  const mainTotalTokens = mainModelEntries.reduce((s, [, u]) => s + u.inputTokens + u.outputTokens, 0);
+  // Subscription (flat-rate) models contribute no dollars, so exclude their
+  // tokens from the proportional-share denominator or paid rows would be
+  // inflated and the sub/ rows would receive a spurious share.
+  const mainTotalTokens = mainModelEntries.reduce((s, [, u]) => s + (u.subscription ? 0 : u.inputTokens + u.outputTokens), 0);
   for (const [modelId, usage] of mainModelEntries) {
     const modelTokens = usage.inputTokens + usage.outputTokens;
-    const modelCostShare = mainTotalTokens > 0 ? mainCost * (modelTokens / mainTotalTokens) : 0;
+    const modelCostShare = usage.subscription || mainTotalTokens <= 0 ? 0 : mainCost * (modelTokens / mainTotalTokens);
     byModel.set(modelId, {
       input: usage.inputTokens, output: usage.outputTokens,
       cacheRead: usage.cacheReadTokens, cacheWrite: usage.cacheWriteTokens, cacheSupported: usage.cacheSupported, cost: modelCostShare,
+      subscription: usage.subscription,
     });
   }
   for (const sa of subagents) {
@@ -1000,10 +1004,12 @@ function showUsage(ctx: any): void {
       existing.cacheWrite += sa.cacheWriteTokens;
       if (sa.cacheSupported) existing.cacheSupported = true;
       existing.cost += sa.cost;
+      if (sa.subscription) existing.subscription = true;
     } else {
       byModel.set(key, {
         input: sa.inputTokens, output: sa.outputTokens,
         cacheRead: sa.cacheReadTokens, cacheWrite: sa.cacheWriteTokens, cacheSupported: sa.cacheSupported, cost: sa.cost,
+        subscription: sa.subscription,
       });
     }
   }
@@ -1021,7 +1027,8 @@ function showUsage(ctx: any): void {
       const cr = (m.cacheRead + m.input) > 0 ? Math.round(m.cacheRead / (m.cacheRead + m.input) * 100) : 0;
       const parts = [`↑${formatTokenCount(m.input)}`, `↓${formatTokenCount(m.output)}`];
       if (m.cacheSupported) parts.push(`⚡${cr}%`);
-      if (m.cost > 0) parts.push(`$${m.cost.toFixed(2)}`);
+      if (m.subscription) parts.push("subscription");
+      else if (m.cost > 0) parts.push(`$${m.cost.toFixed(2)}`);
       lines.push(`  ${modelId}: ${parts.join("  ")}`);
     }
   }
@@ -1031,13 +1038,15 @@ function showUsage(ctx: any): void {
   const agentModelNames = Object.keys(models);
   if (agentModelNames.length > 0) {
     const mainCacheSupported = mainModelEntries.some(([, u]) => u.cacheSupported);
+    const mainAllSubscription = mainModelEntries.every(([, u]) => u.subscription);
     const mainParts = [`↑${formatTokenCount(mainInput)}`, `↓${formatTokenCount(mainOutput)}`];
     const mainCR = (mainCacheRead + mainInput) > 0 ? Math.round(mainCacheRead / (mainCacheRead + mainInput) * 100) : 0;
     if (mainCacheSupported) mainParts.push(`⚡${mainCR}%`);
-    if (mainCost > 0) mainParts.push(`$${mainCost.toFixed(2)}`);
+    if (mainAllSubscription) mainParts.push("subscription");
+    else if (mainCost > 0) mainParts.push(`$${mainCost.toFixed(2)}`);
     lines.push(`  Main (${agentModelNames.join(", ")}): ${mainParts.join("  ")}`);
   }
-  const byAgentType = new Map<string, { input: number; output: number; cacheRead: number; cacheSupported: boolean; cost: number; durationMs: number; toolUses: number; count: number }>();
+  const byAgentType = new Map<string, { input: number; output: number; cacheRead: number; cacheSupported: boolean; cost: number; durationMs: number; toolUses: number; count: number; subscriptionRuns: number }>();
   for (const sa of subagents) {
     const key = sa.agentType || sa.description;
     const existing = byAgentType.get(key);
@@ -1050,10 +1059,12 @@ function showUsage(ctx: any): void {
       existing.durationMs += sa.durationMs;
       existing.toolUses += sa.toolUses;
       existing.count += 1;
+      if (sa.subscription) existing.subscriptionRuns += 1;
     } else {
       byAgentType.set(key, {
         input: sa.inputTokens, output: sa.outputTokens, cacheRead: sa.cacheReadTokens,
         cacheSupported: sa.cacheSupported, cost: sa.cost, durationMs: sa.durationMs, toolUses: sa.toolUses, count: 1,
+        subscriptionRuns: sa.subscription ? 1 : 0,
       });
     }
   }
@@ -1062,7 +1073,10 @@ function showUsage(ctx: any): void {
       ? Math.round(agg.cacheRead / (agg.cacheRead + agg.input) * 100) : 0;
     const parts = [`↑${formatTokenCount(agg.input)}`, `↓${formatTokenCount(agg.output)}`];
     if (agg.cacheSupported) parts.push(`⚡${saCR}%`);
-    if (agg.cost > 0) parts.push(`$${agg.cost.toFixed(2)}`);
+    // All runs subscription-routed → flat-rate label; otherwise show the
+    // paid-only summed cost (subscription runs already contribute $0).
+    if (agg.subscriptionRuns === agg.count) parts.push("subscription");
+    else if (agg.cost > 0) parts.push(`$${agg.cost.toFixed(2)}`);
     if (agg.durationMs > 0) parts.push(formatElapsedDuration(agg.durationMs));
     if (agg.toolUses > 0) parts.push(`${agg.toolUses} tools`);
     const countSuffix = agg.count > 1 ? ` (×${agg.count})` : "";
