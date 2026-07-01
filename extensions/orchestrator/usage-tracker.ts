@@ -22,7 +22,7 @@ export interface ModelUsage {
   cacheWriteTokens: number;
   cacheSupported: boolean;
   turns: number;
-  /** True when this model's turns are billed against the flat-rate subscription (dollars excluded from totals). */
+  /** Flat-rate personal subscription: dollars are excluded from cost totals, tokens are not. */
   subscription: boolean;
 }
 
@@ -61,7 +61,7 @@ export interface SubagentUsage {
   cost: number;
   durationMs: number;
   toolUses: number;
-  /** True when this subagent's usage is billed against the flat-rate subscription (dollars excluded from totals). */
+  /** Flat-rate personal subscription: dollars are excluded from cost totals, tokens are not. */
   subscription: boolean;
 }
 
