@@ -2868,7 +2868,6 @@ function buildResumeOptions(tasks: TaskInfo[], cwd: string): { options: OptionIn
     const count = seen.get(title) ?? 0;
     seen.set(title, count + 1);
     if (count > 0 || byTitle.has(title)) title = `${title} [${taskShortId(t.dir)}]`;
-    // Extremely defensive: if still colliding, keep appending until unique.
     while (byTitle.has(title)) title = `${title} ·`;
     byTitle.set(title, t);
     options.push({ title, description: resumeOptionDescription(t, cwd) });

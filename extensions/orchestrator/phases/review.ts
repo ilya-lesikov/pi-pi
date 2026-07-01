@@ -13,7 +13,13 @@ function isEnabled(value: { enabled?: boolean } | undefined): boolean {
 }
 
 export function reviewSystemPrompt(taskDir: string, pass: number, phase?: string, mode?: "guided" | "autonomous"): string {
-  const reviewsDir = phase === "brainstorm" ? join(taskDir, "brainstorm-reviews") : join(taskDir, "code-reviews");
+  // Each phase writes/loads its review outputs in a distinct directory:
+  // brainstorm -> brainstorm-reviews, plan -> plan-reviews, everything else
+  // (implement/review) -> code-reviews. The apply_feedback prompt must point the
+  // agent at the SAME directory the reviewers wrote to (see planning.ts /
+  // context.ts), otherwise it synthesizes against the wrong (empty) directory.
+  const reviewsDirName = phase === "brainstorm" ? "brainstorm-reviews" : phase === "plan" ? "plan-reviews" : "code-reviews";
+  const reviewsDir = join(taskDir, reviewsDirName);
   const plansDir = join(taskDir, "plans");
 
   if (phase === "brainstorm") {
@@ -73,11 +79,11 @@ export function reviewSystemPrompt(taskDir: string, pass: number, phase?: string
   return [
     `[PI-PI — REVIEW CYCLE (pass ${pass})]`,
     "",
-    "Code reviewer outputs are ready.",
+    "Reviewer outputs are ready.",
     `Read them from ${reviewsDir}/, synthesize feedback, and implement fixes if needed.`,
     "",
-    "You are a SYNTHESIZER: merge the reviewer outputs. Do NOT write your own code review from scratch.",
-    "- Do NOT create the code-reviews/ directory yourself — the extension manages it.",
+    "You are a SYNTHESIZER: merge the reviewer outputs. Do NOT write your own review from scratch.",
+    `- Do NOT create the ${reviewsDirName}/ directory yourself — the extension manages it.`,
     "- Do NOT call plannotator_submit_plan.",
     "",
     "# Your job (in this order):",

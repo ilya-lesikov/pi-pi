@@ -22,4 +22,19 @@ describe("reviewSystemPrompt apply_feedback wording", () => {
     expect(auto).toContain("BRAINSTORM REVIEW CYCLE");
     expect(auto).not.toContain("pp_phase_complete");
   });
+
+  it("points each phase at the directory its reviewers actually write to", () => {
+    // plan reviewers write to plan-reviews (planning.ts) and outputs load from
+    // plan-reviews (context.ts); the prompt must match, not code-reviews.
+    const plan = reviewSystemPrompt("/tmp/task", 1, "plan", "autonomous");
+    expect(plan).toContain("plan-reviews/");
+    expect(plan).not.toContain("code-reviews/");
+
+    const impl = reviewSystemPrompt("/tmp/task", 1, "implement", "autonomous");
+    expect(impl).toContain("code-reviews/");
+    expect(impl).not.toContain("plan-reviews/");
+
+    const brainstorm = reviewSystemPrompt("/tmp/task", 1, "brainstorm", "guided");
+    expect(brainstorm).toContain("brainstorm-reviews/");
+  });
 });
