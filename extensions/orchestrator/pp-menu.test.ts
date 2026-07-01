@@ -58,8 +58,13 @@ describe("showUsage subscription rendering", () => {
     expect(out).toContain("⚡78% hit rate");
     // Cost is always shown, even at $0.00 for subscription sessions.
     expect(out).toContain("Cost: $0.00");
-    // Per-model row shows processed input (↑1.3k), not just uncached.
+    // Per-model row shows processed input (↑1.3k), not just uncached, plus the
+    // same uncached / cache read / cache write breakdown as the total.
     expect(out).toContain("sub/claude-opus-4-8: ↑1.3k");
+    const modelSection = out.slice(out.indexOf("By model:"));
+    expect(modelSection).toContain("uncached:    84");
+    expect(modelSection).toContain("cache read:  1.0k");
+    expect(modelSection).toContain("cache write: 200");
   });
 
   it("does not inflate paid model share when a subscription model is present", () => {

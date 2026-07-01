@@ -1069,6 +1069,13 @@ export function showUsage(ctx: any): void {
       if (m.subscription) parts.push("subscription");
       else if (m.cost > 0) parts.push(`$${m.cost.toFixed(2)}`);
       lines.push(`  ${modelId}: ${parts.join("  ")}`);
+      // Same input breakdown as the total, so ↑1 (processed) is decomposed
+      // into its uncached / cache read / cache write parts per model.
+      if (m.cacheSupported) {
+        lines.push(`    • uncached:    ${formatTokenCount(m.input)}`);
+        lines.push(`    • cache read:  ${formatTokenCount(m.cacheRead)}`);
+        lines.push(`    • cache write: ${formatTokenCount(m.cacheWrite)}`);
+      }
     }
   }
 
