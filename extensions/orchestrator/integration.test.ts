@@ -1637,6 +1637,44 @@ describe("task modes and quick task", () => {
     expect(menu.transcript.filter((entry) => entry.question.startsWith("/pp"))).not.toHaveLength(0);
   });
 
+  it("ESC on pp_phase_complete stops the turn cleanly (aborts, no reminder text)", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "esc dismiss");
+    // Guided task in brainstorm; transition controller is running so the
+    // non-ESC dismiss path would normally return the reminder text.
+    expect(orchestrator.transitionController.isRunning()).toBe(true);
+
+    // Simulate a deliberate user ESC on the top-level menu.
+    menu.expect({ question: m.anyTaskMenu, cancel: "user" });
+
+    const ppPhaseComplete = getTool(pi, "pp_phase_complete");
+    const result = await ppPhaseComplete.execute("esc-1", { summary: "done" }, undefined, undefined, ctx);
+
+    expect(ctx.abort).toHaveBeenCalled();
+    expect(result.content[0].text).toBe("");
+  });
+
+  it("Back on pp_phase_complete keeps the artifact-update reminder (does NOT abort)", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "back dismiss");
+    expect(orchestrator.transitionController.isRunning()).toBe(true);
+
+    // Explicit "Back" navigation (not an ESC): the reminder must be preserved.
+    menu.expect({ question: m.anyTaskMenu, options: { include: ["Back"] }, choose: "Back" });
+
+    const ppPhaseComplete = getTool(pi, "pp_phase_complete");
+    const result = await ppPhaseComplete.execute("back-1", { summary: "done" }, undefined, undefined, ctx);
+
+    expect(ctx.abort).not.toHaveBeenCalled();
+    expect(result.content[0].text).toContain("update USER_REQUEST.md and RESEARCH.md");
+  });
+
   it("autonomous review loop re-runs until cap then advances", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);

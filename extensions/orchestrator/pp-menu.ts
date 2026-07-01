@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, writeFileSync } from "fs";
 import { join, relative, basename } from "path";
 import { isDeepStrictEqual } from "util";
-import { askUser, isCancel } from "../../3p/pi-ask-user/index.js";
+import { askUser, isCancel, type CancelReason } from "../../3p/pi-ask-user/index.js";
 import { unregisterAgentDefinitions } from "./agents/registry.js";
 import {
   type AfterEditCommandConfig,
@@ -71,6 +71,13 @@ type MenuMode = "command" | "tool";
 
 const BACK = "back" as const;
 
+// Sentinel returned by showActiveTaskMenu when the user dismissed the top-level
+// menu with a deliberate ESC (cancelReason "user"), as opposed to selecting the
+// "Back" option or a programmatic dismissal. Callers (pp_phase_complete) use it
+// to stop the turn cleanly instead of returning reminder text that starts a new
+// LLM turn. It is intentionally distinct from the empty-string "Back" return.
+export const USER_CANCELLED = "\u0000user-cancelled" as const;
+
 type OptionInput = string | { title: string; description?: string };
 
 type TimeoutKey =
@@ -85,6 +92,18 @@ function isEnabled(value: { enabled?: boolean } | undefined): boolean {
 }
 
 async function selectOption(ctx: any, question: string, options: OptionInput[]): Promise<string | undefined> {
+  return (await selectOptionCancelable(ctx, question, options)).choice;
+}
+
+// Like selectOption but also surfaces the cancel reason so callers can tell a
+// deliberate user ESC (reason "user") apart from a normal non-selection. Used by
+// showActiveTaskMenu so pp_phase_complete can stop the turn cleanly on ESC
+// (mirroring ask_user) while keeping the "Back" navigation reminder.
+async function selectOptionCancelable(
+  ctx: any,
+  question: string,
+  options: OptionInput[],
+): Promise<{ choice?: string; cancelReason?: CancelReason }> {
   const result = await askUser(ctx, {
     question,
     options,
@@ -92,8 +111,9 @@ async function selectOption(ctx: any, question: string, options: OptionInput[]):
     allowComment: false,
     allowMultiple: false,
   });
-  if (!result || isCancel(result) || result.kind !== "selection") return undefined;
-  return result.selections[0];
+  if (result && isCancel(result)) return { cancelReason: result.reason };
+  if (!result || result.kind !== "selection") return {};
+  return { choice: result.selections[0] };
 }
 
 function opt(title: string, description: string): OptionInput {
@@ -3412,13 +3432,17 @@ export async function showActiveTaskMenu(
     const opt = (title: string, description: string): OptionInput => ({ title, description });
 
     if (effectiveMode === "autonomous") {
-      const autoChoice = await selectOption(ctx, `/pp\n\nTask: ${task.type}\nPhase: ${phase}${summary !== "/pp" ? `\n\n${summary}` : ""}`, [
+      const { choice: autoChoice, cancelReason } = await selectOptionCancelable(ctx, `/pp\n\nTask: ${task.type}\nPhase: ${phase}${summary !== "/pp" ? `\n\n${summary}` : ""}`, [
         opt("Complete task", "Mark task as done and clean up"),
         opt("Pause task", "Suspend task to resume later"),
         opt("Info", "Subagents, usage, and task status"),
         opt("Settings", "Flant AI and other configuration"),
         opt("Back", "Return to the prompt and keep working"),
       ]);
+      // A deliberate ESC only needs distinct handling in tool mode (so
+      // pp_phase_complete can stop the turn); in command mode ESC just closes
+      // the menu like "Back".
+      if (cancelReason === "user" && mode === "tool") return USER_CANCELLED;
       if (!autoChoice || autoChoice === "Back") return "";
       if (autoChoice === "Info") {
         await showInfoMenu(orchestrator, ctx);
@@ -3448,7 +3472,8 @@ export async function showActiveTaskMenu(
     const headerLines = [`/pp\n\nTask: ${task.type}\nPhase: ${phase}`];
     if (summary !== "/pp") headerLines.push(`\n\n${summary}`);
     const menuTitle = headerLines.join("");
-    const choice = await selectOption(ctx, menuTitle, options);
+    const { choice, cancelReason } = await selectOptionCancelable(ctx, menuTitle, options);
+    if (cancelReason === "user" && mode === "tool") return USER_CANCELLED;
     if (!choice || choice === "Back") {
       return "";
     }

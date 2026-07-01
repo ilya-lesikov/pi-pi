@@ -113,7 +113,7 @@ type AskResponse =
 
 // Reason a question was cancelled. Only "user" (a deliberate top-level ESC)
 // should abort the LLM turn; "timeout" and "signal" are programmatic and must not.
-type CancelReason = "user" | "timeout" | "signal";
+export type CancelReason = "user" | "timeout" | "signal";
 
 // Sentinel returned through the UI/askUser boundary to carry a cancel reason.
 // Distinct from a plain AskResponse so callers can disambiguate cancel vs answer.

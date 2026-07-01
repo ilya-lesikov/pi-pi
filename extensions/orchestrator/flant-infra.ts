@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import lockfile from "proper-lockfile";
 import { refreshAnthropicToken } from "@earendil-works/pi-ai/oauth";
+import { streamSimpleAnthropic } from "@earendil-works/pi-ai/anthropic"; // DEBUG: temporary, remove after diagnosis
 import type { ExtensionAPI, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 import type { PiPiConfig } from "./config.js";
 import { updateRegistryFromAvailableModels } from "./model-registry.js";
@@ -494,6 +495,25 @@ export function registerFlantProviders(
         apiKey: oauthToken,
         // Gateway key travels in a side header so it does not clobber the OAuth auth.
         headers: { "x-litellm-api-key": `Bearer ${gatewayKey}` },
+        // DEBUG: temporary streamSimple wrapper to diagnose the third-party 400.
+        // Logs whether pi-ai will prepend the Claude Code identity block, then
+        // delegates to the built-in Anthropic transport. Remove after diagnosis.
+        streamSimple: (model, context, opts) => {
+          const sys = context.systemPrompt ?? "";
+          const apiKeyIsOAuth = typeof oauthToken === "string" && oauthToken.includes("sk-ant-oat");
+          getLogger().debug(
+            {
+              s: "sub-diag",
+              modelId: model.id,
+              apiKeyIsOAuth,
+              predictedSystem0: apiKeyIsOAuth ? "CC-phrase" : "pi-pi-system",
+              systemPromptFirst80: sys.slice(0, 80),
+              hasLitellmHeader: !!opts?.headers && "x-litellm-api-key" in (opts.headers as Record<string, unknown>),
+            },
+            "sub request",
+          );
+          return streamSimpleAnthropic(model, context, opts);
+        },
         // Model id carries the `sub/` prefix the gateway expects, while pricing/
         // metadata is looked up by the bare claude-* id.
         models: anthropicModels.map((m) => {

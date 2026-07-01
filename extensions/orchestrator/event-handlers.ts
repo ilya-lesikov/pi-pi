@@ -713,8 +713,14 @@ function registerSpecifyReviewsTool(orchestrator: Orchestrator): void {
 
       ctx.ui?.setWorkingMessage?.("Waiting for user input…");
       try {
-        const { showActiveTaskMenu } = await import("./pp-menu.js");
+        const { showActiveTaskMenu, USER_CANCELLED } = await import("./pp-menu.js");
         const text = await showActiveTaskMenu(orchestrator, ctx, `Plannotator review complete.\n\n${summary}`, "tool");
+        // Deliberate user ESC: stop the turn cleanly (mirror ask_user), no
+        // reminder text that would start a new LLM turn.
+        if (text === USER_CANCELLED) {
+          ctx.abort?.();
+          return { content: [{ type: "text" as const, text: "" }], details: {} };
+        }
         // A transition may have started while the menu was open. The controller
         // is the source of truth; abort the agent's pending turn so it doesn't
         // race the transition. (Interactive-UX abort — stays local, not routed.)
@@ -911,8 +917,16 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
       }
       ctx.ui.setWorkingMessage?.("Waiting for user approval…");
       try {
-        const { showActiveTaskMenu } = await import("./pp-menu.js");
+        const { showActiveTaskMenu, USER_CANCELLED } = await import("./pp-menu.js");
         const text = await showActiveTaskMenu(orchestrator, ctx, params.summary, "tool");
+        // A deliberate user ESC on the menu means "stop cleanly, let me type" —
+        // mirror ask_user: abort the turn and return nothing so no new LLM turn
+        // starts. This takes precedence over the reminder path below, in ALL
+        // interactive cases (including while a transition is mid-flight).
+        if (text === USER_CANCELLED) {
+          ctx.abort?.();
+          return { content: [{ type: "text" as const, text: "" }], details: {} };
+        }
         // A transition or await may have started while the menu was open. The
         // controller is the source of truth; abort the pending turn so it can't
         // race. (Interactive-UX abort — stays local, not routed.)
@@ -926,6 +940,8 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
           return { content: [{ type: "text" as const, text: "" }], details: {} };
         }
         if (!text) {
+          // Non-ESC dismissal (explicit "Back") while a transition is running:
+          // keep the intentional artifact-update reminder (commit 10e7021).
           return { content: [{ type: "text" as const, text: "User dismissed the menu. Wait for the user's next message. When you resume work, update USER_REQUEST.md and RESEARCH.md with any new findings before calling pp_phase_complete." }], details: {} };
         }
         return { content: [{ type: "text" as const, text }], details: {} };

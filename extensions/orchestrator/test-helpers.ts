@@ -9,7 +9,10 @@ export interface MenuExpectation {
     include?: TextMatch[];
     exclude?: TextMatch[];
   };
-  choose: TextMatch | ((options: string[]) => string);
+  // When set, the harness returns a cancel (as askUser/isCancel would on ESC)
+  // instead of choosing an option. `choose` is ignored in that case.
+  cancel?: "user" | "timeout" | "signal";
+  choose?: TextMatch | ((options: string[]) => string);
 }
 
 export interface MenuTranscriptEntry {
@@ -21,7 +24,7 @@ export interface MenuTranscriptEntry {
 export interface AskUserHarness {
   transcript: MenuTranscriptEntry[];
   expect(step: MenuExpectation): AskUserHarness;
-  handle(opts: any): Promise<{ kind: "selection"; selections: [string] }>;
+  handle(opts: any): Promise<{ kind: "selection"; selections: [string] } | { __cancel: true; reason: "user" | "timeout" | "signal" }>;
   assertDone(): void;
 }
 
@@ -121,6 +124,15 @@ export function createAskUserHarness(): AskUserHarness {
             );
           }
         }
+      }
+
+      if (expected.cancel) {
+        transcript.push({ question, options, chosen: `<cancel:${expected.cancel}>` });
+        return { __cancel: true, reason: expected.cancel };
+      }
+
+      if (expected.choose === undefined) {
+        throw new Error(`Menu expectation is missing a chooser\n${renderMenu(question, options)}`);
       }
 
       let chosen: string;
