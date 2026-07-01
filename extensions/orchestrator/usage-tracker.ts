@@ -133,7 +133,11 @@ export function createUsageTracker(): UsageTracker {
       state.totalCost += safeCost;
       state.totalTurns += 1;
 
-      const key = modelId || "unknown-model";
+      // Key subscription turns under the sub/ prefix even when detected only by
+      // provider (bare model id), so a paid and a subscription turn for the same
+      // underlying model never share a row and the paid dollars stay visible.
+      const baseKey = modelId || "unknown-model";
+      const key = subscription && !baseKey.startsWith(SUB_MODEL_PREFIX) ? `${SUB_MODEL_PREFIX}${baseKey}` : baseKey;
       const usage = state.models.get(key) ?? {
         inputTokens: 0,
         outputTokens: 0,

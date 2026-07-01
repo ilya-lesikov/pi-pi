@@ -390,7 +390,7 @@ describe("usage-tracker", () => {
 
     // Detected via the sub/ model id prefix...
     tracker.recordTurn("sub/claude-opus-4-6", "anthropic", 100, 50, 10, 5, 1.23, true);
-    // ...or via the subscription provider.
+    // ...or via the subscription provider with a bare id (keyed under sub/).
     tracker.recordTurn("claude-opus-4-6", "pp-flant-anthropic-sub", 20, 10, 0, 0, 0.5, true);
 
     expect(tracker.getMainInputTokens()).toBe(120);
@@ -399,7 +399,19 @@ describe("usage-tracker", () => {
     expect(tracker.getMainCost()).toBe(0);
     expect(tracker.getTotalCost()).toBe(0);
     expect(tracker.getPerModelUsage()["sub/claude-opus-4-6"]?.subscription).toBe(true);
-    expect(tracker.getPerModelUsage()["claude-opus-4-6"]?.subscription).toBe(true);
+  });
+
+  it("provider-detected subscription turns key under sub/ so paid rows stay separate", () => {
+    const tracker = createUsageTracker();
+
+    // Same underlying model id: one paid, one subscription (provider-only).
+    tracker.recordTurn("claude-opus-4-6", "pp-flant-anthropic", 10, 5, 0, 0, 0.4, false);
+    tracker.recordTurn("claude-opus-4-6", "pp-flant-anthropic-sub", 20, 10, 0, 0, 2.0, false);
+
+    const usage = tracker.getPerModelUsage();
+    expect(usage["claude-opus-4-6"]).toMatchObject({ inputTokens: 10, outputTokens: 5, subscription: false });
+    expect(usage["sub/claude-opus-4-6"]).toMatchObject({ inputTokens: 20, outputTokens: 10, subscription: true });
+    expect(tracker.getMainCost()).toBeCloseTo(0.4);
   });
 
   it("subscription subagents count tokens but contribute zero cost", () => {
