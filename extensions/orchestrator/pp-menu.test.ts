@@ -40,6 +40,28 @@ describe("showUsage subscription rendering", () => {
     expect(out).toContain("Cost: $0.40");
   });
 
+  it("shows the four-bucket input breakdown and processed-input totals", () => {
+    const tracker = createUsageTracker();
+    // uncached 84, output 27k, cacheRead 1000, cacheWrite 200 on a sub model.
+    tracker.recordTurn("sub/claude-opus-4-8", "pp-flant-anthropic-sub", 84, 27000, 1000, 200, 0, true);
+
+    const out = renderUsage(tracker);
+
+    // Total "Input" is the processed input (84 + 1000 + 200 = 1284 → "1.3k"),
+    // not the uncached sliver, with an explicit breakdown beneath it.
+    expect(out).toContain("Input: 1.3k tokens");
+    expect(out).toContain("uncached:    84");
+    expect(out).toContain("cache read:  1.0k");
+    expect(out).toContain("cache write: 200");
+    expect(out).toContain("Output: 27k tokens");
+    // Hit rate = 1000 / (84 + 1000 + 200) = 78% (rounded).
+    expect(out).toContain("⚡78% hit rate");
+    // Cost is always shown, even at $0.00 for subscription sessions.
+    expect(out).toContain("Cost: $0.00");
+    // Per-model row shows processed input (↑1.3k), not just uncached.
+    expect(out).toContain("sub/claude-opus-4-8: ↑1.3k");
+  });
+
   it("does not inflate paid model share when a subscription model is present", () => {
     const tracker = createUsageTracker();
     tracker.recordTurn("openai/gpt-5", "openai", 100, 0, 0, 0, 0.5, false);

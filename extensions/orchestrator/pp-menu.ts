@@ -972,6 +972,7 @@ export function showUsage(ctx: any): void {
     | {
         getTotalInputTokens(): number; getTotalOutputTokens(): number;
         getTotalCacheReadTokens(): number; getTotalCacheWriteTokens(): number;
+        getTotalProcessedInputTokens(): number;
         getTotalCost(): number; getCacheHitRate(): number;
         getMainInputTokens(): number; getMainOutputTokens(): number;
         getMainCacheReadTokens(): number; getMainCacheWriteTokens(): number;
@@ -986,17 +987,26 @@ export function showUsage(ctx: any): void {
     return;
   }
 
-  const totalInput = tracker.getTotalInputTokens();
+  // Token-weighted cache hit rate: cache reads over all processed input
+  // (uncached + cache read + cache write). Same formula everywhere so the
+  // total, per-model, and per-agent percentages are directly comparable.
+  const hitRate = (uncached: number, cacheRead: number, cacheWrite: number): number => {
+    const processed = uncached + cacheRead + cacheWrite;
+    return processed > 0 ? cacheRead / processed : 0;
+  };
+
+  const totalUncachedInput = tracker.getTotalInputTokens();
   const totalOutput = tracker.getTotalOutputTokens();
   const totalCacheRead = tracker.getTotalCacheReadTokens();
+  const totalCacheWrite = tracker.getTotalCacheWriteTokens();
+  const totalProcessedInput = tracker.getTotalProcessedInputTokens();
   const totalCost = tracker.getTotalCost();
-  const totalCacheRate = (totalCacheRead + totalInput) > 0
-    ? totalCacheRead / (totalCacheRead + totalInput)
-    : 0;
+  const totalCacheRate = tracker.getCacheHitRate();
 
   const mainInput = tracker.getMainInputTokens();
   const mainOutput = tracker.getMainOutputTokens();
   const mainCacheRead = tracker.getMainCacheReadTokens();
+  const mainCacheWrite = tracker.getMainCacheWriteTokens();
   const mainCost = tracker.getMainCost();
   const models = tracker.getPerModelUsage();
   const subagents = tracker.getSubagentList();
@@ -1036,18 +1046,25 @@ export function showUsage(ctx: any): void {
     }
   }
 
+  // Total input the model processed = uncached + cache read + cache write.
+  // Shown as an explicit breakdown so the (often tiny) uncached sliver no
+  // longer masquerades as the whole "Input" figure.
   const lines: string[] = ["Session usage (total):"];
-  lines.push(`  Input: ${formatTokenCount(totalInput)} tokens`);
+  lines.push(`  Input: ${formatTokenCount(totalProcessedInput)} tokens`);
+  lines.push(`    • uncached:    ${formatTokenCount(totalUncachedInput)}`);
+  lines.push(`    • cache read:  ${formatTokenCount(totalCacheRead)}`);
+  lines.push(`    • cache write: ${formatTokenCount(totalCacheWrite)}`);
   lines.push(`  Output: ${formatTokenCount(totalOutput)} tokens`);
   if (totalCacheRead > 0) lines.push(`  Cache: ⚡${Math.round(totalCacheRate * 100)}% hit rate`);
-  if (totalCost > 0) lines.push(`  Cost: $${totalCost.toFixed(2)}`);
+  lines.push(`  Cost: $${totalCost.toFixed(2)}`);
 
   if (byModel.size > 0) {
     lines.push("");
     lines.push("By model:");
     for (const [modelId, m] of byModel) {
-      const cr = (m.cacheRead + m.input) > 0 ? Math.round(m.cacheRead / (m.cacheRead + m.input) * 100) : 0;
-      const parts = [`↑${formatTokenCount(m.input)}`, `↓${formatTokenCount(m.output)}`];
+      const cr = Math.round(hitRate(m.input, m.cacheRead, m.cacheWrite) * 100);
+      const processed = m.input + m.cacheRead + m.cacheWrite;
+      const parts = [`↑${formatTokenCount(processed)}`, `↓${formatTokenCount(m.output)}`];
       if (m.cacheSupported) parts.push(`⚡${cr}%`);
       if (m.subscription) parts.push("subscription");
       else if (m.cost > 0) parts.push(`$${m.cost.toFixed(2)}`);
@@ -1061,14 +1078,15 @@ export function showUsage(ctx: any): void {
   if (agentModelNames.length > 0) {
     const mainCacheSupported = mainModelEntries.some(([, u]) => u.cacheSupported);
     const mainAllSubscription = mainModelEntries.every(([, u]) => u.subscription);
-    const mainParts = [`↑${formatTokenCount(mainInput)}`, `↓${formatTokenCount(mainOutput)}`];
-    const mainCR = (mainCacheRead + mainInput) > 0 ? Math.round(mainCacheRead / (mainCacheRead + mainInput) * 100) : 0;
+    const mainProcessed = mainInput + mainCacheRead + mainCacheWrite;
+    const mainParts = [`↑${formatTokenCount(mainProcessed)}`, `↓${formatTokenCount(mainOutput)}`];
+    const mainCR = Math.round(hitRate(mainInput, mainCacheRead, mainCacheWrite) * 100);
     if (mainCacheSupported) mainParts.push(`⚡${mainCR}%`);
     if (mainAllSubscription) mainParts.push("subscription");
     else if (mainCost > 0) mainParts.push(`$${mainCost.toFixed(2)}`);
     lines.push(`  Main (${agentModelNames.join(", ")}): ${mainParts.join("  ")}`);
   }
-  const byAgentType = new Map<string, { input: number; output: number; cacheRead: number; cacheSupported: boolean; cost: number; durationMs: number; toolUses: number; count: number; subscriptionRuns: number }>();
+  const byAgentType = new Map<string, { input: number; output: number; cacheRead: number; cacheWrite: number; cacheSupported: boolean; cost: number; durationMs: number; toolUses: number; count: number; subscriptionRuns: number }>();
   for (const sa of subagents) {
     const key = sa.agentType || sa.description;
     const existing = byAgentType.get(key);
@@ -1076,6 +1094,7 @@ export function showUsage(ctx: any): void {
       existing.input += sa.inputTokens;
       existing.output += sa.outputTokens;
       existing.cacheRead += sa.cacheReadTokens;
+      existing.cacheWrite += sa.cacheWriteTokens;
       if (sa.cacheSupported) existing.cacheSupported = true;
       existing.cost += sa.cost;
       existing.durationMs += sa.durationMs;
@@ -1084,16 +1103,16 @@ export function showUsage(ctx: any): void {
       if (sa.subscription) existing.subscriptionRuns += 1;
     } else {
       byAgentType.set(key, {
-        input: sa.inputTokens, output: sa.outputTokens, cacheRead: sa.cacheReadTokens,
+        input: sa.inputTokens, output: sa.outputTokens, cacheRead: sa.cacheReadTokens, cacheWrite: sa.cacheWriteTokens,
         cacheSupported: sa.cacheSupported, cost: sa.cost, durationMs: sa.durationMs, toolUses: sa.toolUses, count: 1,
         subscriptionRuns: sa.subscription ? 1 : 0,
       });
     }
   }
   for (const [agentType, agg] of byAgentType) {
-    const saCR = (agg.cacheRead + agg.input) > 0
-      ? Math.round(agg.cacheRead / (agg.cacheRead + agg.input) * 100) : 0;
-    const parts = [`↑${formatTokenCount(agg.input)}`, `↓${formatTokenCount(agg.output)}`];
+    const saCR = Math.round(hitRate(agg.input, agg.cacheRead, agg.cacheWrite) * 100);
+    const processed = agg.input + agg.cacheRead + agg.cacheWrite;
+    const parts = [`↑${formatTokenCount(processed)}`, `↓${formatTokenCount(agg.output)}`];
     if (agg.cacheSupported) parts.push(`⚡${saCR}%`);
     // All runs subscription-routed → flat-rate label; otherwise show the
     // paid-only summed cost (subscription runs already contribute $0).

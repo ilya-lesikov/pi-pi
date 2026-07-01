@@ -58,7 +58,9 @@ function renderStatsLine(width: number, theme: Theme): string {
   const ctx = footerCtx;
   const tracker = footerTracker;
 
-  const inputTokens = tracker?.getTotalInputTokens() ?? 0;
+  // ↑ is the total input the model actually processed (uncached + cache read +
+  // cache write) across main + subagents — not just the tiny uncached sliver.
+  const inputTokens = tracker?.getTotalProcessedInputTokens() ?? 0;
   const outputTokens = tracker?.getTotalOutputTokens() ?? 0;
   const cacheRate = tracker?.getCacheHitRate() ?? 0;
   const totalCost = tracker?.getTotalCost() ?? 0;
@@ -66,7 +68,8 @@ function renderStatsLine(width: number, theme: Theme): string {
   const cacheSupported = tracker?.isCacheSupported() ?? false;
   const leftParts: string[] = [`↑${formatTokens(inputTokens)}`, `↓${formatTokens(outputTokens)}`];
   if (cacheSupported) leftParts.push(`⚡${Math.round(cacheRate * 100)}%`);
-  if (totalCost > 0) leftParts.push(`$${totalCost.toFixed(2)}`);
+  // Always show cost, even $0.00 (subscription/flat-rate sessions).
+  leftParts.push(`$${totalCost.toFixed(2)}`);
   leftParts.push(toContextUsagePart(ctx, theme));
   let left = leftParts.join(" ");
 

@@ -34,6 +34,8 @@ export interface UsageTracker {
   getTotalOutputTokens(): number;
   getTotalCacheReadTokens(): number;
   getTotalCacheWriteTokens(): number;
+  /** Total input the model actually processed: uncached input + cache read + cache write (main + subagents). */
+  getTotalProcessedInputTokens(): number;
   getTotalCost(): number;
   getMainInputTokens(): number;
   getMainOutputTokens(): number;
@@ -75,6 +77,8 @@ interface TrackerState {
   totalTurns: number;
   subagentInputTokens: number;
   subagentOutputTokens: number;
+  subagentCacheReadTokens: number;
+  subagentCacheWriteTokens: number;
   subagentCost: number;
   models: Map<string, ModelUsage>;
   subagents: SubagentUsage[];
@@ -106,6 +110,8 @@ function createInitialState(): TrackerState {
     totalTurns: 0,
     subagentInputTokens: 0,
     subagentOutputTokens: 0,
+    subagentCacheReadTokens: 0,
+    subagentCacheWriteTokens: 0,
     subagentCost: 0,
     models: new Map<string, ModelUsage>(),
     subagents: [],
@@ -177,6 +183,8 @@ export function createUsageTracker(): UsageTracker {
 
       state.subagentInputTokens += effectiveInput;
       state.subagentOutputTokens += safeOutput;
+      state.subagentCacheReadTokens += safeCacheRead;
+      state.subagentCacheWriteTokens += safeCacheWrite;
       state.subagentCost += safeCost;
 
       const cacheSupported = typeof tokens.cacheRead === "number" || typeof tokens.cacheWrite === "number";
@@ -213,6 +221,8 @@ export function createUsageTracker(): UsageTracker {
         state.subagents = [];
         state.subagentInputTokens = 0;
         state.subagentOutputTokens = 0;
+        state.subagentCacheReadTokens = 0;
+        state.subagentCacheWriteTokens = 0;
         state.subagentCost = 0;
         for (const sa of summary.subagents as Record<string, unknown>[]) {
           const modelId = typeof sa.modelId === "string" ? sa.modelId : "unknown";
@@ -236,6 +246,8 @@ export function createUsageTracker(): UsageTracker {
           state.subagents.push(entry);
           state.subagentInputTokens += entry.inputTokens;
           state.subagentOutputTokens += entry.outputTokens;
+          state.subagentCacheReadTokens += entry.cacheReadTokens;
+          state.subagentCacheWriteTokens += entry.cacheWriteTokens;
           state.subagentCost += entry.cost;
         }
       }
@@ -266,11 +278,22 @@ export function createUsageTracker(): UsageTracker {
     },
 
     getTotalCacheReadTokens(): number {
-      return state.totalCacheReadTokens;
+      return state.totalCacheReadTokens + state.subagentCacheReadTokens;
     },
 
     getTotalCacheWriteTokens(): number {
-      return state.totalCacheWriteTokens;
+      return state.totalCacheWriteTokens + state.subagentCacheWriteTokens;
+    },
+
+    getTotalProcessedInputTokens(): number {
+      return (
+        state.totalInputTokens +
+        state.subagentInputTokens +
+        state.totalCacheReadTokens +
+        state.subagentCacheReadTokens +
+        state.totalCacheWriteTokens +
+        state.subagentCacheWriteTokens
+      );
     },
 
     getTotalCost(): number {
@@ -298,9 +321,11 @@ export function createUsageTracker(): UsageTracker {
     },
 
     getCacheHitRate(): number {
-      const totalInput = state.totalInputTokens + state.subagentInputTokens;
-      const totalCacheRead = state.totalCacheReadTokens;
-      const denominator = totalCacheRead + totalInput;
+      const totalCacheRead = state.totalCacheReadTokens + state.subagentCacheReadTokens;
+      // Session-wide, token-weighted average: cache reads over all processed
+      // input (uncached input + cache read + cache write). Including cache
+      // writes keeps first-touch (uncached) content from inflating the rate.
+      const denominator = this.getTotalProcessedInputTokens();
       if (denominator <= 0) return 0;
       return totalCacheRead / denominator;
     },
@@ -360,6 +385,8 @@ export function createUsageTracker(): UsageTracker {
       state.totalTurns = 0;
       state.subagentInputTokens = 0;
       state.subagentOutputTokens = 0;
+      state.subagentCacheReadTokens = 0;
+      state.subagentCacheWriteTokens = 0;
       state.subagentCost = 0;
       state.models.clear();
       state.subagents = [];

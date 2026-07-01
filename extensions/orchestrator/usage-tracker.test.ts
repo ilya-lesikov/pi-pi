@@ -229,17 +229,42 @@ describe("usage-tracker", () => {
     expect(tracker.getTotalCost()).toBe(2);
   });
 
-  it("getCacheHitRate calculates ratio", () => {
+  it("getCacheHitRate is cacheRead over processed input (uncached + read + write)", () => {
     const tracker = createUsageTracker();
 
-    tracker.recordTurn("openai/gpt-5", "openai", 30, 0, 10, 0, 0, true);
+    // uncached 30, cacheRead 10, cacheWrite 10 → 10 / (30+10+10) = 0.2
+    tracker.recordTurn("openai/gpt-5", "openai", 30, 0, 10, 10, 0, true);
 
-    expect(tracker.getCacheHitRate()).toBeCloseTo(10 / 40);
+    expect(tracker.getCacheHitRate()).toBeCloseTo(10 / 50);
+  });
+
+  it("getCacheHitRate includes subagent cache tokens", () => {
+    const tracker = createUsageTracker();
+    tracker.recordTurn("openai/gpt-5", "openai", 10, 0, 0, 0, 0, true);
+    tracker.recordSubagentCompletion({ input: 0, output: 0, cacheRead: 30, cacheWrite: 10 } as any);
+    // cacheRead 30 / processed (10 + 30 + 10) = 0.6
+    expect(tracker.getCacheHitRate()).toBeCloseTo(30 / 50);
   });
 
   it("getCacheHitRate returns zero when denominator is zero", () => {
     const tracker = createUsageTracker();
     expect(tracker.getCacheHitRate()).toBe(0);
+  });
+
+  it("getTotalProcessedInputTokens sums uncached + cache read + cache write across main and subagents", () => {
+    const tracker = createUsageTracker();
+    tracker.recordTurn("openai/gpt-5", "openai", 10, 0, 20, 5, 0, true);
+    tracker.recordSubagentCompletion({ input: 3, output: 0, cacheRead: 7, cacheWrite: 2 } as any);
+    // main: 10+20+5=35, subagent: 3+7+2=12 → 47
+    expect(tracker.getTotalProcessedInputTokens()).toBe(47);
+  });
+
+  it("getTotalCacheReadTokens and getTotalCacheWriteTokens include subagents", () => {
+    const tracker = createUsageTracker();
+    tracker.recordTurn("openai/gpt-5", "openai", 0, 0, 20, 5, 0, true);
+    tracker.recordSubagentCompletion({ input: 0, output: 0, cacheRead: 7, cacheWrite: 2 } as any);
+    expect(tracker.getTotalCacheReadTokens()).toBe(27);
+    expect(tracker.getTotalCacheWriteTokens()).toBe(7);
   });
 
   it("isCacheSupported true when any model or subagent has cache", () => {
