@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import lockfile from "proper-lockfile";
+import { refreshAnthropicToken } from "@earendil-works/pi-ai/oauth";
 import type { ExtensionAPI, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 import type { PiPiConfig } from "./config.js";
 import { updateRegistryFromAvailableModels } from "./model-registry.js";
@@ -92,6 +93,99 @@ export function readClaudeOAuthToken(): string | null {
   } catch {
     return null;
   }
+}
+
+interface AnthropicOAuthCreds {
+  type?: unknown;
+  access?: unknown;
+  refresh?: unknown;
+  expires?: unknown;
+}
+
+/**
+ * Ensure the persisted Claude OAuth access token is fresh, refreshing it via
+ * the stored refresh token when it has expired (or is within its safety
+ * margin). The refreshed credentials are written back to `auth.json` under the
+ * `anthropic` provider id in pi's own `{ type: "oauth", ... }` format, so both
+ * this extension and pi's built-in `anthropic` provider observe the new token.
+ *
+ * Unlike readClaudeOAuthToken, this is async (a refresh performs a network
+ * call) and returns the valid access token, or null when no usable
+ * credentials exist / a refresh fails. Async entry points call this before the
+ * synchronous readClaudeOAuthToken so downstream reads see a fresh token.
+ */
+export async function refreshClaudeOAuthToken(): Promise<string | null> {
+  const log = getLogger();
+  const authPath = join(resolveAgentDir(), "auth.json");
+  if (!existsSync(authPath)) return null;
+
+  let anthropic: AnthropicOAuthCreds | undefined;
+  try {
+    const raw = JSON.parse(readFileSync(authPath, "utf-8")) as { anthropic?: AnthropicOAuthCreds };
+    anthropic = raw.anthropic;
+  } catch {
+    return null;
+  }
+  if (!anthropic || typeof anthropic.access !== "string" || !anthropic.access) return null;
+
+  const expires = typeof anthropic.expires === "number" ? anthropic.expires : 0;
+  if (expires > Date.now()) return anthropic.access;
+
+  // Expired (or no expiry recorded): try to refresh.
+  if (typeof anthropic.refresh !== "string" || !anthropic.refresh) {
+    log.debug({ s: "flant" }, "claude oauth token expired and no refresh token available");
+    return null;
+  }
+
+  let refreshed: { refresh: string; access: string; expires: number };
+  try {
+    refreshed = await refreshAnthropicToken(anthropic.refresh);
+  } catch (err: any) {
+    log.debug({ s: "flant", err: err?.message }, "claude oauth token refresh failed");
+    return null;
+  }
+
+  // Persist refreshed credentials back under the `anthropic` provider id, using
+  // pi's { type: "oauth", ... } shape and the same file lock pi uses.
+  try {
+    const authDir = resolveAgentDir();
+    if (!existsSync(authDir)) mkdirSync(authDir, { recursive: true });
+    if (!existsSync(authPath)) writeFileSync(authPath, "{}\n", "utf-8");
+    const release = lockfile.lockSync(authPath, { stale: 10000 });
+    try {
+      let current: Record<string, unknown> = {};
+      try {
+        current = JSON.parse(readFileSync(authPath, "utf-8")) as Record<string, unknown>;
+      } catch {
+        current = {};
+      }
+      const existing = (current.anthropic && typeof current.anthropic === "object")
+        ? current.anthropic as Record<string, unknown>
+        : {};
+      // Another instance may have refreshed while we were waiting for the lock.
+      const existingExpires = typeof existing.expires === "number" ? existing.expires : 0;
+      if (existingExpires > Date.now() && typeof existing.access === "string" && existing.access) {
+        return existing.access;
+      }
+      current.anthropic = {
+        ...existing,
+        type: "oauth",
+        access: refreshed.access,
+        refresh: refreshed.refresh,
+        expires: refreshed.expires,
+      };
+      writeFileSync(authPath, JSON.stringify(current, null, 2) + "\n", "utf-8");
+    } finally {
+      release();
+    }
+  } catch (err: any) {
+    // If persistence fails we still return the freshly minted token so the
+    // current run can proceed; the next run will refresh again.
+    log.debug({ s: "flant", err: err?.message }, "failed to persist refreshed claude oauth token");
+  }
+
+  log.debug({ s: "flant" }, "refreshed claude oauth token");
+  return refreshed.access;
 }
 
 /** Resolve the gateway API key (LLM_API_KEY preferred, FLANT_API_KEY fallback). */
@@ -578,6 +672,12 @@ export async function updateFlantInfra(
   setPI(pi);
   const settings = loadFlantSettings();
 
+  // Refresh the personal-subscription Claude OAuth token before (re)registering
+  // providers so the sub provider is built with a valid, non-expired token.
+  if (settings.subscription) {
+    await refreshClaudeOAuthToken();
+  }
+
   let models = isCacheValid(settings) ? settings.cachedFlantModels : null;
   let metadata = isCacheValid(settings) ? settings.cachedOpenRouterData : null;
   let refreshed = false;
@@ -654,6 +754,11 @@ export async function initFlantOnStartup(pi: ExtensionAPI): Promise<void> {
     generatedFlantConfig = null;
     return;
   }
-  if (!settings.autoUpdate) return;
+  if (!settings.autoUpdate) {
+    // updateFlantInfra (which refreshes the token) is skipped when auto-update
+    // is off, but any registered sub provider still needs a fresh token.
+    if (settings.subscription) await refreshClaudeOAuthToken();
+    return;
+  }
   await updateFlantInfra(pi);
 }

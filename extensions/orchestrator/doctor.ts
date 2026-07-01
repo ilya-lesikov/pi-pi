@@ -12,7 +12,7 @@ import {
   PRESET_GROUPS,
 } from "./config.js";
 import { resolveModel, getAllAliases } from "./model-registry.js";
-import { loadFlantSettings, readClaudeOAuthToken, readGatewayApiKey } from "./flant-infra.js";
+import { loadFlantSettings, readClaudeOAuthToken, readGatewayApiKey, refreshClaudeOAuthToken } from "./flant-infra.js";
 import type { Orchestrator } from "./orchestrator.js";
 
 type Severity = "pass" | "warning" | "failure";
@@ -528,7 +528,7 @@ export async function runDoctor(orchestrator: Orchestrator, ctx: any): Promise<v
     }
 
     if (settings.subscription) {
-      const oauthToken = readClaudeOAuthToken();
+      const oauthToken = (await refreshClaudeOAuthToken()) ?? readClaudeOAuthToken();
       const gatewayKey = readGatewayApiKey();
       if (!oauthToken) {
         addLine({ severity: "warning", text: "Personal subscription enabled, but no valid Claude OAuth token found (log in to your subscription in pi)" });

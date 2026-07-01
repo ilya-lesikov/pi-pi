@@ -1,7 +1,13 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const refreshAnthropicTokenMock = vi.fn();
+vi.mock("@earendil-works/pi-ai/oauth", () => ({
+  refreshAnthropicToken: (...args: unknown[]) => refreshAnthropicTokenMock(...args),
+}));
 
 const tempDirs: string[] = [];
 
@@ -32,6 +38,7 @@ function collectModelSpecs(value: unknown): string[] {
 }
 
 afterEach(() => {
+  refreshAnthropicTokenMock.mockReset();
   delete process.env.PI_CODING_AGENT_DIR;
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
@@ -133,6 +140,72 @@ describe("flant-infra", () => {
     );
     const mod = await loadFlantInfraModule(dir);
     expect(mod.readClaudeOAuthToken()).toBeNull();
+  });
+
+  it("refreshClaudeOAuthToken returns the current token when not expired", async () => {
+    const dir = makeTempDir();
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "auth.json"),
+      JSON.stringify({ anthropic: { type: "oauth", access: "sk-ant-oat01-fresh", refresh: "rt", expires: Date.now() + 3_600_000 } }),
+      "utf-8",
+    );
+    const mod = await loadFlantInfraModule(dir);
+    await expect(mod.refreshClaudeOAuthToken()).resolves.toBe("sk-ant-oat01-fresh");
+    expect(refreshAnthropicTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("refreshClaudeOAuthToken refreshes an expired token and persists it", async () => {
+    const dir = makeTempDir();
+    mkdirSync(dir, { recursive: true });
+    const authPath = join(dir, "auth.json");
+    writeFileSync(
+      authPath,
+      JSON.stringify({ anthropic: { type: "oauth", access: "sk-ant-oat01-old", refresh: "rt-old", expires: Date.now() - 1000 } }),
+      "utf-8",
+    );
+    const newExpires = Date.now() + 3_600_000;
+    refreshAnthropicTokenMock.mockResolvedValue({ access: "sk-ant-oat01-new", refresh: "rt-new", expires: newExpires });
+
+    const mod = await loadFlantInfraModule(dir);
+    await expect(mod.refreshClaudeOAuthToken()).resolves.toBe("sk-ant-oat01-new");
+    expect(refreshAnthropicTokenMock).toHaveBeenCalledWith("rt-old");
+
+    const persisted = JSON.parse(readFileSync(authPath, "utf-8"));
+    expect(persisted.anthropic).toMatchObject({
+      type: "oauth",
+      access: "sk-ant-oat01-new",
+      refresh: "rt-new",
+      expires: newExpires,
+    });
+    // A subsequent synchronous read now sees the fresh token.
+    expect(mod.readClaudeOAuthToken()).toBe("sk-ant-oat01-new");
+  });
+
+  it("refreshClaudeOAuthToken returns null when expired and no refresh token present", async () => {
+    const dir = makeTempDir();
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "auth.json"),
+      JSON.stringify({ anthropic: { type: "oauth", access: "sk-ant-oat01-old", expires: Date.now() - 1000 } }),
+      "utf-8",
+    );
+    const mod = await loadFlantInfraModule(dir);
+    await expect(mod.refreshClaudeOAuthToken()).resolves.toBeNull();
+    expect(refreshAnthropicTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("refreshClaudeOAuthToken returns null when refresh fails", async () => {
+    const dir = makeTempDir();
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "auth.json"),
+      JSON.stringify({ anthropic: { type: "oauth", access: "sk-ant-oat01-old", refresh: "rt-old", expires: Date.now() - 1000 } }),
+      "utf-8",
+    );
+    refreshAnthropicTokenMock.mockRejectedValue(new Error("refresh boom"));
+    const mod = await loadFlantInfraModule(dir);
+    await expect(mod.refreshClaudeOAuthToken()).resolves.toBeNull();
   });
 
   it("generateDisplayName formats model ids", async () => {
