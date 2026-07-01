@@ -262,30 +262,51 @@ export function validateFromPath(cwd: string, fromPath: string): { ok: true; dir
 
 export function taskName(taskDir: string): string {
   try {
-    const state = loadTask(taskDir);
-    let desc = state.description ?? "";
-
-    if (["implement", "debug", "brainstorm", "review", "quick"].includes(desc)) {
-      const urPath = join(taskDir, "USER_REQUEST.md");
-      if (existsSync(urPath)) {
-        const content = readFileSync(urPath, "utf-8");
-        const lines = content.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
-        const firstContent = lines.find((l) => !l.startsWith("#"));
-        if (firstContent) desc = firstContent;
-      }
-    }
-
-    if (desc) {
-      desc = desc.replace(/\s+/g, " ").trim();
-      if (desc.length > 60) desc = desc.slice(0, 57) + "...";
-      return desc;
-    }
+    return taskNameFromState(taskDir, loadTask(taskDir));
   } catch {
     getLogger().warn({ s: "state", taskDir }, "failed to read task name");
+    return dirSlugName(taskDir);
   }
+}
+
+// Same as taskName but reuses an already-loaded TaskState (avoids re-reading
+// state.json per resume-menu entry). The only per-entry disk read is the
+// USER_REQUEST.md fallback, which is unavoidable for generic descriptions.
+export function taskNameFromState(taskDir: string, state: TaskState): string {
+  let desc = state.description ?? "";
+
+  if (["implement", "debug", "brainstorm", "review", "quick"].includes(desc)) {
+    const urPath = join(taskDir, "USER_REQUEST.md");
+    if (existsSync(urPath)) {
+      const content = readFileSync(urPath, "utf-8");
+      const lines = content.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+      const firstContent = lines.find((l) => !l.startsWith("#"));
+      if (firstContent) desc = firstContent;
+    }
+  }
+
+  if (desc) {
+    desc = desc.replace(/\s+/g, " ").trim();
+    if (desc.length > 60) desc = desc.slice(0, 57) + "...";
+    return desc;
+  }
+  return dirSlugName(taskDir);
+}
+
+function dirSlugName(taskDir: string): string {
   const dir = basename(taskDir);
-  const match = dir.match(/^\d+_(.+)$/);
-  return match ? match[1].replace(/-/g, " ") : dir;
+  const idx = dir.indexOf("_");
+  const slug = idx >= 0 ? dir.slice(idx + 1) : dir;
+  return slug.replace(/-/g, " ");
+}
+
+// The task's short id is the leading segment of its dir name (`${id}_${slug}`),
+// where id is a 12-char uuid slice from createTask. Used to disambiguate
+// otherwise-identical resume-menu titles.
+export function taskShortId(taskDir: string): string {
+  const dir = basename(taskDir);
+  const idPart = dir.split("_", 1)[0] ?? dir;
+  return idPart.slice(0, 6);
 }
 
 export function taskAge(state: TaskState): string {

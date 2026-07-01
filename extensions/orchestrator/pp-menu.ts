@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, writeFileSync } from "fs";
-import { join, relative } from "path";
+import { join, relative, basename } from "path";
 import { isDeepStrictEqual } from "util";
 import { askUser, isCancel } from "../../3p/pi-ask-user/index.js";
 import { unregisterAgentDefinitions } from "./agents/registry.js";
@@ -44,6 +44,8 @@ import {
   saveTask,
   taskAge,
   taskName,
+  taskNameFromState,
+  taskShortId,
   type AutonomousConfig,
   type TaskMode,
   type TaskInfo,
@@ -2798,14 +2800,60 @@ async function pickModeForTaskStart(
   }
 }
 
+// Title: scannable human-readable intent + age. Callers must guarantee
+// uniqueness across the menu (see buildResumeOptions) so the option->task
+// mapping stays stable.
 function resumeOptionTitle(t: TaskInfo): string {
-  return taskName(t.dir);
+  return `${taskNameFromState(t.dir, t.state)} — ${taskAge(t.state)}`;
 }
 
-function resumeOptionDescription(t: TaskInfo): string {
-  const age = taskAge(t.state);
-  const phase = t.state.phase === t.type ? t.type : `${t.type}/${t.state.phase}`;
-  return `${phase}, ${age}`;
+// Description: rich per-entry detail sourced entirely from the already-loaded
+// TaskState (no extra disk reads). Empty/irrelevant fields are omitted.
+function resumeOptionDescription(t: TaskInfo, cwd: string): string {
+  const s = t.state;
+  const parts: string[] = [];
+
+  const phaseStep = s.step ? `${s.phase}/${s.step}` : s.phase;
+  parts.push(`${t.type} · ${phaseStep}`);
+
+  const mode = s.effectiveMode ?? s.mode;
+  if (mode) parts.push(mode);
+
+  if (s.reviewCycle && s.reviewCycle.pass > 0) parts.push(`review pass ${s.reviewCycle.pass}`);
+
+  const fileCount = s.modifiedFiles?.length ?? 0;
+  if (fileCount > 0) parts.push(`${fileCount} file${fileCount === 1 ? "" : "s"}`);
+
+  // Only surface the repo when it is informative: a multi-repo task, or a root
+  // repo that differs from the current project directory.
+  const rootRepo = s.repos?.find((r) => r.isRoot) ?? s.repos?.[0];
+  if (rootRepo && ((s.repos?.length ?? 0) > 1 || basename(rootRepo.path) !== basename(cwd))) {
+    parts.push(`repo: ${basename(rootRepo.path)}`);
+  }
+
+  parts.push(`id ${taskShortId(t.dir)}`);
+  return parts.join(" · ");
+}
+
+// Build menu options with a stable option->task index. Titles are made unique
+// (short id appended on collision) so selection maps back deterministically even
+// if two tasks share an intent, and the age component can't break the mapping
+// after the picker returns.
+function buildResumeOptions(tasks: TaskInfo[], cwd: string): { options: OptionInput[]; byTitle: Map<string, TaskInfo> } {
+  const seen = new Map<string, number>();
+  const byTitle = new Map<string, TaskInfo>();
+  const options: OptionInput[] = [];
+  for (const t of tasks) {
+    let title = resumeOptionTitle(t);
+    const count = seen.get(title) ?? 0;
+    seen.set(title, count + 1);
+    if (count > 0 || byTitle.has(title)) title = `${title} [${taskShortId(t.dir)}]`;
+    // Extremely defensive: if still colliding, keep appending until unique.
+    while (byTitle.has(title)) title = `${title} ·`;
+    byTitle.set(title, t);
+    options.push({ title, description: resumeOptionDescription(t, cwd) });
+  }
+  return { options, byTitle };
 }
 
 async function showResumeMenu(
@@ -2821,16 +2869,13 @@ async function showResumeMenu(
       return BACK;
     }
 
-    const options: OptionInput[] = tasks.map((t) => ({
-      title: resumeOptionTitle(t),
-      description: resumeOptionDescription(t),
-    }));
+    const { options, byTitle } = buildResumeOptions(tasks, orchestrator.cwd);
     options.push({ title: "Back", description: "Return to the previous menu" });
 
     const choice = await selectOption(ctx, "Resume", options);
     if (!choice || choice === "Back") return BACK;
 
-    const task = tasks.find((t) => resumeOptionTitle(t) === choice);
+    const task = byTitle.get(choice);
     if (!task) continue;
     const result = await resumeTask(orchestrator, ctx, task);
     if (result.ok) return "started";
