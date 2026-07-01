@@ -1,6 +1,19 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { SUB_MODEL_PREFIX, SUB_PROVIDER } from "./flant-infra.js";
+
+/**
+ * A usage unit is subscription-routed (flat-rate personal Claude subscription,
+ * not per-token billed) when its main-turn provider is the subscription
+ * provider, or when the registered model id carries the `sub/` prefix. The
+ * prefix is the only signal available for subagents (subagents:completed has no
+ * provider field), so we always check it in addition to the provider.
+ */
+export function isSubscriptionRouted(modelId?: string, provider?: string): boolean {
+  if (provider === SUB_PROVIDER) return true;
+  return typeof modelId === "string" && modelId.startsWith(SUB_MODEL_PREFIX);
+}
 
 export interface ModelUsage {
   inputTokens: number;
@@ -9,6 +22,8 @@ export interface ModelUsage {
   cacheWriteTokens: number;
   cacheSupported: boolean;
   turns: number;
+  /** True when this model's turns are billed against the flat-rate subscription (dollars excluded from totals). */
+  subscription: boolean;
 }
 
 export interface UsageTracker {
@@ -46,6 +61,8 @@ export interface SubagentUsage {
   cost: number;
   durationMs: number;
   toolUses: number;
+  /** True when this subagent's usage is billed against the flat-rate subscription (dollars excluded from totals). */
+  subscription: boolean;
 }
 
 interface TrackerState {
@@ -99,12 +116,15 @@ export function createUsageTracker(): UsageTracker {
   const state = createInitialState();
 
   return {
-    recordTurn(modelId: string, _provider: string, input: number, output: number, cacheRead: number, cacheWrite: number, cost: number, cacheSupported?: boolean): void {
+    recordTurn(modelId: string, provider: string, input: number, output: number, cacheRead: number, cacheWrite: number, cost: number, cacheSupported?: boolean): void {
       const safeInput = toFiniteNumber(input);
       const safeOutput = toFiniteNumber(output);
       const safeCacheRead = toFiniteNumber(cacheRead);
       const safeCacheWrite = toFiniteNumber(cacheWrite);
-      const safeCost = toFiniteNumber(cost);
+      const subscription = isSubscriptionRouted(modelId, provider);
+      // Subscription-routed turns are flat-rate: keep the tokens but exclude the
+      // fictitious per-token dollars so totals stay paid-only by construction.
+      const safeCost = subscription ? 0 : toFiniteNumber(cost);
 
       state.totalInputTokens += safeInput;
       state.totalOutputTokens += safeOutput;
@@ -121,6 +141,7 @@ export function createUsageTracker(): UsageTracker {
         cacheWriteTokens: 0,
         cacheSupported: false,
         turns: 0,
+        subscription: false,
       };
 
       usage.inputTokens += safeInput;
@@ -128,6 +149,7 @@ export function createUsageTracker(): UsageTracker {
       usage.cacheReadTokens += safeCacheRead;
       usage.cacheWriteTokens += safeCacheWrite;
       if (cacheSupported) usage.cacheSupported = true;
+      if (subscription) usage.subscription = true;
       usage.turns += 1;
       state.models.set(key, usage);
     },
@@ -142,7 +164,10 @@ export function createUsageTracker(): UsageTracker {
       const safeTotal = toFiniteNumber(tokens.total);
       const safeCacheRead = toFiniteNumber(tokens.cacheRead);
       const safeCacheWrite = toFiniteNumber(tokens.cacheWrite);
-      const safeCost = toFiniteNumber(tokens.cost ?? cost);
+      // Subagents carry no provider field, so detect subscription routing from
+      // the registered model id prefix. Zero the dollars when subscription.
+      const subscription = isSubscriptionRouted(meta?.modelId);
+      const safeCost = subscription ? 0 : toFiniteNumber(tokens.cost ?? cost);
 
       const effectiveInput = safeInput === 0 && safeOutput === 0 ? safeTotal : safeInput;
 
@@ -164,6 +189,7 @@ export function createUsageTracker(): UsageTracker {
         cost: safeCost,
         durationMs: toFiniteNumber(meta?.durationMs),
         toolUses: toFiniteNumber(meta?.toolUses),
+        subscription,
       });
     },
 
@@ -197,6 +223,7 @@ export function createUsageTracker(): UsageTracker {
             cost: toFiniteNumber(sa.cost),
             durationMs: toFiniteNumber(sa.durationMs),
             toolUses: toFiniteNumber(sa.toolUses),
+            subscription: sa.subscription === true,
           };
           state.subagents.push(entry);
           state.subagentInputTokens += entry.inputTokens;
@@ -213,6 +240,7 @@ export function createUsageTracker(): UsageTracker {
             cacheWriteTokens: toFiniteNumber(usage.cacheWriteTokens),
             cacheSupported: (usage as any).cacheSupported === true,
             turns: toFiniteNumber(usage.turns),
+            subscription: (usage as any).subscription === true,
           });
         }
       }

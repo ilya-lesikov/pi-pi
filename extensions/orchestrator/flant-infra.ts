@@ -70,7 +70,7 @@ const DEFAULT_SETTINGS: FlantSettings = {
 export const SUB_PROVIDER = "pp-flant-anthropic-sub";
 
 /** Prefix the gateway expects for personal-subscription Claude models. */
-const SUB_MODEL_PREFIX = "sub/";
+export const SUB_MODEL_PREFIX = "sub/";
 
 /**
  * Read the Claude OAuth access token persisted by pi's built-in `anthropic`
