@@ -1567,7 +1567,7 @@ describe("task modes and quick task", () => {
     expect(orchestrator.active!.state.autonomousConfig).toBeDefined();
   });
 
-  it("autonomous pp_phase_complete auto-advances without opening menu", async () => {
+  it("autonomous pp_phase_complete auto-advances (plan→implement) without opening menu", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);
     const ctx = makeCtx();
@@ -1583,14 +1583,58 @@ describe("task modes and quick task", () => {
     };
     writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
     writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+    // Move to an autonomous-capable phase (plan). brainstorm is always guided
+    // even for an autonomous task, so auto-advance only applies from plan onward.
+    orchestrator.active!.state.phase = "plan";
+    orchestrator.active!.state.step = "llm_work";
+    const plansDir = join(taskDir, "plans");
+    mkdirSync(plansDir, { recursive: true });
+    writeFileSync(
+      join(plansDir, `${Math.floor(Date.now() / 1000)}_synthesized.md`),
+      makeValidPlan([
+        "- [ ] P1. Implement X — Done when: implementation for X is complete",
+      ]),
+      "utf-8",
+    );
 
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     const result = await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
 
     expect(result.content[0].text).toBe("");
-    expect(orchestrator.active!.state.phase).toBe("plan");
+    expect(orchestrator.active!.state.phase).toBe("implement");
     expect(menu.transcript.filter((entry) => entry.question.startsWith("/pp"))).toHaveLength(0);
+  });
+
+  it("autonomous task in brainstorm stays guided (pp_phase_complete opens the menu, does NOT auto-advance)", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "implement", undefined, undefined, "autonomous");
+    const taskDir = orchestrator.active!.dir;
+    orchestrator.active!.state.autonomousConfig = {
+      phases: {
+        brainstorm: { reviewPreset: "regular", maxReviewPasses: 0 },
+        plan: { plannerPreset: "regular", reviewPreset: "regular", maxReviewPasses: 0 },
+        implement: { reviewPreset: "regular", maxReviewPasses: 0 },
+      },
+    };
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+    expect(orchestrator.active!.state.phase).toBe("brainstorm");
+
+    // brainstorm is user-driven: pp_phase_complete must fall through to the
+    // guided menu rather than the autonomous auto-advance branch. (Autonomous
+    // tasks skip the planner preset picker on transition, so only the guided
+    // Next→Continue step is expected here.)
+    expectActiveTaskNext(menu, "Continue to plan & implement");
+    const ppPhaseComplete = getTool(pi, "pp_phase_complete");
+    await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
+    await new Promise((r) => setTimeout(r, 10));
+
+    // The guided menu was shown (auto-advance did NOT bypass it).
+    expect(menu.transcript.filter((entry) => entry.question.startsWith("/pp"))).not.toHaveLength(0);
   });
 
   it("autonomous review loop re-runs until cap then advances", async () => {
@@ -2043,10 +2087,11 @@ describe("task modes and quick task", () => {
 
     const title = "implement";
     const pp = getCommand(pi, "pp");
+    const titleMatch = (t: string) => t.includes(title);
     menu
       .expect({ question: "/pp", options: { include: ["Task"] }, choose: "Task" })
       .expect({ question: "Task", options: { include: ["Resume"] }, choose: "Resume" })
-      .expect({ question: "Resume", options: { include: [title] }, choose: title });
+      .expect({ question: "Resume", options: { include: [titleMatch] }, choose: titleMatch });
     await pp(undefined, ctx);
 
     expect(orchestrator.active).not.toBeNull();
@@ -2071,10 +2116,11 @@ describe("task modes and quick task", () => {
     await orchestrator.cleanupActive();
 
     const pp = getCommand(pi, "pp");
+    const configTitleMatch = (t: string) => t.includes("resume autonomous config");
     menu
       .expect({ question: "/pp", options: { include: ["Task"] }, choose: "Task" })
       .expect({ question: "Task", options: { include: ["Resume"] }, choose: "Resume" })
-      .expect({ question: "Resume", options: { include: ["resume autonomous config"] }, choose: "resume autonomous config" });
+      .expect({ question: "Resume", options: { include: [configTitleMatch] }, choose: configTitleMatch });
     await pp(undefined, ctx);
 
     expect(orchestrator.active).not.toBeNull();
@@ -2104,6 +2150,10 @@ describe("task modes and quick task", () => {
     writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
     writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
 
+    // brainstorm is user-driven even for an autonomous task, so the transition
+    // to plan goes through the guided menu (which auto-skips the planner preset
+    // picker because the task is autonomous).
+    expectActiveTaskNext(menu, "Continue to plan & implement");
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("call-autonomous-skip-planner", { summary: "done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
@@ -2598,7 +2648,7 @@ describe("resume and recovery", () => {
     menu
       .expect({ question: "/pp", options: { include: ["Task"] }, choose: "Task" })
       .expect({ question: "Task", options: { include: ["Resume"] }, choose: "Resume" })
-      .expect({ question: "Resume", options: { include: ["resume phase state"] }, choose: "resume phase state" });
+      .expect({ question: "Resume", options: { include: [(t: string) => t.includes("resume phase state")] }, choose: (t: string) => t.includes("resume phase state") });
     await pp(undefined, ctx);
 
     expect(orchestrator.active).not.toBeNull();
@@ -2627,7 +2677,7 @@ describe("resume and recovery", () => {
     menu
       .expect({ question: "/pp", options: { include: ["Task"] }, choose: "Task" })
       .expect({ question: "Task", options: { include: ["Resume"] }, choose: "Resume" })
-      .expect({ question: "Resume", options: { include: ["resume stale repos"] }, choose: "resume stale repos" });
+      .expect({ question: "Resume", options: { include: [(t: string) => t.includes("resume stale repos")] }, choose: (t: string) => t.includes("resume stale repos") });
     await pp(undefined, ctx);
 
     expect(orchestrator.active!.state.repos).toEqual([{ path: cwd, isRoot: true }]);
@@ -3919,6 +3969,9 @@ describe("full user flows", () => {
     writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
     writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
 
+    // brainstorm is user-driven: the brainstorm→plan transition uses the guided
+    // menu. plan→implement and implement→review below are autonomous auto-advance.
+    expectActiveTaskNext(menu, "Continue to plan & implement");
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     await ppPhaseComplete.execute("flow-auto-1", { summary: "brainstorm done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));

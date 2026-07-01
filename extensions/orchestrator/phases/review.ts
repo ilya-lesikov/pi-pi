@@ -12,7 +12,7 @@ function isEnabled(value: { enabled?: boolean } | undefined): boolean {
   return value?.enabled !== false;
 }
 
-export function reviewSystemPrompt(taskDir: string, pass: number, phase?: string): string {
+export function reviewSystemPrompt(taskDir: string, pass: number, phase?: string, mode?: "guided" | "autonomous"): string {
   const reviewsDir = phase === "brainstorm" ? join(taskDir, "brainstorm-reviews") : join(taskDir, "code-reviews");
   const plansDir = join(taskDir, "plans");
 
@@ -42,6 +42,34 @@ export function reviewSystemPrompt(taskDir: string, pass: number, phase?: string
     ].join("\n");
   }
 
+  // In autonomous plan/implement the phase does NOT complete until the agent
+  // re-calls pp_phase_complete: that is what finalizes the pass and advances the
+  // phase. Telling it to "present to the user" and wait causes the plan phase to
+  // stall after applying feedback. Guided mode keeps the user-facing behavior.
+  const finalStep =
+    mode === "autonomous"
+      ? "3. Call pp_phase_complete again to finalize this review pass. The phase is NOT complete until you do — do NOT stop or wait for the user"
+      : "3. Present the synthesis to the user";
+
+  const tail =
+    mode === "autonomous"
+      ? [
+          "",
+          "If changes are needed:",
+          `1. Create a fix plan at ${plansDir}/<timestamp>_<description>.md (do NOT modify the original synthesized plan)`,
+          "2. Implement the fixes",
+          "3. Run afterImplement commands",
+          "4. Then call pp_phase_complete again — the extension will start a new review pass or advance the phase as appropriate. Do NOT wait for the user.",
+        ]
+      : [
+          "",
+          "If changes are needed:",
+          `1. Create a fix plan at ${plansDir}/<timestamp>_<description>.md (do NOT modify the original synthesized plan)`,
+          "2. Implement the fixes",
+          "3. Run afterImplement commands",
+          "4. A new review pass will begin",
+        ];
+
   return [
     `[PI-PI — REVIEW CYCLE (pass ${pass})]`,
     "",
@@ -55,13 +83,8 @@ export function reviewSystemPrompt(taskDir: string, pass: number, phase?: string
     "# Your job (in this order):",
     `1. Read ALL reviewer outputs from ${reviewsDir}/`,
     `2. Synthesize into ${reviewsDir}/<timestamp>_final_pass-${pass}.md`,
-    "3. Present the synthesis to the user",
-    "",
-    "If changes are needed:",
-    `1. Create a fix plan at ${plansDir}/<timestamp>_<description>.md (do NOT modify the original synthesized plan)`,
-    "2. Implement the fixes",
-    "3. Run afterImplement commands",
-    "4. A new review pass will begin",
+    finalStep,
+    ...tail,
   ].join("\n");
 }
 

@@ -213,7 +213,7 @@ function reviewReadyMessage(phase: string): string {
   if (phase === "brainstorm") {
     return "[PI-PI] Review cycle is ready for apply_feedback. The reviewers assessed your artifacts (USER_REQUEST.md, RESEARCH.md, and artifacts/), not a code diff. Read their outputs and update those artifacts as needed.";
   }
-  return "[PI-PI] Review cycle is ready for apply_feedback. Read reviewer outputs and proceed.";
+  return "[PI-PI] Review cycle is ready for apply_feedback. Read the reviewer outputs, apply any required changes, then call pp_phase_complete again to finalize this review pass and advance the phase. Do NOT stop or wait for the user — the phase is NOT complete until you re-call pp_phase_complete.";
 }
 
 export async function enterReviewCycle(
@@ -840,7 +840,10 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
         const count = orchestrator.spawnedAgentIds.size + orchestrator.pendingSubagentSpawns;
         return { content: [{ type: "text" as const, text: `${count} subagent(s) still running. Wait for them to complete before calling pp_phase_complete.` }], isError: true as const, details: {} };
       }
-      const effectiveMode = getEffectiveMode(orchestrator.active.state);
+      // Gate on the effective PHASE mode, not the task mode: brainstorm/debug/
+      // review are always user-driven even for an autonomous task, so they must
+      // fall through to the guided menu path below rather than auto-advancing.
+      const effectiveMode = getEffectivePhaseMode(orchestrator.active.state);
       if (effectiveMode === "autonomous") {
         const phase = orchestrator.active.state.phase;
         let justFinalizedReviewCycle = false;
