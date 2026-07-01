@@ -206,14 +206,21 @@ function tryCompleteReviewCycle(orchestrator: Orchestrator, spawnedReviewers?: n
     },
     "instruction",
   );
-  orchestrator.safeSendUserMessage(reviewReadyMessage(phase));
+  orchestrator.safeSendUserMessage(reviewReadyMessage(phase, getEffectivePhaseMode(orchestrator.active.state)));
 }
 
-function reviewReadyMessage(phase: string): string {
+function reviewReadyMessage(phase: string, mode: TaskMode): string {
   if (phase === "brainstorm") {
     return "[PI-PI] Review cycle is ready for apply_feedback. The reviewers assessed your artifacts (USER_REQUEST.md, RESEARCH.md, and artifacts/), not a code diff. Read their outputs and update those artifacts as needed.";
   }
-  return "[PI-PI] Review cycle is ready for apply_feedback. Read the reviewer outputs, apply any required changes, then call pp_phase_complete again to finalize this review pass and advance the phase. Do NOT stop or wait for the user — the phase is NOT complete until you re-call pp_phase_complete.";
+  // Only autonomous plan/implement auto-advance: those must re-call
+  // pp_phase_complete to finalize the pass and transition. Guided phases
+  // (including debug and the interactive review phase) stay user-driven, so
+  // they get neutral wording with no re-call/auto-advance directive.
+  if (mode === "autonomous") {
+    return "[PI-PI] Review cycle is ready for apply_feedback. Read the reviewer outputs, apply any required changes, then call pp_phase_complete again to finalize this review pass and advance the phase. Do NOT stop or wait for the user — the phase is NOT complete until you re-call pp_phase_complete.";
+  }
+  return "[PI-PI] Review cycle is ready for apply_feedback. Read the reviewer outputs and apply any required changes.";
 }
 
 export async function enterReviewCycle(

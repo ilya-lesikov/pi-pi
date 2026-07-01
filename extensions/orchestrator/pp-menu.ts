@@ -3377,13 +3377,16 @@ async function showQuickTaskMenu(
     if (summary !== "/pp") headerLines.push(`\n\n${summary}`);
     const menuTitle = headerLines.join("");
 
-    const choice = await selectOption(ctx, menuTitle, [
+    const { choice, cancelReason } = await selectOptionCancelable(ctx, menuTitle, [
       opt("Complete", "Mark task as done and clean up"),
       opt("Pause", "Suspend task to resume later"),
       opt("Info", "Subagents, usage, and task status"),
       opt("Settings", "Flant AI and other configuration"),
       opt("Back", "Return to the prompt and keep working"),
     ]);
+    // A deliberate ESC in tool mode must stop the turn cleanly (mirror the
+    // guided/autonomous branches); in command mode ESC just closes the menu.
+    if (cancelReason === "user" && mode === "tool") return USER_CANCELLED;
     if (!choice || choice === "Back") return "";
     if (choice === "Info") {
       await showInfoMenu(orchestrator, ctx);

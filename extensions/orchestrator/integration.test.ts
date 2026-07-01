@@ -1675,6 +1675,23 @@ describe("task modes and quick task", () => {
     expect(result.content[0].text).toContain("update USER_REQUEST.md and RESEARCH.md");
   });
 
+  it("ESC on pp_phase_complete for a quick task also stops the turn cleanly", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "quick", "quick esc");
+    expect(orchestrator.active!.type).toBe("quick");
+
+    menu.expect({ question: m.anyTaskMenu, cancel: "user" });
+
+    const ppPhaseComplete = getTool(pi, "pp_phase_complete");
+    const result = await ppPhaseComplete.execute("quick-esc-1", { summary: "done" }, undefined, undefined, ctx);
+
+    expect(ctx.abort).toHaveBeenCalled();
+    expect(result.content[0].text).toBe("");
+  });
+
   it("autonomous review loop re-runs until cap then advances", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);
@@ -2940,6 +2957,49 @@ describe("brainstorm and plan review cycles", () => {
     expect(readyMessages[readyMessages.length - 1]).toContain("USER_REQUEST.md");
     expect(readyMessages[readyMessages.length - 1]).toContain("RESEARCH.md");
     expect(readyMessages[readyMessages.length - 1]).toContain("artifacts/");
+  });
+
+  const runPlanReviewReady = async (mode?: "autonomous") => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx({ cwd });
+
+    await orchestrator.startTask(ctx as any, "implement", "plan review message", undefined, undefined, mode);
+    const taskDir = orchestrator.active!.dir;
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+    mkdirSync(join(taskDir, "plan-reviews"), { recursive: true });
+    writeFileSync(
+      join(taskDir, "plan-reviews", `${Math.floor(Date.now() / 1000)}_test_round-1.md`),
+      "Plan review feedback",
+      "utf-8",
+    );
+    orchestrator.active!.state.phase = "plan";
+    orchestrator.active!.state.step = "synthesize";
+    saveTask(taskDir, orchestrator.active!.state);
+
+    await enterReviewCycle(orchestrator, ctx, "regular");
+    await new Promise((r) => setTimeout(r, 10));
+
+    return (pi.sendUserMessage as any).mock.calls
+      .map((c: any[]) => c[0] as string)
+      .filter((text: string) => text.includes("ready for apply_feedback"));
+  };
+
+  it("autonomous plan review-ready message mandates re-calling pp_phase_complete", async () => {
+    const readyMessages = await runPlanReviewReady("autonomous");
+    expect(readyMessages.length).toBeGreaterThan(0);
+    const last = readyMessages[readyMessages.length - 1];
+    expect(last).toContain("pp_phase_complete");
+    expect(last).toContain("Do NOT stop or wait for the user");
+  });
+
+  it("guided plan review-ready message does NOT tell the agent to re-call pp_phase_complete or auto-advance", async () => {
+    const readyMessages = await runPlanReviewReady();
+    expect(readyMessages.length).toBeGreaterThan(0);
+    const last = readyMessages[readyMessages.length - 1];
+    expect(last).not.toContain("pp_phase_complete");
+    expect(last).not.toContain("Do NOT stop or wait for the user");
   });
 
   it("plan review cycle reaches apply_feedback and finalizeReviewCycle returns to user_gate", async () => {
