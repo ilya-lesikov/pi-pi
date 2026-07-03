@@ -248,7 +248,7 @@ export async function spawnBrainstormReviewers(
           `${reviewOutputFiles.length} brainstorm reviewer(s) completed (round ${round}). Reviews in ${reviewsDir}:`,
           ...reviewOutputFiles.map((f) => `  - ${f}`),
           "",
-          "Read all reviews and update USER_REQUEST.md and RESEARCH.md if needed.",
+          "Read all reviews and update USER_REQUEST.md, RESEARCH.md, and any artifacts/ files if needed.",
         ].join("\n"),
         display: true,
       },

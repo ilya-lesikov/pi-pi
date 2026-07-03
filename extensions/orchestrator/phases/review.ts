@@ -38,7 +38,7 @@ export function reviewSystemPrompt(taskDir: string, pass: number, phase?: string
       "# Your job:",
       `1. Read ALL reviewer outputs from ${reviewsDir}/`,
       "2. Identify valid gaps and inaccuracies that would block planning",
-      "3. If changes are needed: update ONLY the content within existing sections of USER_REQUEST.md / RESEARCH.md",
+      "3. If changes are needed: update the content within existing sections of USER_REQUEST.md / RESEARCH.md, and add/update artifacts/ files as needed",
       "4. If reviewers found no actionable gaps (e.g. task already done, minor suggestions only): do NOT modify the files",
       "5. Ignore suggestions that don't affect downstream planning quality",
       "",
