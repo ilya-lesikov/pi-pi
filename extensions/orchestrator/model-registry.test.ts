@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./log.js", () => ({
   getLogger: () => ({
@@ -11,7 +11,10 @@ import {
   getAllAliases,
   getModelFamilies,
   getModelInfo,
+  isSubscriptionFallbackActive,
   resolveModel,
+  setSubscriptionFallbackActive,
+  toNonSubSpec,
   updateRegistryFromAvailableModels,
 } from "./model-registry.js";
 
@@ -297,6 +300,50 @@ describe("model-registry", () => {
 
     it("returns null for empty available list", () => {
       expect(findLatestFamilyMatch("anthropic/claude-opus-latest", [])).toBeNull();
+    });
+  });
+
+  describe("subscription fallback rewrite", () => {
+    beforeEach(() => setSubscriptionFallbackActive(false));
+    afterEach(() => setSubscriptionFallbackActive(false));
+
+    it("toNonSubSpec rewrites provider-prefixed sub specs", () => {
+      expect(toNonSubSpec("pp-flant-anthropic-sub/sub/claude-opus-4-8")).toBe("pp-flant-anthropic/claude-opus-4-8");
+    });
+
+    it("toNonSubSpec rewrites bare sub/ ids", () => {
+      expect(toNonSubSpec("sub/claude-haiku-4-5")).toBe("pp-flant-anthropic/claude-haiku-4-5");
+    });
+
+    it("toNonSubSpec leaves non-subscription specs unchanged", () => {
+      expect(toNonSubSpec("pp-flant-anthropic/claude-opus-4-8")).toBe("pp-flant-anthropic/claude-opus-4-8");
+      expect(toNonSubSpec("openai/gpt-5.4")).toBe("openai/gpt-5.4");
+    });
+
+    it("resolveModel leaves sub specs unchanged while fallback inactive", () => {
+      expect(isSubscriptionFallbackActive()).toBe(false);
+      expect(resolveModel("pp-flant-anthropic-sub/sub/claude-opus-4-8")).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
+    });
+
+    it("resolveModel rewrites sub specs to non-sub while fallback active", () => {
+      setSubscriptionFallbackActive(true);
+      expect(isSubscriptionFallbackActive()).toBe(true);
+      expect(resolveModel("pp-flant-anthropic-sub/sub/claude-opus-4-8")).toBe("pp-flant-anthropic/claude-opus-4-8");
+      expect(resolveModel("sub/claude-haiku-4-5")).toBe("pp-flant-anthropic/claude-haiku-4-5");
+    });
+
+    it("resolveModel does not touch non-sub specs while fallback active", () => {
+      setSubscriptionFallbackActive(true);
+      expect(resolveModel("pp-flant-openai/gpt-5-4")).toBe("pp-flant-openai/gpt-5-4");
+    });
+
+    it("resolveModel rewrites a subscription alias after registry update while fallback active", () => {
+      updateRegistryFromAvailableModels([
+        "pp-flant-anthropic-sub/sub/claude-opus-4-7",
+        "pp-flant-anthropic-sub/sub/claude-opus-4-8",
+      ]);
+      setSubscriptionFallbackActive(true);
+      expect(resolveModel("pp-flant-anthropic-sub/claude-opus-latest")).toBe("pp-flant-anthropic/claude-opus-4-8");
     });
   });
 });

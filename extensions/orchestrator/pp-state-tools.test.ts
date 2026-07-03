@@ -1,0 +1,162 @@
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("./log.js", () => ({
+  getLogger: () => ({ debug: vi.fn(), warn: vi.fn(), error: vi.fn(), info: vi.fn() }),
+}));
+
+import { registerStateFileTools } from "./pp-state-tools.js";
+
+const tempDirs: string[] = [];
+
+function makeTempCwd(): string {
+  const dir = mkdtempSync(join(tmpdir(), "pi-pi-state-tools-"));
+  tempDirs.push(dir);
+  return dir;
+}
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+interface RegisteredTool {
+  name: string;
+  execute: (id: string, params: any) => Promise<any>;
+}
+
+function setup() {
+  const cwd = makeTempCwd();
+  const taskDir = join(cwd, ".pp", "state", "brainstorm", "abc_brainstorm");
+  mkdirSync(join(taskDir, "artifacts"), { recursive: true });
+  mkdirSync(join(taskDir, "plans"), { recursive: true });
+
+  const tools = new Map<string, RegisteredTool>();
+  const orchestrator: any = {
+    cwd,
+    active: { dir: taskDir },
+    pi: { registerTool: (t: RegisteredTool) => tools.set(t.name, t) },
+  };
+  registerStateFileTools(orchestrator);
+  return { cwd, taskDir, orchestrator, tools };
+}
+
+function textOf(result: any): string {
+  return (result.content ?? []).map((c: any) => c.text).join("\n");
+}
+
+const VALID_RESEARCH = [
+  "## Affected Code",
+  "- foo.ts:bar — does a thing",
+  "## Architecture Context",
+  "- how it connects",
+  "## Constraints & Edge Cases",
+  "- MUST: keep it working",
+].join("\n");
+
+describe("pp_write_state_file", () => {
+  it("creates a valid RESEARCH.md and returns compact output (no diff)", async () => {
+    const { taskDir, tools } = setup();
+    const res = await tools.get("pp_write_state_file")!.execute("1", { path: "RESEARCH.md", content: VALID_RESEARCH });
+    expect(res.isError).toBeFalsy();
+    expect(res.details).toEqual({});
+    expect(textOf(res)).toMatch(/^Created RESEARCH\.md \(\+\d+\/-\d+ lines\)$/);
+    expect(textOf(res)).not.toContain("Affected Code");
+    expect(readFileSync(join(taskDir, "RESEARCH.md"), "utf-8")).toBe(VALID_RESEARCH);
+  });
+
+  it("reports 'Updated' on overwrite", async () => {
+    const { tools } = setup();
+    await tools.get("pp_write_state_file")!.execute("1", { path: "RESEARCH.md", content: VALID_RESEARCH });
+    const res = await tools.get("pp_write_state_file")!.execute("2", { path: "RESEARCH.md", content: VALID_RESEARCH + "\n- more" });
+    expect(textOf(res)).toMatch(/^Updated RESEARCH\.md/);
+  });
+
+  it("rejects invalid RESEARCH.md structure without writing", async () => {
+    const { taskDir, tools } = setup();
+    const res = await tools.get("pp_write_state_file")!.execute("1", { path: "RESEARCH.md", content: "## Wrong Section\nx" });
+    expect(res.isError).toBe(true);
+    expect(textOf(res)).toContain("RESEARCH.md structure is invalid");
+    expect(() => readFileSync(join(taskDir, "RESEARCH.md"), "utf-8")).toThrow();
+  });
+
+  it("accepts an artifact starting with a top-level heading", async () => {
+    const { tools } = setup();
+    const res = await tools.get("pp_write_state_file")!.execute("1", { path: "artifacts/design.md", content: "# Design\n\nbody" });
+    expect(res.isError).toBeFalsy();
+    expect(textOf(res)).toMatch(/artifacts\/design\.md/);
+  });
+
+  it("rejects a path escaping the task dir", async () => {
+    const { tools } = setup();
+    const res = await tools.get("pp_write_state_file")!.execute("1", { path: "../../../evil.md", content: "# x" });
+    expect(res.isError).toBe(true);
+    expect(textOf(res)).toMatch(/escapes the active task directory/);
+  });
+
+  it("rejects a non-.md file", async () => {
+    const { tools } = setup();
+    const res = await tools.get("pp_write_state_file")!.execute("1", { path: "notes.txt", content: "x" });
+    expect(res.isError).toBe(true);
+    expect(textOf(res)).toMatch(/Only \.md/);
+  });
+});
+
+describe("pp_edit_state_file", () => {
+  beforeEach(() => {});
+
+  it("replaces a unique span and returns compact output", async () => {
+    const { taskDir, tools } = setup();
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+    const res = await tools.get("pp_edit_state_file")!.execute("1", {
+      path: "RESEARCH.md",
+      oldText: "does a thing",
+      newText: "does a different thing",
+    });
+    expect(res.isError).toBeFalsy();
+    expect(textOf(res)).toMatch(/^Updated RESEARCH\.md \(\+\d+\/-\d+ lines\)$/);
+    expect(readFileSync(join(taskDir, "RESEARCH.md"), "utf-8")).toContain("does a different thing");
+  });
+
+  it("errors when oldText is not found", async () => {
+    const { taskDir, tools } = setup();
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+    const res = await tools.get("pp_edit_state_file")!.execute("1", { path: "RESEARCH.md", oldText: "nope", newText: "x" });
+    expect(res.isError).toBe(true);
+    expect(textOf(res)).toMatch(/not found/);
+  });
+
+  it("errors on ambiguous oldText unless replaceAll", async () => {
+    const { taskDir, tools } = setup();
+    writeFileSync(join(taskDir, "dup.md"), "x\nx\n", "utf-8");
+    // dup.md is an unstructured .md under the task dir — allowed, no schema.
+    const ambiguous = await tools.get("pp_edit_state_file")!.execute("1", { path: "dup.md", oldText: "x", newText: "y" });
+    expect(ambiguous.isError).toBe(true);
+    expect(textOf(ambiguous)).toMatch(/matches 2 locations/);
+
+    const all = await tools.get("pp_edit_state_file")!.execute("2", { path: "dup.md", oldText: "x", newText: "y", replaceAll: true });
+    expect(all.isError).toBeFalsy();
+    expect(readFileSync(join(taskDir, "dup.md"), "utf-8")).toBe("y\ny\n");
+  });
+
+  it("errors when the file does not exist", async () => {
+    const { tools } = setup();
+    const res = await tools.get("pp_edit_state_file")!.execute("1", { path: "RESEARCH.md", oldText: "a", newText: "b" });
+    expect(res.isError).toBe(true);
+    expect(textOf(res)).toMatch(/does not exist/);
+  });
+
+  it("rejects an edit that breaks structure without writing", async () => {
+    const { taskDir, tools } = setup();
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+    const res = await tools.get("pp_edit_state_file")!.execute("1", {
+      path: "RESEARCH.md",
+      oldText: "## Affected Code",
+      newText: "## Renamed Section",
+    });
+    expect(res.isError).toBe(true);
+    expect(textOf(res)).toContain("RESEARCH.md structure is invalid");
+    expect(readFileSync(join(taskDir, "RESEARCH.md"), "utf-8")).toContain("## Affected Code");
+  });
+});

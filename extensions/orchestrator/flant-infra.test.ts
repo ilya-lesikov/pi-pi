@@ -511,4 +511,26 @@ describe("flant-infra", () => {
     expect(loaded).toEqual(settings);
     expect(existsSync(join(dir, "extensions", "pp", "cache", "flant-models.json"))).toBe(true);
   });
+
+  it("normalizes switchBackIntervalMinutes: default when missing, parsed, floored to >=1", async () => {
+    const dir = makeTempDir();
+    const mod = await loadFlantInfraModule(dir);
+    const settingsDir = join(dir, "extensions", "pp", "cache");
+    const settingsPath = join(settingsDir, "flant-models.json");
+    mkdirSync(settingsDir, { recursive: true });
+
+    // Missing -> default 30.
+    writeFileSync(settingsPath, JSON.stringify({ enabled: true }), "utf-8");
+    expect(mod.loadFlantSettings().switchBackIntervalMinutes).toBe(30);
+
+    // String numeric -> parsed and rounded.
+    writeFileSync(settingsPath, JSON.stringify({ enabled: true, switchBackIntervalMinutes: "45" }), "utf-8");
+    expect(mod.loadFlantSettings().switchBackIntervalMinutes).toBe(45);
+
+    // Invalid / <1 -> floored to 1.
+    writeFileSync(settingsPath, JSON.stringify({ enabled: true, switchBackIntervalMinutes: 0 }), "utf-8");
+    expect(mod.loadFlantSettings().switchBackIntervalMinutes).toBe(1);
+    writeFileSync(settingsPath, JSON.stringify({ enabled: true, switchBackIntervalMinutes: "nonsense" }), "utf-8");
+    expect(mod.loadFlantSettings().switchBackIntervalMinutes).toBe(30);
+  });
 });

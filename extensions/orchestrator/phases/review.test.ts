@@ -23,6 +23,14 @@ describe("reviewSystemPrompt apply_feedback wording", () => {
     expect(auto).not.toContain("pp_phase_complete");
   });
 
+  it("brainstorm apply-feedback prompt permits artifact updates and steers to the compact tools", () => {
+    const prompt = reviewSystemPrompt("/tmp/task", 1, "brainstorm", "autonomous");
+    expect(prompt).toContain("artifacts/");
+    expect(prompt).toContain("pp_write_state_file");
+    // The no-new-sections rule for the two structured files is retained.
+    expect(prompt).toContain("Do NOT add, rename, or remove sections in USER_REQUEST.md or RESEARCH.md");
+  });
+
   it("autonomous plan feedback folds into a new synthesized plan, not a separate fix-plan file", () => {
     // Re-review and the transition read only the latest `*synthesized*` plan, so
     // plan-phase feedback must land there.
