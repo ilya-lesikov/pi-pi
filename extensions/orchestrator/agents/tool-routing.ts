@@ -76,3 +76,24 @@ const TOOL_ROUTING_BODY = [
 ];
 
 export const TOOLS_BLOCK = ["<tools>", ...TOOL_ROUTING_BODY, "</tools>"].join("\n");
+
+// Single source of truth for main-agent delegation guidance. Injected into the MAIN
+// agent prompt in every phase. Registry-consistent lowercase agent names.
+export const DELEGATION_BLOCK = [
+  "<delegation>",
+  "Prefer delegating over doing wide or deep work yourself — subagents run in parallel, dig",
+  "deeper, and preserve your context. subagent_type is REQUIRED (calls without it are rejected).",
+  "",
+  '- Find or locate code ("where is X", "how does Y connect", map a flow)      → explore',
+  "- External library / API / documentation knowledge                          → librarian",
+  '- Judgment call (design tradeoff, "is this correct", "why is this broken")   → advisor',
+  "- Root-cause a test or build that keeps failing after a quick attempt        → deep-debugger",
+  "- A parallel, self-contained implementation subtask                          → task",
+  "- A code review of your changes — ONLY when the user explicitly asks for one → reviewer",
+  "",
+  "explore FINDS; advisor JUDGES. Spawn several explores in parallel for broad searches.",
+  "Don't use advisor for lookups, or deep-debugger for trivial errors. deep-debugger diagnoses",
+  "only — it must NOT write the actual fix. Do NOT spawn reviewer unless the user explicitly",
+  "asks for a review (the automatic review panel already covers implement/review phases).",
+  "</delegation>",
+].join("\n");
