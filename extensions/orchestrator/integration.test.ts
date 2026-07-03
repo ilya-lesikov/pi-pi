@@ -70,6 +70,9 @@ vi.mock("./config.js", async (importOriginal) => {
           explore: { model: "test/explore", thinking: "low" },
           librarian: { model: "test/librarian", thinking: "medium" },
           task: { model: "test/task", thinking: "medium" },
+          advisor: { model: "test/advisor", thinking: "high" },
+          "deep-debugger": { model: "test/deep-debugger", thinking: "high" },
+          reviewer: { model: "test/reviewer", thinking: "high" },
         },
         presetGroups: {
           planners: {
@@ -223,6 +226,9 @@ function makeConfig() {
           explore: { model: "test/explore", thinking: "low" },
           librarian: { model: "test/librarian", thinking: "medium" },
           task: { model: "test/task", thinking: "medium" },
+          advisor: { model: "test/advisor", thinking: "high" },
+          "deep-debugger": { model: "test/deep-debugger", thinking: "high" },
+          reviewer: { model: "test/reviewer", thinking: "high" },
         },
         presetGroups: {
           planners: {
