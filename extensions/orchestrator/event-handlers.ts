@@ -2188,14 +2188,28 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
         ctx.ui.notify(`API error (attempt ${orchestrator.errorRetryCount}/${maxRetries}): ${errorMsg}. Retrying in ${delay / 1000}s...`, "warning");
         const taskToken = orchestrator.activeTaskToken;
         if (orchestrator.pendingRetryTimer) clearTimeout(orchestrator.pendingRetryTimer);
+        // Arm a direct ESC interrupt for this retry window — no SDK/interactive
+        // binding covers pi-pi's own timer (the turn already ended in error).
+        orchestrator.armRetryEscInterrupt(ctx);
         orchestrator.pendingRetryTimer = setTimeout(() => {
           orchestrator.pendingRetryTimer = null;
-          if (orchestrator.activeTaskToken !== taskToken || !orchestrator.active) return;
-          orchestrator.safeSendUserMessage(`[PI-PI] Previous request failed due to an API error. Continue working on the current phase (${phase}).`);
+          if (orchestrator.activeTaskToken !== taskToken || !orchestrator.active) {
+            orchestrator.disarmRetryEscInterrupt();
+            return;
+          }
+          // Defer until the main session is idle: sending a followUp while the SDK
+          // still has an active run throws an async, runtime-swallowed "Agent is
+          // already processing" error. sendUserMessageWhenIdle polls (reusing
+          // pendingRetryTimer so ESC/abort still cancels) and disarms the ESC hook
+          // once delivered.
+          orchestrator.sendUserMessageWhenIdle(
+            `[PI-PI] Previous request failed due to an API error. Continue working on the current phase (${phase}).`,
+            taskToken,
+          );
         }, delay);
       } else {
         ctx.ui.notify(`API error persisted after ${maxRetries} retries: ${errorMsg}. Stopping auto-retry.`, "error");
-        orchestrator.errorRetryCount = 0;
+        orchestrator.cancelPendingRetry();
       }
       return;
     }

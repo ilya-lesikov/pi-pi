@@ -83,6 +83,11 @@ export class Orchestrator {
   commitReminderSent = false;
   phaseStartTime = 0;
   pendingRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  // Unsubscribe for the direct ESC interrupt armed while pendingRetryTimer is
+  // live. pi-pi's own post-error retry is NOT covered by any SDK/interactive ESC
+  // binding (the turn already ended in error, the session is not streaming), so
+  // without this ESC would not cancel it.
+  pendingRetryEscUnsub: (() => void) | null = null;
   activeTaskToken = 0;
   userGatePending = false;
   lastCtx: any = null;
@@ -124,6 +129,80 @@ export class Orchestrator {
       },
       currentStep: () => this.active?.state.step ?? null,
     };
+  }
+
+  // Arm a direct ESC interrupt for the post-error retry window. Idempotent: a
+  // single onTerminalInput handler stays registered until the retry is delivered,
+  // cancelled, or the task is reset. While pendingRetryTimer is live, ESC cancels
+  // the pending retry (no other binding covers this window).
+  armRetryEscInterrupt(ctx: any): void {
+    if (this.pendingRetryEscUnsub) return;
+    const onTerminalInput = ctx?.ui?.onTerminalInput;
+    if (typeof onTerminalInput !== "function") return;
+    const unsub = onTerminalInput.call(ctx.ui, (data: string) => {
+      if (!this.pendingRetryTimer) return undefined;
+      // ESC (0x1b) — cancel the pending retry.
+      if (data.includes("\x1b")) {
+        this.cancelPendingRetry();
+        ctx?.ui?.notify?.("Retry cancelled.", "info");
+        return { consume: true };
+      }
+      return undefined;
+    });
+    this.pendingRetryEscUnsub = typeof unsub === "function" ? unsub : null;
+  }
+
+  disarmRetryEscInterrupt(): void {
+    if (this.pendingRetryEscUnsub) {
+      try {
+        this.pendingRetryEscUnsub();
+      } catch {
+        // ignore unsubscribe failures
+      }
+      this.pendingRetryEscUnsub = null;
+    }
+  }
+
+  // Cancel a pending post-error retry (timer + ESC interrupt) and reset the retry
+  // counter. Used by the ESC interrupt handler and by abort paths.
+  cancelPendingRetry(): void {
+    if (this.pendingRetryTimer) {
+      clearTimeout(this.pendingRetryTimer);
+      this.pendingRetryTimer = null;
+    }
+    this.disarmRetryEscInterrupt();
+    this.errorRetryCount = 0;
+  }
+
+  // Deliver a queued message only once the main session is idle. Firing a
+  // followUp while the SDK still has an active run triggers an async, runtime-
+  // swallowed "Agent is already processing" rejection (surfaces as
+  // Extension "<runtime>" error), so we PRE-CHECK idle and DEFER (bounded poll)
+  // rather than dropping the nudge. Guarded by activeTaskToken; the poll reuses
+  // pendingRetryTimer so ESC/abort cancels it.
+  sendUserMessageWhenIdle(text: string, taskToken: number, attempt = 0): void {
+    const log = getLogger();
+    if (this.activeTaskToken !== taskToken || !this.active) {
+      this.disarmRetryEscInterrupt();
+      return;
+    }
+    const idleFn = this.lastCtx?.isIdle;
+    const idle = typeof idleFn === "function" ? !!idleFn.call(this.lastCtx) : true;
+    if (idle) {
+      this.disarmRetryEscInterrupt();
+      this.safeSendUserMessage(text);
+      return;
+    }
+    const MAX_ATTEMPTS = 120; // ~2min at 1s poll
+    if (attempt >= MAX_ATTEMPTS) {
+      log.warn({ s: "orchestrator", attempt }, "sendUserMessageWhenIdle gave up waiting for idle");
+      this.disarmRetryEscInterrupt();
+      return;
+    }
+    this.pendingRetryTimer = setTimeout(() => {
+      this.pendingRetryTimer = null;
+      this.sendUserMessageWhenIdle(text, taskToken, attempt + 1);
+    }, 1000);
   }
 
   safeSendUserMessage(text: string): void {
@@ -555,6 +634,7 @@ export class Orchestrator {
       clearTimeout(this.pendingRetryTimer);
       this.pendingRetryTimer = null;
     }
+    this.disarmRetryEscInterrupt();
     if (this.staleAgentTimer) {
       clearInterval(this.staleAgentTimer);
       this.staleAgentTimer = null;

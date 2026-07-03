@@ -252,6 +252,11 @@ function showStatus(orchestrator: Orchestrator, ctx: any): void {
 }
 
 async function abortCurrentWork(orchestrator: Orchestrator, ctx: any): Promise<void> {
+  // Clear pi-pi's own delayed post-error retry (timer + ESC interrupt). Unlike
+  // pause/finish, abortCurrentWork does NOT go through cleanupActive/
+  // resetTaskScopedState, so without this a scheduled retry would survive the
+  // abort and re-nudge seconds later.
+  orchestrator.cancelPendingRetry();
   orchestrator.abortAllSubagents();
   orchestrator.transitionController.abortMainAgent(ctx.abort?.bind(ctx));
   await ctx.waitForIdle?.();
