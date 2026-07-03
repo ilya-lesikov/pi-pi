@@ -105,15 +105,16 @@ describe("phased factory prompts: manifest guidance replaces the do-not-re-read 
     expect(c.prompt).toContain("Do NOT spawn task, advisor, deep-debugger, or reviewer");
   });
 
-  it("brainstorm-reviewer restricts spawns and no longer ends with the old trailer verbatim", () => {
+  it("brainstorm-reviewer restricts spawns and lists manifest paths when provided", () => {
     const b = createBrainstormReviewerAgent(
       "opus",
       brainstormReviewers,
-      { userRequest: "u", research: "r" },
+      { userRequest: "u", research: "r", manifest },
       "/out.md",
       [],
     );
     expect(b.prompt).toContain("Do NOT spawn task, advisor, deep-debugger, or reviewer");
-    expect(b.prompt).toContain("Do NOT re-read them from disk");
+    expect(b.prompt).toContain("/t/artifacts/design.md");
+    expect(b.prompt).toContain("read them from disk with the read tool");
   });
 });

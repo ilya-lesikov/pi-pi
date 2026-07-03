@@ -8,7 +8,7 @@ import { TOOLS_BLOCK, ALL_CBM_TOOLS, EXA_TOOLS, PRINCIPLES_BLOCK } from "./tool-
 export function createBrainstormReviewerAgent(
   variant: string,
   variants: Record<string, VariantConfig>,
-  taskArtifacts: { userRequest: string; research: string; artifacts?: { name: string; content: string }[] },
+  taskArtifacts: { userRequest: string; research: string; artifacts?: { name: string; content: string }[]; manifest?: { title: string; path: string }[] },
   outputPath: string,
   contextDirs: string[],
   phase?: string,
@@ -88,7 +88,7 @@ export function createBrainstormReviewerAgent(
         : []),
       ...(repoContext ? [repoContext] : []),
       "",
-      formatManifestBlock([]),
+      formatManifestBlock(taskArtifacts.manifest ?? []),
     ].join("\n"),
   };
 }
