@@ -45,6 +45,7 @@ export function reviewSystemPrompt(taskDir: string, pass: number, phase?: string
       "USER_REQUEST.md MUST keep exactly: # User Request, ## Problem, ## Constraints",
       "RESEARCH.md MUST keep exactly: ## Affected Code, ## Architecture Context, ## Constraints & Edge Cases, ## Open Questions (optional)",
       "Any other sections will fail validation.",
+      "Use pp_write_state_file / pp_edit_state_file (NOT the generic write/edit) for these .pp state files — they keep the output compact and validate structure.",
     ].join("\n");
   }
 

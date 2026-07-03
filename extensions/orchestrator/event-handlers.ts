@@ -26,6 +26,7 @@ import { registerExaTools } from "./exa.js";
 import { registerAstSearchTool } from "./ast-search.js";
 import { SUBAGENT_SESSION_KEY } from "./index.js";
 import { registerCommandHandlers } from "./command-handlers.js";
+import { registerStateFileTools } from "./pp-state-tools.js";
 import { setExtensionOnlyMode, unregisterAgentDefinitions } from "./agents/registry.js";
 import { resolveModel, getModelInfo, updateRegistryFromAvailableModels } from "./model-registry.js";
 import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
@@ -450,6 +451,7 @@ function registerOrchestratorTools(orchestrator: Orchestrator): void {
   registerPhaseCompleteTool(orchestrator);
   registerCommitTool(orchestrator);
   registerSpecifyReviewsTool(orchestrator);
+  registerStateFileTools(orchestrator);
 }
 
 function registerRepoTool(orchestrator: Orchestrator): void {

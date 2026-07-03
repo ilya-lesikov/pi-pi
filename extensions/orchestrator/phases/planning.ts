@@ -47,6 +47,7 @@ export function planningSystemPrompt(taskDir: string, mode: TaskMode): string {
     "- ## Checklist: each item is - [ ] <outcome> — Done when: <observable condition>",
     "  Each item = one independently verifiable outcome. No code snippets or file-by-file instructions.",
     "- ## Blockers: unresolved issues blocking implementation (omit if none)",
+    "Write/update the synthesized plan with pp_write_state_file / pp_edit_state_file (NOT the generic write/edit) — they keep the output compact and validate structure.",
     "- No other top-level sections allowed",
     "- Describe outcomes, not code-level mechanics",
   ].join("\n");

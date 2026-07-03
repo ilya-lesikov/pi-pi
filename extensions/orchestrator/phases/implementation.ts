@@ -11,7 +11,7 @@ export function implementationSystemPrompt(taskDir: string, cwd: string): string
     "# Instructions:",
     "1. Review the synthesized plan in your context",
     "2. Implement each item in order",
-    "3. Check off items in the plan (change - [ ] to - [x]) as you complete them",
+    "3. Check off items in the plan (change - [ ] to - [x]) as you complete them — use pp_edit_state_file (NOT the generic edit) to update the plan compactly",
     "4. After editing files, run lsp diagnostics to check for errors; use lsp codeActions for auto-fixes",
     "5. Before modifying code, understand it first:",
     "   - cbm_search/cbm_search_code: find relevant functions and their context",
