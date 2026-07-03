@@ -376,13 +376,20 @@ File-based locking via `proper-lockfile` with configurable stale timeout. If a p
 | explore | Internal codebase search | LLM via Agent() | read, grep, find, ls, bash, lsp, ast_search, cbm_*, exa_* |
 | librarian | External docs research | LLM via Agent() | read, grep, find, bash, exa_search, exa_fetch |
 | task | Delegated implementation subtask | LLM via Agent() | all (read, write, edit, bash, grep, find, ls, lsp, ast_search, cbm_*, exa_*) |
+| advisor | Deep-reasoning advisor for design decisions and "why is this broken" analysis | LLM via Agent() (GPT, thinking high; all phases) | read, grep, find, ls, bash, lsp, ast_search, cbm_*, exa_* (READ-ONLY) |
+| deep-debugger | Deep root-cause analysis for hard, persistent failures — not every error | LLM via Agent() (GPT, thinking high; all phases) | read, write, edit, bash, grep, find, ls, lsp, ast_search, cbm_*, exa_* (write/edit for diagnosis only — repro/log/experiment files, never the actual fix) |
+| reviewer | Code review of changes/diffs with severity-rated findings — spawn only when the user explicitly asks | LLM via Agent() (GPT, thinking high; all phases) | read, grep, find, ls, bash, lsp, ast_search, cbm_*, exa_* (READ-ONLY; runs its own git diff) |
 | planner | Creates plans from requirements | Extension on plan phase entry | read, grep, find, bash, write (restricted), lsp, ast_search, cbm_*, exa_* |
 | plan-reviewer | Validates plan executability | Extension on demand | read, grep, find, bash, write (restricted), lsp, ast_search, cbm_*, exa_* |
 | code-reviewer | Reviews implementation diffs | Extension on demand | read, grep, find, ls, bash, write (restricted), lsp, ast_search, cbm_*, exa_* |
 
 Planner, plan-reviewer, and code-reviewer have per-model variants (opus, gpt, gemini), each independently configurable/disablable.
 
-All subagents can spawn explore/librarian for additional context. Task subagents cannot spawn other task subagents (no recursion).
+The six LLM-spawned (free-form) agents — explore, librarian, task, advisor, deep-debugger, reviewer — are registered for the `Agent()` tool in every phase. advisor, deep-debugger, and reviewer default to GPT with thinking "high" and are non-blocking. The main agent's system prompt carries a shared delegation block describing when to reach for each. reviewer is gated by prompt/description to only spawn when the user explicitly asks for a review (so it does not duplicate the automatic code-reviewer panel); deep-debugger's write access is restricted by prompt to diagnosis artifacts only. These gates are prompt-only, not code-enforced.
+
+Context delivery: explore/librarian receive no task artifacts. task/advisor/deep-debugger/reviewer receive USER_REQUEST + RESEARCH inlined into their spawn prompt at spawn time, plus a path-aware manifest of additional artifacts and the synthesized plan for on-demand reading. Phased agents (planner, plan-reviewer, code-reviewer, brainstorm-reviewer) receive USER_REQUEST + RESEARCH (+ plan for planners/reviewers) inlined, plus the same manifest.
+
+The phased sub-agents (planner, plan-reviewer, code-reviewer, brainstorm-reviewer, task) may spawn ONLY explore/librarian for additional context — they must not spawn task, advisor, deep-debugger, or reviewer. Task subagents cannot spawn other task subagents (no recursion).
 
 ### Code Intelligence Tools
 
