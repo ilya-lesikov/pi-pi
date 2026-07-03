@@ -81,6 +81,10 @@ export interface AgentRecord {
   worktreeResult?: { hasChanges: boolean; branch?: string };
   /** The tool_use_id from the original Agent tool call. */
   toolCallId?: string;
+  /** Whether the subagents:first_tool event has been emitted for this run. */
+  firstToolEmitted?: boolean;
+  /** Whether the subagents:first_turn event has been emitted for this run. */
+  firstTurnEmitted?: boolean;
   /** Path to the streaming output transcript file. */
   outputFile?: string;
   /** Cleanup function for the output file stream subscription. */

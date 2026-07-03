@@ -146,7 +146,78 @@ describe("agent-runner final output capture", () => {
 
     await runAgent(ctx, "Explore", "Say LOCKED", { pi });
 
-    expect(observedDuringPrompt).toEqual({ depth: 1 });
+    expect(observedDuringPrompt).toMatchObject({ depth: 1 });
     expect((globalThis as any)[key]).toBeUndefined();
+  });
+});
+
+describe("agent-runner lineage (concurrency-safe parent/depth)", () => {
+  const tracerKey = Symbol.for("pi-pi:tracer");
+
+  function installTracer() {
+    const opened: Array<{ subagentId?: string; parentSubagentId?: string; depth: number }> = [];
+    (globalThis as any)[tracerKey] = {
+      openSubagent: (meta: any) => opened.push(meta),
+      traceSubagent: () => {},
+    };
+    return opened;
+  }
+
+  beforeEach(() => {
+    delete (globalThis as any)[Symbol.for("pi-pi:subagent-session")];
+    delete (globalThis as any)[tracerKey];
+  });
+
+  it("concurrent siblings from the top level are all depth=1 with no parent (not a chain)", async () => {
+    const opened = installTracer();
+    // Each sibling's session.prompt yields to the event loop, interleaving the
+    // three runs — the exact condition that corrupted the old global-marker code.
+    createAgentSession.mockImplementation(async () => {
+      const { session } = createSession("OK");
+      session.prompt = vi.fn(async () => {
+        await new Promise((r) => setTimeout(r, 0));
+        session.messages.push({ role: "assistant", content: [{ type: "text", text: "OK" }] });
+      });
+      return { session };
+    });
+
+    await Promise.all([
+      runAgent(ctx, "Explore", "a", { pi, subagentId: "opus" }),
+      runAgent(ctx, "Explore", "b", { pi, subagentId: "gpt" }),
+      runAgent(ctx, "Explore", "c", { pi, subagentId: "gemini" }),
+    ]);
+
+    expect(opened).toHaveLength(3);
+    for (const meta of opened) {
+      expect(meta.depth).toBe(1);
+      expect(meta.parentSubagentId).toBeUndefined();
+    }
+  });
+
+  it("a nested child correctly records its parent and depth=2", async () => {
+    const opened = installTracer();
+    createAgentSession.mockImplementation(async () => {
+      const { session } = createSession("OK");
+      return { session };
+    });
+
+    // Parent run whose prompt spawns a nested child mid-flight.
+    createAgentSession.mockImplementationOnce(async () => {
+      const { session } = createSession("PARENT");
+      session.prompt = vi.fn(async () => {
+        await runAgent(ctx, "Explore", "child", { pi, subagentId: "child" });
+        session.messages.push({ role: "assistant", content: [{ type: "text", text: "PARENT" }] });
+      });
+      return { session };
+    });
+
+    await runAgent(ctx, "Explore", "parent", { pi, subagentId: "parent" });
+
+    const parent = opened.find((o) => o.subagentId === "parent")!;
+    const child = opened.find((o) => o.subagentId === "child")!;
+    expect(parent.depth).toBe(1);
+    expect(parent.parentSubagentId).toBeUndefined();
+    expect(child.depth).toBe(2);
+    expect(child.parentSubagentId).toBe("parent");
   });
 });

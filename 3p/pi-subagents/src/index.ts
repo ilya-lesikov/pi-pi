@@ -402,13 +402,7 @@ Use get_subagent_result for full output.`,
   }
 
   // Background completion: route through group join or send individual nudge
-  const firstProgressSeen = new Set<string>();
-  const firstTurnSeen = new Set<string>();
-
   const manager = new AgentManager((record) => {
-    firstProgressSeen.delete(record.id);
-    firstTurnSeen.delete(record.id);
-
     let eventData: ReturnType<typeof buildEventData> | undefined;
     try {
       eventData = buildEventData(record);
@@ -907,36 +901,9 @@ Guidelines:
         const { state: bgState, callbacks: bgCallbacks } = createActivityTracker(effectiveMaxTurns);
 
         let id: string;
-        const emitFirstTool = (toolName: string) => {
-          if (firstProgressSeen.has(id)) return;
-          firstProgressSeen.add(id);
-          pi.events.emit("subagents:first_tool", {
-            id,
-            type: subagentType,
-            description: params.description,
-            toolName,
-          });
-        };
-        const emitFirstTurn = (turnCount: number) => {
-          if (firstTurnSeen.has(id)) return;
-          firstTurnSeen.add(id);
-          pi.events.emit("subagents:first_turn", {
-            id,
-            type: subagentType,
-            description: params.description,
-            turnCount,
-          });
-        };
-        const originalBgToolActivity = bgCallbacks.onToolActivity;
-        bgCallbacks.onToolActivity = (activity) => {
-          originalBgToolActivity(activity);
-          if (activity.type === "start") emitFirstTool(activity.toolName);
-        };
-        const originalBgTurnEnd = bgCallbacks.onTurnEnd;
-        bgCallbacks.onTurnEnd = (turnCount) => {
-          originalBgTurnEnd(turnCount);
-          emitFirstTurn(turnCount);
-        };
+        // first_tool/first_turn are now emitted centrally by AgentManager.startAgent
+        // (the single choke point for ALL spawn paths, including RPC-spawned panels),
+        // so no per-branch wiring is needed here.
 
         // Wrap onSessionCreated to wire output file streaming.
         // The callback lazily reads record.outputFile (set right after spawn)
@@ -944,8 +911,6 @@ Guidelines:
         const origBgOnSession = bgCallbacks.onSessionCreated;
         bgCallbacks.onSessionCreated = (session: any) => {
           origBgOnSession(session);
-          firstProgressSeen.delete(id);
-          firstTurnSeen.delete(id);
           const rec = manager.getRecord(id);
           if (rec?.outputFile) {
             rec.outputCleanup = streamToOutputFile(session, rec.outputFile, id, ctx.cwd);

@@ -2,6 +2,7 @@
  * agent-runner.ts — Core execution engine: creates sessions, runs agents, collects results.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { Model } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
@@ -27,6 +28,53 @@ const EXCLUDED_TOOL_NAMES = ["Agent", "get_subagent_result", "steer_subagent"];
 const TRACER_KEY = Symbol.for("pi-pi:tracer");
 const SUBAGENT_SESSION_KEY = Symbol.for("pi-pi:subagent-session");
 
+// Concurrency-safe subagent lineage. The previous approach derived parent/depth
+// from the mutable process-global SUBAGENT_SESSION_KEY, which is racy for
+// CONCURRENT siblings: MAIN spawns opus/gpt/gemini in parallel, each runAgent's
+// synchronous prologue read whatever the *previous sibling* had just written to
+// the global — so gpt recorded opus as its parent, gemini recorded gpt, forming a
+// bogus opus→gpt→gemini chain with depth 3-6 instead of three depth-1 children of
+// MAIN. AsyncLocalStorage instead propagates DOWN the async call chain (a nested
+// spawn inherits its true parent's store) but NOT ACROSS sibling promises (each
+// sibling started from MAIN sees no store → parent=undefined, depth=1).
+interface SubagentLineage {
+  depth: number;
+  subagentId?: string;
+}
+const subagentLineage = new AsyncLocalStorage<SubagentLineage>();
+
+// The process-global SUBAGENT_SESSION_KEY marker is read elsewhere purely for
+// truthiness ("is any subagent running in this process?", e.g. orchestrator nudge
+// gates). Manage it with a ref-count so concurrent in-process siblings set/clear
+// it correctly regardless of completion order (a plain save/restore would leak a
+// stale marker whenever the last sibling to finish wasn't the last to start).
+let activeSubagentRuns = 0;
+let markerBeforeFirstRun: unknown;
+function enterSubagentMarker(): void {
+  if (activeSubagentRuns === 0) {
+    // Snapshot whatever was there before our first concurrent run (undefined in
+    // the main process; the orchestrator's persistent bootstrap { depth: 1 } in a
+    // subagent process) so we can restore it exactly when the last run exits.
+    markerBeforeFirstRun = (globalThis as any)[SUBAGENT_SESSION_KEY];
+  }
+  activeSubagentRuns++;
+  const marker = (globalThis as any)[SUBAGENT_SESSION_KEY];
+  if (typeof marker !== "object" || marker === null) {
+    (globalThis as any)[SUBAGENT_SESSION_KEY] = { depth: 1 };
+  }
+}
+function exitSubagentMarker(): void {
+  activeSubagentRuns = Math.max(0, activeSubagentRuns - 1);
+  if (activeSubagentRuns === 0) {
+    if (markerBeforeFirstRun === undefined) {
+      delete (globalThis as any)[SUBAGENT_SESSION_KEY];
+    } else {
+      (globalThis as any)[SUBAGENT_SESSION_KEY] = markerBeforeFirstRun;
+    }
+    markerBeforeFirstRun = undefined;
+  }
+}
+
 interface PiPiTracer {
   openSubagent(meta: {
     subagentId: string;
@@ -43,11 +91,6 @@ interface PiPiTracer {
 
 function getTracer(): PiPiTracer | undefined {
   return (globalThis as any)[TRACER_KEY];
-}
-
-function subagentDepth(): number {
-  const marker = (globalThis as any)[SUBAGENT_SESSION_KEY];
-  return typeof marker?.depth === "number" ? marker.depth : 1;
 }
 
 function traceSubagentEvent(subagentId: string | undefined, event: AgentSessionEvent, turnIndex: number): void {
@@ -242,21 +285,22 @@ export async function runAgent(
 
   // Resolve working directory: worktree override > parent cwd
   const effectiveCwd = options.cwd ?? ctx.cwd;
-  // Shared marker with extensions/orchestrator/index.ts (SUBAGENT_SESSION_KEY).
-  // Canonical shape is { depth: number }; a legacy boolean true is tolerated as depth 1.
-  const subagentSessionKey = Symbol.for("pi-pi:subagent-session");
-  const previousSubagentSession = (globalThis as any)[subagentSessionKey];
-  const previousDepth = typeof previousSubagentSession === "object" && previousSubagentSession !== null
-    ? ((previousSubagentSession as { depth?: number }).depth ?? 0)
-    : previousSubagentSession
-      ? 1
-      : 0;
-  const parentSubagentId = typeof previousSubagentSession === "object" && previousSubagentSession !== null
-    ? (previousSubagentSession as { subagentId?: string }).subagentId
-    : undefined;
-  const subagentSessionState = { depth: previousDepth + 1, subagentId: options.subagentId };
-  (globalThis as any)[subagentSessionKey] = subagentSessionState;
 
+  // Derive lineage from the async-context store (see subagentLineage above).
+  // Reading it BEFORE entering the child's own als.run means concurrent siblings
+  // each see their real parent (MAIN → undefined store), not a leaked sibling.
+  const parentLineage = subagentLineage.getStore();
+  const parentSubagentId = parentLineage?.subagentId;
+  const traceDepth = (parentLineage?.depth ?? 0) + 1;
+  const childLineage: SubagentLineage = { depth: traceDepth, subagentId: options.subagentId };
+
+  // Mark the process as "running a subagent" for truthiness readers (see
+  // enter/exitSubagentMarker). Lineage (parent/depth) comes from als above, so
+  // this marker no longer participates in nesting math and its old sibling-race
+  // can no longer corrupt the org chart.
+  enterSubagentMarker();
+
+  return subagentLineage.run(childLineage, async () => {
   try {
     const env = await detectEnv(options.pi, effectiveCwd);
 
@@ -460,7 +504,7 @@ export async function runAgent(
           description: options.subagentDescription,
           parentToolCallId: options.parentToolCallId,
           parentSubagentId,
-          depth: subagentDepth(),
+          depth: traceDepth,
           systemPrompt,
           effectivePrompt,
         });
@@ -496,20 +540,9 @@ export async function runAgent(
     }
     return { responseText, session, aborted, steered: softLimitReached };
   } finally {
-    const currentDepth = typeof (globalThis as any)[subagentSessionKey] === "object" && (globalThis as any)[subagentSessionKey] !== null
-      ? ((((globalThis as any)[subagentSessionKey]) as { depth?: number }).depth ?? subagentSessionState.depth)
-      : subagentSessionState.depth;
-    const nextDepth = Math.max(0, currentDepth - 1);
-    if (nextDepth === 0) {
-      if (previousSubagentSession === undefined) {
-        delete (globalThis as any)[subagentSessionKey];
-      } else {
-        (globalThis as any)[subagentSessionKey] = previousSubagentSession;
-      }
-    } else {
-      (globalThis as any)[subagentSessionKey] = { depth: nextDepth };
-    }
+    exitSubagentMarker();
   }
+  });
 }
 
 /**

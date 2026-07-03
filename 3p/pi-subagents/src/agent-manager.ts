@@ -123,6 +123,10 @@ export class AgentManager {
     record.status = "running";
     record.startedAt = Date.now();
     if (options.toolCallId && !record.toolCallId) record.toolCallId = options.toolCallId;
+    // Reset first-progress flags: a re-started (e.g. dequeued) record must be able
+    // to emit first_tool/first_turn again for its fresh run.
+    record.firstToolEmitted = false;
+    record.firstTurnEmitted = false;
     if (options.isBackground) this.runningBackground++;
     this.onStart?.(record);
 
@@ -153,9 +157,38 @@ export class AgentManager {
       signal: record.abortController!.signal,
       onToolActivity: (activity) => {
         if (activity.type === "end") record.toolUses++;
+        // Emit first_tool once per run from this single choke point, so ALL spawn
+        // paths (RPC panels, Agent-tool background, foreground) report it — not
+        // just the Agent tool's background branch. Panels spawn via RPC and were
+        // previously silent, making it impossible to tell if a reviewer actually
+        // investigated (ran tools) or wrote from context alone.
+        if (activity.type === "start" && !record.firstToolEmitted) {
+          record.firstToolEmitted = true;
+          try {
+            pi.events.emit("subagents:first_tool", {
+              id,
+              type,
+              description: options.description,
+              toolName: activity.toolName,
+            });
+          } catch { /* ignore */ }
+        }
         options.onToolActivity?.(activity);
       },
-      onTurnEnd: options.onTurnEnd,
+      onTurnEnd: (turnCount) => {
+        if (!record.firstTurnEmitted) {
+          record.firstTurnEmitted = true;
+          try {
+            pi.events.emit("subagents:first_turn", {
+              id,
+              type,
+              description: options.description,
+              turnCount,
+            });
+          } catch { /* ignore */ }
+        }
+        options.onTurnEnd?.(turnCount);
+      },
       onTextDelta: options.onTextDelta,
       validateCompletion: options.validateCompletion,
       maxValidationRetries: options.maxValidationRetries,

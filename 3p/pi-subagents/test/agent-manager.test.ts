@@ -108,6 +108,60 @@ describe("AgentManager — Bug 1 race condition (resultConsumed vs onComplete)",
   });
 });
 
+describe("AgentManager — first_tool/first_turn emission (all spawn paths)", () => {
+  let manager: AgentManager;
+
+  afterEach(() => {
+    manager?.dispose();
+  });
+
+  // Drive the callbacks runAgent would fire, so we can assert the manager emits
+  // the first_tool/first_turn events centrally (RPC panels use this same path).
+  const runAgentDrivingCallbacks = () =>
+    vi.mocked(runAgent).mockImplementation(async (_ctx, _type, _prompt, opts: any) => {
+      opts.onToolActivity?.({ type: "start", toolName: "read" });
+      opts.onToolActivity?.({ type: "start", toolName: "grep" }); // second tool: must NOT re-emit
+      opts.onToolActivity?.({ type: "end", toolName: "read" });
+      opts.onTurnEnd?.(1);
+      opts.onTurnEnd?.(2); // second turn: must NOT re-emit
+      return { responseText: "done", session: mockSession(), aborted: false, steered: false };
+    });
+
+  it("emits subagents:first_tool and subagents:first_turn exactly once each", async () => {
+    const emit = vi.fn();
+    const piWithEvents = { events: { emit } } as any;
+    manager = new AgentManager();
+    runAgentDrivingCallbacks();
+
+    const id = manager.spawn(piWithEvents, mockCtx, "general-purpose", "test", {
+      description: "panel-like agent",
+      isBackground: true,
+    });
+    await manager.getRecord(id)!.promise;
+
+    const firstTool = emit.mock.calls.filter((c) => c[0] === "subagents:first_tool");
+    const firstTurn = emit.mock.calls.filter((c) => c[0] === "subagents:first_turn");
+    expect(firstTool).toHaveLength(1);
+    expect(firstTurn).toHaveLength(1);
+    expect(firstTool[0][1]).toMatchObject({ id, type: "general-purpose", toolName: "read" });
+    expect(firstTurn[0][1]).toMatchObject({ id, type: "general-purpose", turnCount: 1 });
+  });
+
+  it("also emits for foreground agents (spawnAndWait)", async () => {
+    const emit = vi.fn();
+    const piWithEvents = { events: { emit } } as any;
+    manager = new AgentManager();
+    runAgentDrivingCallbacks();
+
+    await manager.spawnAndWait(piWithEvents, mockCtx, "general-purpose", "test", {
+      description: "fg agent",
+    });
+
+    expect(emit.mock.calls.filter((c) => c[0] === "subagents:first_tool")).toHaveLength(1);
+    expect(emit.mock.calls.filter((c) => c[0] === "subagents:first_turn")).toHaveLength(1);
+  });
+});
+
 describe("AgentManager — Bug 3 clearCompleted", () => {
   let manager: AgentManager;
 
