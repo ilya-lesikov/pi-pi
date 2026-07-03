@@ -24,6 +24,9 @@ import { registerAgentDefinitions, unregisterAgentDefinitions } from "./agents/r
 import { createExploreAgent } from "./agents/explore.js";
 import { createLibrarianAgent } from "./agents/librarian.js";
 import { createTaskAgent } from "./agents/task.js";
+import { createAdvisorAgent } from "./agents/advisor.js";
+import { createDeepDebuggerAgent } from "./agents/deep-debugger.js";
+import { createReviewerAgent } from "./agents/reviewer.js";
 import { resolveModel, getModelInfo, findLatestFamilyMatch } from "./model-registry.js";
 import { buildRepoContext } from "./agents/repo-context.js";
 import { getLogger, addTaskDestination, removeTaskDestination, setLogLevel } from "./log.js";
@@ -578,7 +581,10 @@ export class Orchestrator {
     const log = getLogger();
     const explore = createExploreAgent(this.config);
     const librarian = createLibrarianAgent(this.config);
-    const taskAgent = createTaskAgent(this.config, "{{subtask}}", { userRequest: "", synthesizedPlan: "" });
+    const taskAgent = createTaskAgent(this.config);
+    const advisor = createAdvisorAgent(this.config);
+    const deepDebugger = createDeepDebuggerAgent(this.config);
+    const reviewer = createReviewerAgent(this.config);
     const phase = this.active?.state.phase;
     const repos = this.active?.state.repos ?? [];
     log.debug({ s: "agents", phase, repoCount: repos.length }, "registering agent definitions");
@@ -614,6 +620,24 @@ export class Orchestrator {
         variant: null,
         ...taskAgent,
         prompt: appendContext("task", taskAgent.prompt, getModelInfo(resolveModel(this.config.agents.subagents.simple.task.model))),
+      },
+      {
+        type: "advisor",
+        variant: null,
+        ...advisor,
+        prompt: appendContext("advisor", advisor.prompt, getModelInfo(resolveModel(this.config.agents.subagents.simple.advisor.model))),
+      },
+      {
+        type: "deep-debugger",
+        variant: null,
+        ...deepDebugger,
+        prompt: appendContext("deep-debugger", deepDebugger.prompt, getModelInfo(resolveModel(this.config.agents.subagents.simple["deep-debugger"].model))),
+      },
+      {
+        type: "reviewer",
+        variant: null,
+        ...reviewer,
+        prompt: appendContext("reviewer", reviewer.prompt, getModelInfo(resolveModel(this.config.agents.subagents.simple.reviewer.model))),
       },
     ]);
   }
