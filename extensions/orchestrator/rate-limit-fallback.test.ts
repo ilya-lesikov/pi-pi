@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isRateLimitError } from "./rate-limit-fallback.js";
+import { isRateLimitError, isSdkRetryableError } from "./rate-limit-fallback.js";
 import { isSubscriptionRouted } from "./usage-tracker.js";
 import { SUB_MODEL_PREFIX, SUB_PROVIDER, subProbeModelId } from "./flant-infra.js";
 
@@ -17,6 +17,40 @@ describe("isRateLimitError", () => {
     expect(isRateLimitError("500 internal server error")).toBe(false);
     expect(isRateLimitError("")).toBe(false);
     expect(isRateLimitError(undefined)).toBe(false);
+  });
+});
+
+describe("isSdkRetryableError", () => {
+  it("matches the same error classes the SDK auto-retries", () => {
+    // These are exactly the errors the user hit; the SDK retries them itself,
+    // so pi-pi must NOT double-retry.
+    expect(isSdkRetryableError("Anthropic stream ended before message_stop")).toBe(true);
+    expect(isSdkRetryableError("429 rate_limit_error")).toBe(true);
+    expect(isSdkRetryableError("overloaded_error")).toBe(true);
+    expect(isSdkRetryableError("503 service unavailable")).toBe(true);
+    expect(isSdkRetryableError("fetch failed")).toBe(true);
+    expect(isSdkRetryableError("request timed out")).toBe(true);
+  });
+
+  it("does not match non-retryable errors", () => {
+    expect(isSdkRetryableError("invalid request: bad tool arguments")).toBe(false);
+    expect(isSdkRetryableError("")).toBe(false);
+    expect(isSdkRetryableError(undefined)).toBe(false);
+  });
+
+  it("the common rate-limit phrasings are both rate-limit AND SDK-retryable", () => {
+    // The sub-429 interception (isRateLimitError) runs BEFORE the SDK-defer
+    // branch (isSdkRetryableError); the phrasings the gateway actually emits
+    // must be recognised by both so a sub-429 is intercepted and any other
+    // rate-limit is deferred to the SDK rather than double-retried by pi-pi.
+    for (const m of ["429", "rate limit", "rate_limit_error", "too many requests"]) {
+      expect(isRateLimitError(m)).toBe(true);
+      expect(isSdkRetryableError(m)).toBe(true);
+    }
+    // The gateway's account-limit phrasing is a rate limit; the SDK regex does
+    // not include that exact phrase, so pi-pi's sub-429 interception (which runs
+    // first) is what handles it — by design.
+    expect(isRateLimitError("exceed your account")).toBe(true);
   });
 });
 

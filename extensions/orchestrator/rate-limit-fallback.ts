@@ -11,6 +11,21 @@ export function isRateLimitError(message?: string): boolean {
   return /\b429\b|rate.?limit|too many requests|exceed your account/i.test(message);
 }
 
+// Mirror of the SDK's AgentSession._isRetryableError classifier
+// (agent-session.js: overloaded/rate-limit/5xx/network/stream-ended/timeout/...).
+// When true, the SDK auto-retries the SAME turn itself (abortable backoff bound
+// to ESC, visible countdown). pi-pi must NOT ALSO schedule its own post-error
+// retry for these: a second, independent retry races the SDK's continue() and
+// reproduces "Agent is already processing", and re-nudges a futile sub-429. This
+// list is kept in sync with the SDK regex; if they drift, pi-pi at worst falls
+// back to its own idle-gated retry (still safe, just not unified).
+export function isSdkRetryableError(message?: string): boolean {
+  if (typeof message !== "string" || !message) return false;
+  return /overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|connection.?lost|websocket.?closed|websocket.?error|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|ended without|stream ended before message_stop|http2 request did not get a response|timed? out|timeout|terminated|retry delay/i.test(
+    message,
+  );
+}
+
 const SWITCH_DIALOG_CONTEXT =
   "Switching between the personal subscription and regular flant Claude changes the provider/endpoint, " +
   "so the prompt cache is LOST and the full conversation context is re-sent on the next call. " +

@@ -27,7 +27,7 @@ import { registerAstSearchTool } from "./ast-search.js";
 import { SUBAGENT_SESSION_KEY } from "./index.js";
 import { registerCommandHandlers } from "./command-handlers.js";
 import { registerStateFileTools } from "./pp-state-tools.js";
-import { handleMainRateLimit, handleSubagentRateLimit, isRateLimitError } from "./rate-limit-fallback.js";
+import { handleMainRateLimit, handleSubagentRateLimit, isRateLimitError, isSdkRetryableError } from "./rate-limit-fallback.js";
 import { setExtensionOnlyMode, unregisterAgentDefinitions } from "./agents/registry.js";
 import { resolveModel, getModelInfo, updateRegistryFromAvailableModels } from "./model-registry.js";
 import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
@@ -2208,6 +2208,17 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
         !orchestrator.subFallbackActive
       ) {
         void handleMainRateLimit(orchestrator, ctx, activeModelId, activeProvider);
+        return;
+      }
+      // The SDK already auto-retries this class of error itself (abortable
+      // backoff bound to ESC, continuing the SAME turn). Running pi-pi's OWN
+      // independent retry on top would double-fire: its followUp races the SDK's
+      // continue() into "Agent is already processing", and it re-nudges a still-
+      // failing model. So for SDK-retryable errors we defer entirely to the SDK
+      // and do nothing here. pi-pi's own idle-gated retry remains only as the
+      // fallback for errors the SDK does NOT retry.
+      if (isSdkRetryableError(errorMsg)) {
+        getLogger().debug({ s: "turn", err: errorMsg }, "deferring to SDK auto-retry; pi-pi retry skipped");
         return;
       }
       orchestrator.errorRetryCount = (orchestrator.errorRetryCount ?? 0) + 1;
