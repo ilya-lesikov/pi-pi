@@ -14,11 +14,12 @@ import {
   loadAllContextFiles,
   getPhaseArtifacts,
   getLatestSynthesizedPlan,
+  getArtifactManifest,
   loadBrainstormReviewOutputs,
   loadCodeReviewOutputs,
   loadPlanReviewOutputs,
 } from "./context.js";
-import { PRINCIPLES_BLOCK, TOOLS_BLOCK } from "./agents/tool-routing.js";
+import { PRINCIPLES_BLOCK, TOOLS_BLOCK, DELEGATION_BLOCK } from "./agents/tool-routing.js";
 import { constraintsBlock, phaseConstraint } from "./agents/constraints.js";
 import { registerCbmTools } from "./cbm.js";
 import { registerExaTools } from "./exa.js";
@@ -49,6 +50,34 @@ function isEnabled(value: { enabled?: boolean } | undefined): boolean {
 function isPathInside(basePath: string, targetPath: string): boolean {
   const rel = relative(basePath, targetPath);
   return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel));
+}
+
+// Builds the spawn-time context block appended to a free agent's spawn prompt:
+// inlines USER_REQUEST + RESEARCH (always present by spawn time) and appends a
+// path-aware manifest of additional on-demand documents (artifacts + plan).
+function buildSpawnContextBlock(taskDir: string): string {
+  const parts: string[] = [];
+
+  const userRequestPath = join(taskDir, "USER_REQUEST.md");
+  if (existsSync(userRequestPath)) {
+    parts.push("=== USER REQUEST ===\n" + readFileSync(userRequestPath, "utf-8").trimEnd());
+  }
+  const researchPath = join(taskDir, "RESEARCH.md");
+  if (existsSync(researchPath)) {
+    parts.push("=== RESEARCH ===\n" + readFileSync(researchPath, "utf-8").trimEnd());
+  }
+
+  const manifest = getArtifactManifest(taskDir);
+  if (manifest.length > 0) {
+    const lines = manifest.map((m) => `- ${m.path}  — ${m.title}`);
+    parts.push(
+      "=== ADDITIONAL DOCUMENTS (read from disk if relevant) ===\n" +
+        lines.join("\n") +
+        "\nDo NOT re-read USER_REQUEST/RESEARCH from disk (already above).",
+    );
+  }
+
+  return parts.join("\n\n");
 }
 
 export async function detectDefaultBranch(orchestrator: Orchestrator, repos: RepoInfo[], repoPath: string): Promise<string> {
@@ -1855,6 +1884,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       constraintsBlock(phase as Phase, effectiveMode),
       PRINCIPLES_BLOCK,
       TOOLS_BLOCK,
+      DELEGATION_BLOCK,
       projectContext,
       taskBlock,
     ]
@@ -1877,24 +1907,29 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (event.toolName === "Agent" && orchestrator.active) {
       const input = event.input as Record<string, unknown>;
       const requestedType = ((input.subagent_type as string) || "").toLowerCase();
+      const validTypes = ["explore", "librarian", "task", "advisor", "deep-debugger", "reviewer"];
       if (!requestedType) {
-        return { block: true, reason: "subagent_type is required. Use Explore for codebase research, Librarian for external docs, or Task for implementation subtasks." };
+        return { block: true, reason: "subagent_type is required. Valid types: explore (codebase research), librarian (external docs), task (implementation subtask), advisor (design/'why is this broken' judgment), deep-debugger (hard persistent failures), reviewer (code review — only when the user explicitly asks)." };
       }
-      const isExplore = requestedType === "explore";
-      const isLibrarian = requestedType === "librarian";
+      if (!validTypes.includes(requestedType)) {
+        return { block: true, reason: `Unknown subagent_type "${requestedType}". Valid types: ${validTypes.join(", ")}.` };
+      }
 
-      if (isExplore) {
-        input.subagent_type = "explore";
-        input.model = resolveModel(orchestrator.config.agents.subagents.simple.explore.model);
-        input.thinking = orchestrator.config.agents.subagents.simple.explore.thinking;
-      } else if (isLibrarian) {
-        input.subagent_type = "librarian";
-        input.model = resolveModel(orchestrator.config.agents.subagents.simple.librarian.model);
-        input.thinking = orchestrator.config.agents.subagents.simple.librarian.thinking;
-      } else {
-        input.subagent_type = "task";
-        input.model = resolveModel(orchestrator.config.agents.subagents.simple.task.model);
-        input.thinking = orchestrator.config.agents.subagents.simple.task.thinking;
+      const simple = orchestrator.config.agents.subagents.simple;
+      const role = requestedType as keyof typeof simple;
+      input.subagent_type = requestedType;
+      input.model = resolveModel(simple[role].model);
+      input.thinking = simple[role].thinking;
+
+      // Spawn-time context injection: append USER_REQUEST + RESEARCH content and a
+      // path-aware manifest of on-demand documents to the LLM-supplied spawn prompt.
+      // explore/librarian intentionally get nothing (fast, scoped retrieval).
+      if (["task", "advisor", "deep-debugger", "reviewer"].includes(requestedType)) {
+        const contextBlock = buildSpawnContextBlock(orchestrator.active.dir);
+        if (contextBlock) {
+          const existingPrompt = typeof input.prompt === "string" ? input.prompt : "";
+          input.prompt = existingPrompt ? `${existingPrompt}\n\n${contextBlock}` : contextBlock;
+        }
       }
     }
 
