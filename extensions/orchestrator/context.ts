@@ -5,7 +5,7 @@ import type { RepoInfo } from "./repo-utils.js";
 import type { Phase } from "./state.js";
 import { getLogger } from "./log.js";
 
-type AgentType = "main" | "explore" | "librarian" | "planner" | "planReviewer" | "task" | "codeReviewer" | "brainstormReviewer";
+type AgentType = "main" | "explore" | "librarian" | "planner" | "planReviewer" | "task" | "codeReviewer" | "brainstormReviewer" | "advisor" | "deep-debugger" | "reviewer";
 type AgentGroup = "all" | "subagents";
 type InjectMode = "system" | "context";
 type PhaseFilter = "brainstorm" | "debug" | "plan" | "implement" | "review";
@@ -30,7 +30,7 @@ interface Frontmatter {
 }
 
 const VALID_INJECT_MODES: readonly string[] = ["system", "context"];
-const VALID_AGENTS: readonly string[] = ["main", "explore", "librarian", "planner", "planReviewer", "task", "codeReviewer", "brainstormReviewer"];
+const VALID_AGENTS: readonly string[] = ["main", "explore", "librarian", "planner", "planReviewer", "task", "codeReviewer", "brainstormReviewer", "advisor", "deep-debugger", "reviewer"];
 const VALID_AGENT_GROUPS: readonly string[] = ["all", "subagents"];
 const VALID_PHASES: readonly string[] = ["brainstorm", "debug", "plan", "implement", "review"];
 const VALID_VENDORS: readonly string[] = ["anthropic", "openai", "google", "unknown"];
@@ -277,6 +277,54 @@ export function getLatestSynthesizedPlan(taskDir: string): string | null {
   if (synthFiles.length === 0) return null;
 
   return readFileSync(join(plansDir, synthFiles[synthFiles.length - 1]), "utf-8");
+}
+
+function getLatestSynthesizedPlanPath(taskDir: string): string | null {
+  const plansDir = join(taskDir, "plans");
+  if (!existsSync(plansDir)) return null;
+
+  const synthFiles = readdirSync(plansDir)
+    .filter((f) => f.includes("synthesized"))
+    .sort(sortByTimestampPrefix);
+  if (synthFiles.length === 0) return null;
+
+  return join(plansDir, synthFiles[synthFiles.length - 1]);
+}
+
+function extractTitle(path: string, fallback: string): string {
+  try {
+    const content = readFileSync(path, "utf-8");
+    for (const line of content.split("\n")) {
+      const m = line.match(/^#\s+(.+?)\s*$/);
+      if (m) return m[1];
+    }
+  } catch {
+    // fall through to filename fallback
+  }
+  return fallback;
+}
+
+// Path-aware manifest of on-demand task documents (artifacts/*.md + the synthesized
+// plan when present) — each entry carries a REAL filesystem path an agent can read.
+// Unlike getPhaseArtifacts, the plan is included whenever it exists (not phase-gated),
+// so a reviewer spawned in the review phase still gets the plan path.
+export function getArtifactManifest(taskDir: string): { title: string; path: string }[] {
+  const manifest: { title: string; path: string }[] = [];
+
+  const artifactsDir = join(taskDir, "artifacts");
+  if (existsSync(artifactsDir)) {
+    for (const file of readdirSync(artifactsDir).filter((f) => f.endsWith(".md")).sort()) {
+      const path = join(artifactsDir, file);
+      manifest.push({ title: extractTitle(path, `artifacts/${file}`), path });
+    }
+  }
+
+  const planPath = getLatestSynthesizedPlanPath(taskDir);
+  if (planPath) {
+    manifest.push({ title: "Synthesized implementation plan", path: planPath });
+  }
+
+  return manifest;
 }
 
 export function loadBrainstormReviewOutputs(taskDir: string, pass: number): { name: string; content: string }[] {
