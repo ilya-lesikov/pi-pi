@@ -401,9 +401,15 @@ export async function probeSubscriptionCleared(
       method: "POST",
       headers: {
         "content-type": "application/json",
+        "anthropic-version": "2023-06-01",
+        // Claude Code OAuth identity headers — the gateway requires these for
+        // subscription (sub/) routing; without them it can reject the probe and
+        // we would never detect that the limit cleared. Mirrors doctor.ts.
+        "anthropic-beta": "claude-code-20250219,oauth-2025-04-20",
+        "user-agent": "claude-cli/1.0.0",
+        "x-app": "cli",
         Authorization: `Bearer ${oauthToken}`,
         "x-litellm-api-key": `Bearer ${gatewayKey}`,
-        "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
         model: probeModel,

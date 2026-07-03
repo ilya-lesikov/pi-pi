@@ -96,6 +96,11 @@ export class Orchestrator {
   // switch-back probe); subSwitchBackTimer is the fixed-interval probe timer.
   subFallbackActive = false;
   subFallbackDialogPending = false;
+  // Set SYNCHRONOUSLY the moment a sub-429 is detected (before any async dialog),
+  // and cleared once the decision resolves. The autonomous planner/reviewer
+  // auto-retry consults this to avoid re-spawning a failed variant on the still-
+  // sub-routed model while the fallback decision is in flight.
+  subFallbackPendingDecision = false;
   subFallbackModelId: string | null = null;
   subSwitchBackTimer: ReturnType<typeof setTimeout> | null = null;
   userGatePending = false;
@@ -667,6 +672,7 @@ export class Orchestrator {
     }
     this.subFallbackActive = false;
     this.subFallbackDialogPending = false;
+    this.subFallbackPendingDecision = false;
     this.subFallbackModelId = null;
     setSubscriptionFallbackActive(false);
   }

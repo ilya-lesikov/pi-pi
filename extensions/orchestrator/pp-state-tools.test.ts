@@ -101,6 +101,36 @@ describe("pp_write_state_file", () => {
     expect(res.isError).toBe(true);
     expect(textOf(res)).toMatch(/Only \.md/);
   });
+
+  it("rejects managed review outputs and non-synthesized plans", async () => {
+    const { tools } = setup();
+    for (const p of [
+      "code-reviews/1_gpt.md",
+      "brainstorm-reviews/1_gemini.md",
+      "plan-reviews/1_opus.md",
+      "plans/1_gpt.md",
+      "scratch.md",
+      "artifacts/nested/deep.md",
+    ]) {
+      const res = await tools.get("pp_write_state_file")!.execute("1", { path: p, content: "# x" });
+      expect(res.isError, `expected ${p} to be rejected`).toBe(true);
+      expect(textOf(res)).toMatch(/Not an editable state file/);
+    }
+  });
+
+  it("allows the synthesized plan", async () => {
+    const { tools } = setup();
+    const plan = [
+      "# Plan",
+      "## Scope",
+      "Do the thing.",
+      "## Checklist",
+      "- [ ] item — Done when: it works",
+    ].join("\n");
+    const res = await tools.get("pp_write_state_file")!.execute("1", { path: "plans/123_synthesized.md", content: plan });
+    expect(res.isError).toBeFalsy();
+    expect(textOf(res)).toMatch(/plans\/123_synthesized\.md/);
+  });
 });
 
 describe("pp_edit_state_file", () => {
@@ -129,15 +159,15 @@ describe("pp_edit_state_file", () => {
 
   it("errors on ambiguous oldText unless replaceAll", async () => {
     const { taskDir, tools } = setup();
-    writeFileSync(join(taskDir, "dup.md"), "x\nx\n", "utf-8");
-    // dup.md is an unstructured .md under the task dir — allowed, no schema.
-    const ambiguous = await tools.get("pp_edit_state_file")!.execute("1", { path: "dup.md", oldText: "x", newText: "y" });
+    // Use an artifact (an allowed, unstructured-body state file) with duplicate spans.
+    writeFileSync(join(taskDir, "artifacts", "dup.md"), "# Dup\nx\nx\n", "utf-8");
+    const ambiguous = await tools.get("pp_edit_state_file")!.execute("1", { path: "artifacts/dup.md", oldText: "x", newText: "y" });
     expect(ambiguous.isError).toBe(true);
     expect(textOf(ambiguous)).toMatch(/matches 2 locations/);
 
-    const all = await tools.get("pp_edit_state_file")!.execute("2", { path: "dup.md", oldText: "x", newText: "y", replaceAll: true });
+    const all = await tools.get("pp_edit_state_file")!.execute("2", { path: "artifacts/dup.md", oldText: "x", newText: "y", replaceAll: true });
     expect(all.isError).toBeFalsy();
-    expect(readFileSync(join(taskDir, "dup.md"), "utf-8")).toBe("y\ny\n");
+    expect(readFileSync(join(taskDir, "artifacts", "dup.md"), "utf-8")).toBe("# Dup\ny\ny\n");
   });
 
   it("errors when the file does not exist", async () => {

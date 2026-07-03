@@ -1247,7 +1247,14 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
 
     const failedPlannerVariants = [...orchestrator.failedPlannerVariants];
     const effectiveMode = getEffectiveMode(orchestrator.active.state);
-    if (effectiveMode === "autonomous" && failedPlannerVariants.length > 0) {
+    // Do NOT auto-retry failed variants while a subscription-429 fallback decision
+    // is in flight: re-spawning now would use the still-sub-routed model and
+    // re-hit the limit. Once the user decides, the fallback nudge re-drives this.
+    if (
+      effectiveMode === "autonomous" &&
+      failedPlannerVariants.length > 0 &&
+      !orchestrator.subFallbackPendingDecision
+    ) {
       const alreadyRetried = orchestrator.active.state.plannerFailureAutoRetried === true;
       if (!alreadyRetried) {
         const failedSet = new Set(failedPlannerVariants);
@@ -1419,7 +1426,13 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
 
     const failedReviewerVariants = [...orchestrator.failedReviewerVariants];
     const effectiveMode = getEffectiveMode(orchestrator.active.state);
-    if (effectiveMode === "autonomous" && failedReviewerVariants.length > 0) {
+    // See the planner path: suppress auto-retry while a sub-429 fallback decision
+    // is pending so we don't re-spawn on the still-sub-routed model.
+    if (
+      effectiveMode === "autonomous" &&
+      failedReviewerVariants.length > 0 &&
+      !orchestrator.subFallbackPendingDecision
+    ) {
       const cycle = orchestrator.active.state.reviewCycle;
       const phase = orchestrator.active.state.phase;
       const outputs = loadPhaseReviewOutputs(orchestrator.active.dir, phase, cycle.pass);
@@ -1678,11 +1691,16 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     // global switch-to-non-sub dialogue (never per-subagent). subagents:failed
     // carries the subagent's resolved model id.
     const failedModelId = typeof data.modelId === "string" ? data.modelId : undefined;
-    if (
+    const subRateLimited =
       isRateLimitError(data.error) &&
       isSubscriptionRouted(failedModelId) &&
-      !orchestrator.subFallbackActive
-    ) {
+      !orchestrator.subFallbackActive;
+    if (subRateLimited) {
+      // Set the decision-pending flag SYNCHRONOUSLY (before the completion checks
+      // below) so the autonomous planner/reviewer auto-retry does NOT re-spawn
+      // the failed variant on the still-sub-routed model while the fallback
+      // dialogue is in flight.
+      orchestrator.subFallbackPendingDecision = true;
       void handleSubagentRateLimit(orchestrator, orchestrator.lastCtx, failedModelId);
     }
 

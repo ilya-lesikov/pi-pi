@@ -49,9 +49,23 @@ function lineDelta(oldContent: string, newContent: string): { added: number; rem
   return { added: m - lcs, removed: n - lcs };
 }
 
+// The exact set of state files these compact tools may edit. Anything else
+// under the task dir — especially orchestrator-MANAGED outputs like
+// brainstorm-reviews/, plan-reviews/, code-reviews/, and non-synthesized
+// plans/ files — is REJECTED so the agent cannot corrupt managed artifacts.
+function isAllowedStateFile(rel: string): boolean {
+  if (rel === "USER_REQUEST.md" || rel === "RESEARCH.md") return true;
+  const parts = rel.split(sep);
+  const base = parts[parts.length - 1];
+  if (parts.length === 2 && parts[0] === "artifacts" && base.endsWith(".md")) return true;
+  if (parts.length === 2 && parts[0] === "plans" && base.endsWith("_synthesized.md")) return true;
+  return false;
+}
+
 // Resolve a caller-supplied path (relative to the active task dir, or absolute)
-// and enforce it stays within the active task dir under .pp/state/ and is a .md
-// file. Returns the absolute path or an error result.
+// and enforce it stays within the active task dir under .pp/state/, is a .md
+// file, AND is one of the allowed state files. Returns the absolute path or an
+// error result.
 function resolveStatePath(
   orchestrator: Orchestrator,
   rawPath: string,
@@ -74,12 +88,23 @@ function resolveStatePath(
   if (!absolute.endsWith(".md")) {
     return { ok: false, result: err("Only .md state files can be edited with this tool.") };
   }
-  const label = relative(taskDir, absolute) || relative(orchestrator.cwd, absolute);
+  const rel = relative(taskDir, absolute);
+  if (!isAllowedStateFile(rel)) {
+    return {
+      ok: false,
+      result: err(
+        `Not an editable state file: ${rel}. These tools only edit USER_REQUEST.md, RESEARCH.md, artifacts/*.md, and plans/*_synthesized.md. ` +
+          `Managed outputs (brainstorm-reviews/, plan-reviews/, code-reviews/, non-synthesized plans) are off-limits.`,
+      ),
+    };
+  }
+  const label = rel || relative(orchestrator.cwd, absolute);
   return { ok: true, absolute, label };
 }
 
-// Validate structured state files by their role. Unknown .md files under the
-// task dir (e.g. reviews/*.md, scratch notes) are allowed without a schema.
+// Validate structured state files by their role. resolveStatePath has already
+// restricted callers to the allowed set (USER_REQUEST/RESEARCH/artifacts/
+// plans-synthesized), so every path reaching here maps to a known validator.
 function validateStateContent(taskDir: string, absolute: string, content: string):
   | { ok: true }
   | { ok: false; errors: string[]; hint: string } {

@@ -34,6 +34,7 @@ function makeOrchestrator() {
     activeTaskToken: 1,
     subFallbackActive: false,
     subFallbackDialogPending: false,
+    subFallbackPendingDecision: false,
     subFallbackModelId: null as string | null,
     subSwitchBackTimer: null as any,
     config: { agents: { orchestrators: { debug: { thinking: "high" }, implement: { thinking: "high" } } } },
@@ -79,6 +80,15 @@ describe("handleSubagentRateLimit (M1: does not switch the main model)", () => {
     await handleSubagentRateLimit(orch, makeCtx(), "pp-flant-anthropic/claude-opus-4-8");
     expect(askUserMock).not.toHaveBeenCalled();
     expect(orch.subFallbackActive).toBe(false);
+  });
+
+  it("clears the pending-decision flag after the dialog resolves", async () => {
+    vi.useFakeTimers();
+    askUserMock.mockResolvedValue({ kind: "selection", selections: ["Switch to non-sub Claude"] });
+    const orch = makeOrchestrator();
+    orch.subFallbackPendingDecision = true; // set synchronously by the detection site
+    await handleSubagentRateLimit(orch, makeCtx(), "pp-flant-anthropic-sub/sub/claude-opus-4-8");
+    expect(orch.subFallbackPendingDecision).toBe(false);
   });
 });
 

@@ -102,6 +102,7 @@ async function offerFallback(
     await activateFallback(orchestrator, ctx, subModelId, origin);
   } finally {
     orchestrator.subFallbackDialogPending = false;
+    orchestrator.subFallbackPendingDecision = false;
   }
 }
 
