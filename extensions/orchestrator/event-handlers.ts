@@ -1884,6 +1884,10 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (!isControllerInjected) {
       orchestrator.nudgeHalted = false;
       orchestrator.consecutiveNudges = 0;
+      // Genuine user re-engagement also clears the API-error retry halt, so a
+      // fresh request can auto-retry again from a clean counter.
+      orchestrator.errorNudgeHalted = false;
+      orchestrator.errorRetryCount = 0;
     }
     orchestrator.updateStatus(ctx);
 
@@ -2239,6 +2243,15 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
         getLogger().debug({ s: "turn", err: errorMsg }, "deferring to SDK auto-retry; pi-pi retry skipped");
         return;
       }
+      // Halt guard: once the consecutive-error cap is exceeded we stop auto-
+      // retrying until the user re-engages. errorRetryCount is NO LONGER reset on
+      // benign intervening turns (see below) — otherwise a retried turn that ends
+      // as a harmless text-only reply would reset the counter and the cap could
+      // never accumulate, letting transient errors nudge unbounded.
+      if (orchestrator.errorNudgeHalted) {
+        getLogger().debug({ s: "turn", err: errorMsg }, "error auto-retry halted; awaiting user re-engagement");
+        return;
+      }
       orchestrator.errorRetryCount = (orchestrator.errorRetryCount ?? 0) + 1;
       const maxRetries = 5;
       if (orchestrator.errorRetryCount <= maxRetries) {
@@ -2266,12 +2279,24 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
           );
         }, delay);
       } else {
-        ctx.ui.notify(`API error persisted after ${maxRetries} retries: ${errorMsg}. Stopping auto-retry.`, "error");
-        orchestrator.cancelPendingRetry();
+        ctx.ui.notify(`API error persisted after ${maxRetries} retries: ${errorMsg}. Stopping auto-retry — send any message to resume.`, "error");
+        // Halt (do NOT reset the counter) so no further error turn re-arms a retry
+        // until the user re-engages. cancelPendingRetry would reset the count and
+        // re-open the floodgate, so only clear the live timer/ESC hook here.
+        orchestrator.errorNudgeHalted = true;
+        if (orchestrator.pendingRetryTimer) {
+          clearTimeout(orchestrator.pendingRetryTimer);
+          orchestrator.pendingRetryTimer = null;
+        }
+        orchestrator.disarmRetryEscInterrupt();
       }
       return;
     }
-    orchestrator.errorRetryCount = 0;
+    // NOTE: errorRetryCount is intentionally NOT reset here. Resetting on every
+    // non-error turn let a benign nudge-induced turn zero the counter, defeating
+    // the maxRetries cap and allowing unbounded error nudges. The counter is
+    // reset only on genuine user re-engagement (before_agent_start) and on task
+    // reset / cancelPendingRetry.
 
     if ((globalThis as any)[SUBAGENT_SESSION_KEY]) {
       return;

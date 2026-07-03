@@ -3299,24 +3299,51 @@ describe("error retry", () => {
       await turnEnd({ message: { stopReason: "error", errorMessage: "invalid tool arguments", content: [] } }, ctx);
     }
 
-    expect(orchestrator.errorRetryCount).toBe(0);
     expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Stopping auto-retry"), "error");
+    expect(orchestrator.errorNudgeHalted).toBe(true);
+
+    // Once halted, further error turns must NOT arm another retry (this is the
+    // guard against the unbounded-nudge bug).
+    ctx.ui.notify.mockClear();
+    await turnEnd({ message: { stopReason: "error", errorMessage: "invalid tool arguments", content: [] } }, ctx);
+    expect(ctx.ui.notify).not.toHaveBeenCalledWith(expect.stringContaining("Retrying in"), "warning");
     vi.useRealTimers();
   });
 
-  it("successful turn resets error count", async () => {
+  it("a benign turn does NOT reset the error count (cap must accumulate)", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);
     const ctx = makeCtx();
 
-    await orchestrator.startTask(ctx as any, "implement", "retry reset test");
+    await orchestrator.startTask(ctx as any, "implement", "retry no-reset test");
     const turnEnd = pi._handlers.get("turn_end")!;
 
     await turnEnd({ message: { stopReason: "error", errorMessage: "invalid tool arguments", content: [] } }, ctx);
     expect(orchestrator.errorRetryCount).toBe(1);
 
+    // A benign (non-error) turn must NOT zero the counter — otherwise a harmless
+    // nudge-induced reply would defeat the cap and allow unbounded error nudges.
     await turnEnd({ message: { stopReason: "stop", content: [] } }, ctx);
-    expect(orchestrator.errorRetryCount).toBe(0);
+    expect(orchestrator.errorRetryCount).toBe(1);
+  });
+
+  it("genuine user re-engagement resets the error count and halt", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "retry reengage test");
+    const turnEnd = pi._handlers.get("turn_end")!;
+
+    await turnEnd({ message: { stopReason: "error", errorMessage: "invalid tool arguments", content: [] } }, ctx);
+    orchestrator.errorNudgeHalted = true;
+
+    const beforeStart = pi._handlers.get("before_agent_start");
+    if (beforeStart) {
+      await beforeStart({ prompt: "user typed something new" }, ctx);
+      expect(orchestrator.errorRetryCount).toBe(0);
+      expect(orchestrator.errorNudgeHalted).toBe(false);
+    }
   });
 
   it("empty turn triggers continuation nudge", async () => {

@@ -80,6 +80,13 @@ export class Orchestrator {
   nudgeHalted = false;
   pendingSubagentSpawns = 0;
   errorRetryCount = 0;
+  // Halts the API-error auto-retry once errorRetryCount exceeds its cap, mirroring
+  // nudgeHalted. Without this, a benign intervening turn (e.g. the retried turn
+  // ends as a text-only "I'll wait") reset errorRetryCount to 0, so the 5-retry
+  // cap never accumulated and the "Previous request failed" nudge could fire
+  // unbounded (hundreds of times) against transient errors. Cleared only on
+  // genuine (non-[PI-PI]) user re-engagement, like nudgeHalted.
+  errorNudgeHalted = false;
   commitReminderSent = false;
   phaseStartTime = 0;
   pendingRetryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -188,6 +195,7 @@ export class Orchestrator {
     }
     this.disarmRetryEscInterrupt();
     this.errorRetryCount = 0;
+    this.errorNudgeHalted = false;
   }
 
   // Deliver a queued message only once the main session is idle. Firing a
@@ -641,6 +649,7 @@ export class Orchestrator {
     this.agentLifecycle.clear();
     this.pendingSubagentSpawns = 0;
     this.errorRetryCount = 0;
+    this.errorNudgeHalted = false;
     this.commitReminderSent = false;
     this.consecutiveNudges = 0;
     this.nudgeHalted = false;
