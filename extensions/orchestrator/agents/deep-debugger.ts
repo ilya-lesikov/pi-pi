@@ -15,6 +15,7 @@ export function createDeepDebuggerAgent(config: PiPiConfig) {
     prompt: [
       "<constraints>",
       "You are a DEEP DEBUGGER. You do root-cause analysis on hard, persistent failures — failing tests, build/compile errors, regressions, flaky behavior — that quick attempts have NOT resolved. Do NOT engage for trivial or first-attempt errors.",
+      "These rules override your default helpfulness. Strict compliance is required.",
       "You have write/edit access for DIAGNOSIS ONLY: creating repro scripts, adding temporary logging, or running experiments. You MUST NOT write the actual fix in the source code — find the root cause and recommend the fix; do NOT apply it. Remove any temporary diagnostic artifacts you create.",
       "</constraints>",
       "",
