@@ -795,6 +795,9 @@ function collectRoleAssignments(config: Partial<PiPiConfig> | null): string[] {
   add("agents.subagents.simple.explore", config.agents?.subagents?.simple?.explore?.model);
   add("agents.subagents.simple.librarian", config.agents?.subagents?.simple?.librarian?.model);
   add("agents.subagents.simple.task", config.agents?.subagents?.simple?.task?.model);
+  add("agents.subagents.simple.advisor", config.agents?.subagents?.simple?.advisor?.model);
+  add("agents.subagents.simple.deep-debugger", config.agents?.subagents?.simple?.["deep-debugger"]?.model);
+  add("agents.subagents.simple.reviewer", config.agents?.subagents?.simple?.reviewer?.model);
   return out;
 }
 
@@ -853,9 +856,9 @@ async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise
     const subscriptionLabel = `Personal Claude subscription: ${settings.subscription ? "ON" : "OFF"}`;
     if (settings.enabled) {
       options.push(
+        subscriptionLabel,
         `Auto-update on startup: ${settings.autoUpdate ? "ON" : "OFF"}`,
         `Cache period: ${settings.cacheTTLDays} ${settings.cacheTTLDays === 1 ? "day" : "days"}`,
-        subscriptionLabel,
         "Update now",
         "Current status",
       );
@@ -1199,6 +1202,9 @@ const SUBAGENT_ROLES: Array<{ role: AgentRole; label: string; description: strin
   { role: "explore", label: "Explore", description: "agents.subagents.simple.explore" },
   { role: "librarian", label: "Librarian", description: "agents.subagents.simple.librarian" },
   { role: "task", label: "Task", description: "agents.subagents.simple.task" },
+  { role: "advisor", label: "Advisor", description: "agents.subagents.simple.advisor" },
+  { role: "deep-debugger", label: "Deep debugger", description: "agents.subagents.simple.deep-debugger" },
+  { role: "reviewer", label: "Reviewer", description: "agents.subagents.simple.reviewer" },
 ];
 
 const PRESET_GROUP_ITEMS: Array<{ group: PresetGroup; label: string }> = [
