@@ -61,10 +61,6 @@ export class Orchestrator {
   spawnedAgentIds = new Set<string>();
   agentDescriptions = new Map<string, string>();
   agentSpawnTimes = new Map<string, number>();
-  // Resolved model id per spawned subagent id, recorded at spawn time so a
-  // subscription 429 on subagents:failed can be attributed even if the failure
-  // payload omits the model.
-  agentModels = new Map<string, string>();
   agentLifecycle = new Map<string, {
     createdAt?: number;
     startedAt?: number;
@@ -154,8 +150,10 @@ export class Orchestrator {
     if (typeof onTerminalInput !== "function") return;
     const unsub = onTerminalInput.call(ctx.ui, (data: string) => {
       if (!this.pendingRetryTimer) return undefined;
-      // ESC (0x1b) — cancel the pending retry.
-      if (data.includes("\x1b")) {
+      // Match a STANDALONE ESC only. Arrow/function/mouse sequences also start
+      // with 0x1b (e.g. "\x1b[A"), so `includes` would misfire on navigation
+      // keys and swallow them; a bare ESC is exactly the one-byte string.
+      if (data === "\x1b") {
         this.cancelPendingRetry();
         ctx?.ui?.notify?.("Retry cancelled.", "info");
         return { consume: true };
@@ -210,6 +208,10 @@ export class Orchestrator {
     if (attempt >= MAX_ATTEMPTS) {
       log.warn({ s: "orchestrator", attempt }, "sendUserMessageWhenIdle gave up waiting for idle");
       this.disarmRetryEscInterrupt();
+      this.lastCtx?.ui?.notify?.(
+        "pi-pi stopped waiting for the agent to go idle; auto-continuation was dropped. Send any message to resume.",
+        "warning",
+      );
       return;
     }
     this.pendingRetryTimer = setTimeout(() => {
@@ -631,7 +633,6 @@ export class Orchestrator {
     this.spawnedAgentIds.clear();
     this.agentDescriptions.clear();
     this.agentSpawnTimes.clear();
-    this.agentModels.clear();
     this.agentLifecycle.clear();
     this.pendingSubagentSpawns = 0;
     this.errorRetryCount = 0;

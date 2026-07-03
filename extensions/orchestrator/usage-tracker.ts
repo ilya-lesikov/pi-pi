@@ -12,7 +12,11 @@ import { SUB_MODEL_PREFIX, SUB_PROVIDER } from "./flant-infra.js";
  */
 export function isSubscriptionRouted(modelId?: string, provider?: string): boolean {
   if (provider === SUB_PROVIDER) return true;
-  return typeof modelId === "string" && modelId.startsWith(SUB_MODEL_PREFIX);
+  if (typeof modelId !== "string") return false;
+  // Accept a bare `sub/<m>` id OR a full provider-prefixed spec
+  // `pp-flant-anthropic-sub/sub/<m>` passed as a single id (the form callers
+  // store/pass without a separate provider field).
+  return modelId.startsWith(SUB_MODEL_PREFIX) || modelId.startsWith(`${SUB_PROVIDER}/`);
 }
 
 export interface ModelUsage {

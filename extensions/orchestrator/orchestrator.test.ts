@@ -123,6 +123,119 @@ describe("Orchestrator.safeSendUserMessage", () => {
   });
 });
 
+describe("Orchestrator.cancelPendingRetry", () => {
+  it("clears the pending timer, disarms the ESC interrupt, and resets the counter", () => {
+    vi.useFakeTimers();
+    const send = vi.fn();
+    const orchestrator = new Orchestrator(makePi({ sendUserMessage: send }));
+    const unsub = vi.fn();
+    orchestrator.errorRetryCount = 3;
+    orchestrator.pendingRetryEscUnsub = unsub;
+    orchestrator.pendingRetryTimer = setTimeout(() => send("fired"), 1000) as any;
+
+    orchestrator.cancelPendingRetry();
+
+    expect(orchestrator.pendingRetryTimer).toBeNull();
+    expect(orchestrator.pendingRetryEscUnsub).toBeNull();
+    expect(orchestrator.errorRetryCount).toBe(0);
+    expect(unsub).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(2000);
+    expect(send).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+});
+
+describe("Orchestrator.armRetryEscInterrupt", () => {
+  function makeCtxWithTerminal() {
+    let handler: ((data: string) => any) | null = null;
+    const notify = vi.fn();
+    const ctx = {
+      ui: {
+        notify,
+        onTerminalInput: (h: (data: string) => any) => {
+          handler = h;
+          return () => { handler = null; };
+        },
+      },
+    };
+    return { ctx, notify, feed: (data: string) => handler?.(data) };
+  }
+
+  it("cancels the pending retry on a bare ESC only", () => {
+    vi.useFakeTimers();
+    const orchestrator = new Orchestrator(makePi());
+    const { ctx, notify, feed } = makeCtxWithTerminal();
+    orchestrator.pendingRetryTimer = setTimeout(() => {}, 10000) as any;
+    orchestrator.armRetryEscInterrupt(ctx as any);
+
+    // Arrow key (ESC-prefixed sequence) must NOT cancel and must NOT be consumed.
+    const arrow = feed("\x1b[A");
+    expect(arrow).toBeUndefined();
+    expect(orchestrator.pendingRetryTimer).not.toBeNull();
+
+    // Bare ESC cancels and consumes.
+    const esc = feed("\x1b");
+    expect(esc).toEqual({ consume: true });
+    expect(orchestrator.pendingRetryTimer).toBeNull();
+    expect(notify).toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it("is a no-op when no retry timer is armed", () => {
+    const orchestrator = new Orchestrator(makePi());
+    const { ctx, feed } = makeCtxWithTerminal();
+    orchestrator.armRetryEscInterrupt(ctx as any);
+    expect(feed("\x1b")).toBeUndefined();
+  });
+});
+
+describe("Orchestrator.sendUserMessageWhenIdle", () => {
+  it("sends immediately when idle", () => {
+    const send = vi.fn();
+    const orchestrator = new Orchestrator(makePi({ sendUserMessage: send }));
+    orchestrator.active = makeActiveTask(null);
+    orchestrator.activeTaskToken = 7;
+    orchestrator.lastCtx = { isIdle: () => true };
+
+    orchestrator.sendUserMessageWhenIdle("[PI-PI] go", 7);
+    expect(send).toHaveBeenCalledWith("[PI-PI] go", { deliverAs: "followUp" });
+  });
+
+  it("defers while busy, then sends once idle", async () => {
+    vi.useFakeTimers();
+    const send = vi.fn();
+    const orchestrator = new Orchestrator(makePi({ sendUserMessage: send }));
+    orchestrator.active = makeActiveTask(null);
+    orchestrator.activeTaskToken = 1;
+    let idle = false;
+    orchestrator.lastCtx = { isIdle: () => idle };
+
+    orchestrator.sendUserMessageWhenIdle("[PI-PI] go", 1);
+    expect(send).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(send).not.toHaveBeenCalled();
+    idle = true;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(send).toHaveBeenCalledWith("[PI-PI] go", { deliverAs: "followUp" });
+    vi.useRealTimers();
+  });
+
+  it("drops (does not send) when the task token changes", async () => {
+    vi.useFakeTimers();
+    const send = vi.fn();
+    const orchestrator = new Orchestrator(makePi({ sendUserMessage: send }));
+    orchestrator.active = makeActiveTask(null);
+    orchestrator.activeTaskToken = 1;
+    orchestrator.lastCtx = { isIdle: () => false };
+
+    orchestrator.sendUserMessageWhenIdle("[PI-PI] go", 1);
+    orchestrator.activeTaskToken = 2; // task switched
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(send).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+});
+
 describe("Orchestrator.switchModel thinking level", () => {
   function makeCtx() {
     return {

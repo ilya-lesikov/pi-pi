@@ -373,6 +373,16 @@ function mapFlantToOpenRouterId(modelId: string): string | null {
  * expired-token false negative. `max_tokens: 1` + an explicit "just respond hi"
  * instruction keep output at ~1 token.
  */
+// Derive the gateway probe model id (`sub/<bare-claude-id>`) from any stored
+// form: `pp-flant-anthropic-sub/sub/<m>`, `sub/<m>`, or a bare `<m>`. Exported
+// for testing the derivation without a network call.
+export function subProbeModelId(modelId: string): string {
+  let bare = modelId;
+  if (bare.startsWith(`${SUB_PROVIDER}/`)) bare = bare.slice(`${SUB_PROVIDER}/`.length);
+  if (bare.startsWith(SUB_MODEL_PREFIX)) bare = bare.slice(SUB_MODEL_PREFIX.length);
+  return `${SUB_MODEL_PREFIX}${bare}`;
+}
+
 export async function probeSubscriptionCleared(
   modelId: string,
 ): Promise<"ok" | "rate_limited" | "error"> {
@@ -385,8 +395,7 @@ export async function probeSubscriptionCleared(
     return "error";
   }
   // The gateway expects the bare claude-* id under the `sub/` prefix.
-  const bare = modelId.startsWith(SUB_MODEL_PREFIX) ? modelId.slice(SUB_MODEL_PREFIX.length) : modelId;
-  const probeModel = `${SUB_MODEL_PREFIX}${bare}`;
+  const probeModel = subProbeModelId(modelId);
   try {
     const res = await fetch("https://llm-api.flant.ru/v1/messages", {
       method: "POST",

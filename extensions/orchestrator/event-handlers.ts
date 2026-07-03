@@ -1200,9 +1200,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (data.description) {
       orchestrator.agentDescriptions.set(data.id, data.description);
     }
-    if (typeof data.modelId === "string" && data.modelId) {
-      orchestrator.agentModels.set(data.id, data.modelId);
-    }
+
     trackSubagentEvent(data, "created");
     startStaleAgentWatchdog();
     const mgr = (globalThis as any)[Symbol.for("pi-subagents:manager")];
@@ -1636,7 +1634,6 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     orchestrator.spawnedAgentIds.delete(data.id);
     orchestrator.agentDescriptions.delete(data.id);
     orchestrator.agentSpawnTimes.delete(data.id);
-    orchestrator.agentModels.delete(data.id);
     orchestrator.agentLifecycle.delete(data.id);
 
     const desc = data.description || data.type || data.id;
@@ -1678,11 +1675,9 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     }
 
     // Subscription rate-limit (429) on a sub-routed subagent: offer the ONE
-    // global switch-to-non-sub dialogue (never per-subagent). Recover the
-    // subagent's model from the event or the spawn-time record.
-    const failedModelId =
-      (typeof data.modelId === "string" && data.modelId) || orchestrator.agentModels.get(data.id);
-    orchestrator.agentModels.delete(data.id);
+    // global switch-to-non-sub dialogue (never per-subagent). subagents:failed
+    // carries the subagent's resolved model id.
+    const failedModelId = typeof data.modelId === "string" ? data.modelId : undefined;
     if (
       isRateLimitError(data.error) &&
       isSubscriptionRouted(failedModelId) &&

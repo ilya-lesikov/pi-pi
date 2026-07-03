@@ -35,7 +35,7 @@ export async function handleMainRateLimit(
   orchestrator.cancelPendingRetry();
 
   if (orchestrator.subFallbackActive) return; // sticky — already on non-sub
-  await offerFallback(orchestrator, ctx, modelId ?? orchestrator.subFallbackModelId ?? "");
+  await offerFallback(orchestrator, ctx, modelId ?? orchestrator.subFallbackModelId ?? "", "main");
 }
 
 // Handle a subscription-routed 429 reported via subagents:failed. Uses ONE
@@ -48,10 +48,15 @@ export async function handleSubagentRateLimit(
 ): Promise<void> {
   if (!isSubscriptionRouted(modelId)) return;
   if (orchestrator.subFallbackActive) return; // sticky
-  await offerFallback(orchestrator, ctx, modelId ?? "");
+  await offerFallback(orchestrator, ctx, modelId ?? "", "subagent");
 }
 
-async function offerFallback(orchestrator: Orchestrator, ctx: any, subModelId: string): Promise<void> {
+async function offerFallback(
+  orchestrator: Orchestrator,
+  ctx: any,
+  subModelId: string,
+  origin: "main" | "subagent",
+): Promise<void> {
   const log = getLogger();
   if (orchestrator.subFallbackDialogPending) return;
   if (!ctx?.hasUI) {
@@ -79,22 +84,32 @@ async function offerFallback(orchestrator: Orchestrator, ctx: any, subModelId: s
       ctx.ui?.notify?.("Staying on subscription. Auto-continuation paused until you resume or the limit clears.", "info");
       return;
     }
-    await activateFallback(orchestrator, ctx, subModelId);
+    await activateFallback(orchestrator, ctx, subModelId, origin);
   } finally {
     orchestrator.subFallbackDialogPending = false;
   }
 }
 
-async function activateFallback(orchestrator: Orchestrator, ctx: any, subModelId: string): Promise<void> {
+async function activateFallback(
+  orchestrator: Orchestrator,
+  ctx: any,
+  subModelId: string,
+  origin: "main" | "subagent",
+): Promise<void> {
   const log = getLogger();
   orchestrator.subFallbackActive = true;
   orchestrator.subFallbackModelId = subModelId || orchestrator.subFallbackModelId;
   // Activate the session-scoped override so EVERY future model resolution
   // (phase switches, new subagents, planner/reviewer specs) rewrites sub→non-sub.
+  // This is what actually re-routes future subagent spawns, regardless of origin.
   setSubscriptionFallbackActive(true);
 
-  // Switch the CURRENT main model to the non-sub equivalent right now.
-  if (subModelId) {
+  // Switch the CURRENT main model to the non-sub equivalent ONLY when the 429 was
+  // on the main turn. For a SUBAGENT 429 the failing model is the subagent's, not
+  // the main session's — switching the main model here would change the active
+  // orchestrator model the user never touched (e.g. debug's GPT -> Claude). The
+  // session override above already re-routes the retried/next subagent.
+  if (origin === "main" && subModelId) {
     const nonSub = toNonSubSpec(subModelId);
     const ok = await orchestrator.switchModel(ctx, nonSub, currentThinking(orchestrator));
     if (!ok) log.warn({ s: "ratelimit", nonSub }, "failed to switch main model to non-sub");
@@ -104,10 +119,13 @@ async function activateFallback(orchestrator: Orchestrator, ctx: any, subModelId
 
   armSwitchBackProbe(orchestrator);
 
-  // Nudge to continue — retries were cancelled, so the turn is stopped.
+  // Nudge to continue — retries were cancelled, so the turn is stopped. Idle-gated
+  // (same guard as the post-error nudge) so it never races the SDK into an
+  // "Agent is already processing" error.
   const phase = orchestrator.active?.state.phase ?? "current";
-  orchestrator.safeSendUserMessage(
+  orchestrator.sendUserMessageWhenIdle(
     `[PI-PI] Switched to regular (non-subscription) flant Claude after a rate limit. Continue working on the current phase (${phase}).`,
+    orchestrator.activeTaskToken,
   );
 }
 
@@ -202,7 +220,8 @@ async function switchBackToSub(orchestrator: Orchestrator, ctx: any, subModelId:
   orchestrator.subFallbackModelId = null;
   ctx.ui?.notify?.("Switched back to the personal Claude subscription.", "info");
   const phase = orchestrator.active?.state.phase ?? "current";
-  orchestrator.safeSendUserMessage(
+  orchestrator.sendUserMessageWhenIdle(
     `[PI-PI] Switched back to the personal Claude subscription. Continue working on the current phase (${phase}).`,
+    orchestrator.activeTaskToken,
   );
 }
