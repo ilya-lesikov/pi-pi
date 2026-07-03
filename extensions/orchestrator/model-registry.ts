@@ -207,11 +207,53 @@ function findFamily(modelId: string): ModelFamilyDefinition | null {
 }
 
 import { getLogger } from "./log.js";
+import { SUB_MODEL_PREFIX, SUB_PROVIDER } from "./flant-infra.js";
+
+// Session-scoped subscription fallback. When active (set after the user accepts
+// a sub-429 fallback), every model spec resolved through resolveModel that is
+// subscription-routed (`pp-flant-anthropic-sub/sub/<m>` or a bare `sub/<m>`) is
+// rewritten to the regular per-token form `pp-flant-anthropic/<m>`. This is the
+// single lever every resolution site funnels through (main phase switchModel,
+// subagent tool_call input.model, planner/reviewer specs, registerAgents), so a
+// one-shot switch cannot be undone by a later phase/subagent re-resolving a
+// `sub/` spec. Cleared when the user switches back or the task ends.
+let subscriptionFallbackActive = false;
+
+export function setSubscriptionFallbackActive(active: boolean): void {
+  subscriptionFallbackActive = active;
+}
+
+export function isSubscriptionFallbackActive(): boolean {
+  return subscriptionFallbackActive;
+}
+
+// Rewrite a subscription-routed spec to its regular per-token equivalent.
+// Handles both `pp-flant-anthropic-sub/sub/<m>` and a bare `sub/<m>` id.
+// Non-subscription specs pass through unchanged.
+export function toNonSubSpec(spec: string): string {
+  if (spec.startsWith(`${SUB_PROVIDER}/${SUB_MODEL_PREFIX}`)) {
+    return `pp-flant-anthropic/${spec.slice(`${SUB_PROVIDER}/${SUB_MODEL_PREFIX}`.length)}`;
+  }
+  if (spec.startsWith(`${SUB_PROVIDER}/`)) {
+    return `pp-flant-anthropic/${spec.slice(`${SUB_PROVIDER}/`.length)}`;
+  }
+  if (spec.startsWith(SUB_MODEL_PREFIX)) {
+    return `pp-flant-anthropic/${spec.slice(SUB_MODEL_PREFIX.length)}`;
+  }
+  return spec;
+}
 
 export function resolveModel(aliasOrId: string): string {
-  const resolved = aliasMap[aliasOrId] ?? aliasOrId;
+  let resolved = aliasMap[aliasOrId] ?? aliasOrId;
   if (resolved !== aliasOrId) {
     getLogger().debug({ s: "model", alias: aliasOrId, resolved }, "resolved model alias");
+  }
+  if (subscriptionFallbackActive) {
+    const rewritten = toNonSubSpec(resolved);
+    if (rewritten !== resolved) {
+      getLogger().debug({ s: "model", from: resolved, to: rewritten }, "subscription fallback rewrite");
+      resolved = rewritten;
+    }
   }
   return resolved;
 }

@@ -27,7 +27,7 @@ import { createTaskAgent } from "./agents/task.js";
 import { createAdvisorAgent } from "./agents/advisor.js";
 import { createDeepDebuggerAgent } from "./agents/deep-debugger.js";
 import { createReviewerAgent } from "./agents/reviewer.js";
-import { resolveModel, getModelInfo, findLatestFamilyMatch } from "./model-registry.js";
+import { resolveModel, getModelInfo, findLatestFamilyMatch, setSubscriptionFallbackActive } from "./model-registry.js";
 import { buildRepoContext } from "./agents/repo-context.js";
 import { getLogger, addTaskDestination, removeTaskDestination, setLogLevel } from "./log.js";
 import { handleSpawnResult } from "./spawn-cleanup.js";
@@ -61,6 +61,10 @@ export class Orchestrator {
   spawnedAgentIds = new Set<string>();
   agentDescriptions = new Map<string, string>();
   agentSpawnTimes = new Map<string, number>();
+  // Resolved model id per spawned subagent id, recorded at spawn time so a
+  // subscription 429 on subagents:failed can be attributed even if the failure
+  // payload omits the model.
+  agentModels = new Map<string, string>();
   agentLifecycle = new Map<string, {
     createdAt?: number;
     startedAt?: number;
@@ -89,6 +93,15 @@ export class Orchestrator {
   // without this ESC would not cancel it.
   pendingRetryEscUnsub: (() => void) | null = null;
   activeTaskToken = 0;
+  // Subscription rate-limit fallback (Issue 5). subFallbackActive mirrors the
+  // model-registry override flag; subFallbackDialogPending guards against
+  // opening more than one switch dialogue at a time (across main + subagents);
+  // subFallbackModelId records the sub model that hit the limit (used by the
+  // switch-back probe); subSwitchBackTimer is the fixed-interval probe timer.
+  subFallbackActive = false;
+  subFallbackDialogPending = false;
+  subFallbackModelId: string | null = null;
+  subSwitchBackTimer: ReturnType<typeof setTimeout> | null = null;
   userGatePending = false;
   lastCtx: any = null;
   failedPlannerVariants: string[] = [];
@@ -618,6 +631,7 @@ export class Orchestrator {
     this.spawnedAgentIds.clear();
     this.agentDescriptions.clear();
     this.agentSpawnTimes.clear();
+    this.agentModels.clear();
     this.agentLifecycle.clear();
     this.pendingSubagentSpawns = 0;
     this.errorRetryCount = 0;
@@ -639,6 +653,21 @@ export class Orchestrator {
       clearInterval(this.staleAgentTimer);
       this.staleAgentTimer = null;
     }
+    this.clearSubscriptionFallback();
+  }
+
+  // Reset the subscription rate-limit fallback: cancel the switch-back probe
+  // timer, clear the model-registry override, and reset guards. Called on task
+  // reset/cleanup so the sticky override never leaks across tasks.
+  clearSubscriptionFallback(): void {
+    if (this.subSwitchBackTimer) {
+      clearTimeout(this.subSwitchBackTimer);
+      this.subSwitchBackTimer = null;
+    }
+    this.subFallbackActive = false;
+    this.subFallbackDialogPending = false;
+    this.subFallbackModelId = null;
+    setSubscriptionFallbackActive(false);
   }
 
   async cleanupActive(): Promise<void> {

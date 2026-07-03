@@ -35,6 +35,13 @@ export interface FlantSettings {
    * Claude OAuth token (billed against their personal Claude subscription).
    */
   subscription: boolean;
+  /**
+   * Minutes between out-of-band "is the subscription limit cleared yet?" probes
+   * while the sub→non-sub rate-limit fallback is active. On each interval a
+   * cheap probe hits the sub model; on success the user is asked to switch back.
+   * Default 30.
+   */
+  switchBackIntervalMinutes: number;
 }
 
 const GEMINI_MAP: Record<string, string> = {
@@ -64,6 +71,7 @@ const DEFAULT_SETTINGS: FlantSettings = {
   cachedFlantModels: null,
   cachedOpenRouterData: null,
   subscription: false,
+  switchBackIntervalMinutes: 30,
 };
 
 /** Provider name for the personal-subscription Claude routing. */
@@ -245,10 +253,15 @@ function normalizeSettings(raw: unknown): FlantSettings {
   if (!raw || typeof raw !== "object") return { ...DEFAULT_SETTINGS };
   const value = raw as Record<string, unknown>;
   const cacheTTLDays = Math.max(1, Math.round(toNumber(value.cacheTTLDays, DEFAULT_SETTINGS.cacheTTLDays)));
+  const switchBackIntervalMinutes = Math.max(
+    1,
+    Math.round(toNumber(value.switchBackIntervalMinutes, DEFAULT_SETTINGS.switchBackIntervalMinutes)),
+  );
   return {
     enabled: !!value.enabled,
     autoUpdate: value.autoUpdate === undefined ? true : !!value.autoUpdate,
     cacheTTLDays,
+    switchBackIntervalMinutes,
     subscription: !!value.subscription,
     lastUpdated: typeof value.lastUpdated === "string" ? value.lastUpdated : null,
     cachedFlantModels: Array.isArray(value.cachedFlantModels)
@@ -345,6 +358,66 @@ function mapFlantToOpenRouterId(modelId: string): string | null {
   if (modelId.startsWith("o3-")) return `openai/o3-${modelId.slice("o3-".length)}`;
   if (modelId.startsWith("sonar-")) return `perplexity/sonar-${modelId.slice("sonar-".length)}`;
   return null;
+}
+
+/**
+ * Out-of-band probe: is the personal Claude subscription limit cleared yet?
+ * Sends a tiny, fully throwaway request (NOT part of the session, so it cannot
+ * pollute conversation/context/cache) to the gateway's Anthropic endpoint using
+ * the personal Claude OAuth token. Returns:
+ *   "ok"          — 200: capacity is back (offer switch-back)
+ *   "rate_limited" — 429: still limited (stay on non-sub, retry later)
+ *   "error"       — credentials missing / network / other status (treat as not-back)
+ *
+ * The OAuth token is refreshed first so a failure is a genuine 429 and not an
+ * expired-token false negative. `max_tokens: 1` + an explicit "just respond hi"
+ * instruction keep output at ~1 token.
+ */
+export async function probeSubscriptionCleared(
+  modelId: string,
+): Promise<"ok" | "rate_limited" | "error"> {
+  const log = getLogger();
+  await refreshClaudeOAuthToken();
+  const oauthToken = readClaudeOAuthToken();
+  const gatewayKey = readGatewayApiKey();
+  if (!oauthToken || !gatewayKey) {
+    log.debug({ s: "flant", hasOAuth: !!oauthToken, hasGatewayKey: !!gatewayKey }, "probe skipped: missing credentials");
+    return "error";
+  }
+  // The gateway expects the bare claude-* id under the `sub/` prefix.
+  const bare = modelId.startsWith(SUB_MODEL_PREFIX) ? modelId.slice(SUB_MODEL_PREFIX.length) : modelId;
+  const probeModel = `${SUB_MODEL_PREFIX}${bare}`;
+  try {
+    const res = await fetch("https://llm-api.flant.ru/v1/messages", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        Authorization: `Bearer ${oauthToken}`,
+        "x-litellm-api-key": `Bearer ${gatewayKey}`,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: probeModel,
+        max_tokens: 1,
+        temperature: 0,
+        messages: [{ role: "user", content: "just respond hi" }],
+      }),
+      signal: AbortSignal.timeout(30000),
+    });
+    if (res.status === 429) {
+      log.debug({ s: "flant", model: probeModel }, "probe: still rate limited");
+      return "rate_limited";
+    }
+    if (res.ok) {
+      log.debug({ s: "flant", model: probeModel }, "probe: capacity back");
+      return "ok";
+    }
+    log.debug({ s: "flant", model: probeModel, status: res.status }, "probe: unexpected status");
+    return "error";
+  } catch (err: any) {
+    log.debug({ s: "flant", err: err?.message }, "probe failed");
+    return "error";
+  }
 }
 
 export async function discoverFlantModels(apiKey: string): Promise<string[]> {

@@ -822,6 +822,7 @@ function flantStatusText(settings: FlantSettings): string {
     lines.push(
       `Personal subscription: on (${subActive ? `active — pp-flant-anthropic-sub, ${providers.anthropic} models` : "inactive"})`,
     );
+    lines.push(`Rate-limit switch-back check: every ${settings.switchBackIntervalMinutes} min`);
     if (!subActive) {
       if (!hasOAuth) lines.push("  - missing Claude OAuth token (run pi /login for Anthropic)");
       if (!hasGatewayKey) lines.push("  - missing gateway key (set LLM_API_KEY or FLANT_API_KEY)");
@@ -864,6 +865,11 @@ async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise
         subscriptionLabel,
         `Auto-update on startup: ${settings.autoUpdate ? "ON" : "OFF"}`,
         `Cache period: ${settings.cacheTTLDays} ${settings.cacheTTLDays === 1 ? "day" : "days"}`,
+      );
+      if (settings.subscription) {
+        options.push(`Rate-limit switch-back check: every ${settings.switchBackIntervalMinutes} min`);
+      }
+      options.push(
         "Update now",
         "Current status",
       );
@@ -925,6 +931,22 @@ async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise
           "info",
         );
       }
+      continue;
+    }
+
+    if (choice.startsWith("Rate-limit switch-back check:")) {
+      const selected = await selectOption(ctx, "Switch-back check interval", [
+        { title: "15 min", description: "Probe the subscription limit every 15 minutes" },
+        { title: "30 min", description: "Default — probe every 30 minutes" },
+        { title: "60 min", description: "Probe hourly" },
+        { title: "120 min", description: "Probe every two hours" },
+        { title: "Back", description: "Return to the previous menu" },
+      ]);
+      if (!selected || selected === "Back") continue;
+      const mins = Number(selected.split(" ")[0]);
+      if (!Number.isFinite(mins) || mins <= 0) continue;
+      saveFlantSettings({ ...settings, switchBackIntervalMinutes: mins });
+      ctx.ui.notify(`Switch-back check interval set to ${mins} min.`, "info");
       continue;
     }
 

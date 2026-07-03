@@ -27,6 +27,7 @@ import { registerAstSearchTool } from "./ast-search.js";
 import { SUBAGENT_SESSION_KEY } from "./index.js";
 import { registerCommandHandlers } from "./command-handlers.js";
 import { registerStateFileTools } from "./pp-state-tools.js";
+import { handleMainRateLimit, handleSubagentRateLimit, isRateLimitError } from "./rate-limit-fallback.js";
 import { setExtensionOnlyMode, unregisterAgentDefinitions } from "./agents/registry.js";
 import { resolveModel, getModelInfo, updateRegistryFromAvailableModels } from "./model-registry.js";
 import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
@@ -37,7 +38,7 @@ import { validateExitCriteria } from "./phases/machine.js";
 import { openPlannotator, waitForPlannotatorResult, cancelPendingPlannotatorWait } from "./plannotator.js";
 import { Orchestrator, type ActiveTask } from "./orchestrator.js";
 import { createCustomFooter, setFooterContext, setFooterTracker } from "./custom-footer.js";
-import { createUsageTracker, dumpUsageSummary, loadUsageSummary, type UsageTracker } from "./usage-tracker.js";
+import { createUsageTracker, dumpUsageSummary, loadUsageSummary, isSubscriptionRouted, type UsageTracker } from "./usage-tracker.js";
 import { askUser, isCancel } from "../../3p/pi-ask-user/index.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { findRootRepo, normalizeRepoPath, resolveRepoForFile, type RepoInfo } from "./repo-utils.js";
@@ -1199,6 +1200,9 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (data.description) {
       orchestrator.agentDescriptions.set(data.id, data.description);
     }
+    if (typeof data.modelId === "string" && data.modelId) {
+      orchestrator.agentModels.set(data.id, data.modelId);
+    }
     trackSubagentEvent(data, "created");
     startStaleAgentWatchdog();
     const mgr = (globalThis as any)[Symbol.for("pi-subagents:manager")];
@@ -1632,6 +1636,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     orchestrator.spawnedAgentIds.delete(data.id);
     orchestrator.agentDescriptions.delete(data.id);
     orchestrator.agentSpawnTimes.delete(data.id);
+    orchestrator.agentModels.delete(data.id);
     orchestrator.agentLifecycle.delete(data.id);
 
     const desc = data.description || data.type || data.id;
@@ -1670,6 +1675,20 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     const isApiError = data.status === "error" && (data.toolUses ?? 0) === 0;
     if (isApiError && orchestrator.spawnedAgentIds.size > 0) {
       orchestrator.abortAllSubagents();
+    }
+
+    // Subscription rate-limit (429) on a sub-routed subagent: offer the ONE
+    // global switch-to-non-sub dialogue (never per-subagent). Recover the
+    // subagent's model from the event or the spawn-time record.
+    const failedModelId =
+      (typeof data.modelId === "string" && data.modelId) || orchestrator.agentModels.get(data.id);
+    orchestrator.agentModels.delete(data.id);
+    if (
+      isRateLimitError(data.error) &&
+      isSubscriptionRouted(failedModelId) &&
+      !orchestrator.subFallbackActive
+    ) {
+      void handleSubagentRateLimit(orchestrator, orchestrator.lastCtx, failedModelId);
     }
 
     orchestrator.transitionController.sendCustom(
@@ -2183,6 +2202,19 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
         contentBlocks: msg.content?.length ?? 0,
         contentSummary,
       }, "turn ended with error");
+      // Subscription rate-limit (429) on a sub-routed main turn: retrying the
+      // same sub model is futile against an account-level limit. Offer a
+      // user-gated switch to non-sub Claude instead of the generic backoff.
+      const activeModelId = (typeof msg.model === "string" && msg.model) || ctx.model?.id;
+      const activeProvider = (typeof msg.provider === "string" && msg.provider) || ctx.model?.provider;
+      if (
+        isRateLimitError(errorMsg) &&
+        isSubscriptionRouted(activeModelId, activeProvider) &&
+        !orchestrator.subFallbackActive
+      ) {
+        void handleMainRateLimit(orchestrator, ctx, activeModelId, activeProvider);
+        return;
+      }
       orchestrator.errorRetryCount = (orchestrator.errorRetryCount ?? 0) + 1;
       const maxRetries = 5;
       if (orchestrator.errorRetryCount <= maxRetries) {
