@@ -1,4 +1,7 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { join } from "path";
+import { tmpdir } from "os";
 import { registerEventHandlers } from "./event-handlers.js";
 import { Orchestrator, type ActiveTask } from "./orchestrator.js";
 import { getDefaultConfig } from "./config.js";
@@ -249,5 +252,98 @@ describe("ask_user ESC aborts the turn", () => {
       ctx,
     );
     expect(ctx.abort).not.toHaveBeenCalled();
+  });
+});
+
+describe("tool_call Agent routing and spawn-time context injection", () => {
+  const tempDirs: string[] = [];
+
+  function makeTaskDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), "pi-pi-agent-hook-test-"));
+    tempDirs.push(dir);
+    writeFileSync(join(dir, "USER_REQUEST.md"), "the user request body", "utf-8");
+    writeFileSync(join(dir, "RESEARCH.md"), "the research body", "utf-8");
+    const artifactsDir = join(dir, "artifacts");
+    mkdirSync(artifactsDir, { recursive: true });
+    writeFileSync(join(artifactsDir, "design.md"), "# Design Doc\n\nstuff", "utf-8");
+    const plansDir = join(dir, "plans");
+    mkdirSync(plansDir, { recursive: true });
+    writeFileSync(join(plansDir, "1_synthesized.md"), "the plan", "utf-8");
+    return dir;
+  }
+
+  function activeWith(dir: string): ActiveTask {
+    const task = makeActiveTask();
+    task.dir = dir;
+    return task;
+  }
+
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks a missing subagent_type with a valid-types message", async () => {
+    orchestrator.active = makeActiveTask();
+    const handler = getHandler("tool_call");
+    const result = await handler({ toolName: "Agent", input: { prompt: "do a thing" } }, {});
+    expect(result?.block).toBe(true);
+    expect(result?.reason).toContain("subagent_type is required");
+  });
+
+  it("blocks an unknown subagent_type instead of collapsing to task", async () => {
+    orchestrator.active = makeActiveTask();
+    const handler = getHandler("tool_call");
+    const input: Record<string, unknown> = { subagent_type: "wizard", prompt: "x" };
+    const result = await handler({ toolName: "Agent", input }, {});
+    expect(result?.block).toBe(true);
+    expect(result?.reason).toContain('Unknown subagent_type "wizard"');
+    expect(result?.reason).toContain("deep-debugger");
+    // must NOT have been rewritten to task
+    expect(input.subagent_type).toBe("wizard");
+  });
+
+  it("routes advisor to its own model/thinking and injects context into the prompt", async () => {
+    const dir = makeTaskDir();
+    orchestrator.active = activeWith(dir);
+    const handler = getHandler("tool_call");
+    const input: Record<string, unknown> = { subagent_type: "advisor", prompt: "why is this broken" };
+    const result = await handler({ toolName: "Agent", input }, {});
+    expect(result).toBeUndefined();
+    expect(input.subagent_type).toBe("advisor");
+    expect(input.thinking).toBe("high");
+    const prompt = input.prompt as string;
+    expect(prompt).toContain("why is this broken");
+    expect(prompt).toContain("=== USER REQUEST ===");
+    expect(prompt).toContain("the user request body");
+    expect(prompt).toContain("=== RESEARCH ===");
+    expect(prompt).toContain("the research body");
+    // manifest lists real paths, not inlined content
+    expect(prompt).toContain(join(dir, "artifacts", "design.md"));
+    expect(prompt).toContain(join(dir, "plans", "1_synthesized.md"));
+    expect(prompt).not.toContain("the plan");
+  });
+
+  it("maps deep-debugger via bracket-notation config", async () => {
+    const dir = makeTaskDir();
+    orchestrator.active = activeWith(dir);
+    const handler = getHandler("tool_call");
+    const input: Record<string, unknown> = { subagent_type: "deep-debugger", prompt: "trace it" };
+    const result = await handler({ toolName: "Agent", input }, {});
+    expect(result).toBeUndefined();
+    expect(input.subagent_type).toBe("deep-debugger");
+    expect(input.thinking).toBe("high");
+  });
+
+  it("does NOT inject task context into explore spawns", async () => {
+    const dir = makeTaskDir();
+    orchestrator.active = activeWith(dir);
+    const handler = getHandler("tool_call");
+    const input: Record<string, unknown> = { subagent_type: "explore", prompt: "find X" };
+    const result = await handler({ toolName: "Agent", input }, {});
+    expect(result).toBeUndefined();
+    expect(input.subagent_type).toBe("explore");
+    expect(input.prompt).toBe("find X");
   });
 });

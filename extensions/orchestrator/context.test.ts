@@ -14,6 +14,8 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
 import {
   getContextDirs,
   getLatestSynthesizedPlan,
+  getArtifactManifest,
+  formatManifestBlock,
   getPhaseArtifacts,
   loadAllContextFiles,
   loadContextFiles,
@@ -374,6 +376,58 @@ describe("getLatestSynthesizedPlan", () => {
     writeFileSync(join(plansDir, "010_synthesized.md"), "latest", "utf-8");
 
     expect(getLatestSynthesizedPlan(taskDir)).toBe("latest");
+  });
+});
+
+describe("getArtifactManifest", () => {
+  it("returns empty when no artifacts or plan exist", () => {
+    const taskDir = makeTempDir();
+    expect(getArtifactManifest(taskDir)).toEqual([]);
+  });
+
+  it("extracts titles from artifact headings with a filename fallback", () => {
+    const taskDir = makeTempDir();
+    const artifactsDir = join(taskDir, "artifacts");
+    mkdirSync(artifactsDir, { recursive: true });
+    writeFileSync(join(artifactsDir, "design.md"), "# My Design\n\nbody", "utf-8");
+    writeFileSync(join(artifactsDir, "notitle.md"), "no heading here", "utf-8");
+
+    const manifest = getArtifactManifest(taskDir);
+    expect(manifest).toEqual([
+      { title: "My Design", path: join(artifactsDir, "design.md") },
+      { title: "artifacts/notitle.md", path: join(artifactsDir, "notitle.md") },
+    ]);
+  });
+
+  it("includes the latest synthesized plan with its REAL path, regardless of phase", () => {
+    const taskDir = makeTempDir();
+    const plansDir = join(taskDir, "plans");
+    mkdirSync(plansDir, { recursive: true });
+    writeFileSync(join(plansDir, "001_synthesized.md"), "old", "utf-8");
+    writeFileSync(join(plansDir, "010_synthesized.md"), "new", "utf-8");
+
+    const manifest = getArtifactManifest(taskDir);
+    expect(manifest).toEqual([
+      { title: "Synthesized implementation plan", path: join(plansDir, "010_synthesized.md") },
+    ]);
+  });
+});
+
+describe("formatManifestBlock", () => {
+  it("emits the do-not-re-read line only when the manifest is empty", () => {
+    const block = formatManifestBlock([]);
+    expect(block).toContain("Do NOT re-read them from disk");
+    expect(block).not.toContain("read them from disk with the read tool");
+  });
+
+  it("lists each manifest entry's path and title for on-demand reading", () => {
+    const block = formatManifestBlock([
+      { title: "Design", path: "/t/artifacts/design.md" },
+      { title: "Synthesized implementation plan", path: "/t/plans/1_synthesized.md" },
+    ]);
+    expect(block).toContain("do NOT re-read them from disk");
+    expect(block).toContain("- /t/artifacts/design.md  — Design");
+    expect(block).toContain("- /t/plans/1_synthesized.md  — Synthesized implementation plan");
   });
 });
 
