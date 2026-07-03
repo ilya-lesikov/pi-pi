@@ -655,6 +655,9 @@ export function generateFlantConfig(models: string[], subscriptionActive = false
           explore: { model: modelSpec(fastModel, sub), thinking: "low" },
           librarian: { model: modelSpec(fastModel, sub), thinking: "medium" },
           task: { model: modelSpec(taskModel, sub), thinking: "medium" },
+          advisor: { model: modelSpec(latestGpt ?? fallback, sub), thinking: "high" },
+          "deep-debugger": { model: modelSpec(latestGpt ?? fallback, sub), thinking: "high" },
+          reviewer: { model: modelSpec(latestGpt ?? fallback, sub), thinking: "high" },
         },
         presetGroups: {
           planners: buildPresetGroup({

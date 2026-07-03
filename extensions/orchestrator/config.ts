@@ -7,7 +7,7 @@ import { isValidLogLevel, getLogger, type LogLevel } from "./log.js";
 
 export type DurationValue = string | number;
 export type OrchestratorRole = "implement" | "plan" | "debug" | "brainstorm" | "review" | "quick";
-export type SimpleSubagentRole = "explore" | "librarian" | "task";
+export type SimpleSubagentRole = "explore" | "librarian" | "task" | "advisor" | "deep-debugger" | "reviewer";
 export type PresetGroupKey = "planners" | "codeReviewers" | "planReviewers" | "brainstormReviewers";
 
 export interface AgentConfig {
@@ -92,7 +92,7 @@ export type TimeoutConfig = NormalizedPiPiConfig["performance"]["internals"];
 export const PRESET_GROUPS = ["planners", "codeReviewers", "planReviewers", "brainstormReviewers"] as const;
 
 const ORCHESTRATOR_ROLES: OrchestratorRole[] = ["implement", "plan", "debug", "brainstorm", "review", "quick"];
-const SIMPLE_SUBAGENT_ROLES: SimpleSubagentRole[] = ["explore", "librarian", "task"];
+const SIMPLE_SUBAGENT_ROLES: SimpleSubagentRole[] = ["explore", "librarian", "task", "advisor", "deep-debugger", "reviewer"];
 
 const DEFAULT_CONFIG: PiPiConfig = {
   general: {
@@ -115,6 +115,9 @@ const DEFAULT_CONFIG: PiPiConfig = {
         explore: { model: "google/gemini-flash-latest", thinking: "low" },
         librarian: { model: "google/gemini-flash-latest", thinking: "medium" },
         task: { model: "anthropic/claude-opus-latest", thinking: "medium" },
+        advisor: { model: "openai/gpt-latest", thinking: "high" },
+        "deep-debugger": { model: "openai/gpt-latest", thinking: "high" },
+        reviewer: { model: "openai/gpt-latest", thinking: "high" },
       },
       presetGroups: {
         planners: {
