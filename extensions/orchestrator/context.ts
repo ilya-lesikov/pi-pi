@@ -327,6 +327,21 @@ export function getArtifactManifest(taskDir: string): { title: string; path: str
   return manifest;
 }
 
+// Renders a manifest into the trailing prompt block shared by phased panels.
+// Replaces the old "Do NOT re-read them from disk" line: USER_REQUEST/RESEARCH
+// (and the inlined plan) stay in context, while additional artifacts are offered
+// for on-demand reading from disk.
+export function formatManifestBlock(manifest: { title: string; path: string }[]): string {
+  if (manifest.length === 0) {
+    return "The USER REQUEST and RESEARCH above are already in your context. Do NOT re-read them from disk.";
+  }
+  return [
+    "The USER REQUEST and RESEARCH above are already in your context — do NOT re-read them from disk.",
+    "Additional analysis artifacts and the plan are listed below; read them from disk with the read tool if relevant:",
+    ...manifest.map((m) => `- ${m.path}  — ${m.title}`),
+  ].join("\n");
+}
+
 export function loadBrainstormReviewOutputs(taskDir: string, pass: number): { name: string; content: string }[] {
   const dir = join(taskDir, "brainstorm-reviews");
   if (!existsSync(dir)) return [];

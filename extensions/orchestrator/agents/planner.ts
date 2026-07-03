@@ -1,5 +1,5 @@
 import type { VariantConfig } from "../config.js";
-import { loadAllContextFiles } from "../context.js";
+import { loadAllContextFiles, formatManifestBlock } from "../context.js";
 import { resolveModel, getModelInfo } from "../model-registry.js";
 import type { RepoInfo } from "../repo-utils.js";
 import { buildRepoContext } from "./repo-context.js";
@@ -8,7 +8,7 @@ import { TOOLS_BLOCK, ALL_CBM_TOOLS, EXA_TOOLS, PRINCIPLES_BLOCK } from "./tool-
 export function createPlannerAgent(
   variant: string,
   variants: Record<string, VariantConfig>,
-  taskArtifacts: { userRequest: string; research: string },
+  taskArtifacts: { userRequest: string; research: string; manifest?: { title: string; path: string }[] },
   outputPath: string,
   contextDirs: string[],
   phase?: string,
@@ -55,10 +55,10 @@ export function createPlannerAgent(
       "- No other top-level sections allowed",
       "- Describe outcomes, not code-level mechanics",
       "",
-      "subagent_type is REQUIRED when spawning subagents — calls without it are rejected:",
-    '- Agent(subagent_type="Explore", ...) — codebase research. Prefer this for most lookups. Fast and cheap.',
-    '- Agent(subagent_type="Librarian", ...) — external docs, library APIs, web research.',
-    "Spawn multiple Explore agents in parallel for broad searches.",
+      "You may spawn ONLY explore/librarian subagents (subagent_type is REQUIRED — calls without it are rejected):",
+    '- Agent(subagent_type="explore", ...) — codebase research. Prefer this for most lookups. Fast and cheap.',
+    '- Agent(subagent_type="librarian", ...) — external docs, library APIs, web research.',
+    "Spawn multiple explore agents in parallel for broad searches. Do NOT spawn task, advisor, deep-debugger, or reviewer.",
       "</task>",
       "",
       // --- dynamic suffix ---
@@ -74,7 +74,7 @@ export function createPlannerAgent(
       taskArtifacts.research,
       ...(repoContext ? [repoContext] : []),
       "",
-      "The artifacts above are already in your context. Do NOT re-read them from disk.",
+      formatManifestBlock(taskArtifacts.manifest ?? []),
     ].join("\n"),
   };
 }

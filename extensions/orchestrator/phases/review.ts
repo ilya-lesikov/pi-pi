@@ -4,7 +4,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { resolvePreset, type PiPiConfig, type VariantConfig } from "../config.js";
 import { registerAgentDefinitions, spawnViaRpc, waitForCompletion } from "../agents/registry.js";
 import { createCodeReviewerAgent } from "../agents/code-reviewer.js";
-import { getContextDirs, getLatestSynthesizedPlan } from "../context.js";
+import { getContextDirs, getLatestSynthesizedPlan, getArtifactManifest } from "../context.js";
 import type { RepoInfo } from "../repo-utils.js";
 import type { PhaseSend } from "../transition-controller.js";
 
@@ -159,7 +159,7 @@ export async function spawnCodeReviewers(
     const agent = createCodeReviewerAgent(
       variant,
       reviewerVariants,
-      { userRequest, research, synthesizedPlan },
+      { userRequest, research, synthesizedPlan, manifest: getArtifactManifest(taskDir) },
       outputPath,
       contextDirs,
       reviewerPhase,

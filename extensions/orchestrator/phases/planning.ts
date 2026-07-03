@@ -5,7 +5,7 @@ import { resolvePreset, type PiPiConfig, type VariantConfig } from "../config.js
 import { registerAgentDefinitions, spawnViaRpc, waitForCompletion } from "../agents/registry.js";
 import { createPlannerAgent } from "../agents/planner.js";
 import { createPlanReviewerAgent } from "../agents/plan-reviewer.js";
-import { getContextDirs, getLatestSynthesizedPlan } from "../context.js";
+import { getContextDirs, getLatestSynthesizedPlan, getArtifactManifest } from "../context.js";
 import type { RepoInfo } from "../repo-utils.js";
 import { validatePlan } from "../validate-artifacts.js";
 import type { TaskMode } from "../state.js";
@@ -84,7 +84,7 @@ export async function spawnPlanners(
 
   for (const [variant] of enabledVariants) {
     const outputPath = join(plansDir, `${timestamp}_${variant}.md`);
-    const agent = createPlannerAgent(variant, plannerVariants, { userRequest, research }, outputPath, contextDirs, "plan", repos);
+    const agent = createPlannerAgent(variant, plannerVariants, { userRequest, research, manifest: getArtifactManifest(taskDir) }, outputPath, contextDirs, "plan", repos);
 
     registerAgentDefinitions(pi, [{ type: "planner", variant, ...agent }]);
 
@@ -211,7 +211,7 @@ export async function spawnPlanReviewers(
     const agent = createPlanReviewerAgent(
       variant,
       reviewerVariants,
-      { userRequest, research, synthesizedPlan },
+      { userRequest, research, synthesizedPlan, manifest: getArtifactManifest(taskDir) },
       outputPath,
       contextDirs,
       "plan",
