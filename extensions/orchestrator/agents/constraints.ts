@@ -29,6 +29,9 @@ export function completionLine(phase: Phase, mode: TaskMode): string {
   if (phase === "brainstorm") {
     return "This is a conversation. Do NOT call pp_phase_complete yourself — keep going until the user ends it or advances via the /pp menu.";
   }
+  if (phase === "plan" || phase === "implement") {
+    return "When you judge this phase complete, call pp_phase_complete — the extension opens the advance gate for the user to review and confirm. Do NOT instead stop and ask the user to run /pp manually.";
+  }
   return "When the work is complete, stop and let the user review and advance it via the /pp menu. Do NOT advance on your own or call pp_phase_complete unprompted.";
 }
 
