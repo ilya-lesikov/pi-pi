@@ -161,14 +161,15 @@ Supported actions and payloads:
 - `annotate-last`: `{ markdown? }`
 - `archive`: `{ customPlanPath? }`
 
-Plan review is asynchronous:
+Plan review and code review are asynchronous:
 
-- callers send `plannotator:request` with action `plan-review`
-- Plannotator opens the browser review and immediately responds with `{ status: "handled", result: { status: "pending", reviewId } }`
-- when the human approves or rejects in the browser, Plannotator emits `plannotator:review-result` with `{ reviewId, approved, feedback, savedPath?, agentSwitch?, permissionMode? }`
+- callers send `plannotator:request` with action `plan-review` or `code-review`
+- Plannotator immediately responds with `{ status: "handled", result: { status: "pending", reviewId } }` — for `code-review` this ack is emitted BEFORE the (potentially slow) browser session and PR/diff/worktree preparation start, so callers can detect an absent extension within the short availability window without waiting for the review itself
+- when the human approves or rejects in the browser (or closes the window), Plannotator emits `plannotator:review-result` with `{ reviewId, approved, feedback, savedPath?, agentSwitch?, permissionMode? }`
+- if `code-review` startup/preparation fails after the pending ack, Plannotator emits `plannotator:review-result` with `{ reviewId, approved: false, error }` so the failure is distinguishable from a legitimate user rejection
 - callers can query `review-status` with the same `reviewId` to recover from startup races or session restarts
 
-The other shared actions remain request/response flows. Payloads are intentionally minimal and only include fields the shared implementation actually uses.
+The remaining shared actions (`annotate`, `annotate-last`, `archive`, `review-status`) are synchronous request/response flows. Payloads are intentionally minimal and only include fields the shared implementation actually uses.
 
 ### Markdown annotation
 

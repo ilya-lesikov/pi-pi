@@ -891,20 +891,22 @@ async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise
   while (true) {
     const settings = loadFlantSettings();
     const enableLabel = `Enable: ${settings.enabled ? "ON" : "OFF"}`;
-    const options: OptionInput[] = [enableLabel];
+    const options: OptionInput[] = [
+      { title: enableLabel, description: "Turn the Flant AI model providers on or off" },
+    ];
     const subscriptionLabel = `Personal Claude subscription: ${settings.subscription ? "ON" : "OFF"}`;
     if (settings.enabled) {
       options.push(
-        subscriptionLabel,
-        `Auto-update on startup: ${settings.autoUpdate ? "ON" : "OFF"}`,
-        `Cache period: ${settings.cacheTTLDays} ${settings.cacheTTLDays === 1 ? "day" : "days"}`,
+        { title: subscriptionLabel, description: "Route Claude roles through your personal Claude subscription instead of the gateway" },
+        { title: `Auto-update on startup: ${settings.autoUpdate ? "ON" : "OFF"}`, description: "Refresh the available model list automatically each time pi starts" },
+        { title: `Cache period: ${settings.cacheTTLDays} ${settings.cacheTTLDays === 1 ? "day" : "days"}`, description: "How long the fetched model list is reused before it is refreshed" },
       );
       if (settings.subscription) {
-        options.push(`Rate-limit switch-back check: every ${settings.switchBackIntervalMinutes} min`);
+        options.push({ title: `Rate-limit switch-back check: every ${settings.switchBackIntervalMinutes} min`, description: "How often to retry your subscription after it was rate-limited and traffic fell back to the gateway" });
       }
       options.push(
-        "Update now",
-        "Current status",
+        { title: "Update now", description: "Fetch the latest model list from Flant right away" },
+        { title: "Current status", description: "Show the current Flant configuration, providers, and model counts" },
       );
     }
     options.push({ title: "Back", description: "Return to the previous menu" });
@@ -1990,7 +1992,7 @@ async function showPresetVariantEditor(
       continue;
     }
     if (choice.startsWith("Enabled:")) {
-      await showBooleanSetting(orchestrator, ctx, "Enabled", [...variantPath, "enabled"]);
+      await showBooleanSetting(orchestrator, ctx, "Enabled", [...variantPath, "enabled"], "Make this agent available for use", "Disable this agent so it is not used");
       continue;
     }
     const confirm = await selectOption(ctx, "Confirm delete?", [
@@ -2131,8 +2133,8 @@ async function showPresetEnabledSetting(
   const yesTitle = withTags("Yes", formatSourceTags(true, info));
   const noTitle = withTags("No", formatSourceTags(false, info));
   const choice = await selectOption(ctx, "Enabled", [
-    yesTitle,
-    noTitle,
+    { title: yesTitle, description: "Make this preset available for selection" },
+    { title: noTitle, description: "Hide this preset so it can no longer be selected" },
     opt("Back", "Return to the previous menu"),
   ]);
   if (!choice || choice === "Back") return;
@@ -2313,7 +2315,7 @@ async function showAfterEditCommands(orchestrator: Orchestrator, ctx: any): Prom
         continue;
       }
       if (commandChoice.startsWith("Enabled:")) {
-        await showBooleanSetting(orchestrator, ctx, "Enabled", [...commandPath, "enabled"]);
+        await showBooleanSetting(orchestrator, ctx, "Enabled", [...commandPath, "enabled"], "Run this command when its triggers fire", "Keep this command configured but stop running it");
         continue;
       }
       if (commandChoice === "Triggers") {
@@ -2430,7 +2432,7 @@ async function showAfterImplementCommands(orchestrator: Orchestrator, ctx: any):
         continue;
       }
       if (commandChoice.startsWith("Enabled:")) {
-        await showBooleanSetting(orchestrator, ctx, "Enabled", [...commandPath, "enabled"]);
+        await showBooleanSetting(orchestrator, ctx, "Enabled", [...commandPath, "enabled"], "Run this command when its triggers fire", "Keep this command configured but stop running it");
         continue;
       }
       const confirm = await selectOption(ctx, "Confirm delete?", [
@@ -2553,14 +2555,16 @@ async function showBooleanSetting(
   ctx: any,
   title: string,
   keyPath: string[],
+  yesDescription = "Turn this setting on",
+  noDescription = "Turn this setting off",
 ): Promise<void> {
   while (true) {
     const info = getConfigSourceInfo(orchestrator, keyPath);
     const yesTitle = withTags("Yes", formatSourceTags(true, info));
     const noTitle = withTags("No", formatSourceTags(false, info));
     const choice = await selectOption(ctx, title, [
-      yesTitle,
-      noTitle,
+      { title: yesTitle, description: yesDescription },
+      { title: noTitle, description: noDescription },
       ...buildResetOptions(orchestrator, keyPath),
       opt("Back", "Return to the previous menu"),
     ]);
@@ -2582,14 +2586,16 @@ async function showInvertedBooleanSetting(
   ctx: any,
   title: string,
   keyPath: string[],
+  yesDescription = "Turn this setting on",
+  noDescription = "Turn this setting off",
 ): Promise<void> {
   while (true) {
     const info = getConfigSourceInfo(orchestrator, keyPath);
     const yesTitle = withTags("Yes", formatSourceTags(false, info));
     const noTitle = withTags("No", formatSourceTags(true, info));
     const choice = await selectOption(ctx, title, [
-      yesTitle,
-      noTitle,
+      { title: yesTitle, description: yesDescription },
+      { title: noTitle, description: noDescription },
       ...buildResetOptions(orchestrator, keyPath),
       opt("Back", "Return to the previous menu"),
     ]);
@@ -2607,15 +2613,15 @@ async function showInvertedBooleanSetting(
 }
 
 async function showLogLevelSetting(orchestrator: Orchestrator, ctx: any): Promise<void> {
-  const levels: Array<{ value: PiPiConfig["general"]["logLevel"]; label: string }> = [
-    { value: "debug", label: "Debug" },
-    { value: "info", label: "Info" },
-    { value: "warn", label: "Warning" },
-    { value: "error", label: "Error" },
+  const levels: Array<{ value: PiPiConfig["general"]["logLevel"]; label: string; description: string }> = [
+    { value: "debug", label: "Debug", description: "Log everything, including detailed diagnostics for troubleshooting" },
+    { value: "info", label: "Info", description: "Log normal activity plus warnings and errors" },
+    { value: "warn", label: "Warning", description: "Log only warnings and errors" },
+    { value: "error", label: "Error", description: "Log only errors" },
   ];
   while (true) {
     const info = getConfigSourceInfo(orchestrator, ["general", "logLevel"]);
-    const options: OptionInput[] = levels.map((entry) => withTags(entry.label, formatSourceTags(entry.value, info)));
+    const options: OptionInput[] = levels.map((entry) => ({ title: withTags(entry.label, formatSourceTags(entry.value, info)), description: entry.description }));
     options.push(...buildResetOptions(orchestrator, ["general", "logLevel"]));
     options.push(opt("Back", "Return to the previous menu"));
     const choice = await selectOption(ctx, "Log level", options);
@@ -2645,11 +2651,11 @@ async function showGeneralSettings(orchestrator: Orchestrator, ctx: any): Promis
     ]);
     if (!choice || choice === "Back") return BACK;
     if (choice.startsWith("Commit automatically:")) {
-      await showBooleanSetting(orchestrator, ctx, "Commit automatically", ["general", "autoCommit"]);
+      await showBooleanSetting(orchestrator, ctx, "Commit automatically", ["general", "autoCommit"], "Commit changes automatically as work progresses", "Leave committing to you");
       continue;
     }
     if (choice.startsWith("Ignore configs from other repos:")) {
-      await showInvertedBooleanSetting(orchestrator, ctx, "Ignore configs from other repos", ["general", "loadExtraRepoConfigs"]);
+      await showInvertedBooleanSetting(orchestrator, ctx, "Ignore configs from other repos", ["general", "loadExtraRepoConfigs"], "Use only the root repo config and ignore configs from other registered repos", "Also load configs from the other registered repos");
       continue;
     }
     if (choice.startsWith("Log level:")) {
@@ -2657,7 +2663,7 @@ async function showGeneralSettings(orchestrator: Orchestrator, ctx: any): Promis
       continue;
     }
     if (choice.startsWith("Tracing:")) {
-      await showBooleanSetting(orchestrator, ctx, "Tracing", ["general", "tracing"]);
+      await showBooleanSetting(orchestrator, ctx, "Tracing", ["general", "tracing"], "Capture full session traces to .pp/logs/traces/", "Do not record session traces");
       continue;
     }
     await showFlantInfraMenu(orchestrator, ctx);
