@@ -226,6 +226,38 @@ async function pickCommitForRepo(orchestrator: Orchestrator, ctx: any, repo: Rep
   return pickedHash || null;
 }
 
+async function repoHasReviewableChanges(
+  orchestrator: Orchestrator,
+  repo: RepoInfo,
+  base: string,
+): Promise<{ changed: boolean; error?: string }> {
+  const run = async (args: string[]): Promise<{ out: string; failed: boolean }> => {
+    try {
+      const res = await orchestrator.pi.exec("git", args, { cwd: repo.path, timeout: 5000 });
+      if (res.code !== 0) return { out: "", failed: true };
+      return { out: res.stdout, failed: false };
+    } catch {
+      return { out: "", failed: true };
+    }
+  };
+
+  const committed = await run(["diff", "--name-only", `${base}...HEAD`]);
+  const unstaged = await run(["diff", "--name-only"]);
+  const staged = await run(["diff", "--cached", "--name-only"]);
+  const status = await run(["status", "--porcelain"]);
+
+  if (committed.failed && unstaged.failed && staged.failed && status.failed) {
+    return { changed: false, error: "git status/diff failed" };
+  }
+
+  const hasCommitted = committed.out.trim().length > 0;
+  const hasUnstaged = unstaged.out.trim().length > 0;
+  const hasStaged = staged.out.trim().length > 0;
+  const hasUntracked = status.out.split("\n").some((line) => line.startsWith("??"));
+
+  return { changed: hasCommitted || hasUnstaged || hasStaged || hasUntracked };
+}
+
 interface RepoPrContext {
   repoPath: string;
   prUrl: string | null;
@@ -3619,8 +3651,23 @@ export async function showActiveTaskMenu(
           if (handled.continueLoop) continue;
           return handled.text ?? text;
         }
-        const repos = getRegisteredRepos(orchestrator);
+        const allRepos = getRegisteredRepos(orchestrator);
         const summaries: string[] = [];
+        const repos: RepoInfo[] = [];
+        for (const repo of allRepos) {
+          const base = await detectDefaultBranch(orchestrator, allRepos, repo.path);
+          const { changed, error } = await repoHasReviewableChanges(orchestrator, repo, base);
+          if (error) {
+            summaries.push(`${formatRepoLabel(repo)}: ERROR — ${error}`);
+            repos.push(repo);
+          } else if (changed) {
+            repos.push(repo);
+          }
+        }
+        if (repos.length === 0) {
+          ctx.ui.notify("No registered repositories have changes to review.", "info");
+          continue;
+        }
         let stopReviewing = false;
 
         for (const repo of repos) {
