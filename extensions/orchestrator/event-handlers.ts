@@ -594,24 +594,24 @@ function registerRepoTool(orchestrator: Orchestrator): void {
   });
 }
 
-function openCodeReviewDirect(
-  pi: ExtensionAPI,
+async function openCodeReviewDirect(
+  orchestrator: Orchestrator,
   payload: Record<string, unknown>,
 ): Promise<{ approved: boolean; feedback?: string } | { error: string }> {
-  return new Promise((resolve) => {
-    pi.events.emit("plannotator:request", {
-      requestId: crypto.randomUUID(),
-      action: "code-review",
-      payload,
-      respond: (response: any) => {
-        if (response.status === "handled") {
-          resolve({ approved: !!response.result?.approved, feedback: response.result?.feedback });
-        } else {
-          resolve({ error: response.error || "Plannotator not available" });
-        }
-      },
-    });
-  });
+  const { opened, reviewId } = await openPlannotator(orchestrator.pi, "code-review", payload);
+  if (!opened) {
+    return { error: "Plannotator not available" };
+  }
+  let result: { approved: boolean; feedback?: string; error?: string };
+  try {
+    result = await waitForPlannotatorResult(orchestrator, reviewId, null);
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : "Plannotator review failed" };
+  }
+  if (result.error) {
+    return { error: result.error };
+  }
+  return { approved: result.approved, feedback: result.feedback };
 }
 
 function registerSpecifyReviewsTool(orchestrator: Orchestrator): void {
@@ -703,7 +703,7 @@ function registerSpecifyReviewsTool(orchestrator: Orchestrator): void {
           continue;
         }
 
-        const result = await openCodeReviewDirect(pi, {
+        const result = await openCodeReviewDirect(orchestrator, {
           cwd: reviewCwd,
           diffType: "branch",
           defaultBranch: compareBase,

@@ -27,7 +27,7 @@ import {
 } from "./context.js";
 import { detectDefaultBranch, enterReviewCycle, finalizeReviewCycle } from "./event-handlers.js";
 import { Orchestrator } from "./orchestrator.js";
-import { cancelPendingPlannotatorWait } from "./plannotator.js";
+import { cancelPendingPlannotatorWait, openPlannotator, waitForPlannotatorResult } from "./plannotator.js";
 import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
 import { spawnCodeReviewers } from "./phases/review.js";
 import { spawnBrainstormReviewers } from "./phases/brainstorm.js";
@@ -3089,30 +3089,24 @@ async function openCodeReviewInPlannotator(
   if (payload.diffType) requestPayload.diffType = payload.diffType;
   if (payload.defaultBranch) requestPayload.defaultBranch = payload.defaultBranch;
 
-  return await new Promise((resolve) => {
-    let handled = false;
-    const timer = setTimeout(() => {
-      if (!handled) resolve({ status: "error", error: "Plannotator is not available." });
-    }, 30000);
-    orchestrator.pi.events.emit("plannotator:request", {
-      requestId: crypto.randomUUID(),
-      action: "code-review",
-      payload: requestPayload,
-      respond: (response: any) => {
-        handled = true;
-        clearTimeout(timer);
-        if (response?.status !== "handled") {
-          resolve({ status: "error", error: response?.error || "Plannotator is not available." });
-          return;
-        }
-        const approved = !!response?.result?.approved;
-        const feedback = typeof response?.result?.feedback === "string" && response.result.feedback.trim().length > 0
-          ? response.result.feedback
-          : undefined;
-        resolve({ status: approved ? "approved" : "needs_changes", feedback });
-      },
-    });
-  });
+  const { opened, reviewId } = await openPlannotator(orchestrator.pi, "code-review", requestPayload);
+  if (!opened) {
+    return { status: "error", error: "Plannotator is not available." };
+  }
+
+  let result: { approved: boolean; feedback?: string; error?: string };
+  try {
+    result = await waitForPlannotatorResult(orchestrator, reviewId, null);
+  } catch (err) {
+    return { status: "error", error: err instanceof Error ? err.message : "Plannotator review failed." };
+  }
+  if (result.error) {
+    return { status: "error", error: result.error };
+  }
+  const feedback = typeof result.feedback === "string" && result.feedback.trim().length > 0
+    ? result.feedback
+    : undefined;
+  return { status: result.approved ? "approved" : "needs_changes", feedback };
 }
 
 async function startReviewTask(

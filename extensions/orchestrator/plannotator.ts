@@ -46,7 +46,8 @@ export function cancelPendingPlannotatorWait(orchestrator: Orchestrator): void {
 export function waitForPlannotatorResult(
   orchestrator: Orchestrator,
   reviewId: string | null,
-): Promise<{ approved: boolean; feedback?: string }> {
+  timeoutMs: number | null = PLANNOTATOR_RESULT_TIMEOUT_MS,
+): Promise<{ approved: boolean; feedback?: string; error?: string }> {
   cancelPendingPlannotatorWait(orchestrator);
   const pi = orchestrator.pi;
   return new Promise((resolve, reject) => {
@@ -54,7 +55,7 @@ export function waitForPlannotatorResult(
     const unsub = pi.events.on("plannotator:review-result", (data: any) => {
       if (reviewId && data?.reviewId && data.reviewId !== reviewId) return;
       cleanup();
-      resolve({ approved: !!data?.approved, feedback: data?.feedback });
+      resolve({ approved: !!data?.approved, feedback: data?.feedback, error: data?.error });
     });
     orchestrator.plannotatorUnsub = unsub;
     function cleanup() {
@@ -66,9 +67,11 @@ export function waitForPlannotatorResult(
         orchestrator.plannotatorTimer = null;
       }
     }
-    orchestrator.plannotatorTimer = setTimeout(() => {
-      cleanup();
-      reject(new Error("Plannotator review timed out"));
-    }, PLANNOTATOR_RESULT_TIMEOUT_MS);
+    if (timeoutMs !== null) {
+      orchestrator.plannotatorTimer = setTimeout(() => {
+        cleanup();
+        reject(new Error("Plannotator review timed out"));
+      }, timeoutMs);
+    }
   });
 }
