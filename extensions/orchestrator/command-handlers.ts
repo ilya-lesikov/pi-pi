@@ -151,7 +151,7 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
       const { showPpMenu } = await import("./pp-menu.js");
       const text = await showPpMenu(orchestrator, ctx, "command");
       if (text) {
-        orchestrator.safeSendUserMessage(`[PI-PI] ${text}`);
+        orchestrator.safeSendUserMessage(text.startsWith("[PI-PI]") ? text : `[PI-PI] ${text}`);
       }
     },
   });

@@ -201,10 +201,6 @@ const ReviewApp: React.FC = () => {
     document.title = repoInfo ? `${repoInfo.display} · Code Review` : "Code Review";
   }, [repoInfo]);
 
-  // Notify the server when the window/tab is closed without an explicit
-  // decision, so a raw close resolves the pending review instead of stalling
-  // the orchestrator. Guarded by submittedRef so it cannot double-post after an
-  // approve/feedback/exit already fired.
   const submittedRef = useRef<boolean>(false);
   useEffect(() => {
     submittedRef.current = !!submitted;

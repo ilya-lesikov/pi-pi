@@ -246,16 +246,22 @@ async function repoHasReviewableChanges(
   const staged = await run(["diff", "--cached", "--name-only"]);
   const status = await run(["status", "--porcelain"]);
 
-  if (committed.failed && unstaged.failed && staged.failed && status.failed) {
-    return { changed: false, error: "git status/diff failed" };
-  }
-
   const hasCommitted = committed.out.trim().length > 0;
   const hasUnstaged = unstaged.out.trim().length > 0;
   const hasStaged = staged.out.trim().length > 0;
   const hasUntracked = status.out.split("\n").some((line) => line.startsWith("??"));
+  const changed = hasCommitted || hasUnstaged || hasStaged || hasUntracked;
 
-  return { changed: hasCommitted || hasUnstaged || hasStaged || hasUntracked };
+  if (changed) return { changed: true };
+
+  // No change detected — but a failed probe (e.g. a missing/invalid base ref)
+  // could be masking real changes, so surface it rather than silently hiding
+  // the repo.
+  if (committed.failed || unstaged.failed || staged.failed || status.failed) {
+    return { changed: false, error: "git status/diff failed" };
+  }
+
+  return { changed: false };
 }
 
 interface RepoPrContext {
@@ -3641,9 +3647,9 @@ export async function showActiveTaskMenu(
       if (hasPlannotator) {
         reviewOptions.push(opt("Review in Plannotator", phase === "plan" ? "Open plan review in browser" : "Open code diff review in browser"));
       }
-      reviewOptions.push(opt("Review on my own", phase === "plan"
-        ? "Review the plan manually, then continue"
-        : "Review in your editor: mark spots with AI_REVIEW: comments, then have the agent address them"));
+      reviewOptions.push(opt("Review on my own", phase === "implement"
+        ? "Review in your editor: mark spots with AI_REVIEW: comments, then have the agent address them"
+        : "Review manually, then continue"));
       reviewOptions.push(opt("Back", "Return to the previous menu"));
 
       const reviewChoice = await selectOption(ctx, "Review", reviewOptions);
@@ -3746,7 +3752,7 @@ export async function showActiveTaskMenu(
           setStep(orchestrator, "synthesize");
           return continueMessage;
         }
-        if (phase !== "implement" && phase !== "review") {
+        if (phase !== "implement") {
           setStep(orchestrator, "llm_work");
           return continueMessage;
         }
