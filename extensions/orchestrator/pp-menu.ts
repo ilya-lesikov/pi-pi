@@ -3746,6 +3746,10 @@ export async function showActiveTaskMenu(
           setStep(orchestrator, "synthesize");
           return continueMessage;
         }
+        if (phase !== "implement" && phase !== "review") {
+          setStep(orchestrator, "llm_work");
+          return continueMessage;
+        }
 
         const gate = await selectOption(ctx, "Editor review", [
           opt("Done", "I've added AI_REVIEW: markers and saved my files"),

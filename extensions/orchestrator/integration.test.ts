@@ -678,7 +678,7 @@ describe("review cycle lifecycle", () => {
     await new Promise((r) => setTimeout(r, 10));
 
     expectReviewAuto(menu);
-    expectReviewOnMyOwn(menu);
+    expectReviewOnMyOwn(menu, "Skip markers");
     const result = await ppPhaseComplete.execute("call-3", { summary: "implemented" }, undefined, undefined, ctx);
 
     expect(result.content[0].text).toContain("continue");
@@ -1361,7 +1361,7 @@ describe("edge cases and regressions", () => {
     await ppPhaseComplete.execute("call-2", { summary: "plan done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
 
-    expectReviewOnMyOwn(menu);
+    expectReviewOnMyOwn(menu, "Skip markers");
     const result = await ppPhaseComplete.execute("call-3", { summary: "partial work" }, undefined, undefined, ctx);
 
     expect(result.content[0].text).toContain("continue");
@@ -1406,6 +1406,47 @@ describe("edge cases and regressions", () => {
     expect(result.content[0].text).toContain("continue");
     expect(orchestrator.active!.state.phase).toBe("plan");
     expect(orchestrator.active!.state.step).toBe("synthesize");
+  });
+
+  it("editor-review Done returns AI_REVIEW marker instructions in implement phase", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "Editor review test");
+    const taskDir = orchestrator.active!.dir;
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+    expectBrainstormToPlan(menu);
+    const ppPhaseComplete = getTool(pi, "pp_phase_complete");
+    await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
+    await new Promise((r) => setTimeout(r, 10));
+
+    emitSubagentCreated(pi, "planner-1", "Planner (test)");
+    const plansDir = join(taskDir, "plans");
+    mkdirSync(plansDir, { recursive: true });
+    writeFileSync(
+      join(plansDir, `${Math.floor(Date.now() / 1000)}_test.md`),
+      makeValidPlan(["- [ ] P1. Planner draft item — Done when: planner output exists"]),
+      "utf-8",
+    );
+    emitSubagentCompleted(pi, "planner-1", "Planner (test)");
+    writeFileSync(
+      join(plansDir, `${Math.floor(Date.now() / 1000) + 1}_synthesized.md`),
+      makeValidPlan(["- [ ] P1. Todo item — Done when: item intentionally remains unchecked"]),
+      "utf-8",
+    );
+    expectPlanToImplement(menu);
+    await ppPhaseComplete.execute("call-2", { summary: "plan done" }, undefined, undefined, ctx);
+    await new Promise((r) => setTimeout(r, 10));
+
+    expectReviewOnMyOwn(menu, "Done");
+    const result = await ppPhaseComplete.execute("call-3", { summary: "implemented" }, undefined, undefined, ctx);
+
+    expect(result.content[0].text).toContain("AI_REVIEW:");
+    expect(result.content[0].text).toContain("CHANGED files");
+    expect(orchestrator.active!.state.phase).toBe("implement");
+    expect(orchestrator.active!.state.step).toBe("llm_work");
   });
 
   it("generic description task does not auto-trigger agent", async () => {
@@ -2085,7 +2126,7 @@ describe("task modes and quick task", () => {
     expect(prompt).toContain("<principles>");
     expect(prompt).toContain("<tools>");
     expect(prompt).toContain("<task>");
-    expect(prompt).toContain("let the user review and advance it via the /pp menu");
+    expect(prompt).toContain("call pp_phase_complete");
     expect(prompt).not.toContain("HARNESS_BASE_PROMPT");
     expect(prompt).toContain(`Working directory: ${cwd}.`);
     expect(prompt).toMatch(/Current month: \d{4}-\d{2}\./);

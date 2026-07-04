@@ -215,9 +215,12 @@ export function expectReviewAuto(menu: AskUserHarness, preset = "regular"): void
   menu.expect({ question: "Review preset", options: { include: [m.preset(preset), "Back"] }, choose: m.preset(preset) });
 }
 
-export function expectReviewOnMyOwn(menu: AskUserHarness): void {
+export function expectReviewOnMyOwn(menu: AskUserHarness, editorGate?: "Done" | "Skip markers"): void {
   menu.expect({ question: m.anyTaskMenu, options: { include: ["Review"] }, choose: "Review" });
   menu.expect({ question: "Review", options: { include: ["Review on my own"] }, choose: "Review on my own" });
+  if (editorGate) {
+    menu.expect({ question: "Editor review", options: { include: [editorGate] }, choose: editorGate });
+  }
 }
 
 export function expectPpStartImplementAutonomous(menu: AskUserHarness): void {
