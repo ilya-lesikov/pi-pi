@@ -36,6 +36,7 @@ import { spawnBrainstormReviewers } from "./phases/brainstorm.js";
 import { reviewPassUnanimousApprove } from "./phases/verdict.js";
 import { validateExitCriteria } from "./phases/machine.js";
 import { openPlannotator, waitForPlannotatorResult, cancelPendingPlannotatorWait } from "./plannotator.js";
+import { advanceBanner } from "./messages.js";
 import { Orchestrator, type ActiveTask } from "./orchestrator.js";
 import { createCustomFooter, setFooterContext, setFooterTracker } from "./custom-footer.js";
 import { createUsageTracker, dumpUsageSummary, loadUsageSummary, isSubscriptionRouted, type UsageTracker } from "./usage-tracker.js";
@@ -237,7 +238,7 @@ function tryCompleteReviewCycle(orchestrator: Orchestrator, spawnedReviewers?: n
     },
     "instruction",
   );
-  orchestrator.safeSendUserMessage(reviewReadyMessage(phase, getEffectivePhaseMode(orchestrator.active.state)));
+  orchestrator.safeSendUserMessage(advanceBanner(reviewReadyMessage(phase, getEffectivePhaseMode(orchestrator.active.state))));
 }
 
 function reviewReadyMessage(phase: string, mode: TaskMode): string {

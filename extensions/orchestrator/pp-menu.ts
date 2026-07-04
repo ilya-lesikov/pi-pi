@@ -28,6 +28,7 @@ import {
 import { detectDefaultBranch, enterReviewCycle, finalizeReviewCycle } from "./event-handlers.js";
 import { Orchestrator } from "./orchestrator.js";
 import { cancelPendingPlannotatorWait, openPlannotator, waitForPlannotatorResult } from "./plannotator.js";
+import { advanceBanner } from "./messages.js";
 import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
 import { spawnCodeReviewers } from "./phases/review.js";
 import { spawnBrainstormReviewers } from "./phases/brainstorm.js";
@@ -3462,7 +3463,7 @@ export async function showActiveTaskMenu(
   summary: string,
   mode: MenuMode = "command",
 ): Promise<string> {
-  const continueMessage = "User wants to continue. Run /pp when ready to advance.";
+  const continueMessage = advanceBanner("[PI-PI] User wants to continue. Run /pp when ready to advance.");
 
   while (true) {
     if (!orchestrator.active) return "No active task.";
