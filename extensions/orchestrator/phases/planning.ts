@@ -46,10 +46,11 @@ export function planningSystemPrompt(taskDir: string, mode: TaskMode): string {
     "- ## Scope: 2-4 lines — what changes, what doesn't, critical constraints",
     "- ## Checklist: each item is - [ ] <outcome> — Done when: <observable condition>",
     "  Each item = one independently verifiable outcome. No code snippets or file-by-file instructions.",
+    "- ## Pattern constraints: include this section whenever the task adds a type, function, parser, annotation, config key, enum, or any user-facing value. For each, name the CLOSEST EXISTING analog in the codebase (found by behavior, not filename) and the exact conventions the implementer MUST mirror: data shape (prefer one existing shape over inventing parallel/duplicated state), spelling/casing of user-facing values (match existing values — never invent a new casing), and parser/validation/error-handling shape. These are acceptance criteria, not suggestions. Omit the section only if the task adds none of the above.",
     "- ## Blockers: unresolved issues blocking implementation (omit if none)",
     "Write/update the synthesized plan with pp_write_state_file / pp_edit_state_file (NOT the generic write/edit) — they keep the output compact and validate structure.",
     "- No other top-level sections allowed",
-    "- Describe outcomes, not code-level mechanics",
+    "- Describe outcomes, not code-level mechanics, EXCEPT in ## Pattern constraints where naming the concrete analog and conventions is required",
   ].join("\n");
 }
 

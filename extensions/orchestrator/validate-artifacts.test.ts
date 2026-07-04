@@ -41,6 +41,26 @@ Ship minimal fix.
     expect(result.ok).toBe(true);
   });
 
+  it("accepts a Pattern constraints section", () => {
+    const content = `# Plan
+
+## Scope
+Add a new annotation.
+
+## Checklist
+- [ ] Add annotation — Done when: tests pass
+
+## Pattern constraints
+- Mirror deletePolicies: one typed slice, kebab-case values.
+
+## Blockers
+- none
+`;
+
+    const result = validatePlan(content);
+    expect(result.ok).toBe(true);
+  });
+
   it("accepts multiline Done when continuation", () => {
     const content = `# Plan
 

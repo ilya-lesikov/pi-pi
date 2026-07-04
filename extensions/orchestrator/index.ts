@@ -65,7 +65,7 @@ function registerSubagentTools(pi: ExtensionAPI): void {
             ...event.content,
             {
               type: "text" as const,
-              text: `\n\n<validation-error>\nPlan structure is invalid:\n${result.errors.map((e) => `- ${e}`).join("\n")}\n\nFix immediately. Required structure:\n# Plan\n## Scope\n<2-4 lines>\n## Checklist\n- [ ] <outcome> — Done when: <observable condition>\n## Blockers (optional)\n<issues>\n\nRewrite the file now.\n</validation-error>`,
+              text: `\n\n<validation-error>\nPlan structure is invalid:\n${result.errors.map((e) => `- ${e}`).join("\n")}\n\nFix immediately. Required structure:\n# Plan\n## Scope\n<2-4 lines>\n## Checklist\n- [ ] <outcome> — Done when: <observable condition>\n## Pattern constraints (optional; include when adding a type/function/user-facing value)\n<closest existing analog + conventions to mirror>\n## Blockers (optional)\n<issues>\n\nRewrite the file now.\n</validation-error>`,
             },
           ],
         };

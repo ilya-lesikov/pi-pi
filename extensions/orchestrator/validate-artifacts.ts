@@ -5,7 +5,7 @@ const USER_REQUEST_ALLOWED_SECTIONS = ["Problem", "Constraints"] as const;
 const RESEARCH_REQUIRED_SECTIONS = ["Affected Code", "Architecture Context", "Constraints & Edge Cases"] as const;
 const RESEARCH_ALLOWED_SECTIONS = ["Affected Code", "Architecture Context", "Constraints & Edge Cases", "Open Questions"] as const;
 const PLAN_REQUIRED_SECTIONS = ["Scope", "Checklist"] as const;
-const PLAN_ALLOWED_SECTIONS = ["Scope", "Checklist", "Blockers"] as const;
+const PLAN_ALLOWED_SECTIONS = ["Scope", "Checklist", "Pattern constraints", "Blockers"] as const;
 const PLACEHOLDER_PATTERNS = /^(?:[-*.…—]|tbd|todo|n\/a|na|none|\.{2,})$/i;
 
 function splitLines(content: string): string[] {
@@ -186,7 +186,7 @@ export function validatePlan(content: string): ValidationResult {
   const errors: string[] = [];
   const h1 = getH1(content);
   const firstHeading = getFirstHeading(content);
-  const expectedSections = formatSectionList(PLAN_REQUIRED_SECTIONS, ["Blockers"]);
+  const expectedSections = formatSectionList(PLAN_REQUIRED_SECTIONS, ["Pattern constraints", "Blockers"]);
 
   if (!firstHeading) {
     errors.push("Missing required heading: # Plan. Expected first heading: # Plan");
