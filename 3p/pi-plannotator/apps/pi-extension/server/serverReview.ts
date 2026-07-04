@@ -206,6 +206,8 @@ export async function startReviewServer(options: {
 	onCleanup?: () => void | Promise<void>;
 	/** Called when server starts with the URL, remote status, and port */
 	onReady?: (url: string, isRemote: boolean, port: number) => void;
+	/** Working directory of the reviewed repo, used for repo-info (title/header) detection. */
+	repoCwd?: string;
 }): Promise<ReviewServerResult> {
 	const gitUser = detectGitUser();
 	let draftKey = contentHash(options.rawPatch);
@@ -266,7 +268,7 @@ export async function startReviewServer(options: {
 			}
 		: workspace
 			? { display: basename(workspace.root), branch: "Workspace" }
-		: getRepoInfo();
+		: getRepoInfo(options.repoCwd);
 	const editorAnnotations = createEditorAnnotationHandler();
 	const externalAnnotations = createExternalAnnotationHandler("review");
 

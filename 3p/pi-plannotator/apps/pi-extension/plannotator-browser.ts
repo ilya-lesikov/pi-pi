@@ -477,6 +477,7 @@ export async function startCodeReviewBrowserSession(
 		shareBaseUrl: process.env.PLANNOTATOR_SHARE_URL || undefined,
 		pasteApiUrl: process.env.PLANNOTATOR_PASTE_URL || undefined,
 		onCleanup: worktreeCleanup,
+		repoCwd: agentCwd ?? options.cwd ?? ctx.cwd,
 	});
 
 	return startBrowserDecisionSession(server, ctx, server.waitForDecision);
