@@ -3635,7 +3635,9 @@ export async function showActiveTaskMenu(
       if (hasPlannotator) {
         reviewOptions.push(opt("Review in Plannotator", phase === "plan" ? "Open plan review in browser" : "Open code diff review in browser"));
       }
-      reviewOptions.push(opt("Review on my own", "Review manually, then continue"));
+      reviewOptions.push(opt("Review on my own", phase === "plan"
+        ? "Review the plan manually, then continue"
+        : "Review in your editor: mark spots with AI_REVIEW: comments, then have the agent address them"));
       reviewOptions.push(opt("Back", "Return to the previous menu"));
 
       const reviewChoice = await selectOption(ctx, "Review", reviewOptions);
@@ -3736,10 +3738,31 @@ export async function showActiveTaskMenu(
       if (reviewChoice === "Review on my own") {
         if (phase === "plan") {
           setStep(orchestrator, "synthesize");
-        } else {
-          setStep(orchestrator, "llm_work");
+          return continueMessage;
         }
-        return continueMessage;
+
+        const gate = await selectOption(ctx, "Editor review", [
+          opt("Done", "I've added AI_REVIEW: markers and saved my files"),
+          opt("Skip markers", "Continue without the marker workflow"),
+          opt("Back", "Return to the review menu"),
+        ]);
+        if (!gate || gate === "Back") continue;
+        setStep(orchestrator, "llm_work");
+        if (gate === "Skip markers") {
+          return continueMessage;
+        }
+        return advanceBanner(
+          "[PI-PI] The user reviewed the changes in their editor and left inline `AI_REVIEW:` markers " +
+          "(inside each file's native comment syntax, e.g. `// AI_REVIEW: ...`, `# AI_REVIEW: ...`, " +
+          "`<!-- AI_REVIEW: ... -->`).\n\n" +
+          "For each registered repo, enumerate the CHANGED files only — union of `git diff --name-only <base>...HEAD`, " +
+          "`git diff --name-only`, `git diff --cached --name-only`, and untracked-non-ignored files from `git status --porcelain` " +
+          "(base = each repo's configured base branch) — and search WITHIN those files for `AI_REVIEW:`. Do NOT grep the whole " +
+          "worktree (avoid vendored/generated/node_modules and historical markers).\n\n" +
+          "For each marker: address the request, then remove that marker in the SAME edit. After a pass, re-scan the changed " +
+          "files and repeat until no `AI_REVIEW:` markers remain. Then verify your work and report what you changed per marker. " +
+          "When complete, call pp_phase_complete.",
+        );
       }
 
       const reviewPreset = await pickPreset(ctx, orchestrator, getReviewPresetGroup(phase), "Review preset");
