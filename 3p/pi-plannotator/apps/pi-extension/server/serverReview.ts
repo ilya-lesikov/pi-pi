@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { readFileSync, existsSync } from "node:fs";
 import { createServer } from "node:http";
 import os from "node:os";
@@ -161,18 +162,22 @@ function detectWSL(): boolean {
 	return false;
 }
 
+export interface ReviewDecision {
+	approved: boolean;
+	feedback: string;
+	annotations: unknown[];
+	agentSwitch?: string;
+	exit?: boolean;
+}
+
 export interface ReviewServerResult {
+	reviewId: string;
 	port: number;
 	portSource: "env" | "remote-default" | "random";
 	url: string;
 	isRemote: boolean;
-	waitForDecision: () => Promise<{
-		approved: boolean;
-		feedback: string;
-		annotations: unknown[];
-		agentSwitch?: string;
-		exit?: boolean;
-	}>;
+	waitForDecision: () => Promise<ReviewDecision>;
+	onDecision: (listener: (result: ReviewDecision) => void | Promise<void>) => () => void;
 	stop: () => void;
 }
 
@@ -540,22 +545,24 @@ export async function startReviewServer(options: {
 		(options.shareBaseUrl ?? process.env.PLANNOTATOR_SHARE_URL) || undefined;
 	const pasteApiUrl =
 		(options.pasteApiUrl ?? process.env.PLANNOTATOR_PASTE_URL) || undefined;
-	let resolveDecision!: (result: {
-		approved: boolean;
-		feedback: string;
-		annotations: unknown[];
-		agentSwitch?: string;
-		exit?: boolean;
-	}) => void;
-	const decisionPromise = new Promise<{
-		approved: boolean;
-		feedback: string;
-		annotations: unknown[];
-		agentSwitch?: string;
-		exit?: boolean;
-	}>((r) => {
+	const reviewId = randomUUID();
+	let resolveDecision!: (result: ReviewDecision) => void;
+	const decisionListeners = new Set<(result: ReviewDecision) => void | Promise<void>>();
+	let decisionSettled = false;
+	const decisionPromise = new Promise<ReviewDecision>((r) => {
 		resolveDecision = r;
 	});
+	const publishDecision = (result: ReviewDecision): boolean => {
+		if (decisionSettled) return false;
+		decisionSettled = true;
+		resolveDecision(result);
+		for (const listener of decisionListeners) {
+			Promise.resolve(listener(result)).catch((error) => {
+				console.error("[Code Review] Decision listener failed:", error);
+			});
+		}
+		return true;
+	};
 
 	const aiRuntime = await createPiAIRuntime({ getCwd: resolveAgentCwd });
 
@@ -1177,13 +1184,13 @@ export async function startReviewServer(options: {
 			return;
 		} else if (url.pathname === "/api/exit" && req.method === "POST") {
 			deleteDraft(draftKey);
-			resolveDecision({ approved: false, feedback: '', annotations: [], exit: true });
-			json(res, { ok: true });
+			const duplicate = !publishDecision({ approved: false, feedback: '', annotations: [], exit: true });
+			json(res, { ok: true, ...(duplicate && { duplicate: true }) });
 		} else if (url.pathname === "/api/feedback" && req.method === "POST") {
 			try {
 				const body = await parseBody(req);
 				deleteDraft(draftKey);
-				resolveDecision({
+				publishDecision({
 					approved: (body.approved as boolean) ?? false,
 					feedback: (body.feedback as string) || "",
 					annotations: (body.annotations as unknown[]) || [],
@@ -1209,11 +1216,18 @@ export async function startReviewServer(options: {
 	}
 
 	return {
+		reviewId,
 		port,
 		portSource,
 		url: serverUrl,
 		isRemote,
 		waitForDecision: () => decisionPromise,
+		onDecision: (listener) => {
+			decisionListeners.add(listener);
+			return () => {
+				decisionListeners.delete(listener);
+			};
+		},
 		stop: () => {
 			process.removeListener("exit", exitHandler);
 			agentJobs.killAll();

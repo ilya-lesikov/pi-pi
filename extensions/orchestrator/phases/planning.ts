@@ -21,6 +21,10 @@ export function planningSystemPrompt(taskDir: string, mode: TaskMode): string {
     mode === "autonomous"
       ? "   If planner outputs CONTRADICT each other on a locked decision, resolve it by favoring USER_REQUEST.md, RECORD the contradiction and your chosen resolution in the plan, and proceed — do NOT stall waiting for the user (there is none)."
       : "   If planner outputs CONTRADICT each other on a locked decision, surface the contradiction to the user and let them decide — do NOT silently invent a compromise.";
+  const synthesizeCompletionRule =
+    mode === "autonomous"
+      ? ""
+      : "When you judge the plan synthesis complete, call pp_phase_complete — the extension opens the advance gate for the user to review and confirm. Do NOT instead ask the user to run /pp manually.";
   return [
     "[PI-PI — PLAN PHASE]",
     "",
@@ -51,6 +55,7 @@ export function planningSystemPrompt(taskDir: string, mode: TaskMode): string {
     "Write/update the synthesized plan with pp_write_state_file / pp_edit_state_file (NOT the generic write/edit) — they keep the output compact and validate structure.",
     "- No other top-level sections allowed",
     "- Describe outcomes, not code-level mechanics, EXCEPT in ## Pattern constraints where naming the concrete analog and conventions is required",
+    ...(synthesizeCompletionRule ? ["", synthesizeCompletionRule] : []),
   ].join("\n");
 }
 

@@ -30,5 +30,7 @@ export function implementationSystemPrompt(taskDir: string, cwd: string): string
     "Don't batch all changes into one commit.",
     "",
     "Fix issues found by lsp diagnostics before moving on.",
+    "",
+    "When you judge the implement phase complete, call pp_phase_complete — the extension opens the advance gate for the user to review and confirm. Do NOT instead ask the user to run /pp manually.",
   ].join("\n");
 }

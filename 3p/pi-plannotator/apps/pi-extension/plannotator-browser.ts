@@ -59,6 +59,19 @@ export interface PlanReviewBrowserSession extends BrowserDecisionSession<PlanRev
 	onDecision: (listener: (result: PlanReviewDecision) => void | Promise<void>) => () => void;
 }
 
+export interface CodeReviewDecision {
+	approved: boolean;
+	feedback?: string;
+	annotations?: unknown[];
+	agentSwitch?: string;
+	exit?: boolean;
+}
+
+export interface CodeReviewBrowserSession extends BrowserDecisionSession<CodeReviewDecision> {
+	reviewId: string;
+	onDecision: (listener: (result: CodeReviewDecision) => void | Promise<void>) => () => void;
+}
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 let planHtmlContent = "";
 let reviewHtmlContent = "";
@@ -230,15 +243,7 @@ export async function openCodeReview(
 export async function startCodeReviewBrowserSession(
 	ctx: ExtensionContext,
 	options: { cwd?: string; defaultBranch?: string; diffType?: DiffType; prUrl?: string; vcsType?: VcsSelection; useLocal?: boolean } = {},
-): Promise<
-	BrowserDecisionSession<{
-		approved: boolean;
-		feedback?: string;
-		annotations?: unknown[];
-		agentSwitch?: string;
-		exit?: boolean;
-	}>
-> {
+): Promise<CodeReviewBrowserSession> {
 	if (!ctx.hasUI || !reviewHtmlContent) {
 		throw new Error("Plannotator code review browser is unavailable in this session.");
 	}
@@ -480,7 +485,16 @@ export async function startCodeReviewBrowserSession(
 		repoCwd: agentCwd ?? options.cwd ?? ctx.cwd,
 	});
 
-	return startBrowserDecisionSession(server, ctx, server.waitForDecision);
+	const session = startBrowserDecisionSession(server, ctx, server.waitForDecision);
+	server.onDecision(() => {
+		setTimeout(() => session.stop(), 1500);
+	});
+
+	return {
+		...session,
+		reviewId: server.reviewId,
+		onDecision: server.onDecision,
+	};
 }
 
 export async function openMarkdownAnnotation(

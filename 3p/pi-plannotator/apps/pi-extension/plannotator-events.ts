@@ -8,7 +8,6 @@ import {
 	getLastAssistantMessageText,
 	getStartupErrorMessage,
 	openArchiveBrowserAction,
-	openCodeReview,
 	openLastMessageAnnotation,
 	openMarkdownAnnotation,
 	startCodeReviewBrowserSession,
@@ -74,6 +73,12 @@ export interface PlannotatorReviewResultEvent {
 	savedPath?: string;
 	agentSwitch?: string;
 	permissionMode?: string;
+	/**
+	 * Set when the review could not be produced (e.g. code-review startup/prep
+	 * failed after the pending ack). Distinguishes a failure from a legitimate
+	 * user rejection (`approved: false` with feedback).
+	 */
+	error?: string;
 }
 
 export interface PlannotatorReviewStatusPayload {
@@ -99,6 +104,11 @@ export interface PlannotatorCodeReviewResult {
 	feedback?: string;
 	annotations?: unknown[];
 	agentSwitch?: string;
+}
+
+export interface PlannotatorCodeReviewStartResult {
+	status: "pending";
+	reviewId: string;
 }
 
 export interface PlannotatorAnnotatePayload {
@@ -129,7 +139,7 @@ export interface PlannotatorArchiveResult {
 export type PlannotatorRequestMap = {
 	"plan-review": PlannotatorRequestBase<"plan-review", PlannotatorPlanReviewPayload, PlannotatorPlanReviewStartResult>;
 	"review-status": PlannotatorRequestBase<"review-status", PlannotatorReviewStatusPayload, PlannotatorReviewStatusResult>;
-	"code-review": PlannotatorRequestBase<"code-review", PlannotatorCodeReviewPayload, PlannotatorCodeReviewResult>;
+	"code-review": PlannotatorRequestBase<"code-review", PlannotatorCodeReviewPayload, PlannotatorCodeReviewStartResult>;
 	annotate: PlannotatorRequestBase<"annotate", PlannotatorAnnotatePayload, PlannotatorAnnotationResult>;
 	"annotate-last": PlannotatorRequestBase<"annotate-last", PlannotatorAnnotatePayload, PlannotatorAnnotationResult>;
 	archive: PlannotatorRequestBase<"archive", PlannotatorArchivePayload, PlannotatorArchiveResult>;
@@ -138,7 +148,7 @@ export type PlannotatorRequest = PlannotatorRequestMap[PlannotatorAction];
 export type PlannotatorResponseMap = {
 	"plan-review": PlannotatorResponse<PlannotatorPlanReviewStartResult>;
 	"review-status": PlannotatorResponse<PlannotatorReviewStatusResult>;
-	"code-review": PlannotatorResponse<PlannotatorCodeReviewResult>;
+	"code-review": PlannotatorResponse<PlannotatorCodeReviewStartResult>;
 	annotate: PlannotatorResponse<PlannotatorAnnotationResult>;
 	"annotate-last": PlannotatorResponse<PlannotatorAnnotationResult>;
 	archive: PlannotatorResponse<PlannotatorArchiveResult>;
@@ -263,15 +273,43 @@ export function registerPlannotatorEventListeners(pi: ExtensionAPI): void {
 					return;
 				}
 				case "code-review": {
-					const result = await openCodeReview(ctx, {
-						cwd: request.payload?.cwd,
-						defaultBranch: request.payload?.defaultBranch,
-						diffType: request.payload?.diffType,
-						vcsType: request.payload?.vcsType,
-						useLocal: request.payload?.useLocal,
-						prUrl: request.payload?.prUrl,
-					});
-					request.respond({ status: "handled", result });
+					const reviewId = crypto.randomUUID();
+					setStoredReviewStatus(reviewId, { status: "pending" });
+					request.respond({ status: "handled", result: { status: "pending", reviewId } });
+
+					const payload = request.payload;
+					void (async () => {
+						try {
+							const session = await startCodeReviewBrowserSession(ctx, {
+								cwd: payload?.cwd,
+								defaultBranch: payload?.defaultBranch,
+								diffType: payload?.diffType,
+								vcsType: payload?.vcsType,
+								useLocal: payload?.useLocal,
+								prUrl: payload?.prUrl,
+							});
+							session.onDecision((result) => {
+								const reviewResult = {
+									reviewId,
+									approved: result.approved,
+									feedback: result.feedback,
+									agentSwitch: result.agentSwitch,
+								} satisfies PlannotatorReviewResultEvent;
+								setStoredReviewStatus(reviewId, { status: "completed", ...reviewResult });
+								pi.events.emit(PLANNOTATOR_REVIEW_RESULT_CHANNEL, reviewResult);
+							});
+							await session.waitForDecision();
+						} catch (err) {
+							const message = getStartupErrorMessage(err);
+							const reviewResult = {
+								reviewId,
+								approved: false,
+								error: message,
+							} satisfies PlannotatorReviewResultEvent;
+							setStoredReviewStatus(reviewId, { status: "completed", ...reviewResult });
+							pi.events.emit(PLANNOTATOR_REVIEW_RESULT_CHANNEL, reviewResult);
+						}
+					})();
 					return;
 				}
 				case "annotate": {
