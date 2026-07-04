@@ -1645,6 +1645,7 @@ const ReviewApp: React.FC = () => {
       return;
     }
     setIsSendingFeedback(true);
+    submittedRef.current = true;
     try {
       const agentSwitchSettings = getAgentSwitchSettings();
       const effectiveAgent = getEffectiveAgentName(agentSwitchSettings);
@@ -1665,6 +1666,7 @@ const ReviewApp: React.FC = () => {
         throw new Error('Failed to send');
       }
     } catch (err) {
+      submittedRef.current = false;
       console.error('Failed to send feedback:', err);
       setCopyFeedback('Failed to send');
       setTimeout(() => setCopyFeedback(null), 2000);
@@ -1675,6 +1677,7 @@ const ReviewApp: React.FC = () => {
   // Exit review session without sending any feedback
   const handleExit = useCallback(async () => {
     setIsExiting(true);
+    submittedRef.current = true;
     try {
       const res = await fetch('/api/exit', { method: 'POST' });
       if (res.ok) {
@@ -1683,6 +1686,7 @@ const ReviewApp: React.FC = () => {
         throw new Error('Failed to exit');
       }
     } catch (error) {
+      submittedRef.current = false;
       console.error('Failed to exit review:', error);
       setIsExiting(false);
     }
@@ -1691,6 +1695,7 @@ const ReviewApp: React.FC = () => {
   // Approve without feedback (LGTM)
   const handleApprove = useCallback(async () => {
     setIsApproving(true);
+    submittedRef.current = true;
     try {
       const res = await fetch('/api/feedback', {
         method: 'POST',
@@ -1707,6 +1712,7 @@ const ReviewApp: React.FC = () => {
         throw new Error('Failed to send');
       }
     } catch (err) {
+      submittedRef.current = false;
       console.error('Failed to approve:', err);
       setCopyFeedback('Failed to send');
       setTimeout(() => setCopyFeedback(null), 2000);
