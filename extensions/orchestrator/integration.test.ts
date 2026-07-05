@@ -3691,7 +3691,11 @@ describe("delegation nudges", () => {
     expect(orchestrator.delegationNudges).toBe(0);
   });
 
-  it("a matching discretionary spawn resets the counter (successful nudge does not accumulate)", async () => {
+  function mainSpawn(pi: ReturnType<typeof makePi>, subagentType: string) {
+    pi._handlers.get("tool_execution_start")!({ toolCallId: `agent-${Math.random()}`, toolName: "Agent", args: { subagent_type: subagentType, description: "x", prompt: "y" } });
+  }
+
+  it("a matching MAIN spawn resets the counter (successful nudge does not accumulate)", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);
     const ctx = makeCtx();
@@ -3703,11 +3707,11 @@ describe("delegation nudges", () => {
     await pi._handlers.get("turn_end")!(searchTurn, ctx);
     expect(orchestrator.delegationNudges).toBe(1);
 
-    pi.events.emit("subagents:created", { id: "explore-1", type: "explore", description: "exploring" });
+    mainSpawn(pi, "explore");
     expect(orchestrator.delegationNudges).toBe(0);
   });
 
-  it("a NON-matching discretionary spawn does NOT accept the nudge (M2)", async () => {
+  it("a NON-matching MAIN spawn does NOT accept the nudge (M2)", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);
     const ctx = makeCtx();
@@ -3720,8 +3724,27 @@ describe("delegation nudges", () => {
     expect(orchestrator.delegationNudges).toBe(1);
 
     // A broad-search nudge recommends explore; a `task` spawn must NOT count as acceptance.
-    pi.events.emit("subagents:created", { id: "task-1", type: "task", description: "unrelated" });
+    mainSpawn(pi, "task");
     expect(orchestrator.delegationNudges).toBe(1);
+  });
+
+  it("a NESTED spawn (subagents:created without a main Agent call) does NOT accept the nudge (P3-1)", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+    await orchestrator.startTask(ctx as any, "implement", "deleg nested", undefined, undefined, "autonomous");
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "llm_work";
+
+    feedSearch(pi, ["a.ts", "b.ts", "c.ts", "d.ts", "e.ts"]);
+    await pi._handlers.get("turn_end")!(searchTurn, ctx);
+    expect(orchestrator.delegationNudges).toBe(1);
+
+    // A nested explore (e.g. an advisor spawning its own explore) surfaces only as a
+    // lineage-less subagents:created event, never a main Agent tool call. Must NOT accept.
+    pi.events.emit("subagents:created", { id: "nested-explore", type: "explore", description: "nested" });
+    expect(orchestrator.delegationNudges).toBe(1);
+    expect(orchestrator.delegationDetector.pending).not.toBeNull();
   });
 
   it("an ignored nudge expires and clears the pending record after the window (M3)", async () => {
@@ -3758,6 +3781,9 @@ describe("delegation nudges", () => {
     await pi._handlers.get("turn_end")!(searchTurn, ctx);
     expect(orchestrator.delegationNudges).toBe(1);
 
+    // Even if a triad type somehow arrived on the main tool stream, isDiscretionarySpawn
+    // rejects model-suffixed types, so it never counts as acceptance.
+    mainSpawn(pi, "planner_opus");
     pi.events.emit("subagents:created", { id: "planner-1", type: "planner_opus", description: "planning" });
     expect(orchestrator.delegationNudges).toBe(1);
   });

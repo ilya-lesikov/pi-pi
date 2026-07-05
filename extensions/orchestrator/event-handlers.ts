@@ -1000,6 +1000,30 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
   });
 }
 
+// A main-initiated discretionary spawn (observed via the root `Agent` tool call): explore
+// suppresses broad-search; a spawn matching the pending nudge's signal within the window
+// resolves it as accepted and resets the counter so a successful nudge never accumulates
+// toward the halt. Non-matching spawns leave the nudge pending. Not driven from
+// subagents:created because that event also fires for lineage-less nested spawns.
+function onMainDiscretionarySpawn(orch: Orchestrator, spawnType: string, turnIndex: number): void {
+  if (!isDiscretionarySpawn(spawnType)) return;
+  const detector = orch.delegationDetector;
+  if (spawnType === "explore") detector.onExploreSpawned();
+  const pending = detector.pending;
+  if (pending && spawnMatchesSignal(pending.signal, spawnType) && turnIndex - pending.firedTurnIndex <= NUDGE_SPAWN_CORRELATION_TURNS) {
+    getTracer()?.traceMain("delegation_nudge", {
+      event: "resolved",
+      outcome: "accepted",
+      nudgeId: pending.nudgeId,
+      signal: pending.signal,
+      spawnedType: spawnType,
+      turnIndex,
+    });
+    detector.pending = null;
+    orch.delegationNudges = 0;
+  }
+}
+
 function registerMainTraceHooks(orchestrator: Orchestrator): void {
   const pi = orchestrator.pi;
   // These hooks are registered only on the root orchestrator session
@@ -1046,7 +1070,17 @@ function registerMainTraceHooks(orchestrator: Orchestrator): void {
     tracer?.traceMain("tool_execution_start", { turnIndex: tracer.turnIndex, toolCallId: event.toolCallId, toolName: event.toolName, args: event.args });
     // tool_execution_end carries no args, so capture the command/path here and correlate
     // by toolCallId at end. Scoped to the root/main session (these hooks are main-only).
-    if (orchestrator.active) orchestrator.delegationDetector.recordToolStart(event.toolCallId, event.toolName, event.args);
+    if (orchestrator.active) {
+      orchestrator.delegationDetector.recordToolStart(event.toolCallId, event.toolName, event.args);
+      // An `Agent` tool call here is MAIN-initiated by construction (these hooks are root-
+      // only; nested spawns run in a subagent session and never reach them). This is the
+      // authoritative signal for nudge acceptance — the subagents:created event fires for
+      // nested spawns too and carries no lineage, so it cannot be used for this.
+      if (event.toolName === "Agent") {
+        const spawnType = ((event.args as any)?.subagent_type ?? "").toString().toLowerCase();
+        onMainDiscretionarySpawn(orchestrator, spawnType, tracer?.turnIndex ?? 0);
+      }
+    }
   });
   pi.on("tool_execution_update", async (event) => {
     const tracer = getTracer();
@@ -1215,32 +1249,9 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     }
 
     trackSubagentEvent(data, "created");
-
-    // A discretionary (main-initiated) spawn is the behaviour delegation nudges encourage.
-    // Orchestrated triad spawns (model-suffixed planner/*_reviewer) are excluded.
-    if (isDiscretionarySpawn(data.type)) {
-      const detector = orchestrator.delegationDetector;
-      if ((data.type || "").toLowerCase() === "explore") detector.onExploreSpawned();
-      const pending = detector.pending;
-      // Resolve acceptance ONLY when the spawn's role matches the nudge and it lands within
-      // the correlation window; a successful nudge then resets the anti-spam counter so it
-      // never accumulates toward the halt. Non-matching spawns leave the nudge pending.
-      if (pending && spawnMatchesSignal(pending.signal, data.type)) {
-        const turnIndex = getTracer()?.turnIndex ?? -1;
-        if (turnIndex < 0 || turnIndex - pending.firedTurnIndex <= NUDGE_SPAWN_CORRELATION_TURNS) {
-          getTracer()?.traceMain("delegation_nudge", {
-            event: "resolved",
-            outcome: "accepted",
-            nudgeId: pending.nudgeId,
-            signal: pending.signal,
-            spawnedType: (data.type || "").toLowerCase(),
-            turnIndex,
-          });
-          detector.pending = null;
-          orchestrator.delegationNudges = 0;
-        }
-      }
-    }
+    // Nudge acceptance/suppression is driven from the root `Agent` tool-call observation
+    // (main-initiated by construction), NOT here — this event also fires for lineage-less
+    // nested spawns, which must not count as the main agent following a nudge.
 
     startStaleAgentWatchdog();
     const mgr = (globalThis as any)[Symbol.for("pi-subagents:manager")];
