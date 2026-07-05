@@ -10,6 +10,12 @@ import { getLogger, initSessionLogger, addTaskDestination, setLogLevel, flushLog
 import { initTracer, finalizeTracer, getTracer } from "./tracer.js";
 import { handleSpawnResult } from "./spawn-cleanup.js";
 import {
+  MAX_DELEGATION_NUDGES,
+  NUDGE_SPAWN_CORRELATION_TURNS,
+  isDiscretionarySpawn,
+  delegationNudgeMessage,
+} from "./delegation-nudge.js";
+import {
   getContextDirs,
   loadAllContextFiles,
   getPhaseArtifacts,
@@ -1036,6 +1042,9 @@ function registerMainTraceHooks(orchestrator: Orchestrator): void {
   pi.on("tool_execution_start", async (event) => {
     const tracer = getTracer();
     tracer?.traceMain("tool_execution_start", { turnIndex: tracer.turnIndex, toolCallId: event.toolCallId, toolName: event.toolName, args: event.args });
+    // tool_execution_end carries no args, so capture the command/path here and correlate
+    // by toolCallId at end. Scoped to the root/main session (these hooks are main-only).
+    if (orchestrator.active) orchestrator.delegationDetector.recordToolStart(event.toolCallId, event.toolName, event.args);
   });
   pi.on("tool_execution_update", async (event) => {
     const tracer = getTracer();
@@ -1044,6 +1053,7 @@ function registerMainTraceHooks(orchestrator: Orchestrator): void {
   pi.on("tool_execution_end", async (event) => {
     const tracer = getTracer();
     tracer?.traceMain("tool_execution_end", { turnIndex: tracer.turnIndex, toolCallId: event.toolCallId, toolName: event.toolName, result: event.result, isError: event.isError });
+    if (orchestrator.active) orchestrator.delegationDetector.recordToolEnd(event.toolCallId, event.toolName, event.isError === true);
   });
 }
 
@@ -1203,6 +1213,33 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     }
 
     trackSubagentEvent(data, "created");
+
+    // A discretionary (main-initiated) spawn is exactly the behaviour delegation nudges
+    // aim to encourage. Suppress the broad-search nudge for the current window, and if a
+    // nudge was pending, resolve its effectiveness as accepted and clear the anti-spam
+    // counter so a SUCCESSFUL nudge never accumulates toward the halt. Orchestrated triad
+    // spawns (planner/*_reviewer, carrying model suffixes) are excluded.
+    if (isDiscretionarySpawn(data.type)) {
+      const detector = orchestrator.delegationDetector;
+      if ((data.type || "").toLowerCase() === "explore") detector.onExploreSpawned();
+      const pending = detector.pending;
+      if (pending) {
+        const turnIndex = getTracer()?.turnIndex ?? -1;
+        if (turnIndex < 0 || turnIndex - pending.firedTurnIndex <= NUDGE_SPAWN_CORRELATION_TURNS) {
+          getTracer()?.traceMain("delegation_nudge", {
+            event: "resolved",
+            outcome: "accepted",
+            nudgeId: pending.nudgeId,
+            signal: pending.signal,
+            spawnedType: (data.type || "").toLowerCase(),
+            turnIndex,
+          });
+          detector.pending = null;
+          orchestrator.delegationNudges = 0;
+        }
+      }
+    }
+
     startStaleAgentWatchdog();
     const mgr = (globalThis as any)[Symbol.for("pi-subagents:manager")];
     mgr?.refreshWidget?.(orchestrator.lastCtx?.ui);
@@ -1230,6 +1267,72 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       const record = mgr.getRecord(id);
       if (record) record.resultConsumed = true;
     }
+  }
+
+  // Fire a soft delegation nudge when the tool-stream detector reports an active signal.
+  // Guards mirror the continuation nudge: controller running, task active, not in a
+  // transition/await step, no subagent in flight, own halt unset. Never hard-blocks; the
+  // message explicitly permits continuing inline. Placed at turn_end via the independent
+  // block above so it fires during active (tool-ending) search/debug turns.
+  function maybeFireDelegationNudge(phase: Phase): void {
+    if (!orchestrator.active) return;
+    if (!orchestrator.transitionController.isRunning()) return;
+    if (orchestrator.transitionController.isTransitioning()) return;
+    const step = orchestrator.active.state.step;
+    if (step === "await_planners" || step === "await_reviewers") return;
+    // Don't nudge while already delegating: an agentLifecycle entry EXISTS only while a
+    // subagent is in flight (deleted on completed/failed), and pending spawns count too.
+    if (orchestrator.agentLifecycle.size > 0 || orchestrator.spawnedAgentIds.size > 0 || orchestrator.pendingSubagentSpawns > 0) return;
+    if (orchestrator.delegationNudgeHalted) return;
+
+    const turnIndex = getTracer()?.turnIndex ?? 0;
+    const active = orchestrator.delegationDetector.evaluate(phase, turnIndex);
+    if (!active) return;
+
+    if (orchestrator.delegationNudges >= MAX_DELEGATION_NUDGES) {
+      orchestrator.delegationNudgeHalted = true;
+      orchestrator.transitionController.sendCustom(
+        {
+          customType: "pp-delegation-halted",
+          content: "Delegation suggestions paused after repeated nudges without a spawn. Send any message to resume.",
+          display: true,
+        },
+        "context",
+      );
+      return;
+    }
+
+    // A prior pending nudge that never led to a spawn expires now (a new one supersedes it).
+    const prior = orchestrator.delegationDetector.pending;
+    if (prior) {
+      getTracer()?.traceMain("delegation_nudge", {
+        event: "resolved",
+        outcome: "expired",
+        nudgeId: prior.nudgeId,
+        signal: prior.signal,
+        turnIndex,
+      });
+    }
+
+    orchestrator.delegationNudges++;
+    const nudgeId = crypto.randomUUID();
+    orchestrator.delegationDetector.pending = {
+      nudgeId,
+      signal: active.signal,
+      recommendedRole: active.recommendedRole,
+      firedTurnIndex: turnIndex,
+    };
+    getTracer()?.traceMain("delegation_nudge", {
+      event: "fired",
+      nudgeId,
+      signal: active.signal,
+      recommendedRole: active.recommendedRole,
+      phase,
+      step: step ?? undefined,
+      turnIndex,
+    });
+    orchestrator.delegationDetector.clearActiveSignals();
+    orchestrator.safeSendUserMessage(delegationNudgeMessage(active.signal, phase));
   }
 
   function checkPlannerCompletion(): void {
@@ -1885,6 +1988,9 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (!isControllerInjected) {
       orchestrator.nudgeHalted = false;
       orchestrator.consecutiveNudges = 0;
+      // Delegation nudge shares the re-engagement reset discipline (its own counter/halt).
+      orchestrator.delegationNudgeHalted = false;
+      orchestrator.delegationNudges = 0;
       // Genuine user re-engagement also clears the API-error retry halt, so a
       // fresh request can auto-retry again from a clean counter.
       orchestrator.errorNudgeHalted = false;
@@ -2311,6 +2417,13 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (orchestrator.active.state.step === "await_planners" || orchestrator.active.state.step === "await_reviewers") {
       return;
     }
+
+    // Telemetry-driven delegation nudge. Evaluated as an INDEPENDENT block BEFORE the
+    // continuation nudge's isGenuineStop/nudgesEnabled early-returns below: broad-search
+    // and stuck-debug turns end WITH tool calls (forward progress, NOT a genuine stop),
+    // so a block placed after those returns would be dead code. It has its own phase gate,
+    // its own counter/halt, and does not touch the continuation guard.
+    maybeFireDelegationNudge(phase);
 
     const contentParts = Array.isArray(msg?.content) ? msg.content : [];
     const hasText = contentParts.some((c: any) => c.type === "text" && c.text?.trim());
