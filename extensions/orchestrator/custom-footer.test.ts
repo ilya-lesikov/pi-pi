@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach } from "vitest";
 import { createCustomFooter, setFooterContext, setFooterTracker, setFooterOrchestrator } from "./custom-footer.js";
 
 const theme = { fg: (_color: string, text: string) => text } as any;
-const footerData = { getGitBranch: () => "main", getExtensionStatuses: () => new Map() } as any;
+const footerData = { getGitBranch: () => "main" } as any;
 
 function render(width = 200): string[] {
   const footer = createCustomFooter({} as any, theme, footerData);
