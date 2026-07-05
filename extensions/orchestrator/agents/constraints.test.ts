@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { completionLine, constraintsBlock } from "./constraints.js";
+import { closingBlockInstruction, completionLine, constraintsBlock } from "./constraints.js";
 
 describe("completionLine", () => {
   it("guided plan and implement instruct calling pp_phase_complete on completion", () => {
@@ -27,6 +27,27 @@ describe("completionLine", () => {
     for (const phase of ["plan", "implement", "review", "brainstorm"] as const) {
       expect(completionLine(phase, "autonomous")).toContain("call pp_phase_complete");
     }
+  });
+
+  it("guided handoff phases require the standardized closing block", () => {
+    for (const phase of ["brainstorm", "review", "debug"] as const) {
+      const line = completionLine(phase, "guided");
+      expect(line).toContain("the standardized block");
+      expect(line).toContain("Advance via the /pp menu");
+    }
+  });
+
+  it("autonomous phases do not emit the prose closing block", () => {
+    expect(completionLine("brainstorm", "autonomous")).not.toContain("Advance via the /pp menu");
+  });
+});
+
+describe("closingBlockInstruction", () => {
+  it("spells out the exact block with separators, /pp mention, and next phase", () => {
+    const block = closingBlockInstruction("brainstorm");
+    expect(block).toContain("Advance via the /pp menu to move into plan");
+    expect(block).toContain("────");
+    expect(block).toContain("/pp");
   });
 });
 

@@ -1318,7 +1318,7 @@ describe("edge cases and regressions", () => {
 
     await orchestrator.startTask(ctx as any, "implement", "Continue test");
 
-    expectReviewOnMyOwn(menu);
+    expectReviewOnMyOwn(menu, "Skip markers");
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     const result = await ppPhaseComplete.execute("call-1", { summary: "not done yet" }, undefined, undefined, ctx);
 
@@ -1400,7 +1400,7 @@ describe("edge cases and regressions", () => {
       "utf-8",
     );
 
-    expectReviewOnMyOwn(menu);
+    expectReviewOnMyOwn(menu, "Skip markers");
     const result = await ppPhaseComplete.execute("call-2", { summary: "plan ready" }, undefined, undefined, ctx);
 
     expect(result.content[0].text).toContain("continue");
@@ -1447,6 +1447,83 @@ describe("edge cases and regressions", () => {
     expect(result.content[0].text).toContain("CHANGED files");
     expect(orchestrator.active!.state.phase).toBe("implement");
     expect(orchestrator.active!.state.step).toBe("llm_work");
+  });
+
+  it("editor-review Done returns AI_REVIEW state-file instructions in brainstorm phase", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "brainstorm", "Brainstorm editor review");
+
+    expectReviewOnMyOwn(menu, "Done");
+    const ppPhaseComplete = getTool(pi, "pp_phase_complete");
+    const result = await ppPhaseComplete.execute("call-1", { summary: "researched" }, undefined, undefined, ctx);
+
+    expect(result.content[0].text).toContain("AI_REVIEW:");
+    expect(result.content[0].text).toContain("USER_REQUEST.md");
+    expect(result.content[0].text).toContain("RESEARCH.md");
+    expect(result.content[0].text).toContain("artifacts/*.md");
+    expect(result.content[0].text).not.toContain("CHANGED files");
+    expect(orchestrator.active!.state.phase).toBe("brainstorm");
+    expect(orchestrator.active!.state.step).toBe("llm_work");
+  });
+
+  it("editor-review Done returns AI_REVIEW state-file instructions in debug phase", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "debug", "Debug editor review");
+
+    expectReviewOnMyOwn(menu, "Done");
+    const ppPhaseComplete = getTool(pi, "pp_phase_complete");
+    const result = await ppPhaseComplete.execute("call-1", { summary: "diagnosed" }, undefined, undefined, ctx);
+
+    expect(result.content[0].text).toContain("AI_REVIEW:");
+    expect(result.content[0].text).toContain("USER_REQUEST.md");
+    expect(result.content[0].text).not.toContain("CHANGED files");
+    expect(orchestrator.active!.state.phase).toBe("debug");
+    expect(orchestrator.active!.state.step).toBe("llm_work");
+  });
+
+  it("editor-review Done targets synthesized plan in plan phase", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "Plan editor review");
+    const taskDir = orchestrator.active!.dir;
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+    expectBrainstormToPlan(menu);
+    const ppPhaseComplete = getTool(pi, "pp_phase_complete");
+    await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
+    await new Promise((r) => setTimeout(r, 10));
+
+    emitSubagentCreated(pi, "planner-1", "Planner (test)");
+    const plansDir = join(taskDir, "plans");
+    mkdirSync(plansDir, { recursive: true });
+    writeFileSync(
+      join(plansDir, `${Math.floor(Date.now() / 1000)}_test.md`),
+      makeValidPlan(["- [ ] P1. Planner draft item — Done when: planner output exists"]),
+      "utf-8",
+    );
+    emitSubagentCompleted(pi, "planner-1", "Planner (test)");
+    writeFileSync(
+      join(plansDir, `${Math.floor(Date.now() / 1000) + 1}_synthesized.md`),
+      makeValidPlan(["- [ ] P1. Todo item — Done when: item intentionally remains unchecked"]),
+      "utf-8",
+    );
+
+    expectReviewOnMyOwn(menu, "Done");
+    const result = await ppPhaseComplete.execute("call-2", { summary: "plan ready" }, undefined, undefined, ctx);
+
+    expect(result.content[0].text).toContain("AI_REVIEW:");
+    expect(result.content[0].text).toContain("_synthesized.md");
+    expect(result.content[0].text).not.toContain("CHANGED files");
+    expect(orchestrator.active!.state.phase).toBe("plan");
+    expect(orchestrator.active!.state.step).toBe("synthesize");
   });
 
   it("generic description task does not auto-trigger agent", async () => {
