@@ -46,7 +46,7 @@ import { validateExitCriteria } from "./phases/machine.js";
 import { openPlannotator, waitForPlannotatorResult, cancelPendingPlannotatorWait } from "./plannotator.js";
 import { advanceBanner } from "./messages.js";
 import { Orchestrator, type ActiveTask } from "./orchestrator.js";
-import { createCustomFooter, setFooterContext, setFooterTracker } from "./custom-footer.js";
+import { createCustomFooter, setFooterContext, setFooterTracker, setFooterOrchestrator } from "./custom-footer.js";
 import { createUsageTracker, dumpUsageSummary, loadUsageSummary, isSubscriptionRouted, type UsageTracker } from "./usage-tracker.js";
 import { askUser, isCancel } from "../../3p/pi-ask-user/index.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -1917,6 +1917,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       (globalThis as any)[USAGE_TRACKER_KEY] = tracker;
       setFooterContext(ctx);
       setFooterTracker(tracker);
+      setFooterOrchestrator(orchestrator);
       ctx.ui.setFooter(createCustomFooter);
     }
 

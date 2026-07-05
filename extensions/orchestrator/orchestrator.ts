@@ -13,7 +13,6 @@ import {
   type TaskState,
   type Phase,
 } from "./state.js";
-import { phasePipeline } from "./phases/machine.js";
 import { getContextDirs, loadAllContextFiles, getPhaseArtifacts, getLatestSynthesizedPlan } from "./context.js";
 import { brainstormSystemPrompt } from "./phases/brainstorm.js";
 import { planningSystemPrompt, spawnPlanners } from "./phases/planning.js";
@@ -338,67 +337,17 @@ export class Orchestrator {
     return true;
   }
 
+  // The footer's phase/mode display (line 1) reads orchestrator state directly; this only
+  // sets a hidden "pp-phase" status whose value changes per transition so the host repaints
+  // the footer. Nothing renders this string (footer line 3 was removed), so it stays terse.
   updateStatus(ctx: ExtensionContext): void {
     if (!this.active || this.active.state.phase === "done") {
       ctx.ui.setStatus("pp-phase", undefined);
       return;
     }
-
-    const type = this.active.type;
-    const phase = this.active.state.phase;
-    const step = this.active.state.step;
-    const reviewCycle = this.active.state.reviewCycle;
-    const effectiveMode = this.active.state.effectiveMode ?? this.active.state.mode;
-    const modeLabel = effectiveMode === "autonomous" ? " [autonomous]" : "";
-
-    if (type === "debug" || type === "brainstorm" || type === "quick") {
-      const elapsed = this.phaseStartTime > 0 ? this.formatElapsed(this.phaseStartTime) : "";
-      const suffix = elapsed ? ` (${elapsed})` : "";
-      ctx.ui.setStatus("pp-phase", `pp: ${type}${modeLabel}${suffix}`);
-      return;
-    }
-
-    const pipeline = phasePipeline(type).filter((p) => p !== "done");
-    const currentIdx = pipeline.indexOf(phase as (typeof pipeline)[number]);
-
-    const parts: string[] = [];
-    for (let i = 0; i < pipeline.length; i++) {
-      const p = pipeline[i];
-      if (i < currentIdx) {
-        parts.push(`✔ ${p}`);
-      } else if (p === phase) {
-        let detail = "";
-        if (step === "await_planners") detail = "planners";
-        else if (step === "await_reviewers") detail = "reviewers";
-        else if (step === "synthesize") detail = "synthesize";
-        else if (step === "apply_feedback") detail = "feedback";
-        else if (step === "user_gate") detail = "review";
-
-        if (reviewCycle) {
-          const kind = reviewCycle.kind === "plannotator" ? "plannotator" : "review";
-          detail = `${kind} #${reviewCycle.pass}`;
-        }
-
-        const elapsed = this.phaseStartTime > 0 ? this.formatElapsed(this.phaseStartTime) : "";
-        const sub = [detail, elapsed].filter(Boolean).join(", ");
-        parts.push(sub ? `${p} (${sub})` : p);
-      } else {
-        parts.push(p);
-      }
-    }
-
-    ctx.ui.setStatus("pp-phase", `pp: ${parts.join(" → ")}${modeLabel}`);
-  }
-
-  private formatElapsed(startTime: number): string {
-    const sec = Math.floor((Date.now() - startTime) / 1000);
-    if (sec < 60) return `${sec}s`;
-    const min = Math.floor(sec / 60);
-    const remSec = sec % 60;
-    if (min < 60) return remSec > 0 ? `${min}m ${remSec}s` : `${min}m`;
-    const hr = Math.floor(min / 60);
-    const remMin = min % 60;
-    return remMin > 0 ? `${hr}h ${remMin}m` : `${hr}h`;
+    const s = this.active.state;
+    const cycle = s.reviewCycle ? `:${s.reviewCycle.kind}#${s.reviewCycle.pass}` : "";
+    ctx.ui.setStatus("pp-phase", `${this.active.type}:${s.phase}:${s.step}:${getEffectivePhaseMode(s)}${cycle}`);
   }
 
   getPlanStartState(taskDir: string, plannerPresetName?: string): { step: string; shouldSpawnPlanners: boolean } {
