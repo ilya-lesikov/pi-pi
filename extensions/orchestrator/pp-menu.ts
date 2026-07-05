@@ -1853,8 +1853,8 @@ async function showOrchestratorEditor(
     const current = orchestrator.config.agents.orchestrators[role];
     const basePath = ["agents", "orchestrators", role];
     const choice = await selectOption(ctx, label, [
-      opt(`Model: ${current.model}`, "Select model"),
-      opt(`Thinking: ${thinkingLabel(current.thinking)}`, "Select thinking level"),
+      opt(`Model: ${current.model}`, "Choose the model for this agent"),
+      opt(`Thinking: ${thinkingLabel(current.thinking)}`, "Choose how much this agent thinks before acting"),
       ...buildResetOptions(orchestrator, basePath),
       opt("Back", "Return to the previous menu"),
     ]);
@@ -1900,8 +1900,8 @@ async function showSimpleSubagentEditor(
     const current = orchestrator.config.agents.subagents.simple[role];
     const basePath = ["agents", "subagents", "simple", role];
     const choice = await selectOption(ctx, label, [
-      opt(`Model: ${current.model}`, "Select model"),
-      opt(`Thinking: ${thinkingLabel(current.thinking)}`, "Select thinking level"),
+      opt(`Model: ${current.model}`, "Choose the model for this agent"),
+      opt(`Thinking: ${thinkingLabel(current.thinking)}`, "Choose how much this agent thinks before acting"),
       ...buildResetOptions(orchestrator, basePath),
       opt("Back", "Return to the previous menu"),
     ]);
@@ -2002,8 +2002,8 @@ async function showPresetVariantEditor(
     const variantPath = ["agents", "subagents", "presetGroups", group, "presets", presetName, "agents", variantName];
     const options: OptionInput[] = [
       opt(`Enabled: ${isEnabled(variant) ? "Yes" : "No"}`, "Toggle enabled state"),
-      opt(`Model: ${variant.model}`, "Select model"),
-      opt(`Thinking: ${thinkingLabel(variant.thinking)}`, "Select thinking level"),
+      opt(`Model: ${variant.model}`, "Choose the model for this agent"),
+      opt(`Thinking: ${thinkingLabel(variant.thinking)}`, "Choose how much this agent thinks before acting"),
     ];
     if (getOwnedScopes(orchestrator, variantPath).length > 0) {
       options.push(opt("Delete", "Delete this agent override"));
@@ -2881,10 +2881,10 @@ async function showAutonomousPhaseSettings(
     const reviewPreset = phaseConfig.reviewPreset ?? defaultAutonomousReviewPreset(type, phase);
     const maxReview = phaseConfig.maxReviewPasses >= 999 ? "No limit" : String(phaseConfig.maxReviewPasses);
     const options: OptionInput[] = [
-      opt(`Review preset: ${reviewPreset}`, "Select review preset"),
+      opt(`Review preset: ${reviewPreset}`, "Pick which reviewer group runs in this phase"),
     ];
     if (phase === "plan") {
-      options.push(opt(`Planner preset: ${phaseConfig.plannerPreset ?? "regular"}`, "Select planner preset"));
+      options.push(opt(`Planner preset: ${phaseConfig.plannerPreset ?? "regular"}`, "Pick which planner group runs in this phase"));
     }
     options.push(opt(`Max review passes: ${maxReview}`, "Safety cap for autonomous review loops"));
     options.push(opt("Back", "Return to autonomous settings"));
@@ -3553,7 +3553,10 @@ export async function showActiveTaskMenu(
     const { autoLabel } = getReviewLabels(orchestrator);
     const isReviewPhase = phase === "review";
     const hasPlannotator = phase === "plan" || phase === "implement" || isReviewPhase;
-    const reviewTarget = phase === "plan" ? "the synthesized plan" : phase === "implement" ? "the code changes" : "this phase's state files";
+    // Mirror getReviewPresetGroup: brainstorm reviews its state files, plan reviews the
+    // synthesized plan, and every other phase (implement/review/debug) uses codeReviewers,
+    // which review the code changes.
+    const reviewTarget = phase === "plan" ? "the synthesized plan" : phase === "brainstorm" ? "this phase's state files" : "the code changes";
 
     const opt = (title: string, description: string): OptionInput => ({ title, description });
 
@@ -3589,7 +3592,7 @@ export async function showActiveTaskMenu(
     const options: OptionInput[] = [];
     options.push(opt("Next", "Complete, pause, or continue to next phase"));
     if (!waiting) {
-      options.push(opt("Review", `Review ${reviewTarget}: automated reviewers, Plannotator, or your own editor pass`));
+      options.push(opt("Review", `Review ${reviewTarget}: automated reviewers${hasPlannotator ? ", Plannotator, or" : " or"} your own editor pass`));
     }
     options.push(opt("Info", "Subagents, usage, and task status"));
     options.push(opt("Settings", "Models, agents, commands, and other configuration"));
