@@ -3559,6 +3559,215 @@ describe("error retry", () => {
   });
 });
 
+describe("delegation nudges", () => {
+  function feedSearch(pi: ReturnType<typeof makePi>, paths: string[]) {
+    const start = pi._handlers.get("tool_execution_start")!;
+    const end = pi._handlers.get("tool_execution_end")!;
+    paths.forEach((p, i) => {
+      const id = `read-${i}`;
+      start({ toolCallId: id, toolName: "read", args: { path: p } });
+      end({ toolCallId: id, toolName: "read", isError: false });
+    });
+  }
+
+  function feedBashFailures(pi: ReturnType<typeof makePi>, command: string, count: number) {
+    const start = pi._handlers.get("tool_execution_start")!;
+    const end = pi._handlers.get("tool_execution_end")!;
+    for (let i = 0; i < count; i++) {
+      const id = `bash-${i}`;
+      start({ toolCallId: id, toolName: "bash", args: { command } });
+      end({ toolCallId: id, toolName: "bash", isError: true });
+    }
+  }
+
+  const searchTurn = { message: { stopReason: "stop", content: [{ type: "toolCall" }] }, toolResults: [{ ok: true }] };
+
+  it("broad-search fires a soft nudge recommending explore", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+    await orchestrator.startTask(ctx as any, "implement", "deleg broad", undefined, undefined, "autonomous");
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "llm_work";
+
+    feedSearch(pi, ["a.ts", "b.ts", "c.ts", "d.ts", "e.ts"]);
+    const turnEnd = pi._handlers.get("turn_end")!;
+    await turnEnd(searchTurn, ctx);
+
+    expect(orchestrator.delegationNudges).toBe(1);
+    expect(pi.sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("explore"), { deliverAs: "followUp" });
+  });
+
+  it("broad-search does NOT fire below threshold", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+    await orchestrator.startTask(ctx as any, "implement", "deleg few", undefined, undefined, "autonomous");
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "llm_work";
+
+    feedSearch(pi, ["a.ts", "b.ts"]);
+    await pi._handlers.get("turn_end")!(searchTurn, ctx);
+    expect(orchestrator.delegationNudges).toBe(0);
+  });
+
+  it("broad-search does NOT fire when re-reading a single file (distinct clause)", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+    await orchestrator.startTask(ctx as any, "implement", "deleg same", undefined, undefined, "autonomous");
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "llm_work";
+
+    feedSearch(pi, ["same.ts", "same.ts", "same.ts", "same.ts", "same.ts"]);
+    await pi._handlers.get("turn_end")!(searchTurn, ctx);
+    expect(orchestrator.delegationNudges).toBe(0);
+  });
+
+  it("stuck-debug fires on repeated same-family failures", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+    await orchestrator.startTask(ctx as any, "implement", "deleg debug", undefined, undefined, "autonomous");
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "llm_work";
+
+    feedBashFailures(pi, "go test ./...", 3);
+    await pi._handlers.get("turn_end")!(searchTurn, ctx);
+    expect(orchestrator.delegationNudges).toBe(1);
+    expect(pi.sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("deep-debugger"), { deliverAs: "followUp" });
+  });
+
+  it("stuck-debug does NOT fire on a single failure", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+    await orchestrator.startTask(ctx as any, "implement", "deleg one-fail", undefined, undefined, "autonomous");
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "llm_work";
+
+    feedBashFailures(pi, "go test ./...", 1);
+    await pi._handlers.get("turn_end")!(searchTurn, ctx);
+    expect(orchestrator.delegationNudges).toBe(0);
+  });
+
+  it("is suppressed while a subagent is in flight", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+    await orchestrator.startTask(ctx as any, "implement", "deleg inflight", undefined, undefined, "autonomous");
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "llm_work";
+
+    feedSearch(pi, ["a.ts", "b.ts", "c.ts", "d.ts", "e.ts"]);
+    emitSubagentCreated(pi, "explore-x", "in flight");
+    await pi._handlers.get("turn_end")!(searchTurn, ctx);
+    expect(orchestrator.delegationNudges).toBe(0);
+  });
+
+  it("is suppressed in the plan phase", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+    await orchestrator.startTask(ctx as any, "implement", "deleg plan", undefined, undefined, "autonomous");
+    orchestrator.active!.state.phase = "plan";
+    orchestrator.active!.state.step = "llm_work";
+
+    feedSearch(pi, ["a.ts", "b.ts", "c.ts", "d.ts", "e.ts"]);
+    await pi._handlers.get("turn_end")!(searchTurn, ctx);
+    expect(orchestrator.delegationNudges).toBe(0);
+  });
+
+  it("stuck-debug is suppressed in brainstorm (broad-search still allowed)", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+    await orchestrator.startTask(ctx as any, "implement", "deleg brainstorm", undefined, undefined, "autonomous");
+    orchestrator.active!.state.phase = "brainstorm";
+    orchestrator.active!.state.step = "llm_work";
+
+    feedBashFailures(pi, "go test ./...", 3);
+    await pi._handlers.get("turn_end")!(searchTurn, ctx);
+    expect(orchestrator.delegationNudges).toBe(0);
+  });
+
+  it("a discretionary spawn resets the counter (successful nudge does not accumulate)", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+    await orchestrator.startTask(ctx as any, "implement", "deleg accept", undefined, undefined, "autonomous");
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "llm_work";
+
+    feedSearch(pi, ["a.ts", "b.ts", "c.ts", "d.ts", "e.ts"]);
+    await pi._handlers.get("turn_end")!(searchTurn, ctx);
+    expect(orchestrator.delegationNudges).toBe(1);
+
+    pi.events.emit("subagents:created", { id: "explore-1", type: "explore", description: "exploring" });
+    expect(orchestrator.delegationNudges).toBe(0);
+  });
+
+  it("an orchestrated triad spawn does NOT count as acceptance", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+    await orchestrator.startTask(ctx as any, "implement", "deleg triad", undefined, undefined, "autonomous");
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "llm_work";
+
+    feedSearch(pi, ["a.ts", "b.ts", "c.ts", "d.ts", "e.ts"]);
+    await pi._handlers.get("turn_end")!(searchTurn, ctx);
+    expect(orchestrator.delegationNudges).toBe(1);
+
+    pi.events.emit("subagents:created", { id: "planner-1", type: "planner_opus", description: "planning" });
+    expect(orchestrator.delegationNudges).toBe(1);
+  });
+
+  it("halts after the cap without disturbing the continuation/error counters", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+    await orchestrator.startTask(ctx as any, "implement", "deleg halt", undefined, undefined, "autonomous");
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "llm_work";
+    const turnEnd = pi._handlers.get("turn_end")!;
+
+    for (let i = 0; i < 7; i++) {
+      feedSearch(pi, ["a.ts", "b.ts", "c.ts", "d.ts", "e.ts"]);
+      await turnEnd(searchTurn, ctx);
+    }
+
+    expect(orchestrator.delegationNudgeHalted).toBe(true);
+    expect(pi.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ customType: "pp-delegation-halted" }),
+      { deliverAs: "steer" },
+    );
+    // The independent continuation/error guards are untouched.
+    expect(orchestrator.nudgeHalted).toBe(false);
+    expect(orchestrator.consecutiveNudges).toBe(0);
+    expect(orchestrator.errorNudgeHalted).toBe(false);
+  });
+
+  it("halt is NOT reset by a [PI-PI] prompt but IS reset by a genuine user prompt", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+    await orchestrator.startTask(ctx as any, "implement", "deleg reset", undefined, undefined, "autonomous");
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "llm_work";
+    orchestrator.delegationNudgeHalted = true;
+    orchestrator.delegationNudges = 6;
+    const beforeStart = pi._handlers.get("before_agent_start")!;
+
+    await beforeStart({ systemPrompt: "base", prompt: "[PI-PI] Continue the implement phase." }, ctx);
+    expect(orchestrator.delegationNudgeHalted).toBe(true);
+
+    await beforeStart({ systemPrompt: "base", prompt: "new user idea" }, ctx);
+    expect(orchestrator.delegationNudgeHalted).toBe(false);
+    expect(orchestrator.delegationNudges).toBe(0);
+  });
+});
+
 describe("compaction", () => {
   it("compactAndTransition calls ctx.compact for phase transition", async () => {
     const cwd = makeTempDir();
