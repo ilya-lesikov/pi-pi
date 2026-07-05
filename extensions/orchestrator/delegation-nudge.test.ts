@@ -4,12 +4,16 @@ import {
   classifyTool,
   commandFamily,
   isDiscretionarySpawn,
+  spawnMatchesSignal,
+  isPendingExpired,
   broadSearchPhaseEnabled,
   stuckDebugPhaseEnabled,
   delegationNudgeMessage,
+  BROAD_SEARCH_WINDOW,
   BROAD_SEARCH_MIN_CALLS,
   STUCK_DEBUG_MIN_FAILURES,
   STUCK_DEBUG_MIN_PHASE_TURNS,
+  NUDGE_SPAWN_CORRELATION_TURNS,
 } from "./delegation-nudge.js";
 
 describe("classifyTool", () => {
@@ -90,11 +94,11 @@ describe("phase gating", () => {
   });
 });
 
-function feedSearch(d: DelegationDetector, paths: string[]): void {
+function feedSearch(d: DelegationDetector, paths: string[], turnIndex = 0): void {
   paths.forEach((p, i) => {
-    const id = `t${i}`;
+    const id = `t${i}-${Math.random()}`;
     d.recordToolStart(id, "read", { path: p });
-    d.recordToolEnd(id, "read", false);
+    d.recordToolEnd(id, "read", false, turnIndex);
   });
 }
 
@@ -118,11 +122,22 @@ describe("DelegationDetector broad-search", () => {
     expect(d.evaluate("implement", 5)).toMatchObject({ signal: "broad-search", recommendedRole: "explore" });
   });
 
-  it("is suppressed once an explore spawn is observed in the window", () => {
+  it("is suppressed by an explore spawn while it is still within the rolling window", () => {
     const d = new DelegationDetector();
     feedSearch(d, ["a.ts", "b.ts", "c.ts", "d.ts", "e.ts"]);
     d.onExploreSpawned();
     expect(d.evaluate("implement", 5)).toBeNull();
+  });
+
+  it("can fire again once the explore spawn has rolled out of the window (M4)", () => {
+    const d = new DelegationDetector();
+    feedSearch(d, ["a.ts", "b.ts", "c.ts", "d.ts", "e.ts"]);
+    d.onExploreSpawned();
+    expect(d.evaluate("implement", 5)).toBeNull();
+    // Enough NEW distinct search calls to push the spawn fully out of the window.
+    const more = Array.from({ length: BROAD_SEARCH_WINDOW }, (_, i) => `n${i}.ts`);
+    feedSearch(d, more);
+    expect(d.evaluate("implement", 6)).toMatchObject({ signal: "broad-search" });
   });
 
   it("counts allowlisted bash-search targets toward the distinct set", () => {
@@ -136,7 +151,23 @@ describe("DelegationDetector broad-search", () => {
     ];
     cmds.forEach((c, i) => {
       d.recordToolStart(`b${i}`, "bash", { command: c });
-      d.recordToolEnd(`b${i}`, "bash", false);
+      d.recordToolEnd(`b${i}`, "bash", false, 0);
+    });
+    expect(d.evaluate("implement", 5)).toMatchObject({ signal: "broad-search" });
+  });
+
+  it("counts `cd <repo> && grep` wrapped searches (M1)", () => {
+    const d = new DelegationDetector();
+    const cmds = [
+      "cd /repo && grep -rn foo src/a.ts",
+      "cd /repo && grep -rn foo src/b.ts",
+      "cd /repo && rg bar src/c.ts",
+      "cd /repo && find src/d -name x",
+      "cd /repo && cat src/e.ts",
+    ];
+    cmds.forEach((c, i) => {
+      d.recordToolStart(`b${i}`, "bash", { command: c });
+      d.recordToolEnd(`b${i}`, "bash", false, 0);
     });
     expect(d.evaluate("implement", 5)).toMatchObject({ signal: "broad-search" });
   });
@@ -145,60 +176,58 @@ describe("DelegationDetector broad-search", () => {
     const d = new DelegationDetector();
     ["git status", "go build ./...", "npm test", "cd x", "make"].forEach((c, i) => {
       d.recordToolStart(`b${i}`, "bash", { command: c });
-      d.recordToolEnd(`b${i}`, "bash", false);
+      d.recordToolEnd(`b${i}`, "bash", false, 0);
     });
     expect(d.evaluate("implement", 5)).toBeNull();
   });
 });
 
 describe("DelegationDetector stuck-debug", () => {
+  function failN(d: DelegationDetector, command: string, n: number, isError = true) {
+    for (let i = 0; i < n; i++) {
+      const id = `f${i}-${Math.random()}`;
+      d.recordToolStart(id, "bash", { command });
+      d.recordToolEnd(id, "bash", isError, 0);
+    }
+  }
+
   it("fires after repeated failures on the same command family", () => {
     const d = new DelegationDetector();
-    for (let i = 0; i < STUCK_DEBUG_MIN_FAILURES; i++) {
-      d.recordToolStart(`f${i}`, "bash", { command: "go test ./..." });
-      d.recordToolEnd(`f${i}`, "bash", true);
-    }
+    failN(d, "go test ./...", STUCK_DEBUG_MIN_FAILURES);
     expect(d.evaluate("implement", 3)).toMatchObject({ signal: "stuck-debug", recommendedRole: "deep-debugger" });
+  });
+
+  it("matches command family across `cd && go test` wrapping (M1)", () => {
+    const d = new DelegationDetector();
+    failN(d, "cd /repo && go test ./...", STUCK_DEBUG_MIN_FAILURES);
+    expect(d.evaluate("implement", 3)).toMatchObject({ signal: "stuck-debug" });
   });
 
   it("does NOT fire on a single failure", () => {
     const d = new DelegationDetector();
-    d.recordToolStart("f0", "bash", { command: "go test ./..." });
-    d.recordToolEnd("f0", "bash", true);
+    failN(d, "go test ./...", 1);
     expect(d.evaluate("implement", 3)).toBeNull();
   });
 
   it("does NOT fire when stderr-bearing commands SUCCEED (isError=false)", () => {
     const d = new DelegationDetector();
-    for (let i = 0; i < STUCK_DEBUG_MIN_FAILURES + 2; i++) {
-      d.recordToolStart(`f${i}`, "bash", { command: "go test ./..." });
-      d.recordToolEnd(`f${i}`, "bash", false);
-    }
+    failN(d, "go test ./...", STUCK_DEBUG_MIN_FAILURES + 2, false);
     expect(d.evaluate("implement", 3)).toBeNull();
   });
 
   it("resets the streak when the failing family later succeeds", () => {
     const d = new DelegationDetector();
-    d.recordToolStart("f0", "bash", { command: "go test ./..." });
-    d.recordToolEnd("f0", "bash", true);
-    d.recordToolStart("f1", "bash", { command: "go test ./..." });
-    d.recordToolEnd("f1", "bash", true);
-    // Success converges — streak cleared.
-    d.recordToolStart("f2", "bash", { command: "go test ./..." });
-    d.recordToolEnd("f2", "bash", false);
-    d.recordToolStart("f3", "bash", { command: "go test ./..." });
-    d.recordToolEnd("f3", "bash", true);
+    failN(d, "go test ./...", 2);
+    failN(d, "go test ./...", 1, false);
+    failN(d, "go test ./...", 1);
     expect(d.evaluate("implement", 3)).toBeNull();
   });
 
   it("does not confuse failures across DIFFERENT command families", () => {
     const d = new DelegationDetector();
-    d.recordToolStart("f0", "bash", { command: "go test ./..." });
-    d.recordToolEnd("f0", "bash", true);
-    d.recordToolStart("f1", "bash", { command: "npm run build" });
-    d.recordToolEnd("f1", "bash", true);
-    d.recordToolStart("f2", "bash", { command: "pytest" });
-    d.recordToolEnd("f2", "bash", true);
+    failN(d, "go test ./...", 1);
+    failN(d, "npm run build", 1);
+    failN(d, "pytest", 1);
     expect(d.evaluate("implement", 3)).toBeNull();
   });
 
@@ -206,7 +235,7 @@ describe("DelegationDetector stuck-debug", () => {
     const d = new DelegationDetector();
     d.onPhaseChange(0);
     d.recordToolStart("e0", "edit", { path: "x.ts" });
-    d.recordToolEnd("e0", "edit", false);
+    d.recordToolEnd("e0", "edit", false, 1);
     expect(d.evaluate("implement", STUCK_DEBUG_MIN_PHASE_TURNS)).toMatchObject({ signal: "stuck-debug" });
   });
 
@@ -214,10 +243,44 @@ describe("DelegationDetector stuck-debug", () => {
     const d = new DelegationDetector();
     d.onPhaseChange(0);
     d.recordToolStart("e0", "edit", { path: "x.ts" });
-    d.recordToolEnd("e0", "edit", false);
+    d.recordToolEnd("e0", "edit", false, 1);
     d.recordToolStart("c0", "pp_commit", {});
-    d.recordToolEnd("c0", "pp_commit", false);
+    d.recordToolEnd("c0", "pp_commit", false, 2);
     expect(d.evaluate("implement", STUCK_DEBUG_MIN_PHASE_TURNS)).toBeNull();
+  });
+
+  it("does NOT re-fire on an edit AFTER a commit past the 20-turn mark (M5)", () => {
+    const d = new DelegationDetector();
+    d.onPhaseChange(0);
+    // Edit + commit at turn 21 (past threshold from phase start).
+    d.recordToolStart("e0", "edit", { path: "x.ts" });
+    d.recordToolEnd("e0", "edit", false, 21);
+    d.recordToolStart("c0", "pp_commit", {});
+    d.recordToolEnd("c0", "pp_commit", false, 21);
+    // A subsequent edit must NOT immediately re-fire — the window restarted at the commit.
+    d.recordToolStart("e1", "edit", { path: "y.ts" });
+    d.recordToolEnd("e1", "edit", false, 22);
+    expect(d.evaluate("implement", 22)).toBeNull();
+    // Only after another full 20 turns without convergence does it fire again.
+    expect(d.evaluate("implement", 21 + STUCK_DEBUG_MIN_PHASE_TURNS)).toMatchObject({ signal: "stuck-debug" });
+  });
+});
+
+describe("effectiveness helpers", () => {
+  it("spawnMatchesSignal maps signals to roles (M2)", () => {
+    expect(spawnMatchesSignal("broad-search", "explore")).toBe(true);
+    expect(spawnMatchesSignal("broad-search", "task")).toBe(false);
+    expect(spawnMatchesSignal("broad-search", "librarian")).toBe(false);
+    expect(spawnMatchesSignal("stuck-debug", "deep-debugger")).toBe(true);
+    expect(spawnMatchesSignal("stuck-debug", "advisor")).toBe(true);
+    expect(spawnMatchesSignal("stuck-debug", "explore")).toBe(false);
+    expect(spawnMatchesSignal("broad-search", undefined)).toBe(false);
+  });
+
+  it("isPendingExpired respects the correlation window (M3)", () => {
+    const pending = { nudgeId: "n1", signal: "broad-search" as const, recommendedRole: "explore", firedTurnIndex: 10 };
+    expect(isPendingExpired(pending, 10 + NUDGE_SPAWN_CORRELATION_TURNS)).toBe(false);
+    expect(isPendingExpired(pending, 10 + NUDGE_SPAWN_CORRELATION_TURNS + 1)).toBe(true);
   });
 });
 

@@ -68,8 +68,7 @@ interface ToolCallInfo {
   command?: string;
 }
 
-// Extract the search-relevant fields from a tool's start-time args. Defensive: unknown
-// shapes yield an empty descriptor rather than throwing.
+// Defensive against unknown arg shapes: never throws, yields a non-search descriptor.
 export function classifyTool(toolName: string, args: any): { isSearch: boolean; path?: string; commandFamily?: string; isBash: boolean } {
   const name = (toolName || "").toLowerCase();
   if (name === "read" || name === "grep" || name === "ls") {
@@ -82,33 +81,41 @@ export function classifyTool(toolName: string, args: any): { isSearch: boolean; 
   }
   if (name === "bash") {
     const command = typeof args?.command === "string" ? args.command : "";
-    const first = firstExecutable(command);
-    if (first && BASH_SEARCH_COMMANDS.has(first)) {
-      return { isSearch: true, path: bashSearchTarget(command), commandFamily: commandFamily(command), isBash: true };
+    // Real traces wrap searches as `cd <repo> && grep …`, so inspect each &&/;/|
+    // segment, not just the leading token (which would misread as `cd`).
+    const searchSeg = commandSegments(command).find((seg) => {
+      const exe = firstExecutable(seg);
+      return exe != null && BASH_SEARCH_COMMANDS.has(exe);
+    });
+    if (searchSeg) {
+      return { isSearch: true, path: bashSearchTarget(searchSeg), commandFamily: commandFamily(command), isBash: true };
     }
     return { isSearch: false, commandFamily: commandFamily(command), isBash: true };
   }
   return { isSearch: false, isBash: false };
 }
 
-// The first executable token of a shell command, ignoring leading env assignments and
-// resolving a path like /usr/bin/grep to "grep".
+function commandSegments(command: string): string[] {
+  return command.split(/&&|\|\||;|\|/).map((s) => s.trim()).filter(Boolean);
+}
+
 function firstExecutable(command: string): string | undefined {
   const tokens = command.trim().split(/\s+/);
   for (const tok of tokens) {
     if (!tok) continue;
-    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tok)) continue; // FOO=bar prefix
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tok)) continue;
     const base = tok.split("/").pop() || tok;
     return base.toLowerCase();
   }
   return undefined;
 }
 
-// A stable "command family" for similarity comparison: the executable plus a subcommand
-// token when the executable is a known multiplexer (go/npm/yarn/pnpm/git/cargo/...).
-// Compared instead of raw stderr/argument text.
+// A stable "command family" for similarity comparison, compared instead of raw stderr/
+// argument text. Skips a leading `cd` segment so `cd x && go test` keys on `go test`.
 export function commandFamily(command: string): string {
-  const tokens = command.trim().split(/\s+/).filter((t) => t && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(t));
+  const segments = commandSegments(command);
+  const seg = segments.find((s) => firstExecutable(s) !== "cd") ?? command;
+  const tokens = seg.trim().split(/\s+/).filter((t) => t && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(t));
   if (tokens.length === 0) return "";
   const exe = (tokens[0].split("/").pop() || tokens[0]).toLowerCase();
   const MULTIPLEXERS = new Set(["go", "npm", "yarn", "pnpm", "git", "cargo", "make", "npx", "python", "python3", "node", "bun", "deno"]);
@@ -137,6 +144,19 @@ export interface PendingNudge {
   firedTurnIndex: number;
 }
 
+// A spawn counts as accepting a nudge only when its role matches the recommended family:
+// broad-search wants explore; stuck-debug wants deep-debugger or advisor. An unrelated
+// discretionary spawn (task/librarian/reviewer) must not pollute the effectiveness metric.
+export function spawnMatchesSignal(signal: DelegationSignal, spawnType: string | undefined | null): boolean {
+  const t = (spawnType || "").toLowerCase();
+  if (signal === "broad-search") return t === "explore";
+  return t === "deep-debugger" || t === "advisor";
+}
+
+export function isPendingExpired(pending: PendingNudge, turnIndex: number): boolean {
+  return turnIndex - pending.firedTurnIndex > NUDGE_SPAWN_CORRELATION_TURNS;
+}
+
 // Holds all transient per-session detection state. One instance lives on the Orchestrator;
 // event-handlers feed it tool events and query it at turn_end.
 export class DelegationDetector {
@@ -144,11 +164,11 @@ export class DelegationDetector {
   // Rolling window of recent qualifying search paths (undefined path allowed but does not
   // add to the distinct set).
   private searchWindow: Array<string | undefined> = [];
-  private exploreSpawnedInWindow = false;
-  // Consecutive same-family bash failures.
+  // Count of qualifying search calls seen since the last explore spawn. Suppression
+  // decays once this exceeds the window size (the spawn has rolled out of the window).
+  private searchesSinceExplore = Number.MAX_SAFE_INTEGER;
   private lastFailedFamily: string | null = null;
   private failureStreak = 0;
-  // Phase-scoped turn accounting for the edit-loop leg.
   private phaseBaselineTurn = 0;
   private editedSinceConverge = false;
   pending: PendingNudge | null = null;
@@ -156,7 +176,7 @@ export class DelegationDetector {
   reset(): void {
     this.toolCalls.clear();
     this.searchWindow = [];
-    this.exploreSpawnedInWindow = false;
+    this.searchesSinceExplore = Number.MAX_SAFE_INTEGER;
     this.lastFailedFamily = null;
     this.failureStreak = 0;
     this.phaseBaselineTurn = 0;
@@ -168,7 +188,7 @@ export class DelegationDetector {
     this.phaseBaselineTurn = turnIndex;
     this.editedSinceConverge = false;
     this.searchWindow = [];
-    this.exploreSpawnedInWindow = false;
+    this.searchesSinceExplore = Number.MAX_SAFE_INTEGER;
     this.lastFailedFamily = null;
     this.failureStreak = 0;
   }
@@ -183,18 +203,18 @@ export class DelegationDetector {
     }
   }
 
-  // Correlate the end event (which lacks args) with the start-time descriptor, update the
-  // detection state, then evict the entry.
-  recordToolEnd(toolCallId: string, toolName: string, isError: boolean): void {
+  // tool_execution_end lacks args, so correlate with the start-time descriptor by id,
+  // update detection state, then evict. turnIndex feeds the convergence-reset (M5).
+  recordToolEnd(toolCallId: string, toolName: string, isError: boolean, turnIndex: number): void {
     const info = toolCallId ? this.toolCalls.get(toolCallId) : undefined;
     if (toolCallId) this.toolCalls.delete(toolCallId);
     const name = (toolName || info?.toolName || "").toLowerCase();
 
-    // Broad-search: build classification from the correlated info when available.
     const c = classifyTool(name, name === "bash" ? { command: info?.command } : { path: info?.path, pattern: info?.path });
     if (c.isSearch) {
       this.searchWindow.push(c.path);
       if (this.searchWindow.length > BROAD_SEARCH_WINDOW) this.searchWindow.shift();
+      if (this.searchesSinceExplore !== Number.MAX_SAFE_INTEGER) this.searchesSinceExplore += 1;
     }
 
     // Stuck-debug failure streak: only bash failures, keyed on command family.
@@ -208,31 +228,30 @@ export class DelegationDetector {
           this.failureStreak = 1;
         }
       } else if (!isError && family && family === this.lastFailedFamily) {
-        // A success on the same family breaks the streak (converged).
         this.lastFailedFamily = null;
         this.failureStreak = 0;
       }
     }
 
-    // Edit-loop leg: any edit/write marks unconverged progress.
     if (name === "edit" || name === "write") {
       this.editedSinceConverge = true;
     }
-    // A commit / phase completion is the convergence signal that clears the edit loop.
+    // A commit / phase completion converges the edit loop: clear the flag AND restart the
+    // turn window, else the next post-commit edit re-fires immediately past the threshold.
     if (name === "pp_commit" || name === "pp_phase_complete") {
       this.editedSinceConverge = false;
-      this.phaseBaselineTurn = Math.max(this.phaseBaselineTurn, 0);
+      this.phaseBaselineTurn = turnIndex;
     }
   }
 
-  // Called when a discretionary explore spawn is observed, to suppress the broad-search
-  // nudge within the current window.
+  // Suppress broad-search only while the spawn is still within the rolling window: reset the
+  // per-window search counter so suppression decays once the window advances past the spawn.
   onExploreSpawned(): void {
-    this.exploreSpawnedInWindow = true;
+    this.searchesSinceExplore = 0;
   }
 
   private broadSearchActive(): boolean {
-    if (this.exploreSpawnedInWindow) return false;
+    if (this.searchesSinceExplore < BROAD_SEARCH_WINDOW) return false;
     const calls = this.searchWindow.length;
     if (calls < BROAD_SEARCH_MIN_CALLS) return false;
     const distinct = new Set(this.searchWindow.filter((p): p is string => typeof p === "string" && p.length > 0));

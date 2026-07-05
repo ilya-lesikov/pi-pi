@@ -3691,7 +3691,7 @@ describe("delegation nudges", () => {
     expect(orchestrator.delegationNudges).toBe(0);
   });
 
-  it("a discretionary spawn resets the counter (successful nudge does not accumulate)", async () => {
+  it("a matching discretionary spawn resets the counter (successful nudge does not accumulate)", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);
     const ctx = makeCtx();
@@ -3705,6 +3705,45 @@ describe("delegation nudges", () => {
 
     pi.events.emit("subagents:created", { id: "explore-1", type: "explore", description: "exploring" });
     expect(orchestrator.delegationNudges).toBe(0);
+  });
+
+  it("a NON-matching discretionary spawn does NOT accept the nudge (M2)", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+    await orchestrator.startTask(ctx as any, "implement", "deleg mismatch", undefined, undefined, "autonomous");
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "llm_work";
+
+    feedSearch(pi, ["a.ts", "b.ts", "c.ts", "d.ts", "e.ts"]);
+    await pi._handlers.get("turn_end")!(searchTurn, ctx);
+    expect(orchestrator.delegationNudges).toBe(1);
+
+    // A broad-search nudge recommends explore; a `task` spawn must NOT count as acceptance.
+    pi.events.emit("subagents:created", { id: "task-1", type: "task", description: "unrelated" });
+    expect(orchestrator.delegationNudges).toBe(1);
+  });
+
+  it("an ignored nudge expires and clears the pending record after the window (M3)", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+    await orchestrator.startTask(ctx as any, "implement", "deleg expire", undefined, undefined, "autonomous");
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "llm_work";
+    const turnEnd = pi._handlers.get("turn_end")!;
+
+    feedSearch(pi, ["a.ts", "b.ts", "c.ts", "d.ts", "e.ts"]);
+    await turnEnd(searchTurn, ctx);
+    expect(orchestrator.delegationDetector.pending).not.toBeNull();
+
+    // Advance the traced turn index well past the correlation window with benign turns.
+    const turnStart = pi._handlers.get("turn_start")!;
+    for (let t = 1; t <= 10; t++) {
+      await turnStart({ turnIndex: t, timestamp: Date.now() }, ctx);
+      await turnEnd({ turnIndex: t, message: { stopReason: "stop", content: [{ type: "toolCall" }] }, toolResults: [{ ok: true }] }, ctx);
+    }
+    expect(orchestrator.delegationDetector.pending).toBeNull();
   });
 
   it("an orchestrated triad spawn does NOT count as acceptance", async () => {
