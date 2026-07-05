@@ -3553,10 +3553,12 @@ export async function showActiveTaskMenu(
     const { autoLabel } = getReviewLabels(orchestrator);
     const isReviewPhase = phase === "review";
     const hasPlannotator = phase === "plan" || phase === "implement" || isReviewPhase;
-    // Mirror getReviewPresetGroup: brainstorm reviews its state files, plan reviews the
-    // synthesized plan, and every other phase (implement/review/debug) uses codeReviewers,
-    // which review the code changes.
-    const reviewTarget = phase === "plan" ? "the synthesized plan" : phase === "brainstorm" ? "this phase's state files" : "the code changes";
+    // What the automated reviewers scan, mirroring getReviewPresetGroup: brainstorm →
+    // brainstormReviewers (state files), plan → planReviewers (synthesized plan), every other
+    // phase → codeReviewers (code changes). The manual editor pass can target different
+    // artifacts (see the per-phase "Review on my own" description), so this label is scoped
+    // to auto-review only rather than shared by the top-level Review item.
+    const autoReviewTarget = phase === "plan" ? "the synthesized plan" : phase === "brainstorm" ? "this phase's state files" : "the code changes";
 
     const opt = (title: string, description: string): OptionInput => ({ title, description });
 
@@ -3592,7 +3594,7 @@ export async function showActiveTaskMenu(
     const options: OptionInput[] = [];
     options.push(opt("Next", "Complete, pause, or continue to next phase"));
     if (!waiting) {
-      options.push(opt("Review", `Review ${reviewTarget}: automated reviewers${hasPlannotator ? ", Plannotator, or" : " or"} your own editor pass`));
+      options.push(opt("Review", `Automated reviewers${hasPlannotator ? ", Plannotator, or" : " or"} your own editor pass`));
     }
     options.push(opt("Info", "Subagents, usage, and task status"));
     options.push(opt("Settings", "Models, agents, commands, and other configuration"));
@@ -3672,7 +3674,7 @@ export async function showActiveTaskMenu(
 
     if (choice === "Review") {
       const reviewOptions: OptionInput[] = [
-        opt(autoLabel, `Run configured reviewers over ${reviewTarget}`),
+        opt(autoLabel, `Run configured reviewers over ${autoReviewTarget}`),
       ];
       if (hasPlannotator) {
         reviewOptions.push(opt("Review in Plannotator", phase === "plan" ? "Open plan review in browser" : "Open code diff review in browser"));
