@@ -7,10 +7,10 @@ import type { Phase } from "./state.js";
 // needs no redesign. Conservative on purpose: a false-positive nudge trains the agent
 // (and user) to ignore nudges, so a missed nudge is preferable to a spurious one.
 
-// Rolling window (most-recent qualifying search calls) inspected for the broad-search
-// signal, and the counts that trip it. A trigger needs BROAD_SEARCH_MIN_CALLS qualifying
-// calls spanning BROAD_SEARCH_MIN_DISTINCT distinct files/paths within the window — the
-// distinct-path clause separates genuine discovery from re-reading one file in an edit loop.
+// Rolling window measured in TOOL calls (non-search calls age out old searches). A trigger
+// needs BROAD_SEARCH_MIN_CALLS qualifying searches spanning BROAD_SEARCH_MIN_DISTINCT
+// distinct files/paths within that window — the distinct-path clause separates genuine
+// discovery from re-reading one file in an edit loop.
 export const BROAD_SEARCH_WINDOW = 8;
 export const BROAD_SEARCH_MIN_CALLS = 5;
 export const BROAD_SEARCH_MIN_DISTINCT = 3;
@@ -99,6 +99,13 @@ function commandSegments(command: string): string[] {
   return command.split(/&&|\|\||;|\|/).map((s) => s.trim()).filter(Boolean);
 }
 
+// A token is path-like if it contains a separator, a dotted filename, or a glob — enough to
+// distinguish a file/dir operand from a bare search pattern.
+function looksLikePath(tok: string): boolean {
+  const t = tok.replace(/^['"]|['"]$/g, "");
+  return t.includes("/") || /\.[A-Za-z0-9]+$/.test(t) || /[*?\[]/.test(t);
+}
+
 function firstExecutable(command: string): string | undefined {
   const tokens = command.trim().split(/\s+/);
   for (const tok of tokens) {
@@ -125,13 +132,15 @@ export function commandFamily(command: string): string {
   return exe;
 }
 
-// The path/target operand of an allowlisted bash search command (last non-flag token),
-// so it can contribute to the distinct-file set. Best-effort; undefined when unclear.
+// The path/target operand of an allowlisted bash search command (last non-flag token that
+// LOOKS like a path). Returns undefined for a bare search pattern (e.g. `rg Foo`) so search
+// terms are not mistaken for distinct files, which would inflate the distinct-path clause.
 function bashSearchTarget(command: string): string | undefined {
   const tokens = command.trim().split(/\s+/);
   for (let i = tokens.length - 1; i >= 1; i--) {
     const tok = tokens[i];
     if (!tok || tok.startsWith("-") || tok === "|" || tok.includes("|")) continue;
+    if (!looksLikePath(tok)) continue;
     return tok;
   }
   return undefined;
@@ -161,12 +170,13 @@ export function isPendingExpired(pending: PendingNudge, turnIndex: number): bool
 // event-handlers feed it tool events and query it at turn_end.
 export class DelegationDetector {
   private toolCalls = new Map<string, ToolCallInfo>();
-  // Rolling window of recent qualifying search paths (undefined path allowed but does not
-  // add to the distinct set).
-  private searchWindow: Array<string | undefined> = [];
-  // Count of qualifying search calls seen since the last explore spawn. Suppression
-  // decays once this exceeds the window size (the spawn has rolled out of the window).
-  private searchesSinceExplore = Number.MAX_SAFE_INTEGER;
+  // Monotonic count of ALL tool calls, so the search window is a rolling TOOL-call window
+  // (non-search calls age out old searches), not a search-only window.
+  private toolSeq = 0;
+  // Recent qualifying searches as {seq, path}; entries older than the tool window are pruned.
+  private searchWindow: Array<{ seq: number; path?: string }> = [];
+  // Tool-seq of the last explore spawn; suppression lifts once the window advances past it.
+  private exploreSpawnSeq = -Infinity;
   private lastFailedFamily: string | null = null;
   private failureStreak = 0;
   private phaseBaselineTurn = 0;
@@ -175,8 +185,9 @@ export class DelegationDetector {
 
   reset(): void {
     this.toolCalls.clear();
+    this.toolSeq = 0;
     this.searchWindow = [];
-    this.searchesSinceExplore = Number.MAX_SAFE_INTEGER;
+    this.exploreSpawnSeq = -Infinity;
     this.lastFailedFamily = null;
     this.failureStreak = 0;
     this.phaseBaselineTurn = 0;
@@ -187,8 +198,9 @@ export class DelegationDetector {
   onPhaseChange(turnIndex: number): void {
     this.phaseBaselineTurn = turnIndex;
     this.editedSinceConverge = false;
+    this.toolSeq = 0;
     this.searchWindow = [];
-    this.searchesSinceExplore = Number.MAX_SAFE_INTEGER;
+    this.exploreSpawnSeq = -Infinity;
     this.lastFailedFamily = null;
     this.failureStreak = 0;
   }
@@ -210,12 +222,14 @@ export class DelegationDetector {
     if (toolCallId) this.toolCalls.delete(toolCallId);
     const name = (toolName || info?.toolName || "").toLowerCase();
 
+    this.toolSeq += 1;
     const c = classifyTool(name, name === "bash" ? { command: info?.command } : { path: info?.path, pattern: info?.path });
     if (c.isSearch) {
-      this.searchWindow.push(c.path);
-      if (this.searchWindow.length > BROAD_SEARCH_WINDOW) this.searchWindow.shift();
-      if (this.searchesSinceExplore !== Number.MAX_SAFE_INTEGER) this.searchesSinceExplore += 1;
+      this.searchWindow.push({ seq: this.toolSeq, path: c.path });
     }
+    // Prune searches that have fallen outside the rolling tool-call window.
+    const cutoff = this.toolSeq - BROAD_SEARCH_WINDOW;
+    while (this.searchWindow.length > 0 && this.searchWindow[0].seq <= cutoff) this.searchWindow.shift();
 
     // Stuck-debug failure streak: only bash failures, keyed on command family.
     if (name === "bash") {
@@ -236,25 +250,24 @@ export class DelegationDetector {
     if (name === "edit" || name === "write") {
       this.editedSinceConverge = true;
     }
-    // A commit / phase completion converges the edit loop: clear the flag AND restart the
-    // turn window, else the next post-commit edit re-fires immediately past the threshold.
-    if (name === "pp_commit" || name === "pp_phase_complete") {
+    // Only a SUCCESSFUL commit / phase completion converges: a failed commit must not
+    // suppress the long-edit-loop signal. Clears the flag AND restarts the turn window,
+    // else the next post-commit edit re-fires immediately past the threshold.
+    if (!isError && (name === "pp_commit" || name === "pp_phase_complete")) {
       this.editedSinceConverge = false;
       this.phaseBaselineTurn = turnIndex;
     }
   }
 
-  // Suppress broad-search only while the spawn is still within the rolling window: reset the
-  // per-window search counter so suppression decays once the window advances past the spawn.
   onExploreSpawned(): void {
-    this.searchesSinceExplore = 0;
+    this.exploreSpawnSeq = this.toolSeq;
   }
 
   private broadSearchActive(): boolean {
-    if (this.searchesSinceExplore < BROAD_SEARCH_WINDOW) return false;
-    const calls = this.searchWindow.length;
-    if (calls < BROAD_SEARCH_MIN_CALLS) return false;
-    const distinct = new Set(this.searchWindow.filter((p): p is string => typeof p === "string" && p.length > 0));
+    // Suppressed while the explore spawn is still inside the rolling tool-call window.
+    if (this.toolSeq - this.exploreSpawnSeq < BROAD_SEARCH_WINDOW) return false;
+    if (this.searchWindow.length < BROAD_SEARCH_MIN_CALLS) return false;
+    const distinct = new Set(this.searchWindow.map((e) => e.path).filter((p): p is string => typeof p === "string" && p.length > 0));
     return distinct.size >= BROAD_SEARCH_MIN_DISTINCT;
   }
 

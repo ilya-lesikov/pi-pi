@@ -180,6 +180,35 @@ describe("DelegationDetector broad-search", () => {
     });
     expect(d.evaluate("implement", 5)).toBeNull();
   });
+
+  it("ages searches out of the rolling TOOL-call window when non-search calls intervene (P2-1)", () => {
+    const d = new DelegationDetector();
+    const search = (p: string) => { const id = `s-${Math.random()}`; d.recordToolStart(id, "read", { path: p }); d.recordToolEnd(id, "read", false, 0); };
+    const nonSearch = () => { const id = `n-${Math.random()}`; d.recordToolStart(id, "edit", { path: "z.ts" }); d.recordToolEnd(id, "edit", false, 0); };
+    // 5 distinct searches, each separated by 2 non-search calls -> spread over 15 tool calls,
+    // so no 8-tool window ever holds >=5 searches.
+    ["a.ts", "b.ts", "c.ts", "d.ts", "e.ts"].forEach((p) => { search(p); nonSearch(); nonSearch(); });
+    expect(d.evaluate("implement", 5)).toBeNull();
+  });
+
+  it("does NOT treat bare bash search PATTERNS as distinct paths (P2-2)", () => {
+    const d = new DelegationDetector();
+    ["rg Foo", "rg Bar", "grep Baz", "rg Qux", "grep Quux"].forEach((c, i) => {
+      d.recordToolStart(`p${i}`, "bash", { command: c });
+      d.recordToolEnd(`p${i}`, "bash", false, 0);
+    });
+    // Search calls count, but no distinct PATHS -> distinct clause not satisfied.
+    expect(d.evaluate("implement", 5)).toBeNull();
+  });
+
+  it("still counts bash searches that DO carry a path (P2-2)", () => {
+    const d = new DelegationDetector();
+    ["grep Foo src/a.ts", "grep Bar src/b.ts", "rg Baz src/c.ts", "grep Qux src/d.ts", "rg Quux src/e.ts"].forEach((c, i) => {
+      d.recordToolStart(`p${i}`, "bash", { command: c });
+      d.recordToolEnd(`p${i}`, "bash", false, 0);
+    });
+    expect(d.evaluate("implement", 5)).toMatchObject({ signal: "broad-search" });
+  });
 });
 
 describe("DelegationDetector stuck-debug", () => {
@@ -263,6 +292,17 @@ describe("DelegationDetector stuck-debug", () => {
     expect(d.evaluate("implement", 22)).toBeNull();
     // Only after another full 20 turns without convergence does it fire again.
     expect(d.evaluate("implement", 21 + STUCK_DEBUG_MIN_PHASE_TURNS)).toMatchObject({ signal: "stuck-debug" });
+  });
+
+  it("a FAILED pp_commit does NOT converge the edit loop (P2-3)", () => {
+    const d = new DelegationDetector();
+    d.onPhaseChange(0);
+    d.recordToolStart("e0", "edit", { path: "x.ts" });
+    d.recordToolEnd("e0", "edit", false, 1);
+    // Failed commit (isError=true) must NOT clear the signal.
+    d.recordToolStart("c0", "pp_commit", {});
+    d.recordToolEnd("c0", "pp_commit", true, 2);
+    expect(d.evaluate("implement", STUCK_DEBUG_MIN_PHASE_TURNS)).toMatchObject({ signal: "stuck-debug" });
   });
 });
 
