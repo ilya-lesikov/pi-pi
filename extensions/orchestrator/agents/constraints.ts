@@ -19,6 +19,26 @@ export function phaseConstraint(phase: Phase): string {
   return READONLY_CONSTRAINT;
 }
 
+// Guided phases that stop and hand back to the user (brainstorm, review, debug) end their turn
+// with prose rather than a tool call. To keep that handoff consistent, the model must close with
+// this exact block. NEXT_PHASE_LABEL supplies the phase the /pp menu advances into.
+const NEXT_PHASE_LABEL: Partial<Record<Phase, string>> = {
+  brainstorm: "plan",
+  review: "plan",
+  debug: "plan",
+};
+
+export function closingBlockInstruction(phase: Phase): string {
+  const next = NEXT_PHASE_LABEL[phase] ?? "the next phase";
+  return [
+    "End that turn with EXACTLY this block, verbatim, as the final lines of your message (fill the summary line with one sentence; change nothing else):",
+    "────────────────────────────────────────────────",
+    "✅ <one-sentence summary of what this phase produced>",
+    `▶ Advance via the /pp menu to move into ${next}.`,
+    "────────────────────────────────────────────────",
+  ].join("\n");
+}
+
 export function completionLine(phase: Phase, mode: TaskMode): string {
   if (phase === "quick") {
     return "When the user's request is complete, call pp_phase_complete. Do NOT stop and wait for the user before then.";
@@ -27,12 +47,12 @@ export function completionLine(phase: Phase, mode: TaskMode): string {
     return "There is no user driving this phase. The moment its work is complete, call pp_phase_complete — do NOT pause, ask for confirmation, or wait for input. Never end a turn with prose: every turn ends in a tool call.";
   }
   if (phase === "brainstorm") {
-    return "This is a conversation. Do NOT call pp_phase_complete yourself — keep going until the user ends it or advances via the /pp menu.";
+    return "This is a conversation. Do NOT call pp_phase_complete yourself — keep going until the user ends it or advances via the /pp menu. When you have delivered a complete answer and are handing back for the user to advance, close with the standardized block. " + closingBlockInstruction(phase);
   }
   if (phase === "plan" || phase === "implement") {
     return "When you judge this phase complete, call pp_phase_complete — the extension opens the advance gate for the user to review and confirm. Do NOT instead stop and ask the user to run /pp manually.";
   }
-  return "When the work is complete, stop and let the user review and advance it via the /pp menu. Do NOT advance on your own or call pp_phase_complete unprompted.";
+  return "When the work is complete, stop and let the user review and advance it via the /pp menu. Do NOT advance on your own or call pp_phase_complete unprompted. Close with the standardized block. " + closingBlockInstruction(phase);
 }
 
 const PHASE_IDENTITY: Record<string, string> = {
