@@ -276,6 +276,32 @@ function setStep(orchestrator: Orchestrator, step: string): void {
   saveTask(orchestrator.active.dir, orchestrator.active.state);
 }
 
+const AI_REVIEW_MARKER_SYNTAX =
+  "(inside each file's native comment syntax, e.g. `// AI_REVIEW: ...`, `# AI_REVIEW: ...`, `<!-- AI_REVIEW: ... -->`)";
+
+const AI_REVIEW_MARKER_LOOP =
+  "For each marker: address the request, then remove that marker in the SAME edit. After a pass, re-scan the target files and " +
+  "repeat until no `AI_REVIEW:` markers remain. Then verify your work and report what you changed per marker. When complete, " +
+  "call pp_phase_complete.";
+
+// Read-only phases (brainstorm/debug/review) and plan produce markdown state files rather than
+// source changes, so their AI_REVIEW scan targets those artifacts. Missing targets are skipped,
+// not errors. Kept as literal-token guidance (no regexp/parser), mirroring the implement banner.
+function readOnlyReviewBanner(phase: string, taskDir: string): string {
+  const targets =
+    phase === "plan"
+      ? "the synthesized plan(s) at `" + taskDir + "/plans/*_synthesized.md` ONLY (ignore raw planner outputs, " +
+        "`review_*` files, and the `plan-reviews/`, `brainstorm-reviews/`, `code-reviews/` directories)"
+      : "`" + taskDir + "/USER_REQUEST.md`, `" + taskDir + "/RESEARCH.md`, and `" + taskDir + "/artifacts/*.md`";
+  return advanceBanner(
+    `[PI-PI] The user reviewed this phase's state files in their editor and left inline \`AI_REVIEW:\` markers ` +
+    `${AI_REVIEW_MARKER_SYNTAX}.\n\n` +
+    `Search WITHIN ${targets} for \`AI_REVIEW:\`. Only scan those files — skip any target that does not exist ` +
+    `(a missing \`artifacts/*.md\` or a not-yet-produced state file is fine, not an error).\n\n` +
+    AI_REVIEW_MARKER_LOOP,
+  );
+}
+
 function showStatus(orchestrator: Orchestrator, ctx: any): void {
   if (!orchestrator.active) {
     ctx.ui.notify("No active task.", "info");
@@ -3527,6 +3553,7 @@ export async function showActiveTaskMenu(
     const { autoLabel } = getReviewLabels(orchestrator);
     const isReviewPhase = phase === "review";
     const hasPlannotator = phase === "plan" || phase === "implement" || isReviewPhase;
+    const reviewTarget = phase === "plan" ? "the synthesized plan" : phase === "implement" ? "the code changes" : "this phase's state files";
 
     const opt = (title: string, description: string): OptionInput => ({ title, description });
 
@@ -3562,7 +3589,7 @@ export async function showActiveTaskMenu(
     const options: OptionInput[] = [];
     options.push(opt("Next", "Complete, pause, or continue to next phase"));
     if (!waiting) {
-      options.push(opt("Review", "Auto review, Plannotator, or manual review"));
+      options.push(opt("Review", `Review ${reviewTarget}: automated reviewers, Plannotator, or your own editor pass`));
     }
     options.push(opt("Info", "Subagents, usage, and task status"));
     options.push(opt("Settings", "Flant AI and other configuration"));
@@ -3642,14 +3669,16 @@ export async function showActiveTaskMenu(
 
     if (choice === "Review") {
       const reviewOptions: OptionInput[] = [
-        opt(autoLabel, "Run automated review with configured reviewers"),
+        opt(autoLabel, `Run configured reviewers over ${reviewTarget}`),
       ];
       if (hasPlannotator) {
         reviewOptions.push(opt("Review in Plannotator", phase === "plan" ? "Open plan review in browser" : "Open code diff review in browser"));
       }
       reviewOptions.push(opt("Review on my own", phase === "implement"
-        ? "Review in your editor: mark spots with AI_REVIEW: comments, then have the agent address them"
-        : "Review manually, then continue"));
+        ? "Mark spots in the changed files with AI_REVIEW: comments; the agent then addresses each and removes the marker"
+        : phase === "plan"
+          ? "Mark spots in the synthesized plan with AI_REVIEW: comments; the agent then addresses each and removes the marker"
+          : "Mark spots in this phase's state files with AI_REVIEW: comments; the agent then addresses each and removes the marker"));
       reviewOptions.push(opt("Back", "Return to the previous menu"));
 
       const reviewChoice = await selectOption(ctx, "Review", reviewOptions);
@@ -3748,37 +3777,28 @@ export async function showActiveTaskMenu(
       }
 
       if (reviewChoice === "Review on my own") {
-        if (phase === "plan") {
-          setStep(orchestrator, "synthesize");
-          return continueMessage;
-        }
-        if (phase !== "implement") {
-          setStep(orchestrator, "llm_work");
-          return continueMessage;
-        }
-
         const gate = await selectOption(ctx, "Editor review", [
           opt("Done", "I've added AI_REVIEW: markers and saved my files"),
           opt("Skip markers", "Continue without the marker workflow"),
           opt("Back", "Return to the review menu"),
         ]);
         if (!gate || gate === "Back") continue;
-        setStep(orchestrator, "llm_work");
+        setStep(orchestrator, phase === "plan" ? "synthesize" : "llm_work");
         if (gate === "Skip markers") {
           return continueMessage;
         }
-        return advanceBanner(
-          "[PI-PI] The user reviewed the changes in their editor and left inline `AI_REVIEW:` markers " +
-          "(inside each file's native comment syntax, e.g. `// AI_REVIEW: ...`, `# AI_REVIEW: ...`, " +
-          "`<!-- AI_REVIEW: ... -->`).\n\n" +
-          "For each registered repo, enumerate the CHANGED files only — union of `git diff --name-only <base>...HEAD`, " +
-          "`git diff --name-only`, `git diff --cached --name-only`, and untracked-non-ignored files from `git status --porcelain` " +
-          "(base = each repo's configured base branch) — and search WITHIN those files for `AI_REVIEW:`. Do NOT grep the whole " +
-          "worktree (avoid vendored/generated/node_modules and historical markers).\n\n" +
-          "For each marker: address the request, then remove that marker in the SAME edit. After a pass, re-scan the changed " +
-          "files and repeat until no `AI_REVIEW:` markers remain. Then verify your work and report what you changed per marker. " +
-          "When complete, call pp_phase_complete.",
-        );
+        if (phase === "implement") {
+          return advanceBanner(
+            "[PI-PI] The user reviewed the changes in their editor and left inline `AI_REVIEW:` markers " +
+            `${AI_REVIEW_MARKER_SYNTAX}.\n\n` +
+            "For each registered repo, enumerate the CHANGED files only — union of `git diff --name-only <base>...HEAD`, " +
+            "`git diff --name-only`, `git diff --cached --name-only`, and untracked-non-ignored files from `git status --porcelain` " +
+            "(base = each repo's configured base branch) — and search WITHIN those files for `AI_REVIEW:`. Do NOT grep the whole " +
+            "worktree (avoid vendored/generated/node_modules and historical markers).\n\n" +
+            AI_REVIEW_MARKER_LOOP,
+          );
+        }
+        return readOnlyReviewBanner(phase, task.dir);
       }
 
       const reviewPreset = await pickPreset(ctx, orchestrator, getReviewPresetGroup(phase), "Review preset");
