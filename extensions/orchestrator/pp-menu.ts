@@ -2055,7 +2055,7 @@ async function showPresetAgentsMenu(
       options.push(opt(title, `${variant.model} / ${thinkingLabel(variant.thinking)}`));
       byTitle.set(title, variantName);
     }
-    options.push(opt("New agent", "Add a new agent"));
+    options.push(opt("New agent", "Add an agent variant to this preset"));
     options.push(opt("Back", "Return to the previous menu"));
     const choice = await selectOption(ctx, "Agents", options);
     if (!choice || choice === "Back") return BACK;
@@ -2224,7 +2224,7 @@ async function showPresetSettings(
       options.push(opt(optionTitle, enabledPresetSummary(preset.agents)));
       byTitle.set(optionTitle, presetName);
     }
-    options.push(opt("New preset", "Create preset"));
+    options.push(opt("New preset", "Create a preset in this group"));
     options.push(opt("Back", "Return to the previous menu"));
     const choice = await selectOption(ctx, title, options);
     if (!choice || choice === "Back") return BACK;
@@ -2298,7 +2298,7 @@ async function showAfterEditCommands(orchestrator: Orchestrator, ctx: any): Prom
       options.push(opt(`${title}${enabledTag}`, `${globsCount} patterns — ${cmd.run}`));
       byTitle.set(`${title}${enabledTag}`, id);
     }
-    options.push(opt("New command", "Add command"));
+    options.push(opt("New command", "Add a command to run after a file edit"));
     options.push(...buildResetOptions(orchestrator, ["commands", "afterEdit"]));
     options.push(opt("Back", "Return to the previous menu"));
     const choice = await selectOption(ctx, `After file edit: ${entries.length} commands`, options);
@@ -2427,7 +2427,7 @@ async function showAfterImplementCommands(orchestrator: Orchestrator, ctx: any):
       options.push(opt(title, cmd.run));
       byTitle.set(title, id);
     }
-    options.push(opt("New command", "Add command"));
+    options.push(opt("New command", "Add a command to run after implementation"));
     options.push(...buildResetOptions(orchestrator, ["commands", "afterImplement"]));
     options.push(opt("Back", "Return to the previous menu"));
     const choice = await selectOption(ctx, `After implementation: ${entries.length} commands`, options);
@@ -2487,11 +2487,11 @@ async function showCommandsSettings(orchestrator: Orchestrator, ctx: any): Promi
     const choice = await selectOption(ctx, "Commands", [
       opt(
         `After file edit: ${afterEditCount} commands`,
-        `${afterEditCount} commands`,
+        "Commands run when a matching file is edited (e.g. format, lint)",
       ),
       opt(
         `After implementation: ${afterImplementCount} commands`,
-        `${afterImplementCount} commands`,
+        "Commands run once the implement phase completes (e.g. build, test)",
       ),
       opt("Back", "Return to the previous menu"),
     ]);
@@ -2536,7 +2536,7 @@ async function showTimeoutsSettings(orchestrator: Orchestrator, ctx: any): Promi
     const options: OptionInput[] = timeoutEntries.map((entry) => {
       const value = entry.value;
       const key = entry.key;
-      return opt(`${TIMEOUT_LABELS[key]}: ${formatDuration(value)}`, "Edit timeout");
+      return opt(`${TIMEOUT_LABELS[key]}: ${formatDuration(value)}`, "Change this time limit");
     });
     options.push(opt("Back", "Return to the previous menu"));
     const choice = await selectOption(ctx, "Timeouts", options);
@@ -2574,7 +2574,7 @@ async function showTimeoutsSettings(orchestrator: Orchestrator, ctx: any): Promi
 async function showPerformanceSettings(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
   while (true) {
     const choice = await selectOption(ctx, "Performance", [
-      opt("Timeouts", "Timeout configuration"),
+      opt("Timeouts", "Adjust per-operation time limits"),
       opt("Back", "Return to the previous menu"),
     ]);
     if (!choice || choice === "Back") return BACK;
@@ -2789,7 +2789,7 @@ async function showSettingsMenu(orchestrator: Orchestrator, ctx: any): Promise<t
       opt("General", "Commit, log level, Flant AI, repos"),
       opt("Agents", "Orchestrator and subagent configuration"),
       opt("Commands", "After file edit and after implementation"),
-      opt("Performance", "Timeout configuration"),
+      opt("Performance", "Per-operation timeout limits"),
       opt("LSP", "Language server controls"),
       opt("Back", "Return to the previous menu"),
     ];
@@ -3442,7 +3442,7 @@ async function showNoActiveMenu(orchestrator: Orchestrator, ctx: any): Promise<s
     const choice = await selectOption(ctx, "/pp", [
       { title: "Task", description: "Start a new task or resume a paused one" },
       { title: "Info", description: "Subagents, usage, and task status" },
-      { title: "Settings", description: "Flant AI and other configuration" },
+      { title: "Settings", description: "Models, agents, commands, and other configuration" },
       { title: "Back", description: "Close this menu" },
     ]);
     if (!choice || choice === "Back") return undefined;
@@ -3503,7 +3503,7 @@ async function showQuickTaskMenu(
       opt("Complete", "Mark task as done and clean up"),
       opt("Pause", "Suspend task to resume later"),
       opt("Info", "Subagents, usage, and task status"),
-      opt("Settings", "Flant AI and other configuration"),
+      opt("Settings", "Models, agents, commands, and other configuration"),
       opt("Back", "Return to the prompt and keep working"),
     ]);
     // A deliberate ESC in tool mode must stop the turn cleanly (mirror the
@@ -3562,7 +3562,7 @@ export async function showActiveTaskMenu(
         opt("Complete task", "Mark task as done and clean up"),
         opt("Pause task", "Suspend task to resume later"),
         opt("Info", "Subagents, usage, and task status"),
-        opt("Settings", "Flant AI and other configuration"),
+        opt("Settings", "Models, agents, commands, and other configuration"),
         opt("Back", "Return to the prompt and keep working"),
       ]);
       // A deliberate ESC only needs distinct handling in tool mode (so
@@ -3592,7 +3592,7 @@ export async function showActiveTaskMenu(
       options.push(opt("Review", `Review ${reviewTarget}: automated reviewers, Plannotator, or your own editor pass`));
     }
     options.push(opt("Info", "Subagents, usage, and task status"));
-    options.push(opt("Settings", "Flant AI and other configuration"));
+    options.push(opt("Settings", "Models, agents, commands, and other configuration"));
     options.push(opt("Back", "Return to the prompt and keep working"));
 
     const headerLines = [`/pp\n\nTask: ${task.type}\nPhase: ${phase}`];
