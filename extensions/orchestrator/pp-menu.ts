@@ -3683,7 +3683,7 @@ export async function showActiveTaskMenu(
         ? "Mark spots in the changed files with AI_REVIEW: comments; the agent then addresses each and removes the marker"
         : phase === "plan"
           ? "Mark spots in the synthesized plan with AI_REVIEW: comments; the agent then addresses each and removes the marker"
-          : "Mark spots in this phase's state files with AI_REVIEW: comments; the agent then addresses each and removes the marker"));
+          : "Mark spots in USER_REQUEST.md, RESEARCH.md, and artifacts/*.md with AI_REVIEW: comments; the agent then addresses each and removes the marker"));
       reviewOptions.push(opt("Back", "Return to the previous menu"));
 
       const reviewChoice = await selectOption(ctx, "Review", reviewOptions);
