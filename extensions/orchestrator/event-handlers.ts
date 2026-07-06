@@ -483,10 +483,25 @@ async function maybePostPrComments(orchestrator: Orchestrator, finalReviewPath: 
   // Attribute each anchor to the registered repo that actually contains its path
   // (anchors carry repo-relative paths). This lets multi-repo reviews post each
   // repo's findings to that repo's PR rather than dumping everything on root.
+  // Single-repo: everything goes to that repo. Multi-repo: a path present in
+  // exactly one repo is attributed there; an AMBIGUOUS path (present in >1 repo)
+  // or one absent everywhere is skipped rather than risk posting to the wrong PR.
   const byRepo = new Map<string, typeof anchors>();
+  const ambiguous: typeof anchors = [];
+  const singleRepo = repos.length <= 1;
   for (const anchor of anchors) {
-    const repo = repos.find((r) => existsSync(join(r.path, anchor.path))) ?? rootRepo;
-    const key = repo?.path ?? rootPath;
+    let key: string | null = null;
+    if (singleRepo) {
+      key = rootRepo?.path ?? rootPath;
+    } else {
+      const matches = repos.filter((r) => existsSync(join(r.path, anchor.path)));
+      if (matches.length === 1) {
+        key = matches[0].path;
+      } else {
+        ambiguous.push(anchor);
+        continue;
+      }
+    }
     const list = byRepo.get(key) ?? [];
     list.push(anchor);
     byRepo.set(key, list);
@@ -504,6 +519,11 @@ async function maybePostPrComments(orchestrator: Orchestrator, finalReviewPath: 
       parts.push(`${result.skipped.length} finding(s) could not be mapped to the PR diff and were skipped:`);
       parts.push(...result.skipped.map((a) => `  - ${a.path}:${a.line}`));
     }
+  }
+
+  if (ambiguous.length > 0) {
+    parts.push(`${ambiguous.length} finding(s) skipped — their path is ambiguous across repositories (not posted to any PR):`);
+    parts.push(...ambiguous.map((a) => `  - ${a.path}:${a.line}`));
   }
 
   if (!anyPr) {
@@ -2172,12 +2192,22 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       // Review-phase read-only exception is scoped to AI_COMMENT markers: the main
       // agent may only insert/remove `AI_COMMENT:` markers in source files. Enforce
       // it at the gate (the constraint is otherwise prompt-level only): a source
-      // write/edit is allowed only when it changes nothing but AI_COMMENT markers.
+      // write/edit is allowed only when it changes nothing but AI_COMMENT markers,
+      // AND only when the user opted into an AI_COMMENT anchoring mode. In markdown-
+      // only / PR-only modes, no source write is permitted at all.
       if (
         orchestrator.active?.state.phase === "review" &&
         !isPathInside(ppDir, resolvedPath)
       ) {
-        const denial = { block: true as const, reason: "Review phase is read-only except for inserting/removing AI_COMMENT: markers. This edit changes non-AI_COMMENT content — record the finding instead of applying a fix." };
+        const anchoringMode = orchestrator.active.state.reviewAnchoringMode;
+        const aiCommentAllowed = anchoringMode === "ai_comment" || anchoringMode === "ai_comment_pr";
+        const denial = {
+          block: true as const,
+          reason: aiCommentAllowed
+            ? "Review phase is read-only except for inserting/removing AI_COMMENT: markers. This edit changes non-AI_COMMENT content — record the finding instead of applying a fix."
+            : "Review phase is read-only and the selected anchoring mode does not write to source. Record findings in the review report — do NOT edit source files.",
+        };
+        if (!aiCommentAllowed) return denial;
         if (event.toolName === "edit") {
           const edits = Array.isArray((event.input as any)?.edits) ? (event.input as any).edits : [];
           const legacy = event.input as any;

@@ -145,9 +145,10 @@ describe("tool_call write protection", () => {
 });
 
 describe("review-phase AI_COMMENT write guard", () => {
-  function reviewTask(): ActiveTask {
+  function reviewTask(mode: "markdown" | "ai_comment" | "pr" | "ai_comment_pr" = "ai_comment"): ActiveTask {
     const task = makeActiveTask();
     task.state.phase = "review";
+    task.state.reviewAnchoringMode = mode;
     return task;
   }
 
@@ -190,6 +191,27 @@ describe("review-phase AI_COMMENT write guard", () => {
       {},
     );
     expect(result).toBeUndefined();
+  });
+
+  it("blocks even an AI_COMMENT-only edit when the mode is markdown-only", async () => {
+    orchestrator.active = reviewTask("markdown");
+    const handler = getHandler("tool_call");
+    const result = await handler(
+      { toolName: "edit", input: { path: "src/a.ts", edits: [{ oldText: "const x = 1;", newText: "const x = 1;\n// AI_COMMENT: check" }] } },
+      {},
+    );
+    expect(result?.block).toBe(true);
+    expect(result?.reason).toContain("does not write to source");
+  });
+
+  it("blocks an AI_COMMENT-only edit when the mode is PR-only", async () => {
+    orchestrator.active = reviewTask("pr");
+    const handler = getHandler("tool_call");
+    const result = await handler(
+      { toolName: "edit", input: { path: "src/a.ts", edits: [{ oldText: "const x = 1;", newText: "const x = 1;\n// AI_COMMENT: check" }] } },
+      {},
+    );
+    expect(result?.block).toBe(true);
   });
 });
 
