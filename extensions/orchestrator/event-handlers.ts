@@ -1084,6 +1084,18 @@ function registerMainTraceHooks(orchestrator: Orchestrator): void {
   });
 }
 
+// Main-turn watchdog activity helpers (BUG-2). Kept module-level so they can be
+// called from the several existing main-session handlers without registering a
+// second handler per event.
+function markMainTurnActivity(orchestrator: Orchestrator): void {
+  orchestrator.mainTurnLastActivity = Date.now();
+}
+
+function endMainTurn(orchestrator: Orchestrator): void {
+  orchestrator.mainTurnInFlight = false;
+  orchestrator.mainTurnRecovering = false;
+}
+
 export function registerEventHandlers(orchestrator: Orchestrator): void {
   const pi = orchestrator.pi;
 
@@ -1114,11 +1126,67 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   // the subagent branch, so these only ever see root-session events.
   pi.on("agent_end", async (_event, ctx) => {
     if (ctx) orchestrator.lastCtx = ctx;
+    endMainTurn(orchestrator);
     orchestrator.transitionController.onAgentEnd();
   });
   pi.on("session_compact", async (_event, ctx) => {
     if (ctx) orchestrator.lastCtx = ctx;
     orchestrator.transitionController.onSessionCompact();
+  });
+
+  // BUG-2: main-turn stall watchdog. A main turn can start (turn_start / manual
+  // "continue" / SDK auto-retry) and then wedge with no terminal turn_end, so the
+  // session sits "Working…" forever with nothing to recover it (the SDK-retryable
+  // deferral below arms nothing, and startStaleAgentWatchdog only watches
+  // subagents). Activity is marked from the existing main-session handlers
+  // (turn_start below, tool_call, tool_result, turn_end) so we do NOT register a
+  // second handler per event (the runtime allows it, but keeping one owner per
+  // event is simpler and test-mock-friendly). When a turn is in flight with NO
+  // activity beyond the configured threshold, abort + recover via the idle-gated
+  // single-send path so recovery can't itself race into "Agent is already
+  // processing".
+  const startMainTurnWatchdog = () => {
+    if (orchestrator.mainTurnTimer) return;
+    orchestrator.mainTurnTimer = setInterval(() => {
+      if (!orchestrator.active) {
+        clearInterval(orchestrator.mainTurnTimer!);
+        orchestrator.mainTurnTimer = null;
+        return;
+      }
+      if (!orchestrator.mainTurnInFlight || orchestrator.mainTurnRecovering) return;
+      // Only a genuinely stuck turn is a target: an idle session (turn already
+      // settled), an in-progress transition, or an await_* step is not a stall.
+      if (orchestrator.transitionController.isTransitioning()) return;
+      const step = orchestrator.active.state.step;
+      if (step === "await_planners" || step === "await_reviewers") return;
+      const staleMs = orchestrator.config.performance.internals.mainTurnStale;
+      if (Date.now() - orchestrator.mainTurnLastActivity <= staleMs) return;
+
+      orchestrator.mainTurnRecovering = true;
+      const taskToken = orchestrator.activeTaskToken;
+      const phase = orchestrator.active.state.phase;
+      getLogger().warn({ s: "watchdog", phase, staleMs }, "main turn wedged — aborting and recovering");
+      orchestrator.lastCtx?.ui?.notify?.(
+        `Main turn stalled with no activity for ${Math.round(staleMs / 1000)}s — recovering.`,
+        "warning",
+      );
+      try {
+        orchestrator.transitionController.abortMainAgent(orchestrator.lastCtx?.abort?.bind(orchestrator.lastCtx));
+      } catch {}
+      orchestrator.mainTurnInFlight = false;
+      orchestrator.sendUserMessageWhenIdle(
+        `[PI-PI] The previous turn stalled without completing. Continue working on the current phase (${phase}).`,
+        taskToken,
+      );
+    }, 30000);
+  };
+
+  pi.on("turn_start", async (_event, ctx) => {
+    if (ctx) orchestrator.lastCtx = ctx;
+    orchestrator.mainTurnInFlight = true;
+    orchestrator.mainTurnRecovering = false;
+    markMainTurnActivity(orchestrator);
+    startMainTurnWatchdog();
   });
 
   // Expose the event-driven planner-completion check so initial plan-entry
@@ -2008,6 +2076,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   });
 
   pi.on("tool_call", async (event, _ctx) => {
+    markMainTurnActivity(orchestrator);
     getLogger().debug({ s: "hook", hook: "tool_call", tool: event.toolName }, "tool call");
     if (event.toolName === "ask_user" && orchestrator.active) {
       if (getEffectivePhaseMode(orchestrator.active.state) === "autonomous") {
@@ -2070,6 +2139,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   });
 
   pi.on("tool_result", async (event, ctx) => {
+    markMainTurnActivity(orchestrator);
     // ESC in an ask_user dialogue must stop the LLM's turn (treat ESC as
     // "stop, I want to type"). Only a deliberate user cancel aborts — timeout
     // and programmatic signal-aborts carry a non-"user" reason and must not.
@@ -2251,6 +2321,10 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   });
 
   pi.on("turn_end", async (event, ctx) => {
+    // The turn produced a terminal event — it is no longer wedged. If the SDK
+    // auto-retries a retryable error it will emit a fresh turn_start, which
+    // re-arms the watchdog.
+    endMainTurn(orchestrator);
     const msg = event.message as any;
     const usageTracker = getUsageTracker();
     if (usageTracker && msg?.usage) {

@@ -66,6 +66,7 @@ export interface PiPiConfig {
     };
     internals: {
       subagentStale: DurationValue;
+      mainTurnStale: DurationValue;
       taskLockStale: DurationValue;
       taskLockRefresh: DurationValue;
     };
@@ -80,6 +81,7 @@ export interface NormalizedPiPiConfig extends PiPiConfig {
     };
     internals: {
       subagentStale: number;
+      mainTurnStale: number;
       taskLockStale: number;
       taskLockRefresh: number;
     };
@@ -205,6 +207,7 @@ const DEFAULT_CONFIG: PiPiConfig = {
     },
     internals: {
       subagentStale: "5m",
+      mainTurnStale: "10m",
       taskLockStale: "1m",
       taskLockRefresh: "30s",
     },
@@ -420,6 +423,7 @@ export function validateConfig(config: Record<string, any>): void {
     if (performance.internals !== undefined) {
       const internals = requireObject(performance.internals, "config.performance.internals");
       ensureDuration(internals.subagentStale, "config.performance.internals.subagentStale");
+      ensureDuration(internals.mainTurnStale, "config.performance.internals.mainTurnStale");
       ensureDuration(internals.taskLockStale, "config.performance.internals.taskLockStale");
       ensureDuration(internals.taskLockRefresh, "config.performance.internals.taskLockRefresh");
     }
@@ -529,6 +533,9 @@ export function validateMergedConfig(config: Record<string, any>): void {
   if (parseDuration(typed.performance.internals.subagentStale) === null) {
     throw new Error("config.performance.internals.subagentStale must be a valid duration");
   }
+  if (parseDuration(typed.performance.internals.mainTurnStale) === null) {
+    throw new Error("config.performance.internals.mainTurnStale must be a valid duration");
+  }
   if (parseDuration(typed.performance.internals.taskLockStale) === null) {
     throw new Error("config.performance.internals.taskLockStale must be a valid duration");
   }
@@ -543,6 +550,7 @@ export function normalizeConfigDurations(config: PiPiConfig): NormalizedPiPiConf
   const afterEdit = parseDuration(next.performance.commands.afterEdit);
   const afterImplement = parseDuration(next.performance.commands.afterImplement);
   const subagentStale = parseDuration(next.performance.internals.subagentStale);
+  const mainTurnStale = parseDuration(next.performance.internals.mainTurnStale);
   const taskLockStale = parseDuration(next.performance.internals.taskLockStale);
   const taskLockRefresh = parseDuration(next.performance.internals.taskLockRefresh);
 
@@ -550,6 +558,7 @@ export function normalizeConfigDurations(config: PiPiConfig): NormalizedPiPiConf
     afterEdit === null ||
     afterImplement === null ||
     subagentStale === null ||
+    mainTurnStale === null ||
     taskLockStale === null ||
     taskLockRefresh === null
   ) {
@@ -559,6 +568,7 @@ export function normalizeConfigDurations(config: PiPiConfig): NormalizedPiPiConf
   next.performance.commands.afterEdit = afterEdit;
   next.performance.commands.afterImplement = afterImplement;
   next.performance.internals.subagentStale = subagentStale;
+  next.performance.internals.mainTurnStale = mainTurnStale;
   next.performance.internals.taskLockStale = taskLockStale;
   next.performance.internals.taskLockRefresh = taskLockRefresh;
   return next;

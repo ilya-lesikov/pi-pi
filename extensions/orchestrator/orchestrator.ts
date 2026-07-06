@@ -73,6 +73,16 @@ export class Orchestrator {
     step?: string;
   }>();
   staleAgentTimer: ReturnType<typeof setInterval> | null = null;
+  // Main-turn stall watchdog (BUG-2). A main turn that starts but never emits a
+  // terminal turn_end/error can wedge the session ("Working…" forever). Unlike
+  // staleAgentTimer (subagents only), this watches the MAIN session: any main-
+  // session stream/tool/turn activity refreshes mainTurnLastActivity; when a turn
+  // is in flight with no activity beyond config.performance.internals.mainTurnStale,
+  // the watchdog recovers via the idle-gated single-send path.
+  mainTurnTimer: ReturnType<typeof setInterval> | null = null;
+  mainTurnLastActivity = 0;
+  mainTurnInFlight = false;
+  mainTurnRecovering = false;
   // Single consecutive-nudge guard (replaces the old multi-tier throttle). Reset
   // to 0 on any productive turn; once it reaches the cap the nudges halt with one
   // user notification.
@@ -628,6 +638,12 @@ export class Orchestrator {
       clearInterval(this.staleAgentTimer);
       this.staleAgentTimer = null;
     }
+    if (this.mainTurnTimer) {
+      clearInterval(this.mainTurnTimer);
+      this.mainTurnTimer = null;
+    }
+    this.mainTurnInFlight = false;
+    this.mainTurnRecovering = false;
     this.clearSubscriptionFallback();
   }
 

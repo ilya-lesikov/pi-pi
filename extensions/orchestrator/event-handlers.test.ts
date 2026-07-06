@@ -347,3 +347,59 @@ describe("tool_call Agent routing and spawn-time context injection", () => {
     expect(input.prompt).toBe("find X");
   });
 });
+
+describe("main-turn stall watchdog (BUG-2)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("recovers a wedged main turn via the idle-gated single-send path", async () => {
+    orchestrator.active = makeActiveTask();
+    orchestrator.config.performance.internals.mainTurnStale = 60000;
+    const sendSpy = vi.spyOn(orchestrator, "sendUserMessageWhenIdle").mockImplementation(() => {});
+    orchestrator.lastCtx = { isIdle: () => true } as any;
+
+    // A turn starts and then never terminates.
+    await getHandler("turn_start")({ type: "turn_start", turnIndex: 0 }, {});
+    expect(orchestrator.mainTurnInFlight).toBe(true);
+
+    // Before the threshold: no recovery.
+    vi.advanceTimersByTime(30000);
+    expect(sendSpy).not.toHaveBeenCalled();
+
+    // Past the threshold with no activity: watchdog fires once.
+    vi.advanceTimersByTime(61000);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    expect(sendSpy.mock.calls[0][0]).toContain("stalled without completing");
+    expect(orchestrator.mainTurnRecovering).toBe(true);
+  });
+
+  it("does not fire while the turn keeps making activity", async () => {
+    orchestrator.active = makeActiveTask();
+    orchestrator.config.performance.internals.mainTurnStale = 60000;
+    const sendSpy = vi.spyOn(orchestrator, "sendUserMessageWhenIdle").mockImplementation(() => {});
+
+    await getHandler("turn_start")({ type: "turn_start", turnIndex: 0 }, {});
+    for (let i = 0; i < 5; i++) {
+      vi.advanceTimersByTime(30000);
+      await getHandler("tool_call")({ toolName: "read", input: { path: "a.ts" } }, {});
+    }
+    expect(sendSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not fire after the turn terminates", async () => {
+    orchestrator.active = makeActiveTask();
+    orchestrator.config.performance.internals.mainTurnStale = 60000;
+    const sendSpy = vi.spyOn(orchestrator, "sendUserMessageWhenIdle").mockImplementation(() => {});
+
+    const ctx = { ui: { setStatus: vi.fn(), setWorkingMessage: vi.fn(), notify: vi.fn() }, isIdle: () => true } as any;
+    await getHandler("turn_start")({ type: "turn_start", turnIndex: 0 }, ctx);
+    await getHandler("turn_end")({ type: "turn_end", turnIndex: 0, message: {}, toolResults: [] }, ctx);
+    expect(orchestrator.mainTurnInFlight).toBe(false);
+    vi.advanceTimersByTime(120000);
+    expect(sendSpy).not.toHaveBeenCalled();
+  });
+});

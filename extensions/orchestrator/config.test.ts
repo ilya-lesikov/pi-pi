@@ -214,6 +214,25 @@ describe("loadConfig", () => {
     expect(overridden.general.injectAgentsMd).toBe(false);
   });
 
+  it("defaults mainTurnStale to 10m and normalizes an override to ms", () => {
+    const cwd = makeTempDir();
+    const defaults = loadConfig(cwd, "/nonexistent/global/config.json");
+    expect(defaults.performance.internals.mainTurnStale).toBe(600000);
+
+    const cwd2 = makeTempDir();
+    const ppDir = join(cwd2, ".pp");
+    mkdirSync(ppDir, { recursive: true });
+    writeFileSync(join(ppDir, "config.json"), JSON.stringify({ performance: { internals: { mainTurnStale: "90s" } } }), "utf-8");
+    const overridden = loadConfig(cwd2, "/nonexistent/global/config.json");
+    expect(overridden.performance.internals.mainTurnStale).toBe(90000);
+  });
+
+  it("rejects an invalid mainTurnStale duration", () => {
+    expect(() => validateConfig({ performance: { internals: { mainTurnStale: "soon" } } })).toThrow(
+      "config.performance.internals.mainTurnStale",
+    );
+  });
+
   it("creates default config when config.json does not exist", () => {
     const cwd = makeTempDir();
     const configPath = join(cwd, ".pp", "config.json");

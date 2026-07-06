@@ -87,6 +87,7 @@ type TimeoutKey =
   | "performance.commands.afterEdit"
   | "performance.commands.afterImplement"
   | "performance.internals.subagentStale"
+  | "performance.internals.mainTurnStale"
   | "performance.internals.taskLockStale"
   | "performance.internals.taskLockRefresh";
 
@@ -1291,6 +1292,7 @@ const TIMEOUT_LABELS: Record<TimeoutKey, string> = {
   "performance.commands.afterEdit": "Command after file edit",
   "performance.commands.afterImplement": "Command after implementation",
   "performance.internals.subagentStale": "Subagent stale",
+  "performance.internals.mainTurnStale": "Main turn stale",
   "performance.internals.taskLockStale": "Lock stale",
   "performance.internals.taskLockRefresh": "Lock update",
 };
@@ -2500,6 +2502,11 @@ async function showTimeoutsSettings(orchestrator: Orchestrator, ctx: any): Promi
         key: "performance.internals.subagentStale",
         path: ["performance", "internals", "subagentStale"],
         value: orchestrator.config.performance.internals.subagentStale,
+      },
+      {
+        key: "performance.internals.mainTurnStale",
+        path: ["performance", "internals", "mainTurnStale"],
+        value: orchestrator.config.performance.internals.mainTurnStale,
       },
       {
         key: "performance.internals.taskLockStale",
