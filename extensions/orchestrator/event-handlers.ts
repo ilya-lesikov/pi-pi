@@ -1912,6 +1912,11 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     const projectContext = systemSnippets
       ? ["<project_context>", systemSnippets, "</project_context>"].join("\n")
       : "";
+    const agentsMdPath = join(orchestrator.cwd, "AGENTS.md");
+    const agentsMd =
+      orchestrator.config.general.injectAgentsMd && existsSync(agentsMdPath)
+        ? ["<agents_md>", readFileSync(agentsMdPath, "utf-8"), "</agents_md>"].join("\n")
+        : "";
     const checklistLine =
       phase === "implement" ? "Keep the plan checklist current: mark each item done (- [ ] → - [x]) as you complete it." : "";
     const taskBlock = [
@@ -1930,6 +1935,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       TOOLS_BLOCK,
       DELEGATION_BLOCK,
       projectContext,
+      agentsMd,
       taskBlock,
     ]
       .filter(Boolean)

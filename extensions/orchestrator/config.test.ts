@@ -122,10 +122,16 @@ describe("validateConfig", () => {
     );
   });
 
+  it("throws for invalid injectAgentsMd value", () => {
+    expect(() => validateConfig({ general: { injectAgentsMd: "yes" } })).toThrow(
+      "config.general.injectAgentsMd",
+    );
+  });
+
   it("accepts valid partial config", () => {
     expect(() =>
       validateConfig({
-        general: { autoCommit: false },
+        general: { autoCommit: false, injectAgentsMd: false },
         commands: {
           afterEdit: { fmt: { run: "npm run fmt", globs: ["**/*.ts"] } },
           afterImplement: { test: { run: "npm test" } },
@@ -192,6 +198,20 @@ describe("loadConfig", () => {
     expect(config.performance.commands.afterEdit).toBe(1234);
     expect(config.performance.commands.afterImplement).toBe(300000);
     expect(config.general.autoCommit).toBe(false);
+    expect(config.general.injectAgentsMd).toBe(true);
+  });
+
+  it("defaults injectAgentsMd to true and honors an explicit override", () => {
+    const cwd = makeTempDir();
+    const defaults = loadConfig(cwd, "/nonexistent/global/config.json");
+    expect(defaults.general.injectAgentsMd).toBe(true);
+
+    const cwd2 = makeTempDir();
+    const ppDir = join(cwd2, ".pp");
+    mkdirSync(ppDir, { recursive: true });
+    writeFileSync(join(ppDir, "config.json"), JSON.stringify({ general: { injectAgentsMd: false } }), "utf-8");
+    const overridden = loadConfig(cwd2, "/nonexistent/global/config.json");
+    expect(overridden.general.injectAgentsMd).toBe(false);
   });
 
   it("creates default config when config.json does not exist", () => {

@@ -43,6 +43,7 @@ export interface AfterImplementCommandConfig {
 export interface PiPiConfig {
   general: {
     autoCommit: boolean;
+    injectAgentsMd: boolean;
     loadExtraRepoConfigs: boolean;
     logLevel: LogLevel;
     tracing: boolean;
@@ -97,6 +98,7 @@ const SIMPLE_SUBAGENT_ROLES: SimpleSubagentRole[] = ["explore", "librarian", "ta
 const DEFAULT_CONFIG: PiPiConfig = {
   general: {
     autoCommit: true,
+    injectAgentsMd: true,
     loadExtraRepoConfigs: true,
     logLevel: "info",
     tracing: false,
@@ -347,6 +349,7 @@ export function validateConfig(config: Record<string, any>): void {
   if (config.general !== undefined) {
     const general = requireObject(config.general, "config.general");
     ensureBool(general.autoCommit, "config.general.autoCommit");
+    ensureBool(general.injectAgentsMd, "config.general.injectAgentsMd");
     ensureBool(general.loadExtraRepoConfigs, "config.general.loadExtraRepoConfigs");
     ensureBool(general.tracing, "config.general.tracing");
     if (general.logLevel !== undefined && !isValidLogLevel(general.logLevel)) {

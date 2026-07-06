@@ -53,6 +53,7 @@ vi.mock("./config.js", async (importOriginal) => {
   return { ...original, loadConfig: () => ({
     general: {
       autoCommit: false,
+      injectAgentsMd: true,
       loadExtraRepoConfigs: true,
       logLevel: "info",
     },
@@ -209,6 +210,7 @@ function makeConfig() {
   return {
     general: {
       autoCommit: false,
+      injectAgentsMd: true,
       loadExtraRepoConfigs: true,
       logLevel: "info",
     },
@@ -2248,6 +2250,66 @@ describe("task modes and quick task", () => {
     const prompt = (await beforeStart({ systemPrompt: "base" }, ctx))?.systemPrompt ?? "";
     expect(prompt).toContain("call pp_phase_complete");
     expect(prompt).not.toContain("advance it via the /pp menu");
+  });
+
+  it("injects root AGENTS.md into the system prompt when enabled, ignoring nested/extra-repo files", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx({ cwd });
+
+    writeFileSync(join(cwd, "AGENTS.md"), "ROOT_AGENTS_CONTENT", "utf-8");
+    mkdirSync(join(cwd, "nested"), { recursive: true });
+    writeFileSync(join(cwd, "nested", "AGENTS.md"), "NESTED_AGENTS_CONTENT", "utf-8");
+
+    await orchestrator.startTask({ ...ctx, cwd } as any, "implement", "implement", undefined, undefined, "guided");
+    orchestrator.active!.state.phase = "plan";
+    orchestrator.active!.state.step = "synthesize";
+
+    const beforeStart = pi._handlers.get("before_agent_start")!;
+    const prompt = (await beforeStart({ systemPrompt: "base" }, ctx))?.systemPrompt ?? "";
+    expect(prompt).toContain("<agents_md>");
+    expect(prompt).toContain("ROOT_AGENTS_CONTENT");
+    expect(prompt).not.toContain("NESTED_AGENTS_CONTENT");
+  });
+
+  it("omits AGENTS.md block when disabled or file absent", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx({ cwd });
+
+    await orchestrator.startTask({ ...ctx, cwd } as any, "implement", "implement", undefined, undefined, "guided");
+    orchestrator.active!.state.phase = "plan";
+    orchestrator.active!.state.step = "synthesize";
+
+    const beforeStart = pi._handlers.get("before_agent_start")!;
+    const absent = (await beforeStart({ systemPrompt: "base" }, ctx))?.systemPrompt ?? "";
+    expect(absent).not.toContain("<agents_md>");
+
+    writeFileSync(join(cwd, "AGENTS.md"), "ROOT_AGENTS_CONTENT", "utf-8");
+    orchestrator.config.general.injectAgentsMd = false;
+    const disabled = (await beforeStart({ systemPrompt: "base" }, ctx))?.systemPrompt ?? "";
+    expect(disabled).not.toContain("<agents_md>");
+    expect(disabled).not.toContain("ROOT_AGENTS_CONTENT");
+  });
+
+  it("auto-refreshes AGENTS.md content on the next turn without restart", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx({ cwd });
+
+    writeFileSync(join(cwd, "AGENTS.md"), "FIRST_VERSION", "utf-8");
+    await orchestrator.startTask({ ...ctx, cwd } as any, "implement", "implement", undefined, undefined, "guided");
+    orchestrator.active!.state.phase = "plan";
+    orchestrator.active!.state.step = "synthesize";
+
+    const beforeStart = pi._handlers.get("before_agent_start")!;
+    const first = (await beforeStart({ systemPrompt: "base" }, ctx))?.systemPrompt ?? "";
+    expect(first).toContain("FIRST_VERSION");
+
+    writeFileSync(join(cwd, "AGENTS.md"), "SECOND_VERSION", "utf-8");
+    const second = (await beforeStart({ systemPrompt: "base" }, ctx))?.systemPrompt ?? "";
+    expect(second).toContain("SECOND_VERSION");
+    expect(second).not.toContain("FIRST_VERSION");
   });
 
   it("autonomous plan-phase prompt body contains no /pp guidance", async () => {

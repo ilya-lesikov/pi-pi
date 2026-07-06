@@ -2675,6 +2675,7 @@ async function showGeneralSettings(orchestrator: Orchestrator, ctx: any): Promis
   while (true) {
     const choice = await selectOption(ctx, "General", [
       opt(`Commit automatically: ${orchestrator.config.general.autoCommit ? "Yes" : "No"}`, "Enable or disable auto commits"),
+      opt(`Inject root AGENTS.md: ${orchestrator.config.general.injectAgentsMd ? "Yes" : "No"}`, "Inject the working repo's root AGENTS.md into the agent system prompt"),
       opt(`Ignore configs from other repos: ${orchestrator.config.general.loadExtraRepoConfigs ? "No" : "Yes"}`, "Load only root repo config"),
       opt(`Log level: ${logLevelLabel(orchestrator.config.general.logLevel)}`, "Logging verbosity"),
       opt(`Tracing: ${orchestrator.config.general.tracing ? "Yes" : "No"}`, "Capture full session traces to .pp/logs/traces/"),
@@ -2684,6 +2685,10 @@ async function showGeneralSettings(orchestrator: Orchestrator, ctx: any): Promis
     if (!choice || choice === "Back") return BACK;
     if (choice.startsWith("Commit automatically:")) {
       await showBooleanSetting(orchestrator, ctx, "Commit automatically", ["general", "autoCommit"], "Commit changes automatically as work progresses", "Leave committing to you");
+      continue;
+    }
+    if (choice.startsWith("Inject root AGENTS.md:")) {
+      await showBooleanSetting(orchestrator, ctx, "Inject root AGENTS.md", ["general", "injectAgentsMd"], "Inject the working repo's root AGENTS.md into the agent system prompt", "Do not inject AGENTS.md");
       continue;
     }
     if (choice.startsWith("Ignore configs from other repos:")) {
