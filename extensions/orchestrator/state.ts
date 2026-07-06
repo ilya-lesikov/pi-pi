@@ -59,6 +59,7 @@ export interface TaskState {
   plannerFailureAutoRetried?: boolean;
   reviewerFailureAutoRetried?: boolean;
   reviewAnchoringMode?: ReviewAnchoringMode;
+  prCommentedReviewFiles?: string[];
 }
 
 export type ReviewAnchoringMode = "markdown" | "ai_comment" | "pr" | "ai_comment_pr";

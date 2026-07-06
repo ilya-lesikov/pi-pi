@@ -37,6 +37,25 @@ describe("stripAiCommentsFromContent", () => {
     const input = "line one\nline two";
     expect(stripAiCommentsFromContent(input)).toEqual({ content: input, removed: 0 });
   });
+
+  it("does NOT corrupt a marker that lives inside a string literal", () => {
+    const cases = [
+      `const s = "// AI_COMMENT: example";`,
+      `const AI_COMMENT_MARKER_SYNTAX = "// AI_COMMENT: ...";`,
+      `log('# AI_COMMENT: note');`,
+      "const t = `<!-- AI_COMMENT: x -->`;",
+    ];
+    for (const input of cases) {
+      expect(stripAiCommentsFromContent(input)).toEqual({ content: input, removed: 0 });
+    }
+  });
+
+  it("strips a real trailing marker even when the code has an earlier closed string", () => {
+    const input = `url = "http://x"; // AI_COMMENT: note`;
+    const { content, removed } = stripAiCommentsFromContent(input);
+    expect(removed).toBe(1);
+    expect(content).toBe(`url = "http://x";`);
+  });
 });
 
 describe("stripAiCommentMarkers", () => {

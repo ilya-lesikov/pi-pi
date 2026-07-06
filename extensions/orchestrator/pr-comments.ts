@@ -75,20 +75,28 @@ export async function detectPrTarget(exec: ExecFn, repoPath: string): Promise<Pr
   try {
     const res = await exec(
       "gh",
-      ["pr", "view", "--json", "number,headRefOid,headRepositoryOwner,headRepository"],
+      ["pr", "view", "--json", "number,headRefOid,url"],
       { cwd: repoPath, timeout: 10000 },
     );
     if (res.code !== 0) return null;
     const parsed = JSON.parse(res.stdout);
     const number = typeof parsed?.number === "number" ? parsed.number : Number(parsed?.number);
     const headSha = typeof parsed?.headRefOid === "string" ? parsed.headRefOid.trim() : "";
-    const owner = typeof parsed?.headRepositoryOwner?.login === "string" ? parsed.headRepositoryOwner.login : "";
-    const repo = typeof parsed?.headRepository?.name === "string" ? parsed.headRepository.name : "";
-    if (!Number.isFinite(number) || number <= 0 || !headSha || !owner || !repo) return null;
-    return { number, headSha, owner, repo };
+    // Review comments must be created against the BASE repository, not the head
+    // fork. The PR `url` (https://github.com/<owner>/<repo>/pull/<n>) is the base
+    // repo, so derive owner/repo from it rather than from headRepository*.
+    const base = parseBaseRepoFromUrl(typeof parsed?.url === "string" ? parsed.url : "");
+    if (!Number.isFinite(number) || number <= 0 || !headSha || !base) return null;
+    return { number, headSha, owner: base.owner, repo: base.repo };
   } catch {
     return null;
   }
+}
+
+export function parseBaseRepoFromUrl(url: string): { owner: string; repo: string } | null {
+  const match = url.match(/github\.com[/:]([^/]+)\/([^/]+?)(?:\.git)?\/pull\/\d+/);
+  if (!match) return null;
+  return { owner: match[1], repo: match[2] };
 }
 
 // Post one line-anchored PR review comment per anchor via the GitHub pulls API.

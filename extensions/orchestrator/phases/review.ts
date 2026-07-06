@@ -31,6 +31,11 @@ function anchoringInstructions(mode: ReviewAnchoringMode, reviewsDir: string): s
     "",
     "Anchor the accepted findings at their locations. Use the `ANCHORS:` blocks the reviewers emitted",
     `(in ${reviewsDir}/) as the source of file:line for each finding — do NOT invent locations.`,
+    "",
+    "In the synthesized final-review file, you MUST include a machine-readable `ANCHORS:` block for the accepted findings — one line per finding in EXACTLY this format (the extension parses these lines to post PR comments):",
+    "ANCHORS:",
+    "<relative/path/from/repo/root>:<line> — <one-line finding>",
+    "Use `ANCHORS:` followed by `(none)` if there are no anchorable accepted findings.",
   ];
   if (wantsAiComment) {
     lines.push(

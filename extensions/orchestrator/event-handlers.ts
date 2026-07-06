@@ -459,6 +459,14 @@ async function maybePostPrComments(orchestrator: Orchestrator, finalReviewPath: 
   const mode = active.state.reviewAnchoringMode;
   if (mode !== "pr" && mode !== "ai_comment_pr") return;
 
+  // Idempotency: each synthesized final-review file posts to the PR at most once.
+  // The synthesizer often edits the file after first writing it (typo/append),
+  // which would otherwise re-post the full anchor set as duplicate PR comments.
+  const posted = active.state.prCommentedReviewFiles ?? [];
+  if (posted.includes(finalReviewPath)) return;
+  active.state.prCommentedReviewFiles = [...posted, finalReviewPath];
+  try { saveTask(active.dir, active.state); } catch {}
+
   const anchors = parseReviewAnchorsFromFile(finalReviewPath);
   if (anchors.length === 0) {
     orchestrator.safeSendUserMessage("[PI-PI] PR comments requested but no anchorable findings (path:line) were found in the synthesized review — skipped PR posting.");
@@ -467,20 +475,38 @@ async function maybePostPrComments(orchestrator: Orchestrator, finalReviewPath: 
 
   const repos = active.state.repos ?? [];
   const rootRepo = repos.find((r) => r.isRoot) ?? repos[0];
-  const repoPath = rootRepo?.path ?? orchestrator.cwd;
+  const rootPath = rootRepo?.path ?? orchestrator.cwd;
   const exec = (cmd: string, args: string[], opts: { cwd: string; timeout?: number }) => orchestrator.pi.exec(cmd, args, opts);
 
-  const target = await detectPrTarget(exec, repoPath);
-  if (!target) {
-    orchestrator.safeSendUserMessage("[PI-PI] PR comments requested but no authenticated GitHub PR was detected for this branch — findings remain in the review report" + (mode === "ai_comment_pr" ? " and AI_COMMENT markers." : "."));
-    return;
+  // Attribute each anchor to the registered repo that actually contains its path
+  // (anchors carry repo-relative paths). This lets multi-repo reviews post each
+  // repo's findings to that repo's PR rather than dumping everything on root.
+  const byRepo = new Map<string, typeof anchors>();
+  for (const anchor of anchors) {
+    const repo = repos.find((r) => existsSync(join(r.path, anchor.path))) ?? rootRepo;
+    const key = repo?.path ?? rootPath;
+    const list = byRepo.get(key) ?? [];
+    list.push(anchor);
+    byRepo.set(key, list);
   }
 
-  const result = await postPrLineComments(exec, repoPath, target, anchors);
-  const parts = [`[PI-PI] Posted ${result.posted} PR line comment(s) to PR #${target.number} from your GitHub account.`];
-  if (result.skipped.length > 0) {
-    parts.push(`${result.skipped.length} finding(s) could not be mapped to the PR diff and were skipped:`);
-    parts.push(...result.skipped.map((a) => `  - ${a.path}:${a.line}`));
+  let anyPr = false;
+  const parts: string[] = [];
+  for (const [repoPath, repoAnchors] of byRepo) {
+    const target = await detectPrTarget(exec, repoPath);
+    if (!target) continue;
+    anyPr = true;
+    const result = await postPrLineComments(exec, repoPath, target, repoAnchors);
+    parts.push(`[PI-PI] Posted ${result.posted} PR line comment(s) to PR #${target.number} from your GitHub account.`);
+    if (result.skipped.length > 0) {
+      parts.push(`${result.skipped.length} finding(s) could not be mapped to the PR diff and were skipped:`);
+      parts.push(...result.skipped.map((a) => `  - ${a.path}:${a.line}`));
+    }
+  }
+
+  if (!anyPr) {
+    orchestrator.safeSendUserMessage("[PI-PI] PR comments requested but no authenticated GitHub PR was detected for the reviewed repositories — findings remain in the review report" + (mode === "ai_comment_pr" ? " and AI_COMMENT markers." : "."));
+    return;
   }
   orchestrator.safeSendUserMessage(parts.join("\n"));
 }
@@ -1059,26 +1085,32 @@ function registerMainTraceHooks(orchestrator: Orchestrator): void {
     tracer?.traceMain("turn_end", { turnIndex: event.turnIndex, message: event.message, toolResults: event.toolResults });
   });
   pi.on("message_start", async (event) => {
+    markMainTurnActivity(orchestrator);
     const tracer = getTracer();
     tracer?.traceMain("message_start", { turnIndex: tracer.turnIndex, message: event.message });
   });
   pi.on("message_update", async (event) => {
+    markMainTurnActivity(orchestrator);
     const tracer = getTracer();
     tracer?.traceMain("message_update", { turnIndex: tracer.turnIndex, assistantMessageEvent: event.assistantMessageEvent });
   });
   pi.on("message_end", async (event) => {
+    markMainTurnActivity(orchestrator);
     const tracer = getTracer();
     tracer?.traceMain("message_end", { turnIndex: tracer.turnIndex, message: event.message });
   });
   pi.on("tool_execution_start", async (event) => {
+    markMainTurnActivity(orchestrator);
     const tracer = getTracer();
     tracer?.traceMain("tool_execution_start", { turnIndex: tracer.turnIndex, toolCallId: event.toolCallId, toolName: event.toolName, args: event.args });
   });
   pi.on("tool_execution_update", async (event) => {
+    markMainTurnActivity(orchestrator);
     const tracer = getTracer();
     tracer?.traceMain("tool_execution_update", { turnIndex: tracer.turnIndex, toolCallId: event.toolCallId, toolName: event.toolName, args: event.args, partialResult: event.partialResult });
   });
   pi.on("tool_execution_end", async (event) => {
+    markMainTurnActivity(orchestrator);
     const tracer = getTracer();
     tracer?.traceMain("tool_execution_end", { turnIndex: tracer.turnIndex, toolCallId: event.toolCallId, toolName: event.toolName, result: event.result, isError: event.isError });
   });
@@ -2206,7 +2238,9 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
         isPathInside(codeReviewsDir, resolvedWrite) &&
         /_final_pass-\d+\.md$/.test(basename(resolvedWrite))
       ) {
-        void maybePostPrComments(orchestrator, resolvedWrite);
+        void maybePostPrComments(orchestrator, resolvedWrite).catch((err) =>
+          getLogger().debug({ s: "pr-comments", err: err?.message }, "PR comment posting failed"),
+        );
       }
 
       const ppDir = resolve(orchestrator.cwd, ".pp");

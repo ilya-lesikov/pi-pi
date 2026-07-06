@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   parseReviewAnchors,
+  parseBaseRepoFromUrl,
   detectPrTarget,
   postPrLineComments,
   PI_PI_FOOTER,
@@ -58,7 +59,7 @@ describe("detectPrTarget", () => {
     expect(await detectPrTarget(exec, "/repo")).toBeNull();
   });
 
-  it("parses number, head sha, owner, repo", async () => {
+  it("derives owner/repo from the PR url (base repo), keeping head SHA as commit_id", async () => {
     const exec: ExecFn = vi.fn(async (_c, args) => {
       if (args[0] === "auth") return { code: 0, stdout: "", stderr: "" };
       return {
@@ -66,13 +67,37 @@ describe("detectPrTarget", () => {
         stdout: JSON.stringify({
           number: 42,
           headRefOid: "abc123",
-          headRepositoryOwner: { login: "octo" },
-          headRepository: { name: "widget" },
+          url: "https://github.com/octo/widget/pull/42",
         }),
         stderr: "",
       };
     });
     expect(await detectPrTarget(exec, "/repo")).toEqual({ number: 42, headSha: "abc123", owner: "octo", repo: "widget" });
+  });
+
+  it("targets the base repo for a fork PR, not the head fork", async () => {
+    const exec: ExecFn = vi.fn(async (_c, args) => {
+      if (args[0] === "auth") return { code: 0, stdout: "", stderr: "" };
+      return {
+        code: 0,
+        stdout: JSON.stringify({
+          number: 7,
+          headRefOid: "ff00",
+          url: "https://github.com/upstream-org/proj/pull/7",
+        }),
+        stderr: "",
+      };
+    });
+    expect(await detectPrTarget(exec, "/repo")).toEqual({ number: 7, headSha: "ff00", owner: "upstream-org", repo: "proj" });
+  });
+});
+
+describe("parseBaseRepoFromUrl", () => {
+  it("extracts owner/repo from a PR url", () => {
+    expect(parseBaseRepoFromUrl("https://github.com/octo/widget/pull/42")).toEqual({ owner: "octo", repo: "widget" });
+  });
+  it("returns null for a non-PR url", () => {
+    expect(parseBaseRepoFromUrl("https://github.com/octo/widget")).toBeNull();
   });
 });
 
