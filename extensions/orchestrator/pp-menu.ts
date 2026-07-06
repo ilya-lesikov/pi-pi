@@ -31,6 +31,7 @@ import { cancelPendingPlannotatorWait, openPlannotator, waitForPlannotatorResult
 import { advanceBanner } from "./messages.js";
 import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
 import { spawnCodeReviewers } from "./phases/review.js";
+import { stripAiCommentMarkersForActiveTask } from "./ai-comment-cleanup.js";
 import { spawnBrainstormReviewers } from "./phases/brainstorm.js";
 import { nextPhase } from "./phases/machine.js";
 import { getAllAliases, getModelFamilies, getModelInfo, resolveModel, updateRegistryFromAvailableModels } from "./model-registry.js";
@@ -351,6 +352,8 @@ async function finishTask(orchestrator: Orchestrator, ctx: any): Promise<string>
   const dir = orchestrator.active.dir;
 
   orchestrator.lastCtx = ctx;
+
+  await stripAiCommentMarkersForActiveTask(orchestrator, ctx);
 
   orchestrator.active.state.phase = "done";
   orchestrator.active.state.reviewCycle = null;

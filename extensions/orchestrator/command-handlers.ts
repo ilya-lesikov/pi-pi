@@ -6,6 +6,7 @@ import { spawnPlanners } from "./phases/planning.js";
 import { Orchestrator } from "./orchestrator.js";
 import { groupFilesByRepo } from "./repo-utils.js";
 import { getEffectiveMode, saveTask } from "./state.js";
+import { stripAiCommentMarkersForActiveTask } from "./ai-comment-cleanup.js";
 import { getLogger } from "./log.js";
 import { handleSpawnResult } from "./spawn-cleanup.js";
 
@@ -92,6 +93,8 @@ export async function transitionToNextPhase(
   if (next === "done") {
     const name = orchestrator.active.description;
     const type = orchestrator.active.type;
+
+    await stripAiCommentMarkersForActiveTask(orchestrator, ctx);
 
     orchestrator.abortAllSubagents();
     unregisterAgentDefinitions(orchestrator.pi);
