@@ -2137,10 +2137,21 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     // so this works whether or not `active` is still set (done cleanup nulls it).
     if (transitioning) {
       const summary = orchestrator.transitionController.currentSummary() || "Phase transition in progress.";
+      // Task-boundary discard: keep NO verbatim transcript beyond the summary so
+      // the finished/replaced task cannot leak into the next task. Point
+      // firstKeptEntryId at the newest branch entry (nothing before it is kept
+      // verbatim). Phase transitions keep the default recent window so
+      // legitimate context carries forward.
+      const branchEntries = (event as any).branchEntries as Array<{ id: string }> | undefined;
+      const lastEntryId = branchEntries && branchEntries.length > 0 ? branchEntries[branchEntries.length - 1].id : undefined;
+      const firstKeptEntryId =
+        orchestrator.transitionController.isDiscardTransition() && lastEntryId
+          ? lastEntryId
+          : event.preparation.firstKeptEntryId;
       return {
         compaction: {
           summary,
-          firstKeptEntryId: event.preparation.firstKeptEntryId,
+          firstKeptEntryId,
           tokensBefore: event.preparation.tokensBefore,
         },
       };

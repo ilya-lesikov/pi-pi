@@ -430,7 +430,8 @@ export class Orchestrator {
       this.lastCtx = ctx;
       await this.transitionController.requestTransition({
         kind: "done",
-        summary: `Starting new ${type} task. Previous conversation discarded.`,
+        discard: true,
+        summary: `A new, unrelated ${type} task is starting. The previous task is finished — DISCARD its entire conversation. Do NOT carry forward, reference, or act on any prior task's messages, phase, plan, or aborted turns; treat the new task as a clean slate.`,
       });
     }
 

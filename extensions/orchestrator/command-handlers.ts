@@ -101,7 +101,8 @@ export async function transitionToNextPhase(
     // Route the task-done compaction through the controller as a "done" target.
     void orchestrator.transitionController.requestTransition({
       kind: "done",
-      summary: `Task "${name}" (${type}) completed.`,
+      discard: true,
+      summary: `Task "${name}" (${type}) is finished — DISCARD its entire conversation. Do NOT carry forward, reference, or act on any of this task's messages, phase, plan, or aborted turns; the next task starts from a clean slate.`,
     });
     ctx.ui.notify("Task completed!", "info");
     return { ok: true };

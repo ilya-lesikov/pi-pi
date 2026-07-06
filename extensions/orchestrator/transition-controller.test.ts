@@ -205,3 +205,103 @@ describe("TransitionController phase transition flow", () => {
     expect(onResume).toHaveBeenCalledOnce();
   });
 });
+
+describe("TransitionController done supersession (task-boundary discard cannot be swallowed)", () => {
+  it("a done request supersedes a PENDING transition in place (no swallowed discard)", async () => {
+    const { host, session, calls, completeCompaction } = makeHost({ idle: false });
+    const c = new TransitionController(host, session);
+    // A phase transition is pending (not yet compacting: waiting for agent_end).
+    const staleResume = vi.fn();
+    const pPhase = c.requestTransition({ kind: "phase", summary: "phase", onResume: staleResume, instruction: "Begin working." });
+    expect(c.getState()).toBe("pending");
+    // A new-task done arrives before agent_end. It must replace the pending req.
+    const pDone = c.requestTransition({ kind: "done", discard: true, summary: "DISCARD" });
+    expect(c.getState()).toBe("pending");
+    expect(c.currentSummary()).toBe("DISCARD");
+    expect(c.isDiscardTransition()).toBe(true);
+
+    c.onAgentEnd();
+    expect(calls.compactStarted).toBe(1);
+    completeCompaction();
+    await Promise.all([pPhase, pDone]);
+    // The superseded phase resume/instruction must NOT have run.
+    expect(staleResume).not.toHaveBeenCalled();
+    expect(calls.userMessages).toHaveLength(0);
+    expect(c.getState()).toBe("running");
+  });
+
+  it("queues a done request behind a COMPACTING transition and runs its discard after", async () => {
+    const { host, session, calls, completeCompaction } = makeHost({ idle: false });
+    const c = new TransitionController(host, session);
+    const staleResume = vi.fn();
+    const pPhase = c.requestTransition({ kind: "phase", summary: "phase", onResume: staleResume, instruction: "Begin working." });
+    c.onAgentEnd();
+    expect(c.getState()).toBe("compacting");
+
+    // done arrives mid-compaction — must be queued, not dropped, not double-resumed.
+    let doneResolved = false;
+    const pDone = c.requestTransition({ kind: "done", discard: true, summary: "DISCARD" }).then(() => { doneResolved = true; });
+    expect(calls.compactStarted).toBe(1);
+
+    // First (phase) compaction settles. The superseded phase instruction must be
+    // suppressed because a done is queued behind it; the queued done then runs.
+    completeCompaction();
+    await pPhase;
+    expect(staleResume).toHaveBeenCalledOnce(); // phase onResume still ran (it was the active req)
+    // The queued done must not have resolved yet — its own compaction must run.
+    expect(doneResolved).toBe(false);
+    expect(calls.compactStarted).toBe(2);
+    expect(c.currentSummary()).toBe("DISCARD");
+    expect(c.isDiscardTransition()).toBe(true);
+
+    completeCompaction();
+    await pDone;
+    expect(doneResolved).toBe(true);
+    expect(c.getState()).toBe("running");
+    // The superseded phase instruction ("Begin working.") must NOT have been sent.
+    expect(calls.userMessages).toHaveLength(0);
+  });
+
+  it("queues a done request behind a RESUMING transition", async () => {
+    const { host, session, calls, completeCompaction } = makeHost({ idle: false });
+    const c = new TransitionController(host, session);
+    // onResume that lets us inject the done request while state === "resuming".
+    let injected: Promise<void> | null = null;
+    const pPhase = c.requestTransition({
+      kind: "phase",
+      summary: "phase",
+      onResume: () => {
+        expect(c.getState()).toBe("resuming");
+        injected = c.requestTransition({ kind: "done", discard: true, summary: "DISCARD" });
+      },
+      instruction: "Begin working.",
+    });
+    c.onAgentEnd();
+    completeCompaction();
+    await pPhase;
+    // A done was queued during resuming — it must run its own compaction now.
+    expect(injected).not.toBeNull();
+    expect(calls.compactStarted).toBe(2);
+    completeCompaction();
+    await injected!;
+    expect(c.getState()).toBe("running");
+    expect(c.isDiscardTransition()).toBe(false);
+  });
+
+  it("last-wins when two done requests queue behind an in-flight transition", async () => {
+    const { host, session, calls, completeCompaction } = makeHost({ idle: false });
+    const c = new TransitionController(host, session);
+    const pPhase = c.requestTransition({ kind: "phase", summary: "phase", onResume: () => {}, instruction: "go" });
+    c.onAgentEnd();
+    const pDone1 = c.requestTransition({ kind: "done", discard: true, summary: "FIRST" });
+    const pDone2 = c.requestTransition({ kind: "done", discard: true, summary: "SECOND" });
+
+    completeCompaction(); // phase settles -> queued done runs
+    await pPhase;
+    expect(c.currentSummary()).toBe("SECOND");
+    completeCompaction(); // done settles -> both queued callers resolve
+    await Promise.all([pDone1, pDone2]);
+    expect(c.getState()).toBe("running");
+    expect(calls.compactStarted).toBe(2);
+  });
+});

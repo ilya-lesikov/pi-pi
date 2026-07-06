@@ -509,6 +509,30 @@ describe("transitionToNextPhase", () => {
     expect(cleanupSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("completing a task (next === done) requests a discard transition", async () => {
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi as any);
+    const taskDir = makeTempDir();
+    orchestrator.cwd = taskDir;
+    orchestrator.config = makeConfig() as any;
+    orchestrator.active = makeTransitionTask(taskDir, "quick");
+    const ctx = makeTransitionCtx();
+    vi.spyOn(machineModule, "validateExitCriteria").mockReturnValue({ ok: true });
+    vi.spyOn(orchestrator, "cleanupActive").mockImplementation(async () => {
+      orchestrator.active = null;
+    });
+    vi.spyOn(orchestrator, "abortAllSubagents").mockImplementation(() => undefined);
+    const reqSpy = vi.spyOn(orchestrator.transitionController, "requestTransition").mockReturnValue(Promise.resolve());
+
+    const result = await transitionToNextPhase(orchestrator, ctx);
+
+    expect(result).toEqual({ ok: true });
+    const doneCall = reqSpy.mock.calls.find(([req]: any[]) => req.kind === "done");
+    expect(doneCall).toBeDefined();
+    expect((doneCall![0] as any).discard).toBe(true);
+    expect((doneCall![0] as any).summary).toContain("DISCARD");
+  });
+
   it("skips afterImplement when phase is not implement", async () => {
     const pi = makePi();
     const orchestrator = new Orchestrator(pi as any);

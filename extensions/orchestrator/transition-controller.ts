@@ -26,6 +26,13 @@ export interface TransitionRequest {
   kind: TransitionKind;
   // Compaction summary used by the session_before_compact handler.
   summary?: string;
+  // Task-boundary discard: the previous task is finished/replaced and its
+  // conversation must be genuinely dropped (not softly summarized) so it cannot
+  // leak into the next task. Drives session_before_compact to keep no verbatim
+  // transcript beyond the summary. Only set on finished/replaced-task "done"
+  // transitions (startTask/finishTask/task-complete) — NOT pause/stop (those
+  // resume later and must preserve context).
+  discard?: boolean;
   // Runs after compaction completes (or is skipped), before the resume message.
   // Used for phase transitions to switch model + inject context/artifacts and to
   // spawn planners at the right moment. Throwing here is logged, not fatal.
@@ -80,6 +87,11 @@ export class TransitionController {
   private active: TransitionRequest | null = null;
   // Resolvers for callers that await the transition (done/stop/new-task paths).
   private waiters: Array<() => void> = [];
+  // A single "done" transition queued behind an in-flight (compacting/resuming)
+  // transition it supersedes. Run once the current transition settles so its
+  // discard compaction is guaranteed to execute. Last-wins (never a queue).
+  private pendingNext: TransitionRequest | null = null;
+  private pendingNextWaiters: Array<() => void> = [];
 
   constructor(
     private readonly host: TransitionHost,
@@ -141,6 +153,13 @@ export class TransitionController {
     return this.active?.summary ?? "";
   }
 
+  // True when the in-flight transition is a task-boundary discard (see
+  // TransitionRequest.discard). Lets session_before_compact drop the verbatim
+  // transcript window instead of keeping the default recent tokens.
+  isDiscardTransition(): boolean {
+    return this.active?.discard === true;
+  }
+
   // Outbound plain user-message. The ONLY path for main-session user messaging.
   // Plain user messages (pi.sendUserMessage) ALWAYS start a turn — even with
   // deliverAs:"steer" when idle (SDK prompt()) — so this only serves the
@@ -168,8 +187,29 @@ export class TransitionController {
   requestTransition(req: TransitionRequest): Promise<void> {
     const log = getLogger();
     if (this.state !== "running") {
-      // A transition is already in flight. Coalesce: ignore the new request but
-      // still attach the waiter so the caller is released when this settles.
+      // A transition is already in flight. A task-boundary discard (kind:"done")
+      // must NOT be silently skipped by an in-flight/aborted transition — that
+      // is the concrete cause of prior-task context leaking into the next task.
+      if (req.kind === "done") {
+        if (this.state === "pending") {
+          // Not compacting yet (waiting for agent_end). Replace the pending
+          // request in place: its onResume/instruction is dropped (superseded),
+          // its waiters ride along and resolve when the done transition settles.
+          log.debug({ s: "controller", superseded: this.active?.kind }, "done supersedes pending transition");
+          this.active = req;
+          const promise = new Promise<void>((resolve) => this.waiters.push(resolve));
+          if (this.host.isIdle()) this.beginCompaction();
+          return promise;
+        }
+        // compacting/resuming: a compaction is already in flight for the old
+        // request. Queue the done request to run once it settles so its discard
+        // compaction actually executes; suppress the superseded instruction.
+        // Last-wins if one is already queued (never an unbounded queue).
+        log.debug({ s: "controller", state: this.state }, "done queued behind in-flight transition");
+        this.pendingNext = req;
+        return new Promise<void>((resolve) => this.pendingNextWaiters.push(resolve));
+      }
+      // phase (or other) while not running: keep conservative coalescing.
       if (req.kind === "phase") {
         log.warn({ s: "controller", state: this.state }, "phase transition coalesced while not running — onResume/instruction dropped");
       } else {
@@ -247,7 +287,10 @@ export class TransitionController {
     } catch (err: any) {
       getLogger().error({ s: "controller", err: err?.message ?? String(err) }, "onResume failed");
     }
-    if (req?.instruction) {
+    // Suppress the superseded transition's resume instruction when a done
+    // request is queued to supersede it (its followUp would resume a task that
+    // is about to be discarded).
+    if (req?.instruction && !this.pendingNext) {
       this.send(req.instruction, "instruction");
     }
     this.active = null;
@@ -255,5 +298,20 @@ export class TransitionController {
     const waiters = this.waiters;
     this.waiters = [];
     for (const w of waiters) w();
+    // A done transition queued while this one was in flight: run it now. We are
+    // post-compaction with no agent turn in flight, so begin its compaction
+    // directly rather than through the isIdle/agent_end gate. Its queued callers
+    // ride the new transition's waiters, so they resolve only AFTER the discard
+    // compaction settles.
+    if (this.pendingNext) {
+      const next = this.pendingNext;
+      const resolvers = this.pendingNextWaiters;
+      this.pendingNext = null;
+      this.pendingNextWaiters = [];
+      this.active = next;
+      this.state = "pending";
+      for (const r of resolvers) this.waiters.push(r);
+      this.beginCompaction();
+    }
   }
 }

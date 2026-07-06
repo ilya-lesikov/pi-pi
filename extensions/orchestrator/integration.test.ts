@@ -3773,6 +3773,54 @@ describe("compaction", () => {
     expect(result.compaction.summary).toBe("Task done summary");
   });
 
+  it("task-boundary discard uses distinct discard wording and keeps no verbatim transcript", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    orchestrator.lastCtx = makeCtx({ isIdle: vi.fn().mockReturnValue(false) });
+
+    void orchestrator.transitionController.requestTransition({
+      kind: "done",
+      discard: true,
+      summary: "Task \"x\" (implement) is finished — DISCARD its entire conversation. Do NOT carry forward.",
+    });
+    orchestrator.transitionController.onAgentEnd();
+    const beforeCompact = pi._handlers.get("session_before_compact")!;
+    const result = await beforeCompact(
+      {
+        preparation: { firstKeptEntryId: "old-kept", tokensBefore: 999 },
+        branchEntries: [{ id: "e-a" }, { id: "e-b" }, { id: "newest" }],
+      },
+      {},
+    );
+
+    // Distinct from the phase-transition summary, and instructs discard.
+    expect(result.compaction.summary).not.toBe("Phase transition in progress.");
+    expect(result.compaction.summary).toContain("DISCARD");
+    // Verbatim window collapsed to the newest entry — nothing prior kept.
+    expect(result.compaction.firstKeptEntryId).toBe("newest");
+  });
+
+  it("phase transition keeps the default recent verbatim window (no discard)", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    orchestrator.lastCtx = makeCtx({ isIdle: vi.fn().mockReturnValue(false) });
+
+    void orchestrator.transitionController.requestTransition({ kind: "phase", summary: "Phase summary text" });
+    orchestrator.transitionController.onAgentEnd();
+    const beforeCompact = pi._handlers.get("session_before_compact")!;
+    const result = await beforeCompact(
+      {
+        preparation: { firstKeptEntryId: "old-kept", tokensBefore: 111 },
+        branchEntries: [{ id: "e-a" }, { id: "newest" }],
+      },
+      {},
+    );
+
+    expect(result.compaction.summary).toBe("Phase summary text");
+    expect(result.compaction.firstKeptEntryId).toBe("old-kept");
+  });
+
+
   it("session_before_compact re-injects artifacts after natural compaction", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);

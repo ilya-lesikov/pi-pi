@@ -392,7 +392,8 @@ async function finishTask(orchestrator: Orchestrator, ctx: any): Promise<string>
   // is over, nothing awaits this compaction).
   void orchestrator.transitionController.requestTransition({
     kind: "done",
-    summary: `Task "${name}" (${type}) completed.`,
+    discard: true,
+    summary: `Task "${name}" (${type}) is finished — DISCARD its entire conversation. Do NOT carry forward, reference, or act on any of this task's messages, phase, plan, or aborted turns; the next task starts from a clean slate.`,
   });
 
   const urExists = existsSync(join(dir, "USER_REQUEST.md"));
