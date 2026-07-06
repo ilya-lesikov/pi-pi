@@ -30,7 +30,6 @@ import { resolveModel, getModelInfo, findLatestFamilyMatch, setSubscriptionFallb
 import { buildRepoContext } from "./agents/repo-context.js";
 import { getLogger, addTaskDestination, removeTaskDestination, setLogLevel } from "./log.js";
 import { handleSpawnResult } from "./spawn-cleanup.js";
-import { DelegationDetector } from "./delegation-nudge.js";
 import { getTracer } from "./tracer.js";
 import { TransitionController, type TransitionHost } from "./transition-controller.js";
 
@@ -79,13 +78,6 @@ export class Orchestrator {
   // user notification.
   consecutiveNudges = 0;
   nudgeHalted = false;
-  // Independent anti-spam guard for the telemetry-driven delegation nudge (broad-search /
-  // stuck-debug). Kept SEPARATE from consecutiveNudges/nudgeHalted so it can never corrupt
-  // the continuation-halt logic. Same reset discipline: cleared on task reset and on genuine
-  // (non-[PI-PI]) user re-engagement, never on a controller-injected restart.
-  delegationNudges = 0;
-  delegationNudgeHalted = false;
-  delegationDetector = new DelegationDetector();
   pendingSubagentSpawns = 0;
   errorRetryCount = 0;
   // Halts the API-error auto-retry once errorRetryCount exceeds its cap, mirroring
@@ -539,7 +531,6 @@ export class Orchestrator {
     this.injectContextAndArtifacts(this.active.dir, this.active.state.phase);
 
     this.phaseStartTime = Date.now();
-    this.delegationDetector.onPhaseChange(getTracer()?.turnIndex ?? 0);
     const isGenericDescription = ["implement", "debug", "brainstorm", "review"].includes(this.active.description);
     const isGenericQuickDescription = this.active.description === "quick";
     const hasInheritedTaskContext = Boolean(fromTaskDir && type === "implement");
@@ -612,9 +603,6 @@ export class Orchestrator {
     this.commitReminderSent = false;
     this.consecutiveNudges = 0;
     this.nudgeHalted = false;
-    this.delegationNudges = 0;
-    this.delegationNudgeHalted = false;
-    this.delegationDetector.reset();
     this.phaseStartTime = 0;
     this.userGatePending = false;
     this.failedPlannerVariants = [];
@@ -781,7 +769,6 @@ export class Orchestrator {
       summary: summary || "Phase transition — previous phase completed.",
       onResume: async () => {
         this.phaseStartTime = Date.now();
-        this.delegationDetector.onPhaseChange(getTracer()?.turnIndex ?? 0);
         if (this.active && (phase === "plan" || phase === "implement")) {
           const modelConfig = phase === "plan" ? this.config.agents.orchestrators.plan : this.config.agents.orchestrators.implement;
           await this.switchModel(ctx, modelConfig.model, modelConfig.thinking);
