@@ -8,7 +8,7 @@ import { TOOLS_BLOCK, ALL_CBM_TOOLS, EXA_TOOLS, PRINCIPLES_BLOCK } from "./tool-
 export function createCodeReviewerAgent(
   variant: string,
   variants: Record<string, VariantConfig>,
-  taskArtifacts: { userRequest: string; research: string; synthesizedPlan: string; manifest?: { title: string; path: string }[] },
+  taskArtifacts: { userRequest: string; research: string; synthesizedPlan?: string; manifest?: { title: string; path: string }[] },
   outputPath: string,
   contextDirs: string[],
   phase?: string,
@@ -21,6 +21,9 @@ export function createCodeReviewerAgent(
   const contextFiles = loadAllContextFiles(contextDirs, "codeReviewer", "system", phase, getModelInfo(variantConfig.model));
   const contextBlock = contextFiles.map((f) => f.content).join("\n\n");
   const repoContext = buildRepoContext(repos);
+  // A standalone review task (phase "review") has no synthesized plan: review the
+  // diff against USER_REQUEST.md/RESEARCH.md, not an implementation plan.
+  const hasPlan = typeof taskArtifacts.synthesizedPlan === "string" && taskArtifacts.synthesizedPlan.trim().length > 0;
 
   return {
     frontmatter: {
@@ -53,11 +56,15 @@ export function createCodeReviewerAgent(
       "3. Read changed files for full context",
       "4. Run lsp diagnostics on changed files",
       "5. Use lsp findReferences to check callers of modified functions",
-      "6. Check the implementation against the plan",
+      hasPlan
+        ? "6. Check the implementation against the plan"
+        : "6. Check the changes against USER_REQUEST.md and RESEARCH.md (there is no implementation plan for a standalone review)",
       "",
       "Review criteria:",
       "- Bugs: logic errors, off-by-ones, null handling, race conditions",
-      "- Correctness: does it match the plan and user request?",
+      hasPlan
+        ? "- Correctness: does it match the plan and user request?"
+        : "- Correctness: does it match the user request and the reviewed scope?",
       "- Quality: error handling, edge cases, type safety",
       "- Missing: untested paths, unhandled errors, incomplete implementations",
       "",
@@ -81,6 +88,16 @@ export function createCodeReviewerAgent(
       "- MINOR: (nice to have)",
       "- OPEN QUESTIONS: (low-confidence concerns, speculative follow-ups)",
       "",
+      "After the findings, include a machine-readable ANCHORS block so the synthesizer can place",
+      "the findings at their exact locations (in source AI_COMMENT markers and/or GitHub PR line comments).",
+      "Emit one line per actionable finding (CRITICAL/MAJOR/MINOR), in this EXACT format:",
+      "ANCHORS:",
+      "<relative/path/from/repo/root>:<line> — <severity>: <one-line finding>",
+      "Rules:",
+      "- Use the repo-relative path (as `git diff` shows it) and a single 1-based line number on the NEW side of the diff.",
+      "- One finding per line; omit findings you cannot pin to a concrete file:line (keep those in OPEN QUESTIONS).",
+      "- If there are no actionable findings, write `ANCHORS:` followed by `(none)`.",
+      "",
       "You may spawn ONLY explore/librarian subagents (subagent_type is REQUIRED — calls without it are rejected):",
     '- Agent(subagent_type="explore", ...) — codebase research. Prefer this for most lookups. Fast and cheap.',
     '- Agent(subagent_type="librarian", ...) — external docs, library APIs, web research.',
@@ -97,8 +114,7 @@ export function createCodeReviewerAgent(
       "=== RESEARCH ===",
       taskArtifacts.research,
       "",
-      "=== SYNTHESIZED PLAN ===",
-      taskArtifacts.synthesizedPlan,
+      ...(hasPlan ? ["=== SYNTHESIZED PLAN ===", taskArtifacts.synthesizedPlan as string, ""] : []),
       ...(repoContext ? [repoContext] : []),
       "",
       formatManifestBlock(taskArtifacts.manifest ?? []),

@@ -6,13 +6,50 @@ import { registerAgentDefinitions, spawnViaRpc, waitForCompletion } from "../age
 import { createCodeReviewerAgent } from "../agents/code-reviewer.js";
 import { getContextDirs, getLatestSynthesizedPlan, getArtifactManifest } from "../context.js";
 import type { RepoInfo } from "../repo-utils.js";
+import type { ReviewAnchoringMode } from "../state.js";
 import type { PhaseSend } from "../transition-controller.js";
 
 function isEnabled(value: { enabled?: boolean } | undefined): boolean {
   return value?.enabled !== false;
 }
 
-export function reviewSystemPrompt(taskDir: string, pass: number, phase?: string, mode?: "guided" | "autonomous"): string {
+// Reviewer→user anchoring marker (mirror of the user→reviewer `AI_REVIEW:` marker).
+// Kept as literal-token guidance (no regex/parser) so it matches the AI_REVIEW style.
+export const AI_COMMENT_MARKER_SYNTAX =
+  "(inside each file's native comment syntax, e.g. `// AI_COMMENT: ...`, `# AI_COMMENT: ...`, `<!-- AI_COMMENT: ... -->`)";
+
+function anchoringInstructions(mode: ReviewAnchoringMode, reviewsDir: string): string[] {
+  const wantsAiComment = mode === "ai_comment" || mode === "ai_comment_pr";
+  const wantsPr = mode === "pr" || mode === "ai_comment_pr";
+  if (!wantsAiComment && !wantsPr) {
+    return [
+      "",
+      "Anchoring: markdown only. Keep all findings in the synthesized review file above; do NOT edit source files or post to GitHub.",
+    ];
+  }
+  const lines: string[] = [
+    "",
+    "Anchor the accepted findings at their locations. Use the `ANCHORS:` blocks the reviewers emitted",
+    `(in ${reviewsDir}/) as the source of file:line for each finding — do NOT invent locations.`,
+  ];
+  if (wantsAiComment) {
+    lines.push(
+      "",
+      `AI_COMMENT source markers: for each accepted finding, insert an \`AI_COMMENT:\` marker ${AI_COMMENT_MARKER_SYNTAX} on or immediately above the cited line, briefly stating the finding. ` +
+        "This is the ONE source edit you are permitted (no fixes, no other changes). Do NOT touch lines you cannot anchor to a concrete finding. " +
+        "These markers are the reviewer→user channel — they will be addressed and removed later, and any left over are auto-stripped on task completion.",
+    );
+  }
+  if (wantsPr) {
+    lines.push(
+      "",
+      "GitHub PR line comments: the extension posts these from the user's account after this pass — you do NOT call `gh` yourself. Ensure every accepted finding has a precise `path:line` in the synthesized review so the extension can map it to the PR diff.",
+    );
+  }
+  return lines;
+}
+
+export function reviewSystemPrompt(taskDir: string, pass: number, phase?: string, mode?: "guided" | "autonomous", anchoringMode: ReviewAnchoringMode = "markdown"): string {
   // Each phase writes/loads its review outputs in a distinct directory:
   // brainstorm -> brainstorm-reviews, plan -> plan-reviews, everything else
   // (implement/review) -> code-reviews. The apply_feedback prompt must point the
@@ -46,6 +83,29 @@ export function reviewSystemPrompt(taskDir: string, pass: number, phase?: string
       "RESEARCH.md MUST keep exactly: ## Affected Code, ## Architecture Context, ## Constraints & Edge Cases, ## Open Questions (optional)",
       "Any other sections will fail validation.",
       "Use pp_write_state_file / pp_edit_state_file (NOT the generic write/edit) for these .pp state files — they keep the output compact and validate structure.",
+    ].join("\n");
+  }
+
+  // A standalone review task's "review" phase has nothing to implement: the output
+  // is the synthesized findings, optionally anchored into source (AI_COMMENT) and/or
+  // posted to the PR. So it must NOT get the "create a fix plan / implement / run
+  // afterImplement" tail that implement-phase review uses.
+  if (phase === "review") {
+    return [
+      `[PI-PI — REVIEW CYCLE (pass ${pass})]`,
+      "",
+      "Reviewer outputs are ready.",
+      `Read them from ${reviewsDir}/ and synthesize the findings.`,
+      "",
+      "You are a SYNTHESIZER: merge the reviewer outputs. Do NOT write your own review from scratch.",
+      `- Do NOT create the ${reviewsDirName}/ directory yourself — the extension manages it.`,
+      "- This is a standalone review: do NOT create a fix plan, implement fixes, run afterImplement commands, or commit.",
+      "",
+      "# Your job (in this order):",
+      `1. Read ALL reviewer outputs from ${reviewsDir}/`,
+      `2. Synthesize into ${reviewsDir}/<timestamp>_final_pass-${pass}.md`,
+      "3. Present the synthesis to the user",
+      ...anchoringInstructions(anchoringMode, reviewsDir),
     ].join("\n");
   }
 
@@ -132,8 +192,11 @@ export async function spawnCodeReviewers(
 
   const userRequest = readFileSync(urPath, "utf-8");
   const research = readFileSync(resPath, "utf-8");
-  const synthesizedPlan = getLatestSynthesizedPlan(taskDir);
-  if (!synthesizedPlan) {
+  // A standalone review task (phase "review") has no synthesized plan by design —
+  // reviewers assess the diff against USER_REQUEST.md/RESEARCH.md instead. The
+  // plan is only required where one legitimately exists (the implement phase).
+  const synthesizedPlan = phase === "review" ? undefined : (getLatestSynthesizedPlan(taskDir) ?? undefined);
+  if (phase !== "review" && !synthesizedPlan) {
     send(
       { customType: "pp-code-reviews-error", content: "Cannot start code review: no synthesized plan found.", display: true },
       "context",

@@ -379,7 +379,7 @@ export class Orchestrator {
 
     if (this.active.state.reviewCycle?.step === "apply_feedback") {
       const pass = this.active.state.reviewCycle.pass;
-      return reviewCycleSystemPrompt(this.active.dir, pass, this.active.state.phase, mode);
+      return reviewCycleSystemPrompt(this.active.dir, pass, this.active.state.phase, mode, this.active.state.reviewAnchoringMode ?? "markdown");
     }
 
     switch (this.active.state.phase) {

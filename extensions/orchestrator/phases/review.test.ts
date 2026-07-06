@@ -45,6 +45,37 @@ describe("reviewSystemPrompt apply_feedback wording", () => {
     expect(impl).toContain("Implement the fixes");
   });
 
+  it("standalone review phase omits the fix-plan/implement/afterImplement tail", () => {
+    const prompt = reviewSystemPrompt("/tmp/task", 1, "review", "guided");
+    expect(prompt).toContain("REVIEW CYCLE");
+    expect(prompt).toContain("standalone review");
+    expect(prompt).not.toContain("Create a fix plan");
+    expect(prompt).not.toContain("Implement the fixes");
+    expect(prompt).not.toContain("Run afterImplement commands");
+    expect(prompt).toContain("code-reviews/");
+  });
+
+  it("review phase markdown anchoring keeps findings in the review file only", () => {
+    const prompt = reviewSystemPrompt("/tmp/task", 1, "review", "guided", "markdown");
+    expect(prompt).toContain("markdown only");
+    expect(prompt).not.toContain("AI_COMMENT:");
+    expect(prompt).not.toContain("GitHub PR line comments");
+  });
+
+  it("review phase ai_comment anchoring instructs AI_COMMENT insertion, not fixes", () => {
+    const prompt = reviewSystemPrompt("/tmp/task", 1, "review", "guided", "ai_comment");
+    expect(prompt).toContain("AI_COMMENT:");
+    expect(prompt).toContain("ANCHORS:");
+    expect(prompt).not.toContain("GitHub PR line comments");
+  });
+
+  it("review phase ai_comment_pr anchoring covers both source markers and PR comments", () => {
+    const prompt = reviewSystemPrompt("/tmp/task", 1, "review", "guided", "ai_comment_pr");
+    expect(prompt).toContain("AI_COMMENT:");
+    expect(prompt).toContain("GitHub PR line comments");
+    expect(prompt).toContain("do NOT call `gh` yourself");
+  });
+
   it("points each phase at the directory its reviewers actually write to", () => {
     // plan reviewers write to plan-reviews (planning.ts) and outputs load from
     // plan-reviews (context.ts); the prompt must match, not code-reviews.
