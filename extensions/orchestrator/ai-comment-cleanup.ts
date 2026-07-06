@@ -73,6 +73,15 @@ export function stripAiCommentsFromContent(content: string): { content: string; 
   return { content: out.join("\n"), removed };
 }
 
+// True when the change from `before` to `after` only inserts and/or removes
+// `AI_COMMENT:` markers — i.e. stripping all such markers from both sides yields
+// identical text. Used to enforce the review-phase read-only exception at the
+// tool-call gate (the agent may touch AI_COMMENT markers and nothing else).
+export function isAiCommentOnlyChange(before: string, after: string): boolean {
+  if (before === after) return true;
+  return stripAiCommentsFromContent(before).content === stripAiCommentsFromContent(after).content;
+}
+
 // Strip AI_COMMENT markers from all tracked files in the given repos. Uses
 // `git grep` to find candidate files (fast, respects the index / .gitignore).
 // Best-effort: errors are swallowed so cleanup never blocks task completion.

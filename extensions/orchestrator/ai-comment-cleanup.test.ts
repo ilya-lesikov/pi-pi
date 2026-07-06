@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { mkdtempSync, writeFileSync, readFileSync, mkdirSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { stripAiCommentsFromContent, stripAiCommentMarkers, AI_COMMENT_TOKEN, type ExecFn } from "./ai-comment-cleanup.js";
+import { stripAiCommentsFromContent, stripAiCommentMarkers, isAiCommentOnlyChange, AI_COMMENT_TOKEN, type ExecFn } from "./ai-comment-cleanup.js";
 
 describe("stripAiCommentsFromContent", () => {
   it("drops full-line AI_COMMENT markers in various comment syntaxes", () => {
@@ -55,6 +55,38 @@ describe("stripAiCommentsFromContent", () => {
     const { content, removed } = stripAiCommentsFromContent(input);
     expect(removed).toBe(1);
     expect(content).toBe(`url = "http://x";`);
+  });
+});
+
+describe("isAiCommentOnlyChange", () => {
+  it("allows inserting an AI_COMMENT marker line", () => {
+    const before = "const x = 1;\nconst y = 2;";
+    const after = "const x = 1;\n// AI_COMMENT: off-by-one?\nconst y = 2;";
+    expect(isAiCommentOnlyChange(before, after)).toBe(true);
+  });
+
+  it("allows removing an AI_COMMENT marker line", () => {
+    const before = "const x = 1;\n// AI_COMMENT: note\nconst y = 2;";
+    const after = "const x = 1;\nconst y = 2;";
+    expect(isAiCommentOnlyChange(before, after)).toBe(true);
+  });
+
+  it("allows a trailing AI_COMMENT marker", () => {
+    expect(isAiCommentOnlyChange("const x = 1;", "const x = 1; // AI_COMMENT: hm")).toBe(true);
+  });
+
+  it("rejects an actual code change", () => {
+    expect(isAiCommentOnlyChange("const x = 1;", "const x = 2;")).toBe(false);
+  });
+
+  it("rejects a fix disguised alongside a marker", () => {
+    const before = "const x = 1;";
+    const after = "const x = 2; // AI_COMMENT: fixed";
+    expect(isAiCommentOnlyChange(before, after)).toBe(false);
+  });
+
+  it("treats an identical write as allowed", () => {
+    expect(isAiCommentOnlyChange("same", "same")).toBe(true);
   });
 });
 

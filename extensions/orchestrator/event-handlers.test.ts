@@ -144,6 +144,55 @@ describe("tool_call write protection", () => {
   });
 });
 
+describe("review-phase AI_COMMENT write guard", () => {
+  function reviewTask(): ActiveTask {
+    const task = makeActiveTask();
+    task.state.phase = "review";
+    return task;
+  }
+
+  it("allows an edit that only inserts an AI_COMMENT marker", async () => {
+    orchestrator.active = reviewTask();
+    const handler = getHandler("tool_call");
+    const result = await handler(
+      { toolName: "edit", input: { path: "src/a.ts", edits: [{ oldText: "const x = 1;", newText: "const x = 1;\n// AI_COMMENT: check" }] } },
+      {},
+    );
+    expect(result).toBeUndefined();
+  });
+
+  it("blocks an edit that changes real code during review", async () => {
+    orchestrator.active = reviewTask();
+    const handler = getHandler("tool_call");
+    const result = await handler(
+      { toolName: "edit", input: { path: "src/a.ts", edits: [{ oldText: "const x = 1;", newText: "const x = 2;" }] } },
+      {},
+    );
+    expect(result?.block).toBe(true);
+    expect(result?.reason).toContain("AI_COMMENT");
+  });
+
+  it("blocks a brand-new source file write during review", async () => {
+    orchestrator.active = reviewTask();
+    const handler = getHandler("tool_call");
+    const result = await handler(
+      { toolName: "write", input: { path: "src/new.ts", content: "// AI_COMMENT: note\n" } },
+      {},
+    );
+    expect(result?.block).toBe(true);
+  });
+
+  it("does not restrict source edits outside the review phase", async () => {
+    orchestrator.active = makeActiveTask(); // implement phase
+    const handler = getHandler("tool_call");
+    const result = await handler(
+      { toolName: "edit", input: { path: "src/a.ts", edits: [{ oldText: "const x = 1;", newText: "const x = 2;" }] } },
+      {},
+    );
+    expect(result).toBeUndefined();
+  });
+});
+
 describe("tool_result implementation tracking", () => {
   it("adds file to modifiedFiles when input uses path field", async () => {
     orchestrator.active = makeActiveTask();

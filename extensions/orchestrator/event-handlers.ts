@@ -28,6 +28,7 @@ import { SUBAGENT_SESSION_KEY } from "./index.js";
 import { registerCommandHandlers } from "./command-handlers.js";
 import { registerStateFileTools } from "./pp-state-tools.js";
 import { detectPrTarget, parseReviewAnchorsFromFile, postPrLineComments } from "./pr-comments.js";
+import { isAiCommentOnlyChange } from "./ai-comment-cleanup.js";
 import { handleMainRateLimit, handleSubagentRateLimit, isRateLimitError, isSdkRetryableError } from "./rate-limit-fallback.js";
 import { setExtensionOnlyMode, unregisterAgentDefinitions } from "./agents/registry.js";
 import { resolveModel, getModelInfo, updateRegistryFromAvailableModels } from "./model-registry.js";
@@ -464,14 +465,15 @@ async function maybePostPrComments(orchestrator: Orchestrator, finalReviewPath: 
   // which would otherwise re-post the full anchor set as duplicate PR comments.
   const posted = active.state.prCommentedReviewFiles ?? [];
   if (posted.includes(finalReviewPath)) return;
+
+  // Do NOT record the file as posted until it actually has anchors: an early
+  // incremental write can create the file before the ANCHORS: block exists, and
+  // recording it here would permanently suppress the later real post.
+  const anchors = parseReviewAnchorsFromFile(finalReviewPath);
+  if (anchors.length === 0) return;
+
   active.state.prCommentedReviewFiles = [...posted, finalReviewPath];
   try { saveTask(active.dir, active.state); } catch {}
-
-  const anchors = parseReviewAnchorsFromFile(finalReviewPath);
-  if (anchors.length === 0) {
-    orchestrator.safeSendUserMessage("[PI-PI] PR comments requested but no anchorable findings (path:line) were found in the synthesized review — skipped PR posting.");
-    return;
-  }
 
   const repos = active.state.repos ?? [];
   const rootRepo = repos.find((r) => r.isRoot) ?? repos[0];
@@ -2165,6 +2167,39 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
 
       if (fileName === "config.json" && isPathInside(ppDir, resolvedPath)) {
         return { block: true, reason: "config.json is managed by the user, not the LLM" };
+      }
+
+      // Review-phase read-only exception is scoped to AI_COMMENT markers: the main
+      // agent may only insert/remove `AI_COMMENT:` markers in source files. Enforce
+      // it at the gate (the constraint is otherwise prompt-level only): a source
+      // write/edit is allowed only when it changes nothing but AI_COMMENT markers.
+      if (
+        orchestrator.active?.state.phase === "review" &&
+        !isPathInside(ppDir, resolvedPath)
+      ) {
+        const denial = { block: true as const, reason: "Review phase is read-only except for inserting/removing AI_COMMENT: markers. This edit changes non-AI_COMMENT content — record the finding instead of applying a fix." };
+        if (event.toolName === "edit") {
+          const edits = Array.isArray((event.input as any)?.edits) ? (event.input as any).edits : [];
+          const legacy = event.input as any;
+          const allEdits = [
+            ...edits,
+            ...(typeof legacy?.oldText === "string" && typeof legacy?.newText === "string" ? [{ oldText: legacy.oldText, newText: legacy.newText }] : []),
+          ];
+          for (const e of allEdits) {
+            if (typeof e?.oldText !== "string" || typeof e?.newText !== "string") continue;
+            if (!isAiCommentOnlyChange(e.oldText, e.newText)) return denial;
+          }
+        } else {
+          // Anchoring inserts markers into EXISTING code; creating a new source
+          // file is never a valid AI_COMMENT-only operation.
+          if (!existsSync(resolvedPath)) return denial;
+          const newContent = typeof (event.input as any)?.content === "string" ? (event.input as any).content : "";
+          let before = "";
+          try {
+            before = readFileSync(resolvedPath, "utf-8");
+          } catch {}
+          if (!isAiCommentOnlyChange(before, newContent)) return denial;
+        }
       }
     }
     return;
