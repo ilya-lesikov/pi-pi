@@ -27,6 +27,7 @@ import { registerAstSearchTool } from "./ast-search.js";
 import { SUBAGENT_SESSION_KEY } from "./index.js";
 import { registerCommandHandlers } from "./command-handlers.js";
 import { registerStateFileTools } from "./pp-state-tools.js";
+import { detectPrTarget, parseReviewAnchorsFromFile, postPrLineComments } from "./pr-comments.js";
 import { handleMainRateLimit, handleSubagentRateLimit, isRateLimitError, isSdkRetryableError } from "./rate-limit-fallback.js";
 import { setExtensionOnlyMode, unregisterAgentDefinitions } from "./agents/registry.js";
 import { resolveModel, getModelInfo, updateRegistryFromAvailableModels } from "./model-registry.js";
@@ -446,6 +447,42 @@ export function finalizeReviewCycleAutonomous(task: ActiveTask): void {
     task.state.step = "llm_work";
   }
   saveTask(task.dir, task.state);
+}
+
+// After the synthesizer writes a final review file, post the anchored findings to
+// the reviewed repo's PR when the user opted into PR comments. Only the repo whose
+// diff was reviewed (the file's repo, defaulting to root) is targeted, and missing
+// auth/PR/anchors degrade to a notify rather than failing the review.
+async function maybePostPrComments(orchestrator: Orchestrator, finalReviewPath: string): Promise<void> {
+  const active = orchestrator.active;
+  if (!active) return;
+  const mode = active.state.reviewAnchoringMode;
+  if (mode !== "pr" && mode !== "ai_comment_pr") return;
+
+  const anchors = parseReviewAnchorsFromFile(finalReviewPath);
+  if (anchors.length === 0) {
+    orchestrator.safeSendUserMessage("[PI-PI] PR comments requested but no anchorable findings (path:line) were found in the synthesized review — skipped PR posting.");
+    return;
+  }
+
+  const repos = active.state.repos ?? [];
+  const rootRepo = repos.find((r) => r.isRoot) ?? repos[0];
+  const repoPath = rootRepo?.path ?? orchestrator.cwd;
+  const exec = (cmd: string, args: string[], opts: { cwd: string; timeout?: number }) => orchestrator.pi.exec(cmd, args, opts);
+
+  const target = await detectPrTarget(exec, repoPath);
+  if (!target) {
+    orchestrator.safeSendUserMessage("[PI-PI] PR comments requested but no authenticated GitHub PR was detected for this branch — findings remain in the review report" + (mode === "ai_comment_pr" ? " and AI_COMMENT markers." : "."));
+    return;
+  }
+
+  const result = await postPrLineComments(exec, repoPath, target, anchors);
+  const parts = [`[PI-PI] Posted ${result.posted} PR line comment(s) to PR #${target.number} from your GitHub account.`];
+  if (result.skipped.length > 0) {
+    parts.push(`${result.skipped.length} finding(s) could not be mapped to the PR diff and were skipped:`);
+    parts.push(...result.skipped.map((a) => `  - ${a.path}:${a.line}`));
+  }
+  orchestrator.safeSendUserMessage(parts.join("\n"));
 }
 
 function registerOrchestratorTools(orchestrator: Orchestrator): void {
@@ -2091,6 +2128,15 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
             ],
           };
         }
+      }
+
+      const codeReviewsDir = join(taskDir, "code-reviews");
+      if (
+        orchestrator.active.state.phase === "review" &&
+        isPathInside(codeReviewsDir, resolvedWrite) &&
+        /_final_pass-\d+\.md$/.test(basename(resolvedWrite))
+      ) {
+        void maybePostPrComments(orchestrator, resolvedWrite);
       }
 
       const ppDir = resolve(orchestrator.cwd, ".pp");

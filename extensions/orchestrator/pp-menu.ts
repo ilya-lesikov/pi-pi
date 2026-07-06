@@ -51,6 +51,7 @@ import {
   type TaskMode,
   type TaskInfo,
   type TaskType,
+  type ReviewAnchoringMode,
 } from "./state.js";
 import {
   clearFlantGeneratedConfig,
@@ -230,6 +231,24 @@ function setStep(orchestrator: Orchestrator, step: string): void {
   if (!orchestrator.active) return;
   orchestrator.active.state.step = step;
   saveTask(orchestrator.active.dir, orchestrator.active.state);
+}
+
+async function pickReviewAnchoringMode(ctx: any): Promise<ReviewAnchoringMode | undefined> {
+  const labelToMode: Record<string, ReviewAnchoringMode> = {
+    "Markdown only": "markdown",
+    "AI_COMMENT source comments": "ai_comment",
+    "GitHub PR line comments": "pr",
+    "AI_COMMENT + GitHub PR line comments": "ai_comment_pr",
+  };
+  const choice = await selectOption(ctx, "Anchor findings", [
+    { title: "Markdown only", description: "Keep findings in the synthesized review report (no source or PR changes)" },
+    { title: "AI_COMMENT source comments", description: "Also insert AI_COMMENT: markers at each finding's location in the source" },
+    { title: "GitHub PR line comments", description: "Also post line-anchored comments to the PR from your GitHub account" },
+    { title: "AI_COMMENT + GitHub PR line comments", description: "Both AI_COMMENT source markers and GitHub PR line comments" },
+    { title: "Back", description: "Return to the previous menu" },
+  ]);
+  if (!choice || choice === "Back") return undefined;
+  return labelToMode[choice];
 }
 
 const AI_REVIEW_MARKER_SYNTAX =
@@ -3622,6 +3641,12 @@ export async function showActiveTaskMenu(
 
       const reviewPreset = await pickPreset(ctx, orchestrator, getReviewPresetGroup(phase), "Review preset");
       if (!reviewPreset) continue;
+      if (phase === "review") {
+        const anchoringMode = await pickReviewAnchoringMode(ctx);
+        if (!anchoringMode) continue;
+        task.state.reviewAnchoringMode = anchoringMode;
+        saveTask(task.dir, task.state);
+      }
       finalizeReviewCycle(task);
       if (!hasEnabledReviewers(orchestrator, reviewPreset)) {
         const label = phase === "brainstorm" ? "brainstorm" : phase === "plan" ? "plan" : "code";
