@@ -43,11 +43,12 @@ describe("completionLine", () => {
 });
 
 describe("closingBlockInstruction", () => {
-  it("spells out the exact block with separators, /pp mention, and next phase", () => {
+  it("spells out the exact block with a blank line between summary and advance, no rules", () => {
     const block = closingBlockInstruction("brainstorm");
     expect(block).toContain("Advance via the /pp menu to move into plan");
-    expect(block).toContain("────");
+    expect(block).not.toContain("────");
     expect(block).toContain("/pp");
+    expect(block).toContain("✅ <one-sentence summary of what this phase produced>\n\n▶ Advance via the /pp menu to move into plan.");
   });
 });
 

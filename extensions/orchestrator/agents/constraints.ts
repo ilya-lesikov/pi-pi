@@ -32,10 +32,9 @@ export function closingBlockInstruction(phase: Phase): string {
   const next = NEXT_PHASE_LABEL[phase] ?? "the next phase";
   return [
     "End that turn with EXACTLY this block, verbatim, as the final lines of your message (fill the summary line with one sentence; change nothing else):",
-    "────────────────────────────────────────────────",
     "✅ <one-sentence summary of what this phase produced>",
+    "",
     `▶ Advance via the /pp menu to move into ${next}.`,
-    "────────────────────────────────────────────────",
   ].join("\n");
 }
 
