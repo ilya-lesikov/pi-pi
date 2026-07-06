@@ -2532,10 +2532,9 @@ describe("task modes and quick task", () => {
     menu
       .expect({ question: "/pp", options: { include: ["Task"] }, choose: "Task" })
       .expect({ question: "Task", options: { include: ["Review"] }, choose: "Review" })
-      .expect({ question: "Review", options: { include: ["Describe"] }, choose: "Describe" })
+      .expect({ question: "Review", options: { exact: ["New", "Resume", "Back"] }, choose: "New" })
       .expect({ question: "Mode", options: { include: ["Autonomous"] }, choose: "Autonomous" })
       .expect({ question: "Autonomous", options: { include: ["Start"] }, choose: "Start" });
-    ctx.ui.input.mockResolvedValueOnce("Review current branch changes");
     const pp = getCommand(pi, "pp");
     await pp(undefined, ctx);
 

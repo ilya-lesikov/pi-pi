@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, writeFileSync } from "fs";
+import { existsSync, readdirSync } from "fs";
 import { join, relative, basename } from "path";
 import { isDeepStrictEqual } from "util";
 import { askUser, isCancel, type CancelReason } from "../../3p/pi-ask-user/index.js";
@@ -151,51 +151,7 @@ function formatRepoList(repos: RepoInfo[]): string {
     .join("\n");
 }
 
-function appendSection(content: string, heading: string, body: string): string {
-  const normalized = content.trimEnd();
-  if (normalized.includes(`${heading}\n`)) return normalized + "\n";
-  return `${normalized}\n\n${heading}\n${body}\n`;
-}
 
-function appendToSection(content: string, heading: string, body: string): string {
-  const normalized = content.trimEnd();
-  if (normalized.includes(body)) return normalized + "\n";
-
-  const lines = normalized.split("\n");
-  const sectionIndex = lines.findIndex((line) => line.trim() === heading);
-  if (sectionIndex === -1) {
-    return appendSection(normalized, heading, body);
-  }
-
-  let insertIndex = lines.length;
-  for (let i = sectionIndex + 1; i < lines.length; i += 1) {
-    if (lines[i]?.startsWith("## ")) {
-      insertIndex = i;
-      break;
-    }
-  }
-
-  const insertLines = body.split("\n");
-  if (insertIndex > sectionIndex + 1 && lines[insertIndex - 1]?.trim() !== "") {
-    insertLines.unshift("");
-  }
-  lines.splice(insertIndex, 0, ...insertLines);
-  return lines.join("\n") + "\n";
-}
-
-function appendRepoContext(content: string, repos: RepoInfo[]): string {
-  if (repos.length === 0) return content;
-  const lines = repos.map((repo) => `- ${formatRepoLabel(repo)}${repo.baseBranch ? ` (base: ${repo.baseBranch})` : ""}`);
-  return appendToSection(content, "## Constraints", `Registered repositories:\n${lines.join("\n")}`);
-}
-
-function appendResearchOpenQuestions(content: string, text: string): string {
-  const normalized = content.trimEnd();
-  if (normalized.includes("## Open Questions\n")) {
-    return `${normalized}\n${text}\n`;
-  }
-  return `${normalized}\n\n## Open Questions\n${text}\n`;
-}
 
 async function pickCommitForRepo(orchestrator: Orchestrator, ctx: any, repo: RepoInfo): Promise<string | null> {
   let commits: Array<{ hash: string; message: string; age: string }> = [];
@@ -3186,175 +3142,27 @@ async function openCodeReviewInPlannotator(
   return { status: result.approved ? "approved" : "needs_changes", feedback };
 }
 
-async function startReviewTask(
-  orchestrator: Orchestrator,
-  ctx: any,
-  userRequestContent: string,
-  researchContent: string | null,
-  description: string,
-  mode?: TaskMode,
-  autonomousConfig?: AutonomousConfig,
-): Promise<"started" | typeof BACK> {
-  await orchestrator.startTask(ctx, "review", description, undefined, undefined, mode);
-  if (!orchestrator.active || orchestrator.active.type !== "review") return BACK;
-  orchestrator.active.state.autonomousConfig = autonomousConfig;
-  saveTask(orchestrator.active.dir, orchestrator.active.state);
-  const repos = getRegisteredRepos(orchestrator);
-  const userRequestWithRepos = appendRepoContext(userRequestContent, repos);
-  writeFileSync(join(orchestrator.active.dir, "USER_REQUEST.md"), userRequestWithRepos, "utf-8");
-  if (researchContent) {
-    writeFileSync(join(orchestrator.active.dir, "RESEARCH.md"), researchContent, "utf-8");
-  }
-  return "started";
-}
-
 async function showReviewMenu(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK | "started"> {
   while (true) {
-    const options: OptionInput[] = [
-      { title: "Current branch", description: "Review changes on current branch vs base" },
-      { title: "Last commit", description: "Review changes in the most recent commit" },
-      { title: "Since commit", description: "Review all changes since a specific commit" },
-      { title: "Uncommitted changes", description: "Review working directory changes" },
-      { title: "Describe", description: "Describe what to review and let the agent figure it out" },
+    const choice = await selectOption(ctx, "Review", [
+      { title: "New", description: "Start a new review — type what to review (a branch, commit range, uncommitted changes, or a PR URL) as your first chat message" },
       { title: "Resume", description: "Resume a previously unfinished review" },
       { title: "Back", description: "Return to the previous menu" },
-    ];
-    const choice = await selectOption(ctx, "Review", options);
+    ]);
     if (!choice || choice === "Back") return BACK;
 
-    if (choice === "Resume") {
-      const result = await showResumeMenu(orchestrator, ctx, "review", "No paused review tasks found.");
-      if (result === "started") return result;
-      continue;
-    }
-
-    if (choice === "Current branch") {
-      const repos = getRegisteredRepos(orchestrator);
-      const repoRanges = await Promise.all(
-        repos.map(async (repo) => `- ${formatRepoLabel(repo)}: ${await detectDefaultBranch(orchestrator, repos, repo.path)}..HEAD`),
-      );
-      const prContexts = await detectCurrentPrContext(orchestrator, repos);
-
-      const urLines = [
-        "# User Request",
-        "Review current branch changes across registered repositories.",
-        "",
-        "Diff ranges:",
-        ...repoRanges,
-      ];
-      const prUrls = prContexts
-        .filter((pr) => pr.prUrl)
-        .map((pr) => `- ${pr.repoPath}: ${pr.prUrl}`);
-      if (prUrls.length > 0) {
-        urLines.push("", "Open PRs:", ...prUrls);
-      }
-      urLines.push("", "## Problem", "Review and identify issues in the code changes.", "", "## Constraints", "Focus on correctness, edge cases, style, missing tests, potential bugs.");
-      const urContent = urLines.join("\n") + "\n";
-
-      let resContent = [
-        "## Affected Code",
-        "(to be filled during review)",
-        "",
-        "## Architecture Context",
-        "(to be filled during review)",
-        "",
-        "## Constraints & Edge Cases",
-        "- MUST: Review all changed code across the registered repositories",
-        "- RISK: Issues can span repository boundaries",
-      ].join("\n") + "\n";
-      if (prContexts.length > 0) {
-        const prContextBlocks = prContexts
-          .map((pr) => {
-            const lines = [`${pr.repoPath}`];
-            if (pr.prUrl) lines.push(`URL: ${pr.prUrl}`);
-            if (pr.prContext) lines.push(pr.prContext);
-            return lines.join("\n");
-          })
-          .join("\n\n");
-        resContent = appendResearchOpenQuestions(resContent, `PR context:\n${prContextBlocks}`);
-      }
-
+    if (choice === "New") {
       const modeSelection = await pickModeForTaskStart(orchestrator, ctx, "review");
       if (!modeSelection) continue;
-      const description = "review-current-branch";
-      return startReviewTask(orchestrator, ctx, urContent, resContent, description, modeSelection.mode, modeSelection.autonomousConfig);
+      await orchestrator.startTask(ctx, "review", "review", undefined, undefined, modeSelection.mode);
+      if (!orchestrator.active || orchestrator.active.type !== "review") return BACK;
+      orchestrator.active.state.autonomousConfig = modeSelection.autonomousConfig;
+      saveTask(orchestrator.active.dir, orchestrator.active.state);
+      return "started";
     }
 
-    if (choice === "Last commit") {
-      const repos = getRegisteredRepos(orchestrator);
-      const urContent = [
-        "# User Request",
-        "Review last commit changes across registered repositories",
-        "",
-        "## Problem",
-        "Review and identify issues in the most recent commit.",
-        "",
-        "## Constraints",
-        "Focus on correctness, edge cases, style, missing tests, potential bugs.",
-        "",
-      ].join("\n");
-      const modeSelection = await pickModeForTaskStart(orchestrator, ctx, "review");
-      if (!modeSelection) continue;
-      return startReviewTask(orchestrator, ctx, urContent, null, "review-last-commit", modeSelection.mode, modeSelection.autonomousConfig);
-    }
-
-    if (choice === "Since commit") {
-      const repos = getRegisteredRepos(orchestrator);
-      const repoOptions: OptionInput[] = repos.map((repo) => ({
-        title: formatRepoLabel(repo),
-        description: "Choose repository for commit range",
-      }));
-      repoOptions.push({ title: "Back", description: "Return to the previous menu" });
-      const repoChoice = await selectOption(ctx, "Select repository", repoOptions);
-      if (!repoChoice || repoChoice === "Back") continue;
-      const selectedRepo = repos.find((repo) => formatRepoLabel(repo) === repoChoice);
-      if (!selectedRepo) continue;
-      const pickedHash = await pickCommitForRepo(orchestrator, ctx, selectedRepo);
-      if (!pickedHash) continue;
-
-      const urContent = [
-        "# User Request",
-        `Review changes in ${selectedRepo.path} since commit ${pickedHash}`,
-        "",
-        "## Problem",
-        `Review and identify issues in all changes in ${selectedRepo.path} since ${pickedHash}.`,
-        "",
-        "## Constraints",
-        "Focus on correctness, edge cases, style, missing tests, potential bugs.",
-        "",
-      ].join("\n");
-      const modeSelection = await pickModeForTaskStart(orchestrator, ctx, "review");
-      if (!modeSelection) continue;
-      return startReviewTask(orchestrator, ctx, urContent, null, "review-since-commit", modeSelection.mode, modeSelection.autonomousConfig);
-    }
-
-    if (choice === "Uncommitted changes") {
-      const repos = getRegisteredRepos(orchestrator);
-      const urContent = [
-        "# User Request",
-        "Review uncommitted changes across registered repositories",
-        "",
-        "## Problem",
-        "Review and identify issues in uncommitted working directory changes.",
-        "",
-        "## Constraints",
-        "Focus on correctness, edge cases, style, missing tests, potential bugs.",
-        "",
-      ].join("\n");
-      const modeSelection = await pickModeForTaskStart(orchestrator, ctx, "review");
-      if (!modeSelection) continue;
-      return startReviewTask(orchestrator, ctx, urContent, null, "review-uncommitted", modeSelection.mode, modeSelection.autonomousConfig);
-    }
-
-    const input = await ctx.ui.input("Describe what to review");
-    if (input === undefined || input === null) continue;
-    const trimmed = String(input).trim();
-    const description = trimmed || "review";
-
-    const urContent = `# User Request\n${description}\n\n## Problem\n${description}\n\n## Constraints\nFocus on correctness, edge cases, style, missing tests, potential bugs.\n`;
-    const modeSelection = await pickModeForTaskStart(orchestrator, ctx, "review");
-    if (!modeSelection) continue;
-    return startReviewTask(orchestrator, ctx, urContent, null, description, modeSelection.mode, modeSelection.autonomousConfig);
+    const result = await showResumeMenu(orchestrator, ctx, "review", "No paused review tasks found.");
+    if (result === "started") return result;
   }
 }
 
