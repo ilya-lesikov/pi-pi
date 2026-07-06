@@ -3542,6 +3542,76 @@ describe("error retry", () => {
     expect(pi.sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("Continue the implement phase"), { deliverAs: "followUp" });
   });
 
+  it("drops a continuation nudge whose phase no longer matches at delivery", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "stale phase nudge");
+    orchestrator.active!.state.phase = "plan";
+    orchestrator.active!.state.step = "llm_work";
+    const turnEnd = pi._handlers.get("turn_end")!;
+    await turnEnd({ message: { stopReason: "stop", content: [] }, toolResults: [] }, ctx);
+    const nudge = (pi.sendUserMessage as any).mock.calls.map((c: any[]) => c[0]).find((t: string) => t.includes("Continue the plan phase"));
+    expect(nudge).toBeDefined();
+    expect(orchestrator.pendingNudges.has(nudge)).toBe(true);
+
+    // Phase advances before the queued nudge is delivered.
+    orchestrator.active!.state.phase = "implement";
+    const beforeStart = pi._handlers.get("before_agent_start")!;
+    const abort = vi.fn();
+    await beforeStart({ systemPrompt: "base", prompt: nudge }, makeCtx({ abort }));
+
+    expect(abort).toHaveBeenCalledOnce();
+    expect(orchestrator.pendingNudges.has(nudge)).toBe(false);
+  });
+
+  it("drops a continuation nudge whose task token changed at delivery (same phase)", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "stale token nudge");
+    orchestrator.active!.state.phase = "plan";
+    orchestrator.active!.state.step = "llm_work";
+    const turnEnd = pi._handlers.get("turn_end")!;
+    await turnEnd({ message: { stopReason: "stop", content: [] }, toolResults: [] }, ctx);
+    const nudge = (pi.sendUserMessage as any).mock.calls.map((c: any[]) => c[0]).find((t: string) => t.includes("Continue the plan phase"));
+    expect(nudge).toBeDefined();
+
+    // A new task starts (token bumped), also at the plan phase — the old nudge
+    // must not drive a turn in the new task even though the phase name matches.
+    orchestrator.activeTaskToken++;
+    orchestrator.active!.state.phase = "plan";
+    const beforeStart = pi._handlers.get("before_agent_start")!;
+    const abort = vi.fn();
+    await beforeStart({ systemPrompt: "base", prompt: nudge }, makeCtx({ abort }));
+
+    expect(abort).toHaveBeenCalledOnce();
+  });
+
+  it("delivers a continuation nudge whose phase and token still match", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "fresh nudge");
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "llm_work";
+    const turnEnd = pi._handlers.get("turn_end")!;
+    await turnEnd({ message: { stopReason: "stop", content: [] }, toolResults: [] }, ctx);
+    const nudge = (pi.sendUserMessage as any).mock.calls.map((c: any[]) => c[0]).find((t: string) => t.includes("Continue the implement phase"));
+    expect(nudge).toBeDefined();
+
+    const beforeStart = pi._handlers.get("before_agent_start")!;
+    const abort = vi.fn();
+    const result = await beforeStart({ systemPrompt: "base", prompt: nudge }, makeCtx({ abort }));
+
+    expect(abort).not.toHaveBeenCalled();
+    expect(result?.systemPrompt).toContain("<task>");
+    expect(orchestrator.pendingNudges.has(nudge)).toBe(false);
+  });
+
   it("suppresses nudges while the controller is transitioning (not running)", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);

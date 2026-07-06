@@ -1879,6 +1879,30 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (orchestrator.transitionController.gateAgentStart(() => ctx.abort())) {
       return;
     }
+
+    // Stale continuation-nudge guard. A `[PI-PI] Continue the <phase> phase…`
+    // nudge is a followUp queued at turn_end; by the time it is delivered the
+    // phase may have advanced (plan→implement) or the task may have changed
+    // (old plan-task → new plan-task). Re-validate against the phase/token
+    // captured at generation time and abort the turn on any mismatch — a stale
+    // nudge is not genuine user re-engagement, so this runs BEFORE the no-active
+    // early return and does NOT clear the nudge/error guards. Checked only for
+    // the tracked "Continue the <phase> phase" shape; other [PI-PI] handoffs are
+    // untouched.
+    const nudgeMeta = orchestrator.pendingNudges.get(event.prompt ?? "");
+    if (nudgeMeta !== undefined) {
+      orchestrator.pendingNudges.delete(event.prompt ?? "");
+      const livePhase = orchestrator.active?.state.phase;
+      if (!orchestrator.active || nudgeMeta.phase !== livePhase || nudgeMeta.taskToken !== orchestrator.activeTaskToken) {
+        getLogger().debug(
+          { s: "hook", hook: "before_agent_start", nudgePhase: nudgeMeta.phase, livePhase, nudgeToken: nudgeMeta.taskToken, liveToken: orchestrator.activeTaskToken },
+          "dropping stale continuation nudge",
+        );
+        ctx.abort();
+        return;
+      }
+    }
+
     if (!orchestrator.active || orchestrator.active.state.phase === "done") return;
 
     // Clear the nudge guard ONLY on a genuine user re-engagement. Controller-
@@ -2384,6 +2408,10 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     const nudge = isAutonomous
       ? `[PI-PI] Continue the ${phase} phase. ${phaseConstraint(phase as Phase)} If the phase's objectives are met, call pp_phase_complete now; otherwise call the next tool. Do NOT apologize or reply with text only — respond with a tool call.`
       : `[PI-PI] Continue the ${phase} phase where you left off.`;
+    // Record the nudge's phase/task at generation time so a delivery that lands
+    // after the phase advanced or the task changed can be dropped (the queued
+    // followUp string itself carries no token).
+    orchestrator.pendingNudges.set(nudge, { phase: phase as Phase, taskToken: orchestrator.activeTaskToken });
     orchestrator.safeSendUserMessage(nudge);
   });
 

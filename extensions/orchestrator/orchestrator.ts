@@ -96,6 +96,14 @@ export class Orchestrator {
   // without this ESC would not cancel it.
   pendingRetryEscUnsub: (() => void) | null = null;
   activeTaskToken = 0;
+  // Side-channel for stale-nudge re-validation. A continuation nudge is delivered
+  // as a followUp whose prompt STRING carries no phase/task token, and the SDK
+  // queue only surfaces the string in before_agent_start. So at nudge-generation
+  // time we record {phase, taskToken} keyed by the exact nudge string; at delivery
+  // we re-check both against the live phase/token and drop the nudge on mismatch
+  // (a nudge generated for an old phase/task must not drive a turn in the new one).
+  // Last-wins per distinct string; a stale entry only ever fails-closed to drop.
+  pendingNudges = new Map<string, { phase: Phase; taskToken: number }>();
   // Subscription rate-limit fallback (Issue 5). subFallbackActive mirrors the
   // model-registry override flag; subFallbackDialogPending guards against
   // opening more than one switch dialogue at a time (across main + subagents);
@@ -604,6 +612,7 @@ export class Orchestrator {
     this.commitReminderSent = false;
     this.consecutiveNudges = 0;
     this.nudgeHalted = false;
+    this.pendingNudges.clear();
     this.phaseStartTime = 0;
     this.userGatePending = false;
     this.failedPlannerVariants = [];
