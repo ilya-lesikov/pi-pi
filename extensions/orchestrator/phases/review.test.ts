@@ -62,6 +62,13 @@ describe("reviewSystemPrompt apply_feedback wording", () => {
     expect(prompt).not.toContain("do NOT call `gh` yourself");
   });
 
+  it("standalone review synthesis prints the structured Review Summary schema", () => {
+    const prompt = reviewSystemPrompt("/tmp/task", 1, "review", "guided");
+    expect(prompt).toContain("## Review Summary");
+    expect(prompt).toContain("| # | Severity | Location | Finding |");
+    expect(prompt).toContain("Next step: /pp → Next → Publish");
+  });
+
   it("points each phase at the directory its reviewers actually write to", () => {
     // plan reviewers write to plan-reviews (planning.ts) and outputs load from
     // plan-reviews (context.ts); the prompt must match, not code-reviews.

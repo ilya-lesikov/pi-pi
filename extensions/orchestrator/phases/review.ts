@@ -5,6 +5,7 @@ import { resolvePreset, type PiPiConfig, type VariantConfig } from "../config.js
 import { registerAgentDefinitions, spawnViaRpc, waitForCompletion } from "../agents/registry.js";
 import { createCodeReviewerAgent } from "../agents/code-reviewer.js";
 import { getContextDirs, getLatestSynthesizedPlan, getArtifactManifest } from "../context.js";
+import { reviewSummaryInstruction } from "../agents/constraints.js";
 import type { RepoInfo } from "../repo-utils.js";
 import type { PhaseSend } from "../transition-controller.js";
 
@@ -75,6 +76,8 @@ export function reviewSystemPrompt(taskDir: string, pass: number, phase?: string
       "ANCHORS:",
       "<relative/path/from/repo/root>:<line> — <one-line finding>",
       "Use the `ANCHORS:` blocks the reviewers emitted as the source of file:line — do NOT invent locations. Write `ANCHORS:` followed by `(none)` if there are no anchorable accepted findings.",
+      "",
+      reviewSummaryInstruction,
     ].join("\n");
   }
 

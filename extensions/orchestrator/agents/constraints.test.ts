@@ -50,6 +50,22 @@ describe("closingBlockInstruction", () => {
     expect(block).toContain("/pp");
     expect(block).toContain("✅ <one-sentence summary of what this phase produced>\n\n▶ Advance via the /pp menu to move into plan.");
   });
+
+  it("prepends the Review Summary schema ONLY for the review phase, before the closing block", () => {
+    const review = closingBlockInstruction("review");
+    expect(review).toContain("## Review Summary");
+    expect(review).toContain("| # | Severity | Location | Finding |");
+    expect(review).toContain("BLOCKER");
+    // The ✅/▶ lines must remain the final lines of the block.
+    expect(review.trimEnd().endsWith("▶ Advance via the /pp menu to move into plan.")).toBe(true);
+    expect(review.indexOf("## Review Summary")).toBeLessThan(review.indexOf("✅ <one-sentence summary"));
+  });
+
+  it("does NOT emit the Review Summary schema for brainstorm or debug closes", () => {
+    for (const phase of ["brainstorm", "debug"] as const) {
+      expect(closingBlockInstruction(phase)).not.toContain("## Review Summary");
+    }
+  });
 });
 
 describe("constraintsBlock", () => {

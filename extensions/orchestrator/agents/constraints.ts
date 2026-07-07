@@ -37,9 +37,42 @@ const NEXT_PHASE_LABEL: Partial<Record<Phase, string>> = {
   debug: "plan",
 };
 
+// The structured summary a review must print when it finishes, on BOTH review finish paths
+// (the review-cycle synthesis in review.ts and the ordinary review-task close here). Counts
+// reconcile with the `ANCHORS:` block: when it is `(none)`, Anchored=0 and every finding is
+// Un-anchorable. Location is `file:line`, or `file:—` for un-anchorable findings.
+export const REVIEW_SUMMARY_SCHEMA = [
+  "## Review Summary",
+  "",
+  "Scope: <repos/PR/branch/range + change size>",
+  "",
+  "| Repo | PR | Findings | Anchored | Un-anchorable |",
+  "|------|----|----------|----------|---------------|",
+  "| <owner/repo> | #<n> | <total> | <in-diff> | <not-in-diff> |",
+  "",
+  "### Findings",
+  "| # | Severity | Location | Finding |",
+  "|---|----------|----------|---------|",
+  "| 1 | BLOCKER | <file:line or file:—> | <one line> |",
+  "",
+  "Next step: /pp → Next → Publish to post these as GitHub PR comments or file comments.",
+].join("\n");
+
+// Instruction wrapping REVIEW_SUMMARY_SCHEMA: severity vocabulary is fixed and the summary
+// degrades gracefully to a single-repo / no-PR row when only one repo (or no PR) was resolved.
+export const reviewSummaryInstruction = [
+  "Before the closing block, print a structured Review Summary in EXACTLY this shape (fill in the values; severity is one of BLOCKER / MAJOR / MINOR, uppercase):",
+  "",
+  REVIEW_SUMMARY_SCHEMA,
+  "",
+  "Counts MUST reconcile with the `ANCHORS:` block: an `(none)` block means Anchored=0 and every finding is Un-anchorable. Fill the table from whatever repos/PR you resolved; degrade to a single-repo / no-PR row when there is only one repo or no PR.",
+].join("\n");
+
 export function closingBlockInstruction(phase: Phase): string {
   const next = NEXT_PHASE_LABEL[phase] ?? "the next phase";
+  const summary = phase === "review" ? reviewSummaryInstruction + "\n\n" : "";
   return [
+    summary +
     "End that turn with EXACTLY this block, verbatim, as the final lines of your message (fill the summary line with one sentence; change nothing else):",
     "✅ <one-sentence summary of what this phase produced>",
     "",
