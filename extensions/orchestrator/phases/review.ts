@@ -77,6 +77,8 @@ export function reviewSystemPrompt(taskDir: string, pass: number, phase?: string
       "<relative/path/from/repo/root>:<line> — <one-line finding>",
       "Use the `ANCHORS:` blocks the reviewers emitted as the source of file:line — do NOT invent locations. Write `ANCHORS:` followed by `(none)` if there are no anchorable accepted findings.",
       "",
+      "PRIVACY: phrase every finding as a self-contained observation about the code. Do NOT reference private or internal details, `the ticket`, issue trackers, or internal design docs — these findings are published as PR/file comments. Say what is wrong in the code, not that it violates a private document's goal.",
+      "",
       reviewSummaryInstruction,
     ].join("\n");
   }
