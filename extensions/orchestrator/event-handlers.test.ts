@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { registerEventHandlers } from "./event-handlers.js";
+import { registerEventHandlers, checkoutPrHead } from "./event-handlers.js";
 import { Orchestrator, type ActiveTask } from "./orchestrator.js";
 import { getDefaultConfig } from "./config.js";
 
@@ -22,6 +22,7 @@ function makePi() {
       emit: vi.fn(),
     },
     getAllTools: vi.fn().mockReturnValue([{ name: "lsp" }]),
+    registerTool: vi.fn(),
     sendMessage: vi.fn(),
     sendUserMessage: vi.fn(),
     setModel: vi.fn(),
@@ -450,5 +451,84 @@ describe("main-turn stall watchdog (BUG-2)", () => {
     expect(orchestrator.mainTurnInFlight).toBe(false);
     vi.advanceTimersByTime(120000);
     expect(sendSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("checkoutPrHead", () => {
+  function makeGitOrchestrator(script: Record<string, { code: number; stdout?: string; stderr?: string }>) {
+    const calls: string[][] = [];
+    const exec = vi.fn(async (_cmd: string, args: string[]) => {
+      calls.push(args);
+      const key = args.join(" ");
+      const matched = Object.keys(script).find((k) => key.startsWith(k));
+      const res = matched ? script[matched] : { code: 0, stdout: "", stderr: "" };
+      return { code: res.code, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
+    });
+    return { orchestrator: { pi: { exec } } as any, calls };
+  }
+
+  it("is a no-op when no PR head is provided (non-PR review scope)", async () => {
+    const { orchestrator, calls } = makeGitOrchestrator({});
+    const result = await checkoutPrHead(orchestrator, "/repo", "", "");
+    expect(result.ok).toBe(true);
+    expect(result.message).toContain("non-PR review scope");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("HALTs on a dirty working tree without checking out", async () => {
+    const { orchestrator, calls } = makeGitOrchestrator({
+      "status --porcelain": { code: 0, stdout: " M src/a.ts\n" },
+    });
+    const result = await checkoutPrHead(orchestrator, "/repo", "feature", "abc123");
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain("HALT");
+    expect(result.message).toContain("uncommitted changes");
+    expect(calls.some((c) => c[0] === "checkout")).toBe(false);
+  });
+
+  it("HALTs when on a different branch without checking out", async () => {
+    const { orchestrator, calls } = makeGitOrchestrator({
+      "status --porcelain": { code: 0, stdout: "" },
+      "rev-parse --abbrev-ref HEAD": { code: 0, stdout: "main\n" },
+    });
+    const result = await checkoutPrHead(orchestrator, "/repo", "feature", "abc123");
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain("HALT");
+    expect(result.message).toContain("feature");
+    expect(calls.some((c) => c[0] === "checkout")).toBe(false);
+  });
+
+  it("checks out the PR head in-place on a clean tree on the right branch", async () => {
+    const { orchestrator, calls } = makeGitOrchestrator({
+      "status --porcelain": { code: 0, stdout: "" },
+      "rev-parse --abbrev-ref HEAD": { code: 0, stdout: "feature\n" },
+      "rev-parse HEAD": { code: 0, stdout: "oldsha\n" },
+      "checkout abc123": { code: 0, stdout: "" },
+    });
+    const result = await checkoutPrHead(orchestrator, "/repo", "feature", "abc123");
+    expect(result.ok).toBe(true);
+    expect(calls.some((c) => c[0] === "checkout" && c[1] === "abc123")).toBe(true);
+  });
+
+  it("skips checkout when already on the PR head commit", async () => {
+    const { orchestrator, calls } = makeGitOrchestrator({
+      "status --porcelain": { code: 0, stdout: "" },
+      "rev-parse --abbrev-ref HEAD": { code: 0, stdout: "feature\n" },
+      "rev-parse HEAD": { code: 0, stdout: "abc123\n" },
+    });
+    const result = await checkoutPrHead(orchestrator, "/repo", "feature", "abc123");
+    expect(result.ok).toBe(true);
+    expect(result.message).toContain("already on PR head");
+    expect(calls.some((c) => c[0] === "checkout")).toBe(false);
+  });
+});
+
+describe("pp_checkout_pr_head tool registration", () => {
+  it("registers the checkout tool during orchestrator tool setup", async () => {
+    const { registerOrchestratorToolsForTest } = await import("./event-handlers.js");
+    orchestrator.active = makeActiveTask();
+    registerOrchestratorToolsForTest(orchestrator);
+    const names = (pi.registerTool as any).mock.calls.map((c: any[]) => c[0].name);
+    expect(names).toContain("pp_checkout_pr_head");
   });
 });
