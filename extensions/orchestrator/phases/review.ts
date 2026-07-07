@@ -5,7 +5,6 @@ import { resolvePreset, type PiPiConfig, type VariantConfig } from "../config.js
 import { registerAgentDefinitions, spawnViaRpc, waitForCompletion } from "../agents/registry.js";
 import { createCodeReviewerAgent } from "../agents/code-reviewer.js";
 import { getContextDirs, getLatestSynthesizedPlan, getArtifactManifest } from "../context.js";
-import { reviewSummaryInstruction } from "../agents/constraints.js";
 import type { RepoInfo } from "../repo-utils.js";
 import type { PhaseSend } from "../transition-controller.js";
 
@@ -69,7 +68,7 @@ export function reviewSystemPrompt(taskDir: string, pass: number, phase?: string
       "",
       "# Your job (in this order):",
       `1. Read ALL reviewer outputs from ${reviewsDir}/`,
-      `2. Synthesize into ${reviewsDir}/<timestamp>_final_pass-${pass}.md`,
+      `2. Synthesize into ${reviewsDir}/<unix-epoch-seconds>_final_pass-${pass}.md (prefix with the current Unix epoch seconds, e.g. \`date +%s\`, so the file orders chronologically)`,
       "3. Present the synthesis to the user",
       "",
       "In the synthesized final-review file you MUST include a machine-readable `ANCHORS:` block for the accepted findings — one line per finding in EXACTLY this format (a later publish step consumes these lines):",
@@ -78,9 +77,9 @@ export function reviewSystemPrompt(taskDir: string, pass: number, phase?: string
       "Use the `ANCHORS:` blocks the reviewers emitted as the source of file:line — do NOT invent locations. Write `ANCHORS:` followed by `(none)` if there are no anchorable accepted findings.",
       "",
       "PRIVACY: phrase every finding as a self-contained observation about the code. Do NOT reference private or internal details, `the ticket`, issue trackers, or internal design docs — these findings are published as PR/file comments. Say what is wrong in the code, not that it violates a private document's goal.",
-      // Guided review already receives the Review Summary schema via the standardized
-      // closing block (constraints.ts closingBlockInstruction); only autonomous needs it here.
-      ...(mode === "guided" ? [] : ["", reviewSummaryInstruction]),
+      // The Review Summary schema is delivered by the standardized closing block
+      // (constraints.ts closingBlockInstruction, gated to phase==="review"), which is
+      // always prepended to this prompt — so it is intentionally NOT repeated here.
     ].join("\n");
   }
 
@@ -137,7 +136,7 @@ export function reviewSystemPrompt(taskDir: string, pass: number, phase?: string
     "",
     "# Your job (in this order):",
     `1. Read ALL reviewer outputs from ${reviewsDir}/`,
-    `2. Synthesize into ${reviewsDir}/<timestamp>_final_pass-${pass}.md`,
+    `2. Synthesize into ${reviewsDir}/<unix-epoch-seconds>_final_pass-${pass}.md (prefix with the current Unix epoch seconds, e.g. \`date +%s\`, so the file orders chronologically)`,
     finalStep,
     ...tail,
   ].join("\n");

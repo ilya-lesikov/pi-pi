@@ -62,16 +62,13 @@ describe("reviewSystemPrompt apply_feedback wording", () => {
     expect(prompt).not.toContain("do NOT call `gh` yourself");
   });
 
-  it("autonomous review synthesis embeds the Review Summary schema (guided gets it from the closing block)", () => {
-    const auto = reviewSystemPrompt("/tmp/task", 1, "review", "autonomous");
-    expect(auto).toContain("## Review Summary");
-    expect(auto).toContain("| # | Severity | Location | Finding |");
-    expect(auto).toContain("Next step: /pp → Next → Publish");
-
-    // Guided review must NOT duplicate the schema in the synthesis prompt: the
-    // standardized closing block already carries it for guided closes.
-    const guided = reviewSystemPrompt("/tmp/task", 1, "review", "guided");
-    expect(guided).not.toContain("## Review Summary");
+  it("review-cycle synthesis does NOT embed the Review Summary schema (delivered via the closing block)", () => {
+    // The schema is injected once by constraintsBlock -> closingBlockInstruction("review"),
+    // which is always prepended to the phase prompt; repeating it here would duplicate it.
+    for (const mode of ["guided", "autonomous"] as const) {
+      const prompt = reviewSystemPrompt("/tmp/task", 1, "review", mode);
+      expect(prompt).not.toContain("## Review Summary");
+    }
   });
 
   it("points each phase at the directory its reviewers actually write to", () => {

@@ -9,7 +9,7 @@ export function reviewSystemPrompt(taskDir: string, cwd: string): string {
     "USER_REQUEST.md — you must capture the user's request and your findings into the state files yourself.",
     "If the scope is ambiguous, ask the user before diving in.",
     "",
-    "If the review scope is a GitHub PR: for each registered repo, resolve the PR with `gh pr view --json number,headRefName,headRefOid,url`, then call pp_checkout_pr_head with that repo's `headRefName`/`headRefOid` to verify it is on the PR head BEFORE analyzing it. If the tool HALTS (dirty tree, or not on the PR head commit), relay its message to the user and wait for them to resolve it before continuing. For a branch, commit-range, or uncommitted-changes review, do NOT call pp_checkout_pr_head.",
+    "If the review scope is a GitHub PR: for each registered repo, resolve the PR with `gh pr view --json number,headRefName,headRefOid,url`, then call pp_checkout_pr_head with that repo's `headRefName`/`headRefOid` to land it on the PR head BEFORE analyzing it. If the tool HALTS (dirty tree, different branch, or diverged branch), relay its message to the user and wait for them to resolve it before continuing. For a branch, commit-range, or uncommitted-changes review, do NOT call pp_checkout_pr_head.",
     "",
     "Use available tools to analyze the changes:",
     "- git diff, git log, git show for examining commits and diffs",
