@@ -486,9 +486,10 @@ describe("checkoutPrHead", () => {
     expect(calls.some((c) => c[0] === "checkout")).toBe(false);
   });
 
-  it("HALTs when on a different branch without checking out", async () => {
+  it("HALTs when on a different branch, and never runs git checkout", async () => {
     const { orchestrator, calls } = makeGitOrchestrator({
       "status --porcelain": { code: 0, stdout: "" },
+      "rev-parse HEAD": { code: 0, stdout: "othersha\n" },
       "rev-parse --abbrev-ref HEAD": { code: 0, stdout: "main\n" },
     });
     const result = await checkoutPrHead(orchestrator, "/repo", "feature", "abc123");
@@ -498,27 +499,38 @@ describe("checkoutPrHead", () => {
     expect(calls.some((c) => c[0] === "checkout")).toBe(false);
   });
 
-  it("checks out the PR head in-place on a clean tree on the right branch", async () => {
+  it("HALTs when on the right branch but not at the PR head commit, without checking out", async () => {
     const { orchestrator, calls } = makeGitOrchestrator({
       "status --porcelain": { code: 0, stdout: "" },
-      "rev-parse --abbrev-ref HEAD": { code: 0, stdout: "feature\n" },
       "rev-parse HEAD": { code: 0, stdout: "oldsha\n" },
-      "checkout abc123": { code: 0, stdout: "" },
+      "rev-parse --abbrev-ref HEAD": { code: 0, stdout: "feature\n" },
     });
     const result = await checkoutPrHead(orchestrator, "/repo", "feature", "abc123");
-    expect(result.ok).toBe(true);
-    expect(calls.some((c) => c[0] === "checkout" && c[1] === "abc123")).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain("HALT");
+    expect(result.message).toContain("not at the PR head commit");
+    expect(calls.some((c) => c[0] === "checkout")).toBe(false);
   });
 
-  it("skips checkout when already on the PR head commit", async () => {
+  it("succeeds without any checkout when already on the PR head commit", async () => {
     const { orchestrator, calls } = makeGitOrchestrator({
       "status --porcelain": { code: 0, stdout: "" },
-      "rev-parse --abbrev-ref HEAD": { code: 0, stdout: "feature\n" },
       "rev-parse HEAD": { code: 0, stdout: "abc123\n" },
     });
     const result = await checkoutPrHead(orchestrator, "/repo", "feature", "abc123");
     expect(result.ok).toBe(true);
-    expect(result.message).toContain("already on PR head");
+    expect(result.message).toContain("on PR head");
+    expect(calls.some((c) => c[0] === "checkout")).toBe(false);
+  });
+
+  it("succeeds on a detached HEAD already at the PR head (re-entrant)", async () => {
+    const { orchestrator, calls } = makeGitOrchestrator({
+      "status --porcelain": { code: 0, stdout: "" },
+      "rev-parse HEAD": { code: 0, stdout: "abc123\n" },
+      "rev-parse --abbrev-ref HEAD": { code: 0, stdout: "HEAD\n" },
+    });
+    const result = await checkoutPrHead(orchestrator, "/repo", "feature", "abc123");
+    expect(result.ok).toBe(true);
     expect(calls.some((c) => c[0] === "checkout")).toBe(false);
   });
 });

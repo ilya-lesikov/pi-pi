@@ -33,10 +33,10 @@ const TOOL_ROUTING_BODY = [
     "before doing any work.",
   "",
   "**pp_checkout_pr_head** (review phase, PR-scoped only): after resolving a repo's PR (e.g. `gh pr view " +
-    "--json headRefName,headRefOid`), call this once per repo to check it out to its PR head before reviewing. " +
-    "The extension does the checkout in-place; if the tree is dirty or on a different branch it HALTS and returns " +
-    "a message to relay to the user. Do NOT call it for a branch/commit-range/uncommitted-changes review, and " +
-    "never run `git checkout` yourself.",
+    "--json headRefName,headRefOid`), call this once per repo to verify it is on its PR head before reviewing. " +
+    "The extension only inspects git state; if the tree is dirty or not already on the PR head commit it HALTS " +
+    "and returns a message to relay to the user. Do NOT call it for a branch/commit-range/uncommitted-changes " +
+    "review, and never run `git checkout` yourself.",
   "",
   "Find code by concept or behavior:",
   "- Multi-repo: cbm_search, cbm_search_code, cbm_trace, cbm_changes accept optional project_path (absolute repo path). If omitted, they use the root project.",

@@ -462,10 +462,12 @@ function registerOrchestratorTools(orchestrator: Orchestrator): void {
   registerStateFileTools(orchestrator);
 }
 
-// Extension-side PR-head checkout for the review phase. Performed here (never via the
-// agent prompt) so REVIEW_READONLY_CONSTRAINT stays truthful — the agent never runs
-// `git checkout` itself. Refuses to touch a dirty tree or switch branches (no stash,
-// no --force, no worktree): on either it HALTS and asks the user to resolve it.
+// Extension-side PR-head verification for the review phase. Performed here (never via
+// the agent prompt) so REVIEW_READONLY_CONSTRAINT stays truthful — the agent never runs
+// `git checkout` itself. Under the locked constraints (no stash, no --force, no branch
+// switch, no worktree, no detached checkout) the only non-halting outcome is a clean tree
+// already sitting on the PR head commit; anything else HALTS and asks the user to resolve
+// it. Checking HEAD's SHA first makes this re-entrant and safe on a detached HEAD.
 export async function checkoutPrHead(
   orchestrator: Orchestrator,
   repoPath: string,
@@ -476,10 +478,11 @@ export async function checkoutPrHead(
   const name = (headRefName ?? "").trim();
   const oid = (headRefOid ?? "").trim();
   if (!name && !oid) {
-    return { ok: true, message: `No PR head provided for ${repoPath}; skipping checkout (non-PR review scope).` };
+    return { ok: true, message: `No PR head provided for ${repoPath}; skipping (non-PR review scope).` };
   }
 
   const run = (args: string[]) => pi.exec("git", args, { cwd: repoPath, timeout: 15000 });
+  const target = `${name || oid}${name && oid ? ` @ ${oid}` : ""}`;
 
   let status;
   try {
@@ -494,9 +497,20 @@ export async function checkoutPrHead(
     return {
       ok: false,
       message:
-        `HALT: ${repoPath} has uncommitted changes. Commit or stash them, then ask me to continue. ` +
-        `The review needs this repo on its PR head (${name || oid}${name && oid ? ` @ ${oid}` : ""}).\n\n${status.stdout.trim()}`,
+        `HALT: ${repoPath} has uncommitted changes. Commit or stash them, then bring the repo to its PR head (${target}) and ask me to continue.\n\n${status.stdout.trim()}`,
     };
+  }
+
+  if (oid) {
+    let head;
+    try {
+      head = await run(["rev-parse", "HEAD"]);
+    } catch (err: any) {
+      return { ok: false, message: `Cannot read HEAD of ${repoPath}: ${err?.message ?? "git rev-parse failed"}` };
+    }
+    if (head.stdout.trim() === oid) {
+      return { ok: true, message: `${repoPath} is on PR head ${oid}.` };
+    }
   }
 
   let branch;
@@ -510,36 +524,17 @@ export async function checkoutPrHead(
     return {
       ok: false,
       message:
-        `HALT: ${repoPath} is on branch "${currentBranch}", not the PR head branch "${name}". ` +
-        `Switch to "${name}" (target commit ${oid || "unknown"}), then ask me to continue. ` +
-        "I will not switch branches for you.",
+        `HALT: ${repoPath} is on "${currentBranch}", not the PR head branch "${name}" (target commit ${oid || "unknown"}). ` +
+        "Check out that branch at its PR head, then ask me to continue. I will not switch branches or move HEAD for you.",
     };
   }
 
-  if (oid) {
-    let head;
-    try {
-      head = await run(["rev-parse", "HEAD"]);
-    } catch (err: any) {
-      return { ok: false, message: `Cannot read HEAD of ${repoPath}: ${err?.message ?? "git rev-parse failed"}` };
-    }
-    if (head.stdout.trim() === oid) {
-      return { ok: true, message: `${repoPath} already on PR head ${oid}.` };
-    }
-    let checkout;
-    try {
-      checkout = await run(["checkout", oid]);
-    } catch (err: any) {
-      return { ok: false, message: `Checkout of ${oid} in ${repoPath} failed: ${err?.message ?? "git checkout failed"}` };
-    }
-    if (checkout.code !== 0) {
-      return {
-        ok: false,
-        message: `HALT: could not check out PR head ${oid} in ${repoPath}: ${checkout.stderr?.trim() || checkout.stdout?.trim() || "git checkout failed"}`,
-      };
-    }
-  }
-  return { ok: true, message: `${repoPath} checked out to PR head ${oid || name}.` };
+  return {
+    ok: false,
+    message:
+      `HALT: ${repoPath} is on branch "${currentBranch}" but not at the PR head commit ${oid || "(unknown)"}. ` +
+      "Fast-forward/pull the branch to the PR head, then ask me to continue. I will not move HEAD for you.",
+  };
 }
 
 function registerCheckoutPrHeadTool(orchestrator: Orchestrator): void {
@@ -549,13 +544,13 @@ function registerCheckoutPrHeadTool(orchestrator: Orchestrator): void {
     name: "pp_checkout_pr_head",
     label: "pi-pi",
     description:
-      "Check out a registered repository to its PR head commit before reviewing it. " +
+      "Verify a registered repository is on its PR head commit before reviewing it. " +
       "Call this ONLY for a PR-scoped review, once per repo, AFTER you have resolved the PR " +
       "(e.g. via `gh pr view --json headRefName,headRefOid`). Do NOT call it for a branch, " +
-      "commit-range, or uncommitted-changes review. The extension performs the checkout in-place " +
-      "(no worktree, no stash, no --force): if the repo has uncommitted changes or is on a " +
-      "different branch, it HALTS and returns a message for you to relay to the user, and does NOT " +
-      "check out. You never run `git checkout` yourself.",
+      "commit-range, or uncommitted-changes review. The extension only inspects git state " +
+      "(no worktree, no stash, no --force, no branch switch, no detached checkout): if the repo " +
+      "is clean and already on the PR head commit it succeeds; otherwise it HALTS and returns a " +
+      "message for you to relay to the user. You never run `git checkout` yourself.",
     parameters: Type.Object({
       repoPath: Type.String({ description: "Absolute path to the registered repository" }),
       headRefName: Type.String({ description: "PR head branch name (headRefName)" }),
