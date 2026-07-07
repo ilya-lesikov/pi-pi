@@ -48,5 +48,13 @@ export function reviewSystemPrompt(taskDir: string, cwd: string): string {
     "",
     "Focus on: correctness, edge cases, style consistency, missing tests, potential bugs.",
     "You are investigating and documenting findings — you do NOT apply fixes in this phase.",
+    "",
+    "# Required: findings file with an ANCHORS block",
+    `When you finish reviewing, you MUST write your findings to ${taskDir}/code-reviews/<timestamp>_final_pass-1.md (use the GENERIC write tool, NOT pp_write_state_file — code-reviews/ is not a managed state path). Create the code-reviews/ directory if it does not exist.`,
+    "That file MUST include a machine-readable `ANCHORS:` block for the accepted findings — one line per finding in EXACTLY this format (the /pp Publish step consumes these lines):",
+    "ANCHORS:",
+    "<relative/path/from/repo/root>:<line> — <one-line finding>",
+    "Use the real file:line for each finding — do NOT invent locations. Write `ANCHORS:` followed by `(none)` if there are no anchorable accepted findings.",
+    "This is a normal deliverable of every review, independent of any automated review cycle: without it, publishing has nothing to anchor.",
   ].join("\n");
 }
