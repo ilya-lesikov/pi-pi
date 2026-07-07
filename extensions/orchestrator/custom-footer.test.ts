@@ -41,14 +41,33 @@ describe("createCustomFooter", () => {
     expect(line1).toContain("mode: autonomous");
   });
 
-  it("line 1 read-only phase shows guided mode even for an autonomous task", () => {
+  it("line 1 shows autonomous mode in a read-only phase for an autonomous task", () => {
     setFooterContext(makeCtx());
     setFooterOrchestrator({
       active: { type: "implement", state: { phase: "brainstorm", mode: "autonomous" } },
     } as any);
     const [line1] = render();
     expect(line1).toContain("phase: brainstorm");
+    expect(line1).toContain("mode: autonomous");
+  });
+
+  it("line 1 shows guided mode for a guided task", () => {
+    setFooterContext(makeCtx());
+    setFooterOrchestrator({
+      active: { type: "implement", state: { phase: "implement", mode: "guided" } },
+    } as any);
+    const [line1] = render();
     expect(line1).toContain("mode: guided");
+  });
+
+  it("line 1 omits the mode segment for a quick task", () => {
+    setFooterContext(makeCtx());
+    setFooterOrchestrator({
+      active: { type: "quick", state: { phase: "quick", mode: "autonomous" } },
+    } as any);
+    const [line1] = render();
+    expect(line1).toContain("task: quick");
+    expect(line1).not.toContain("mode:");
   });
 
   it("line 1 omits task metadata when no task is active", () => {

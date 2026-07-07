@@ -3,7 +3,7 @@ import type { ExtensionContext, ReadonlyFooterDataProvider, Theme } from "@earen
 import { truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 import type { UsageTracker } from "./usage-tracker.js";
 import type { Orchestrator } from "./orchestrator.js";
-import { getEffectivePhaseMode } from "./state.js";
+import { formatModeIndicator } from "./state.js";
 
 let footerCtx: ExtensionContext | undefined;
 let footerTracker: UsageTracker | undefined;
@@ -126,8 +126,9 @@ function renderPathLine(width: number, theme: Theme, footerData: ReadonlyFooterD
 
   const task = footerOrchestrator?.active;
   if (task && task.state.phase !== "done") {
-    const mode = getEffectivePhaseMode(task.state);
-    line += ` • task: ${task.type} • phase: ${task.state.phase} • mode: ${mode}`;
+    line += ` • task: ${task.type} • phase: ${task.state.phase}`;
+    const mode = formatModeIndicator(task.state, task.type);
+    if (mode) line += ` • mode: ${mode}`;
   } else {
     const sessionName = ctx?.sessionManager.getSessionName();
     if (sessionName) line += ` • ${sessionName}`;

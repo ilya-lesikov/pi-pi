@@ -93,6 +93,13 @@ export function getEffectivePhaseMode(state: TaskState): TaskMode {
   return getEffectiveMode(state) ?? "guided";
 }
 
+// Display-only: reflects the task's chosen mode regardless of per-phase interactivity.
+// Returns undefined for quick tasks so the footer omits the mode segment entirely.
+export function formatModeIndicator(state: TaskState, type: TaskType): TaskMode | undefined {
+  if (type === "quick") return undefined;
+  return getEffectiveMode(state) === "autonomous" ? "autonomous" : "guided";
+}
+
 export function createTask(cwd: string, type: TaskType, description: string, mode?: TaskMode): string {
   const log = getLogger();
   const id = crypto.randomUUID().slice(0, 12);
