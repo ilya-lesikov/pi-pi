@@ -55,25 +55,11 @@ describe("reviewSystemPrompt apply_feedback wording", () => {
     expect(prompt).toContain("code-reviews/");
   });
 
-  it("review phase markdown anchoring keeps findings in the review file only", () => {
-    const prompt = reviewSystemPrompt("/tmp/task", 1, "review", "guided", "markdown");
-    expect(prompt).toContain("markdown only");
-    expect(prompt).not.toContain("AI_COMMENT:");
-    expect(prompt).not.toContain("GitHub PR line comments");
-  });
-
-  it("review phase ai_comment anchoring instructs AI_COMMENT insertion, not fixes", () => {
-    const prompt = reviewSystemPrompt("/tmp/task", 1, "review", "guided", "ai_comment");
-    expect(prompt).toContain("AI_COMMENT:");
+  it("standalone review synthesis emits an ANCHORS block and defers publishing to the user", () => {
+    const prompt = reviewSystemPrompt("/tmp/task", 1, "review", "guided");
     expect(prompt).toContain("ANCHORS:");
-    expect(prompt).not.toContain("GitHub PR line comments");
-  });
-
-  it("review phase ai_comment_pr anchoring covers both source markers and PR comments", () => {
-    const prompt = reviewSystemPrompt("/tmp/task", 1, "review", "guided", "ai_comment_pr");
-    expect(prompt).toContain("AI_COMMENT:");
-    expect(prompt).toContain("GitHub PR line comments");
-    expect(prompt).toContain("do NOT call `gh` yourself");
+    expect(prompt).toContain("Do NOT publish findings now");
+    expect(prompt).not.toContain("do NOT call `gh` yourself");
   });
 
   it("points each phase at the directory its reviewers actually write to", () => {

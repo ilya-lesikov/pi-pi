@@ -1,8 +1,5 @@
-import { describe, it, expect, vi } from "vitest";
-import { mkdtempSync, writeFileSync, readFileSync, mkdirSync } from "fs";
-import { tmpdir } from "os";
-import { join } from "path";
-import { stripAiCommentsFromContent, stripAiCommentMarkers, isAiCommentOnlyChange, AI_COMMENT_TOKEN, type ExecFn } from "./ai-comment-cleanup.js";
+import { describe, it, expect } from "vitest";
+import { stripAiCommentsFromContent, isAiCommentOnlyChange } from "./ai-comment-cleanup.js";
 
 describe("stripAiCommentsFromContent", () => {
   it("drops full-line AI_COMMENT markers in various comment syntaxes", () => {
@@ -90,32 +87,3 @@ describe("isAiCommentOnlyChange", () => {
   });
 });
 
-describe("stripAiCommentMarkers", () => {
-  it("removes markers from all git-grep-reported files, leaving none behind", async () => {
-    const repo = mkdtempSync(join(tmpdir(), "aicomment-"));
-    mkdirSync(join(repo, "src"), { recursive: true });
-    const fileA = join(repo, "src", "a.ts");
-    const fileB = join(repo, "src", "b.ts");
-    writeFileSync(fileA, ["const a = 1;", "// AI_COMMENT: fix me", "const a2 = 2;"].join("\n"));
-    writeFileSync(fileB, "const b = 1; // AI_COMMENT: trailing");
-
-    const exec: ExecFn = vi.fn(async (cmd, args) => {
-      if (cmd === "git" && args[0] === "grep") {
-        return { code: 0, stdout: "src/a.ts\nsrc/b.ts\n", stderr: "" };
-      }
-      return { code: 1, stdout: "", stderr: "" };
-    });
-
-    const res = await stripAiCommentMarkers(exec, [repo]);
-    expect(res.filesChanged).toBe(2);
-    expect(res.markersRemoved).toBe(2);
-    expect(readFileSync(fileA, "utf-8")).not.toContain(AI_COMMENT_TOKEN);
-    expect(readFileSync(fileB, "utf-8")).toBe("const b = 1;");
-  });
-
-  it("swallows git grep failure (no tracked matches) without throwing", async () => {
-    const exec: ExecFn = vi.fn(async () => ({ code: 1, stdout: "", stderr: "" }));
-    const res = await stripAiCommentMarkers(exec, ["/nonexistent"]);
-    expect(res).toEqual({ filesChanged: 0, markersRemoved: 0 });
-  });
-});

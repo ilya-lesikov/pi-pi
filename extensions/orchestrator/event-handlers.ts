@@ -27,7 +27,6 @@ import { registerAstSearchTool } from "./ast-search.js";
 import { SUBAGENT_SESSION_KEY } from "./index.js";
 import { registerCommandHandlers } from "./command-handlers.js";
 import { registerStateFileTools } from "./pp-state-tools.js";
-import { detectPrTarget, parseReviewAnchorsFromFile, postPrLineComments } from "./pr-comments.js";
 import { isAiCommentOnlyChange } from "./ai-comment-cleanup.js";
 import { handleMainRateLimit, handleSubagentRateLimit, isRateLimitError, isSdkRetryableError } from "./rate-limit-fallback.js";
 import { setExtensionOnlyMode, unregisterAgentDefinitions } from "./agents/registry.js";
@@ -448,89 +447,6 @@ export function finalizeReviewCycleAutonomous(task: ActiveTask): void {
     task.state.step = "llm_work";
   }
   saveTask(task.dir, task.state);
-}
-
-// After the synthesizer writes a final review file, post the anchored findings to
-// the reviewed repo's PR when the user opted into PR comments. Only the repo whose
-// diff was reviewed (the file's repo, defaulting to root) is targeted, and missing
-// auth/PR/anchors degrade to a notify rather than failing the review.
-async function maybePostPrComments(orchestrator: Orchestrator, finalReviewPath: string): Promise<void> {
-  const active = orchestrator.active;
-  if (!active) return;
-  const mode = active.state.reviewAnchoringMode;
-  if (mode !== "pr" && mode !== "ai_comment_pr") return;
-
-  // Idempotency: each synthesized final-review file posts to the PR at most once.
-  // The synthesizer often edits the file after first writing it (typo/append),
-  // which would otherwise re-post the full anchor set as duplicate PR comments.
-  const posted = active.state.prCommentedReviewFiles ?? [];
-  if (posted.includes(finalReviewPath)) return;
-
-  // Do NOT record the file as posted until it actually has anchors: an early
-  // incremental write can create the file before the ANCHORS: block exists, and
-  // recording it here would permanently suppress the later real post.
-  const anchors = parseReviewAnchorsFromFile(finalReviewPath);
-  if (anchors.length === 0) return;
-
-  active.state.prCommentedReviewFiles = [...posted, finalReviewPath];
-  try { saveTask(active.dir, active.state); } catch {}
-
-  const repos = active.state.repos ?? [];
-  const rootRepo = repos.find((r) => r.isRoot) ?? repos[0];
-  const rootPath = rootRepo?.path ?? orchestrator.cwd;
-  const exec = (cmd: string, args: string[], opts: { cwd: string; timeout?: number }) => orchestrator.pi.exec(cmd, args, opts);
-
-  // Attribute each anchor to the registered repo that actually contains its path
-  // (anchors carry repo-relative paths). This lets multi-repo reviews post each
-  // repo's findings to that repo's PR rather than dumping everything on root.
-  // Single-repo: everything goes to that repo. Multi-repo: a path present in
-  // exactly one repo is attributed there; an AMBIGUOUS path (present in >1 repo)
-  // or one absent everywhere is skipped rather than risk posting to the wrong PR.
-  const byRepo = new Map<string, typeof anchors>();
-  const ambiguous: typeof anchors = [];
-  const singleRepo = repos.length <= 1;
-  for (const anchor of anchors) {
-    let key: string | null = null;
-    if (singleRepo) {
-      key = rootRepo?.path ?? rootPath;
-    } else {
-      const matches = repos.filter((r) => existsSync(join(r.path, anchor.path)));
-      if (matches.length === 1) {
-        key = matches[0].path;
-      } else {
-        ambiguous.push(anchor);
-        continue;
-      }
-    }
-    const list = byRepo.get(key) ?? [];
-    list.push(anchor);
-    byRepo.set(key, list);
-  }
-
-  let anyPr = false;
-  const parts: string[] = [];
-  for (const [repoPath, repoAnchors] of byRepo) {
-    const target = await detectPrTarget(exec, repoPath);
-    if (!target) continue;
-    anyPr = true;
-    const result = await postPrLineComments(exec, repoPath, target, repoAnchors);
-    parts.push(`[PI-PI] Posted ${result.posted} PR line comment(s) to PR #${target.number} from your GitHub account.`);
-    if (result.skipped.length > 0) {
-      parts.push(`${result.skipped.length} finding(s) could not be mapped to the PR diff and were skipped:`);
-      parts.push(...result.skipped.map((a) => `  - ${a.path}:${a.line}`));
-    }
-  }
-
-  if (ambiguous.length > 0) {
-    parts.push(`${ambiguous.length} finding(s) skipped — their path is ambiguous across repositories (not posted to any PR):`);
-    parts.push(...ambiguous.map((a) => `  - ${a.path}:${a.line}`));
-  }
-
-  if (!anyPr) {
-    orchestrator.safeSendUserMessage("[PI-PI] PR comments requested but no authenticated GitHub PR was detected for the reviewed repositories — findings remain in the review report" + (mode === "ai_comment_pr" ? " and AI_COMMENT markers." : "."));
-    return;
-  }
-  orchestrator.safeSendUserMessage(parts.join("\n"));
 }
 
 function registerOrchestratorTools(orchestrator: Orchestrator): void {
@@ -2192,22 +2108,16 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       // Review-phase read-only exception is scoped to AI_COMMENT markers: the main
       // agent may only insert/remove `AI_COMMENT:` markers in source files. Enforce
       // it at the gate (the constraint is otherwise prompt-level only): a source
-      // write/edit is allowed only when it changes nothing but AI_COMMENT markers,
-      // AND only when the user opted into an AI_COMMENT anchoring mode. In markdown-
-      // only / PR-only modes, no source write is permitted at all.
+      // write/edit is allowed only when it changes nothing but AI_COMMENT markers.
+      // Publishing findings as file comments goes through this path.
       if (
         orchestrator.active?.state.phase === "review" &&
         !isPathInside(ppDir, resolvedPath)
       ) {
-        const anchoringMode = orchestrator.active.state.reviewAnchoringMode;
-        const aiCommentAllowed = anchoringMode === "ai_comment" || anchoringMode === "ai_comment_pr";
         const denial = {
           block: true as const,
-          reason: aiCommentAllowed
-            ? "Review phase is read-only except for inserting/removing AI_COMMENT: markers. This edit changes non-AI_COMMENT content — record the finding instead of applying a fix."
-            : "Review phase is read-only and the selected anchoring mode does not write to source. Record findings in the review report — do NOT edit source files.",
+          reason: "Review phase is read-only except for inserting/removing AI_COMMENT: markers. This edit changes non-AI_COMMENT content — record the finding instead of applying a fix.",
         };
-        if (!aiCommentAllowed) return denial;
         if (event.toolName === "edit") {
           const edits = Array.isArray((event.input as any)?.edits) ? (event.input as any).edits : [];
           const legacy = event.input as any;
@@ -2295,17 +2205,6 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
             ],
           };
         }
-      }
-
-      const codeReviewsDir = join(taskDir, "code-reviews");
-      if (
-        orchestrator.active.state.phase === "review" &&
-        isPathInside(codeReviewsDir, resolvedWrite) &&
-        /_final_pass-\d+\.md$/.test(basename(resolvedWrite))
-      ) {
-        void maybePostPrComments(orchestrator, resolvedWrite).catch((err) =>
-          getLogger().debug({ s: "pr-comments", err: err?.message }, "PR comment posting failed"),
-        );
       }
 
       const ppDir = resolve(orchestrator.cwd, ".pp");

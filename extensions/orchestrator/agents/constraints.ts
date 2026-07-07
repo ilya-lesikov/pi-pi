@@ -3,12 +3,13 @@ import type { Phase, TaskMode } from "../state.js";
 const READONLY_CONSTRAINT =
   "You MUST NOT edit, create, or delete any project file (source, tests, config, docs) — only files under .pp/state/ may be written — and you MUST NOT run state-changing shell commands. If you find a fix worth making, record it in your output; do NOT apply it here.";
 
-// The review phase is read-only EXCEPT for anchoring findings: when synthesizing a
-// review the main agent may insert or remove `AI_COMMENT:` markers in source files
-// (and nothing else — no fixes, no other edits). This is the reviewer→user mirror of
-// the user→reviewer `AI_REVIEW:` markers.
+// The review phase is read-only EXCEPT for publishing findings: the main agent may
+// insert or remove `AI_COMMENT:` markers in source files (file comments), and may
+// run `gh` to post/read GitHub PR line comments (PR comments) — and nothing else
+// (no fixes, no other edits, no other state-changing commands). This is the
+// reviewer→user mirror of the user→reviewer `AI_REVIEW:` markers.
 const REVIEW_READONLY_CONSTRAINT =
-  "You MUST NOT edit, create, or delete any project file (source, tests, config, docs) — only files under .pp/state/ may be written — and you MUST NOT run state-changing shell commands, WITH ONE EXCEPTION: when anchoring review findings you MAY insert or remove `AI_COMMENT:` markers in source files (in each file's native comment syntax) and nothing else. Do NOT apply fixes or make any other source change. If you find a fix worth making, record it in your output.";
+  "You MUST NOT edit, create, or delete any project file (source, tests, config, docs) — only files under .pp/state/ may be written — and you MUST NOT run state-changing shell commands, WITH ONE EXCEPTION: when publishing review findings you MAY insert or remove `AI_COMMENT:` markers in source files (in each file's native comment syntax) and MAY run `gh` to post or read GitHub PR line comments, and nothing else. Do NOT apply fixes or make any other source change. If you find a fix worth making, record it in your output.";
 
 const IMPLEMENT_CONSTRAINT =
   "Implement only the approved plan. Do NOT add scope or change plan items without recording why in the plan. If the same fix fails 3 times, stop and re-plan — do NOT keep retrying the same approach.";

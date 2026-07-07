@@ -6,55 +6,13 @@ import { registerAgentDefinitions, spawnViaRpc, waitForCompletion } from "../age
 import { createCodeReviewerAgent } from "../agents/code-reviewer.js";
 import { getContextDirs, getLatestSynthesizedPlan, getArtifactManifest } from "../context.js";
 import type { RepoInfo } from "../repo-utils.js";
-import type { ReviewAnchoringMode } from "../state.js";
 import type { PhaseSend } from "../transition-controller.js";
 
 function isEnabled(value: { enabled?: boolean } | undefined): boolean {
   return value?.enabled !== false;
 }
 
-// Reviewer→user anchoring marker (mirror of the user→reviewer `AI_REVIEW:` marker).
-// Kept as literal-token guidance (no regex/parser) so it matches the AI_REVIEW style.
-export const AI_COMMENT_MARKER_SYNTAX =
-  "(inside each file's native comment syntax, e.g. `// AI_COMMENT: ...`, `# AI_COMMENT: ...`, `<!-- AI_COMMENT: ... -->`)";
-
-function anchoringInstructions(mode: ReviewAnchoringMode, reviewsDir: string): string[] {
-  const wantsAiComment = mode === "ai_comment" || mode === "ai_comment_pr";
-  const wantsPr = mode === "pr" || mode === "ai_comment_pr";
-  if (!wantsAiComment && !wantsPr) {
-    return [
-      "",
-      "Anchoring: markdown only. Keep all findings in the synthesized review file above; do NOT edit source files or post to GitHub.",
-    ];
-  }
-  const lines: string[] = [
-    "",
-    "Anchor the accepted findings at their locations. Use the `ANCHORS:` blocks the reviewers emitted",
-    `(in ${reviewsDir}/) as the source of file:line for each finding — do NOT invent locations.`,
-    "",
-    "In the synthesized final-review file, you MUST include a machine-readable `ANCHORS:` block for the accepted findings — one line per finding in EXACTLY this format (the extension parses these lines to post PR comments):",
-    "ANCHORS:",
-    "<relative/path/from/repo/root>:<line> — <one-line finding>",
-    "Use `ANCHORS:` followed by `(none)` if there are no anchorable accepted findings.",
-  ];
-  if (wantsAiComment) {
-    lines.push(
-      "",
-      `AI_COMMENT source markers: for each accepted finding, insert an \`AI_COMMENT:\` marker ${AI_COMMENT_MARKER_SYNTAX} on or immediately above the cited line, briefly stating the finding. ` +
-        "This is the ONE source edit you are permitted (no fixes, no other changes). Do NOT touch lines you cannot anchor to a concrete finding. " +
-        "These markers are the reviewer→user channel — they will be addressed and removed later, and any left over are auto-stripped on task completion.",
-    );
-  }
-  if (wantsPr) {
-    lines.push(
-      "",
-      "GitHub PR line comments: the extension posts these from the user's account after this pass — you do NOT call `gh` yourself. Ensure every accepted finding has a precise `path:line` in the synthesized review so the extension can map it to the PR diff.",
-    );
-  }
-  return lines;
-}
-
-export function reviewSystemPrompt(taskDir: string, pass: number, phase?: string, mode?: "guided" | "autonomous", anchoringMode: ReviewAnchoringMode = "markdown"): string {
+export function reviewSystemPrompt(taskDir: string, pass: number, phase?: string, mode?: "guided" | "autonomous"): string {
   // Each phase writes/loads its review outputs in a distinct directory:
   // brainstorm -> brainstorm-reviews, plan -> plan-reviews, everything else
   // (implement/review) -> code-reviews. The apply_feedback prompt must point the
@@ -92,9 +50,10 @@ export function reviewSystemPrompt(taskDir: string, pass: number, phase?: string
   }
 
   // A standalone review task's "review" phase has nothing to implement: the output
-  // is the synthesized findings, optionally anchored into source (AI_COMMENT) and/or
-  // posted to the PR. So it must NOT get the "create a fix plan / implement / run
-  // afterImplement" tail that implement-phase review uses.
+  // is the synthesized findings. So it must NOT get the "create a fix plan /
+  // implement / run afterImplement" tail that implement-phase review uses. The user
+  // publishes findings (as file comments and/or GitHub PR comments) via the /pp
+  // "Publish" menu after synthesis — which consumes the ANCHORS: block below.
   if (phase === "review") {
     return [
       `[PI-PI — REVIEW CYCLE (pass ${pass})]`,
@@ -105,12 +64,17 @@ export function reviewSystemPrompt(taskDir: string, pass: number, phase?: string
       "You are a SYNTHESIZER: merge the reviewer outputs. Do NOT write your own review from scratch.",
       `- Do NOT create the ${reviewsDirName}/ directory yourself — the extension manages it.`,
       "- This is a standalone review: do NOT create a fix plan, implement fixes, run afterImplement commands, or commit.",
+      "- Do NOT publish findings now (no source edits, no `gh`); the user triggers publishing from the /pp menu.",
       "",
       "# Your job (in this order):",
       `1. Read ALL reviewer outputs from ${reviewsDir}/`,
       `2. Synthesize into ${reviewsDir}/<timestamp>_final_pass-${pass}.md`,
       "3. Present the synthesis to the user",
-      ...anchoringInstructions(anchoringMode, reviewsDir),
+      "",
+      "In the synthesized final-review file you MUST include a machine-readable `ANCHORS:` block for the accepted findings — one line per finding in EXACTLY this format (a later publish step consumes these lines):",
+      "ANCHORS:",
+      "<relative/path/from/repo/root>:<line> — <one-line finding>",
+      "Use the `ANCHORS:` blocks the reviewers emitted as the source of file:line — do NOT invent locations. Write `ANCHORS:` followed by `(none)` if there are no anchorable accepted findings.",
     ].join("\n");
   }
 
