@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { join } from "path";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs";
+import { tmpdir } from "os";
 import { getDefaultConfig, GLOBAL_CONFIG_PATH, parseDuration } from "./config.js";
 import * as configModule from "./config.js";
 import * as flantInfra from "./flant-infra.js";
-import { formatDuration, formatSourceTags, getConfigSourceInfo, pickMaxReviewPasses, showUsage } from "./pp-menu.js";
+import { formatDuration, formatSourceTags, getConfigSourceInfo, pickMaxReviewPasses, publishGuard, publishFileCommentsBanner, publishPrCommentsBanner, showUsage } from "./pp-menu.js";
 import { createUsageTracker } from "./usage-tracker.js";
 
 const USAGE_TRACKER_SYMBOL = Symbol.for("pi-pi:usage-tracker");
@@ -203,5 +205,47 @@ describe("pickMaxReviewPasses", () => {
   it("returns null when input is cancelled or empty", async () => {
     expect(await pickMaxReviewPasses(makeInputCtx([undefined]), 3)).toBeNull();
     expect(await pickMaxReviewPasses(makeInputCtx([""]), 3)).toBeNull();
+  });
+});
+
+describe("publishGuard", () => {
+  let taskDir: string;
+
+  afterEach(() => {
+    if (taskDir) rmSync(taskDir, { recursive: true, force: true });
+  });
+
+  function makeTask(): string {
+    taskDir = mkdtempSync(join(tmpdir(), "pp-guard-"));
+    return taskDir;
+  }
+
+  it("blocks publishing when no review has run (no code-reviews dir)", () => {
+    const dir = makeTask();
+    const msg = publishGuard(dir);
+    expect(msg).toBeTruthy();
+    expect(msg).toContain("review pass");
+  });
+
+  it("blocks publishing when a final_pass file exists but carries no ANCHORS block", () => {
+    const dir = makeTask();
+    mkdirSync(join(dir, "code-reviews"));
+    writeFileSync(join(dir, "code-reviews", "20260101-000000_final_pass-1.md"), "# Findings\n\nSome prose without anchors.\n");
+    expect(publishGuard(dir)).toBeTruthy();
+  });
+
+  it("allows publishing when the latest final_pass file has an ANCHORS block", () => {
+    const dir = makeTask();
+    mkdirSync(join(dir, "code-reviews"));
+    writeFileSync(join(dir, "code-reviews", "20260101-000000_final_pass-1.md"), "ANCHORS:\nsrc/a.ts:10 — bug\n");
+    expect(publishGuard(dir)).toBeUndefined();
+  });
+
+  it("resolves the newest final_pass file by name and honors its ANCHORS block", () => {
+    const dir = makeTask();
+    mkdirSync(join(dir, "code-reviews"));
+    writeFileSync(join(dir, "code-reviews", "20260101-000000_final_pass-1.md"), "ANCHORS:\nsrc/a.ts:10 — bug\n");
+    writeFileSync(join(dir, "code-reviews", "20260102-000000_final_pass-2.md"), "# Findings\n\nno anchors here\n");
+    expect(publishGuard(dir)).toBeTruthy();
   });
 });
