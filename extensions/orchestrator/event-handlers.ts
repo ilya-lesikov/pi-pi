@@ -559,6 +559,24 @@ export async function checkoutPrHead(
         `${ff.stderr?.trim() ? `\n\n${ff.stderr.trim()}` : ""}`,
     };
   }
+
+  // `git merge --ff-only <ancestor>` returns exit 0 ("Already up to date") WITHOUT moving HEAD
+  // when the branch is already ahead of the PR head, so a zero exit is not proof we landed on it.
+  // Re-read HEAD and HALT if the branch carries commits beyond the PR head.
+  let after;
+  try {
+    after = await run(["rev-parse", "HEAD"]);
+  } catch (err: any) {
+    return { ok: false, message: `Cannot confirm HEAD of ${repoPath} after fast-forward: ${err?.message ?? "git rev-parse failed"}` };
+  }
+  if (after.stdout.trim() !== oid) {
+    return {
+      ok: false,
+      message:
+        `HALT: ${repoPath} (branch "${currentBranch}") is ahead of the PR head ${oid} — it has commits the PR head does not. ` +
+        "Push them to the PR (or check out the exact PR head), then ask me to continue. I will not move HEAD backwards for you.",
+    };
+  }
   return { ok: true, message: `${repoPath} fast-forwarded to PR head ${oid}.` };
 }
 

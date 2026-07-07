@@ -455,13 +455,24 @@ describe("main-turn stall watchdog (BUG-2)", () => {
 });
 
 describe("checkoutPrHead", () => {
-  function makeGitOrchestrator(script: Record<string, { code: number; stdout?: string; stderr?: string }>) {
+  type GitResult = { code: number; stdout?: string; stderr?: string };
+  // A key maps to a single result, or an array consumed in call order (last entry repeats).
+  function makeGitOrchestrator(script: Record<string, GitResult | GitResult[]>) {
     const calls: string[][] = [];
+    const seen: Record<string, number> = {};
     const exec = vi.fn(async (_cmd: string, args: string[]) => {
       calls.push(args);
       const key = args.join(" ");
       const matched = Object.keys(script).find((k) => key.startsWith(k));
-      const res = matched ? script[matched] : { code: 0, stdout: "", stderr: "" };
+      const entry = matched ? script[matched] : { code: 0, stdout: "", stderr: "" };
+      let res: GitResult;
+      if (Array.isArray(entry)) {
+        const i = Math.min(seen[matched!] ?? 0, entry.length - 1);
+        seen[matched!] = (seen[matched!] ?? 0) + 1;
+        res = entry[i];
+      } else {
+        res = entry;
+      }
       return { code: res.code, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
     });
     return { orchestrator: { pi: { exec } } as any, calls };
@@ -503,7 +514,7 @@ describe("checkoutPrHead", () => {
   it("fast-forwards a clean branch that is behind the PR head, without checkout or force", async () => {
     const { orchestrator, calls } = makeGitOrchestrator({
       "status --porcelain": { code: 0, stdout: "" },
-      "rev-parse HEAD": { code: 0, stdout: "oldsha\n" },
+      "rev-parse HEAD": [{ code: 0, stdout: "oldsha\n" }, { code: 0, stdout: "abc123\n" }],
       "rev-parse --abbrev-ref HEAD": { code: 0, stdout: "feature\n" },
       "merge --ff-only abc123": { code: 0, stdout: "Updating oldsha..abc123\n" },
     });
@@ -511,6 +522,21 @@ describe("checkoutPrHead", () => {
     expect(result.ok).toBe(true);
     expect(result.message).toContain("fast-forwarded");
     expect(calls.some((c) => c[0] === "merge" && c[1] === "--ff-only" && c[2] === "abc123")).toBe(true);
+    expect(calls.some((c) => c[0] === "checkout")).toBe(false);
+  });
+
+  it("HALTs when the branch is AHEAD of the PR head (ff-only is a no-op that leaves HEAD ahead)", async () => {
+    const { orchestrator, calls } = makeGitOrchestrator({
+      "status --porcelain": { code: 0, stdout: "" },
+      // ff-only to an ancestor returns exit 0 ("Already up to date") without moving HEAD.
+      "rev-parse HEAD": { code: 0, stdout: "aheadsha\n" },
+      "rev-parse --abbrev-ref HEAD": { code: 0, stdout: "feature\n" },
+      "merge --ff-only abc123": { code: 0, stdout: "Already up to date.\n" },
+    });
+    const result = await checkoutPrHead(orchestrator, "/repo", "feature", "abc123");
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain("HALT");
+    expect(result.message).toContain("ahead of the PR head");
     expect(calls.some((c) => c[0] === "checkout")).toBe(false);
   });
 

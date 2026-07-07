@@ -5,8 +5,21 @@ import { tmpdir } from "os";
 import { getDefaultConfig, GLOBAL_CONFIG_PATH, parseDuration } from "./config.js";
 import * as configModule from "./config.js";
 import * as flantInfra from "./flant-infra.js";
-import { formatDuration, formatSourceTags, getConfigSourceInfo, pickMaxReviewPasses, publishGuard, publishFileCommentsBanner, publishPrCommentsBanner, showUsage } from "./pp-menu.js";
+import { formatDuration, formatSourceTags, getConfigSourceInfo, pickMaxReviewPasses, publishGuard, publishFileCommentsBanner, publishPrCommentsBanner, showActiveTaskMenu, showUsage } from "./pp-menu.js";
 import { createUsageTracker } from "./usage-tracker.js";
+
+// Drives showActiveTaskMenu's submenu navigation by scripting selectOption answers.
+const askQueue: string[] = [];
+const askQuestions: string[] = [];
+vi.mock("../../3p/pi-ask-user/index.js", () => ({
+  isCancel: (r: any) => r?.__cancel === true,
+  askUser: vi.fn(async (_ctx: any, opts: any) => {
+    askQuestions.push(opts.question);
+    const next = askQueue.shift();
+    if (next === undefined || next === "__ESC__") return { __cancel: true, reason: "user" };
+    return { kind: "selection", selections: [next] };
+  }),
+}));
 
 const USAGE_TRACKER_SYMBOL = Symbol.for("pi-pi:usage-tracker");
 
@@ -275,5 +288,57 @@ describe("publish banners", () => {
       expect(banner).toContain("the ticket");
       expect(banner).toContain("self-contained");
     }
+  });
+});
+
+describe("showActiveTaskMenu Publish/Next Back navigation (#6)", () => {
+  let taskDir: string;
+
+  afterEach(() => {
+    askQueue.length = 0;
+    askQuestions.length = 0;
+    if (taskDir) rmSync(taskDir, { recursive: true, force: true });
+  });
+
+  function makeReviewOrchestrator(): any {
+    taskDir = mkdtempSync(join(tmpdir(), "pp-nav-"));
+    return {
+      active: {
+        type: "review",
+        dir: taskDir,
+        state: { phase: "review", step: "llm_work", mode: "guided" },
+      },
+      transitionController: {
+        isRunning: () => false,
+        abortMainAgent: () => {},
+      },
+      cancelPendingRetry: () => {},
+      abortAllSubagents: () => {},
+    };
+  }
+
+  const ctx = { ui: { notify: () => {} }, waitForIdle: async () => {}, abort: () => {} };
+
+  it("Publish 'Back' re-renders the Next submenu instead of the top-level menu", async () => {
+    const orchestrator = makeReviewOrchestrator();
+    // /pp -> Next -> Publish -> Back (should return to Next) -> Back (to top-level) -> Back (exit).
+    askQueue.push("Next", "Publish", "Back", "Back", "Back");
+    const result = await showActiveTaskMenu(orchestrator, ctx, "/pp", "tool");
+    expect(result).toBe("");
+    // After Publish's Back we must see the "Next" submenu rendered again before the
+    // top-level menu reappears: questions = [top, Next, Publish, Next(again), top].
+    const nextRenders = askQuestions.filter((q) => q === "Next").length;
+    expect(nextRenders).toBe(2);
+    expect(askQuestions[askQuestions.length - 1]).toContain("/pp");
+  });
+
+  it("Next 'Back' returns straight to the top-level menu", async () => {
+    const orchestrator = makeReviewOrchestrator();
+    askQueue.push("Next", "Back", "Back");
+    const result = await showActiveTaskMenu(orchestrator, ctx, "/pp", "tool");
+    expect(result).toBe("");
+    expect(askQuestions.filter((q) => q === "Next").length).toBe(1);
+    // Top-level rendered twice (initial + after Next's Back), Next once.
+    expect(askQuestions.filter((q) => q.startsWith("/pp")).length).toBe(2);
   });
 });
