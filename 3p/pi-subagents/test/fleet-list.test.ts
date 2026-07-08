@@ -177,6 +177,19 @@ describe("FleetList navigation", () => {
     expect(h.render().some(l => l.includes("← for agents"))).toBe(true);
   });
 
+  it("still respects an open overlay AFTER an Esc dismissal (guard survives hide)", () => {
+    const h = harness([makeRecord()]);
+    h.render();     // capture the overlay probe (widget renders before input)
+    h.press(DOWN);  // activate
+    h.press(ESC);   // dismiss — widget hidden, this.tui nulled
+    expect(h.render()).toEqual([]);
+    // /agents menu opens: ↓/← must fall through, not reopen/steal keys.
+    h.setOverlayOpen(true);
+    expect(h.press(DOWN)).toBeUndefined();
+    expect(h.press(LEFT)).toBeUndefined();
+    expect(h.render()).toEqual([]);
+  });
+
   it("ignores key-release events so one tap moves exactly one row", () => {
     const h = harness([
       makeRecord({ id: "a1", description: "one" }),
@@ -242,6 +255,15 @@ describe("FleetList navigation", () => {
     expect(h.render()).toEqual([]);
     // Arrow key at the empty prompt brings it back, active.
     expect(h.press(DOWN)).toEqual({ consume: true });
+    expect(h.render().some(l => l.includes("enter view"))).toBe(true);
+  });
+
+  it("reopens on manual ← after an Esc dismissal", () => {
+    const h = harness([makeRecord()]);
+    h.press(DOWN);
+    h.press(ESC);
+    expect(h.render()).toEqual([]);
+    expect(h.press(LEFT)).toEqual({ consume: true });
     expect(h.render().some(l => l.includes("enter view"))).toBe(true);
   });
 

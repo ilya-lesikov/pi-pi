@@ -77,6 +77,14 @@ function rightAlign(left: string, right: string, width: number): string {
 export class FleetList {
   private ui: FleetUICtx | undefined;
   private tui: any | undefined;
+  /**
+   * Stable TUI singleton reference kept for `handleKey`'s overlay guard. Unlike
+   * `this.tui` (nulled whenever the widget is hidden), this survives hide/dismiss
+   * so the guard can still see `hasOverlay()` while the panel is closed — without
+   * it, an Esc-dismissed FleetView would resume stealing arrow keys under an
+   * open /agents menu. Cleared only on setUICtx/dispose.
+   */
+  private overlayProbe: { hasOverlay?: () => boolean } | undefined;
   private inputUnsub: (() => void) | undefined;
   private widgetRegistered = false;
   private timer: ReturnType<typeof setInterval> | undefined;
@@ -118,6 +126,7 @@ export class FleetList {
     this.ui = ui;
     this.widgetRegistered = false;
     this.tui = undefined;
+    this.overlayProbe = undefined;
     this.inputUnsub = ui.onTerminalInput(data => this.handleKey(data));
   }
 
@@ -143,6 +152,7 @@ export class FleetList {
     if (this.ui && this.widgetRegistered) this.ui.setWidget(FLEET_KEY, undefined);
     this.widgetRegistered = false;
     this.tui = undefined;
+    this.overlayProbe = undefined;
     this.active = false;
     // Null last so a `viewerClose()` microtask above can't re-register the widget.
     this.ui = undefined;
@@ -173,6 +183,7 @@ export class FleetList {
     if (!this.widgetRegistered) {
       this.ui.setWidget(FLEET_KEY, (tui, theme) => {
         this.tui = tui;
+        this.overlayProbe = tui; // persists past widget hide for the overlay guard
         return {
           render: (w: number) => this.renderBar(w, theme),
           invalidate: () => { this.widgetRegistered = false; this.tui = undefined; },
@@ -230,7 +241,7 @@ export class FleetList {
     // it own arrow keys — extension input listeners run before the focused
     // overlay in TUI.handleInput, so without this we'd steal navigation keys
     // whenever the prompt happens to be empty.
-    if (this.tui?.hasOverlay?.()) {
+    if (this.overlayProbe?.hasOverlay?.()) {
       if (this.active) this.deactivate();
       return undefined;
     }
