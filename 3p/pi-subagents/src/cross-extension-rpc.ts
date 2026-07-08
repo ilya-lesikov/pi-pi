@@ -9,6 +9,8 @@
  *   error   → { success: false, error: string }
  */
 
+import { type ModelRegistry, resolveModel } from "./model-resolver.js";
+
 /** Minimal event bus interface needed by the RPC handlers. */
 export interface EventBus {
   on(event: string, handler: (data: unknown) => void): () => void;
@@ -29,18 +31,10 @@ export interface SpawnCapable {
   abort(id: string): boolean;
 }
 
-export interface SpawnRequest {
-  requestId: string;
-  type: string;
-  prompt: string;
-  options?: any;
-}
-
 export interface RpcDeps {
   events: EventBus;
   pi: unknown;                    // passed through to manager.spawn
   getCtx: () => unknown | undefined;  // returns current ExtensionContext
-  isSubagentSession?: (ctx: unknown) => boolean;
   manager: SpawnCapable;
 }
 
@@ -48,10 +42,6 @@ export interface RpcHandle {
   unsubPing: () => void;
   unsubSpawn: () => void;
   unsubStop: () => void;
-}
-
-function emitReply(events: EventBus, channel: string, requestId: string, reply: RpcReply<unknown>): void {
-  events.emit(`${channel}:reply:${requestId}`, reply);
 }
 
 /**
@@ -83,47 +73,44 @@ function handleRpc<P extends { requestId: string }>(
  * Returns unsub functions for cleanup.
  */
 export function registerRpcHandlers(deps: RpcDeps): RpcHandle {
-  const { events, pi, getCtx, isSubagentSession, manager } = deps;
+  const { events, pi, getCtx, manager } = deps;
 
   const unsubPing = handleRpc(events, "subagents:rpc:ping", () => {
     return { version: PROTOCOL_VERSION };
   });
 
-  const unsubSpawn = events.on("subagents:rpc:spawn", (raw: unknown) => {
-    const params = raw as SpawnRequest;
-    const ctx = getCtx();
-    if (!ctx) {
-      emitReply(events, "subagents:rpc:spawn", params.requestId, { success: false, error: "No active session" });
-      return;
-    }
-    if (isSubagentSession?.(ctx)) {
-      emitReply(events, "subagents:rpc:spawn", params.requestId, {
-        success: false,
-        error: "Cannot spawn subagents from a subagent session context",
-      });
-      return;
-    }
+  const unsubSpawn = handleRpc<{ requestId: string; type: string; prompt: string; options?: any }>(
+    events, "subagents:rpc:spawn", ({ type, prompt, options }) => {
+      const ctx = getCtx();
+      if (!ctx) throw new Error("No active session");
 
-    queueMicrotask(() => {
-      try {
-        const rawOpts = params.options ?? {};
-        const spawnOpts = { ...rawOpts, isBackground: rawOpts.isBackground ?? rawOpts.run_in_background ?? true };
-        const id = manager.spawn(pi, ctx, params.type, params.prompt, spawnOpts);
-        events.emit("subagents:created", {
-          id,
-          type: params.type,
-          description: params.options?.description ?? params.type,
-          isBackground: params.options?.run_in_background ?? true,
-        });
-        emitReply(events, "subagents:rpc:spawn", params.requestId, { success: true, data: { id } });
-      } catch (err: any) {
-        emitReply(events, "subagents:rpc:spawn", params.requestId, {
-          success: false,
-          error: err?.message ?? String(err),
-        });
+      // Cross-extension RPC callers (e.g. pi-tasks TaskExecute) naturally
+      // forward serializable values, so options.model can be a string like
+      // "openai-codex/gpt-5.5". Resolve it to a real Model instance here
+      // — same pattern the scheduler path already uses — so the spawned
+      // agent's auth lookup doesn't crash with "No API key found for
+      // undefined".
+      let normalizedOptions = options ?? {};
+      if (typeof normalizedOptions.model === "string") {
+        const registry = (ctx as { modelRegistry?: ModelRegistry }).modelRegistry;
+        if (!registry) {
+          throw new Error(
+            `Model override "${normalizedOptions.model}" provided but ctx.modelRegistry is unavailable`,
+          );
+        }
+        const resolved = resolveModel(normalizedOptions.model, registry);
+        if (typeof resolved === "string") {
+          // resolveModel returns a human-readable error string when the
+          // input doesn't match any available model. Surface it instead of
+          // silently falling back so the caller sees the auth/typo issue.
+          throw new Error(resolved);
+        }
+        normalizedOptions = { ...normalizedOptions, model: resolved };
       }
-    });
-  });
+
+      return { id: manager.spawn(pi, ctx, type, prompt, normalizedOptions) };
+    },
+  );
 
   const unsubStop = handleRpc<{ requestId: string; agentId: string }>(
     events, "subagents:rpc:stop", ({ agentId }) => {

@@ -1,11 +1,10 @@
 /**
- * custom-agents.ts — Load user-defined agents from project (.pi/agents/) and global (~/.pi/agent/agents/) locations.
+ * custom-agents.ts — Load user-defined agents from project (.pi/agents/) and global ($PI_CODING_AGENT_DIR/agents/, default ~/.pi/agent/agents/) locations.
  */
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { BUILTIN_TOOL_NAMES } from "./agent-types.js";
 import type { AgentConfig, MemoryScope, ThinkingLevel } from "./types.js";
 
@@ -13,13 +12,13 @@ import type { AgentConfig, MemoryScope, ThinkingLevel } from "./types.js";
  * Scan for custom agent .md files from multiple locations.
  * Discovery hierarchy (higher priority wins):
  *   1. Project: <cwd>/.pi/agents/*.md
- *   2. Global:  ~/.pi/agent/agents/*.md
+ *   2. Global:  $PI_CODING_AGENT_DIR/agents/*.md (default: ~/.pi/agent/agents/*.md)
  *
  * Project-level agents override global ones with the same name.
  * Any name is allowed — names matching defaults (e.g. "Explore") override them.
  */
 export function loadCustomAgents(cwd: string): Map<string, AgentConfig> {
-  const globalDir = join(homedir(), ".pi", "agent", "agents");
+  const globalDir = join(getAgentDir(), "agents");
   const projectDir = join(cwd, ".pi", "agents");
 
   const agents = new Map<string, AgentConfig>();
@@ -51,17 +50,23 @@ function loadFromDir(dir: string, agents: Map<string, AgentConfig>, source: "pro
 
     const { frontmatter: fm, body } = parseFrontmatter<Record<string, unknown>>(content);
 
+    const { builtinToolNames, extSelectors } = parseToolsField(fm.tools);
+
     agents.set(name, {
       name,
       displayName: str(fm.display_name),
       description: str(fm.description) ?? name,
-      builtinToolNames: csvList(fm.tools, BUILTIN_TOOL_NAMES),
+      builtinToolNames,
+      extSelectors,
       disallowedTools: csvListOptional(fm.disallowed_tools),
       extensions: inheritField(fm.extensions ?? fm.inherit_extensions),
+      excludeExtensions: csvListOptional(fm.exclude_extensions),
       skills: inheritField(fm.skills ?? fm.inherit_skills),
       model: str(fm.model),
       thinking: str(fm.thinking) as ThinkingLevel | undefined,
       maxTurns: nonNegativeInt(fm.max_turns),
+      persistSession: fm.persist_session != null ? fm.persist_session === true : undefined,
+      sessionDir: str(fm.session_dir),
       systemPrompt: body.trim(),
       promptMode: fm.prompt_mode === "append" ? "append" : "replace",
       inheritContext: fm.inherit_context != null ? fm.inherit_context === true : undefined,
@@ -106,6 +111,25 @@ function parseCsvField(val: unknown): string[] | undefined {
 function csvList(val: unknown, defaults: string[]): string[] {
   if (val === undefined || val === null) return defaults;
   return parseCsvField(val) ?? [];
+}
+
+/**
+ * Partition the `tools:` CSV into the built-in tool allowlist and raw `ext:` selectors.
+ * `*` (and the case-insensitive alias `all`, for `tools: all`) expands to all
+ * built-ins; plain entries are built-in names; `ext:` entries are extension-tool
+ * selectors parsed later by the runner. omitted → all built-ins, no selectors.
+ * `tools:` present with only `ext:` entries → zero built-ins (use `*`).
+ */
+function parseToolsField(val: unknown): { builtinToolNames: string[]; extSelectors: string[] | undefined } {
+  const entries = csvList(val, BUILTIN_TOOL_NAMES);
+  const isWildcard = (e: string) => e === "*" || e.toLowerCase() === "all";
+  const hasWildcard = entries.some(isWildcard);
+  const plain = entries.filter(e => !isWildcard(e) && !e.startsWith("ext:"));
+  const extEntries = entries.filter(e => e.startsWith("ext:"));
+  return {
+    builtinToolNames: hasWildcard ? [...new Set([...BUILTIN_TOOL_NAMES, ...plain])] : plain,
+    extSelectors: extEntries.length > 0 ? extEntries : undefined,
+  };
 }
 
 /**

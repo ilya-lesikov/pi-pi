@@ -6,15 +6,19 @@
  */
 
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
-import { type Component, matchesKey, type TUI, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { type Component, Input, matchesKey, type TUI, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { extractText } from "../context.js";
 import type { AgentRecord } from "../types.js";
+import { getLifetimeTotal, getSessionContextPercent } from "../usage.js";
 import type { Theme } from "./agent-widget.js";
-import { type AgentActivity, describeActivity, formatDuration, formatTokens, getDisplayName, getPromptModeLabel } from "./agent-widget.js";
+import { type AgentActivity, buildInvocationTags, describeActivity, formatDuration, formatSessionTokens, getDisplayName, getPromptModeLabel } from "./agent-widget.js";
+import { createViewerKeys, type ViewerKeybindings, type ViewerKeys } from "./viewer-keys.js";
 
-/** Lines consumed by chrome: top border + header + header sep + footer sep + footer + bottom border. */
-const CHROME_LINES = 6;
+/** Base lines consumed by chrome: top border + header + header sep + footer sep + footer + bottom border. */
+const CHROME_LINES_BASE = 6;
 const MIN_VIEWPORT = 3;
+/** Height ceiling shared by the overlay's `maxHeight` and the viewer's internal viewport cap. */
+export const VIEWPORT_HEIGHT_PCT = 70;
 
 export class ConversationViewer implements Component {
   private scrollOffset = 0;
@@ -22,6 +26,11 @@ export class ConversationViewer implements Component {
   private unsubscribe: (() => void) | undefined;
   private lastInnerW = 0;
   private closed = false;
+  /** Two-press confirm guard for the stop key, so a stray key can't kill the agent. */
+  private stopArmed = false;
+  private keys: ViewerKeys;
+  /** Steering composer — present while the user is typing a message to the agent. */
+  private composer: Input | undefined;
 
   constructor(
     private tui: TUI,
@@ -30,7 +39,14 @@ export class ConversationViewer implements Component {
     private activity: AgentActivity | undefined,
     private theme: Theme,
     private done: (result: undefined) => void,
+    /** Abort the agent shown here. Omitted → no stop affordance (e.g. read-only history). */
+    private onStop?: () => void,
+    /** User keybindings from `ctx.ui.custom()`. Omitted → hardcoded defaults. */
+    keybindings?: ViewerKeybindings,
+    /** Send a steering message to the agent. Omitted → no compose affordance. */
+    private onSteer?: (message: string) => void,
   ) {
+    this.keys = createViewerKeys(keybindings);
     this.unsubscribe = session.subscribe(() => {
       if (this.closed) return;
       this.tui.requestRender();
@@ -38,26 +54,59 @@ export class ConversationViewer implements Component {
   }
 
   handleInput(data: string): void {
+    // While composing a steer message, the input owns all keys (Enter sends,
+    // Esc cancels — both wired in openComposer()). Editing keys flow through.
+    if (this.composer) {
+      this.composer.handleInput(data);
+      this.tui.requestRender();
+      return;
+    }
+
     if (matchesKey(data, "escape") || matchesKey(data, "q")) {
       this.closed = true;
       this.done(undefined);
       return;
     }
 
+    // Enter opens the steering composer (only while the agent can still be
+    // steered) — then type + Enter sends, Esc or an empty submit returns. When
+    // not steerable, fall through so the key still disarms a pending stop.
+    if (matchesKey(data, "enter") && this.canSteer()) {
+      this.stopArmed = false;
+      this.openComposer();
+      return;
+    }
+
+    // Stop/abort the agent (only while it can still be stopped). Two-press:
+    // first "x" arms, second confirms — any other key disarms.
+    if (matchesKey(data, "x")) {
+      if (this.isStoppable()) {
+        if (this.stopArmed) {
+          this.stopArmed = false;
+          this.onStop?.();
+        } else {
+          this.stopArmed = true;
+        }
+        this.tui.requestRender();
+      }
+      return;
+    }
+    if (this.stopArmed) this.stopArmed = false;
+
     const totalLines = this.buildContentLines(this.lastInnerW).length;
     const viewportHeight = this.viewportHeight();
     const maxScroll = Math.max(0, totalLines - viewportHeight);
 
-    if (matchesKey(data, "up") || matchesKey(data, "k")) {
+    if (this.keys.scrollUp(data)) {
       this.scrollOffset = Math.max(0, this.scrollOffset - 1);
       this.autoScroll = this.scrollOffset >= maxScroll;
-    } else if (matchesKey(data, "down") || matchesKey(data, "j")) {
+    } else if (this.keys.scrollDown(data)) {
       this.scrollOffset = Math.min(maxScroll, this.scrollOffset + 1);
       this.autoScroll = this.scrollOffset >= maxScroll;
-    } else if (matchesKey(data, "pageUp")) {
+    } else if (this.keys.pageUp(data)) {
       this.scrollOffset = Math.max(0, this.scrollOffset - viewportHeight);
       this.autoScroll = false;
-    } else if (matchesKey(data, "pageDown")) {
+    } else if (this.keys.pageDown(data)) {
       this.scrollOffset = Math.min(maxScroll, this.scrollOffset + viewportHeight);
       this.autoScroll = this.scrollOffset >= maxScroll;
     } else if (matchesKey(data, "home")) {
@@ -103,16 +152,17 @@ export class ConversationViewer implements Component {
     const headerParts: string[] = [duration];
     const toolUses = this.activity?.toolUses ?? this.record.toolUses;
     if (toolUses > 0) headerParts.unshift(`${toolUses} tool${toolUses === 1 ? "" : "s"}`);
-    if (this.activity?.session) {
-      try {
-        const tokens = this.activity.session.getSessionStats().tokens.total;
-        if (tokens > 0) headerParts.push(formatTokens(tokens));
-      } catch { /* */ }
+    const tokens = getLifetimeTotal(this.activity?.lifetimeUsage);
+    if (tokens > 0) {
+      const percent = getSessionContextPercent(this.activity?.session);
+      headerParts.push(formatSessionTokens(tokens, percent, th, this.record.compactionCount));
     }
 
     lines.push(row(
       `${statusIcon} ${th.bold(name)}${modeTag}  ${th.fg("muted", this.record.description)} ${th.fg("dim", "·")} ${th.fg("dim", headerParts.join(" · "))}`,
     ));
+    const invocationLine = this.invocationLine();
+    if (invocationLine) lines.push(row(invocationLine));
     lines.push(hrMid);
 
     // Content area — rebuild every render (live data, no cache needed)
@@ -133,16 +183,70 @@ export class ConversationViewer implements Component {
 
     // Footer
     lines.push(hrMid);
-    const scrollPct = contentLines.length <= viewportHeight
-      ? "100%"
-      : `${Math.round(((visibleStart + viewportHeight) / contentLines.length) * 100)}%`;
-    const footerLeft = th.fg("dim", `${contentLines.length} lines · ${scrollPct}`);
-    const footerRight = th.fg("dim", "↑↓ scroll · PgUp/PgDn · Esc close");
-    const footerGap = Math.max(1, innerW - visibleWidth(footerLeft) - visibleWidth(footerRight));
-    lines.push(row(footerLeft + " ".repeat(footerGap) + footerRight));
+    if (this.composer) {
+      // Composer row: the Input renders its own `> ` prompt and cursor.
+      lines.push(row(this.composer.render(innerW)[0] ?? ""));
+      const composeHint = th.fg("dim", "Enter send · Esc cancel");
+      const composeLeft = th.fg("accent", "✎ steer");
+      const composeGap = Math.max(1, innerW - visibleWidth(composeLeft) - visibleWidth(composeHint));
+      lines.push(row(composeLeft + " ".repeat(composeGap) + composeHint));
+    } else {
+      // Actions on the left, navigation on the right. The scroll hint keeps its
+      // full key list so the less-obvious bindings stay discoverable; it leads
+      // the right group so "Esc close" is the only part that truncates first.
+      const sep = th.fg("dim", " · ");
+      const actions: string[] = [];
+      if (this.canSteer()) actions.push(th.fg("dim", "Enter steer"));
+      if (this.isStoppable()) {
+        actions.push(this.stopArmed ? th.fg("error", "x again to STOP") : th.fg("dim", "x stop"));
+      }
+      const footerRight = th.fg("dim", "↑↓ scroll · PgUp/PgDn or Shift+↑↓ · Esc close");
+
+      // Prepend the line-count/scroll-% readout only when there's spare width —
+      // it's the first thing dropped so it never crowds out the hints.
+      const scrollPct = contentLines.length <= viewportHeight
+        ? "100%"
+        : `${Math.round(((visibleStart + viewportHeight) / contentLines.length) * 100)}%`;
+      const count = th.fg("dim", `${contentLines.length} lines · ${scrollPct}`);
+      const withCount = [count, ...actions].join(sep);
+      const footerLeft = visibleWidth(withCount) + visibleWidth(footerRight) + 1 <= innerW
+        ? withCount
+        : actions.join(sep);
+
+      const footerGap = Math.max(1, innerW - visibleWidth(footerLeft) - visibleWidth(footerRight));
+      lines.push(row(footerLeft + " ".repeat(footerGap) + footerRight));
+    }
     lines.push(hrBot);
 
     return lines;
+  }
+
+  /** Stoppable only when a stop handler exists and the agent is still active. */
+  private isStoppable(): boolean {
+    return !!this.onStop && (this.record.status === "running" || this.record.status === "queued");
+  }
+
+  /** Steerable only when a steer handler exists and the agent is still active. */
+  private canSteer(): boolean {
+    return !!this.onSteer && (this.record.status === "running" || this.record.status === "queued");
+  }
+
+  /** Open the inline steering composer and route subsequent input to it. */
+  private openComposer(): void {
+    const input = new Input();
+    input.focused = true;
+    input.onSubmit = (value: string) => {
+      const message = value.trim();
+      this.composer = undefined;
+      if (message) this.onSteer?.(message);
+      this.tui.requestRender();
+    };
+    input.onEscape = () => {
+      this.composer = undefined;
+      this.tui.requestRender();
+    };
+    this.composer = input;
+    this.tui.requestRender();
   }
 
   invalidate(): void { /* no cached state to clear */ }
@@ -158,7 +262,22 @@ export class ConversationViewer implements Component {
   // ---- Private ----
 
   private viewportHeight(): number {
-    return Math.max(MIN_VIEWPORT, this.tui.terminal.rows - CHROME_LINES);
+    // Cap mirrors the overlay's maxHeight — otherwise the viewer would render
+    // more lines than the overlay shows and clip the footer.
+    const maxRows = Math.floor((this.tui.terminal.rows * VIEWPORT_HEIGHT_PCT) / 100);
+    return Math.max(MIN_VIEWPORT, maxRows - this.chromeLines());
+  }
+
+  private chromeLines(): number {
+    // The composer adds one row above the footer hint while it's open.
+    return CHROME_LINES_BASE + (this.invocationLine() ? 1 : 0) + (this.composer ? 1 : 0);
+  }
+
+  private invocationLine(): string | undefined {
+    const { modelName, tags } = buildInvocationTags(this.record.invocation);
+    const parts = modelName ? [modelName, ...tags] : tags;
+    if (parts.length === 0) return undefined;
+    return this.theme.fg("dim", `  ↳ ${parts.join(" · ")}`);
   }
 
   private buildContentLines(width: number): string[] {
@@ -167,7 +286,6 @@ export class ConversationViewer implements Component {
     const th = this.theme;
     const messages = this.session.messages;
     const lines: string[] = [];
-    const detab = (s: string) => s.replace(/\t/g, "    ");
 
     if (messages.length === 0) {
       lines.push(th.fg("dim", "(waiting for first message...)"));
@@ -183,7 +301,7 @@ export class ConversationViewer implements Component {
         if (!text.trim()) continue;
         if (needsSeparator) lines.push(th.fg("dim", "───"));
         lines.push(th.fg("accent", "[User]"));
-        for (const line of wrapTextWithAnsi(detab(text.trim()), width)) {
+        for (const line of wrapTextWithAnsi(text.trim(), width)) {
           lines.push(line);
         }
       } else if (msg.role === "assistant") {
@@ -198,7 +316,7 @@ export class ConversationViewer implements Component {
         if (needsSeparator) lines.push(th.fg("dim", "───"));
         lines.push(th.bold("[Assistant]"));
         if (textParts.length > 0) {
-          for (const line of wrapTextWithAnsi(detab(textParts.join("\n").trim()), width)) {
+          for (const line of wrapTextWithAnsi(textParts.join("\n").trim(), width)) {
             lines.push(line);
           }
         }
@@ -211,18 +329,18 @@ export class ConversationViewer implements Component {
         if (!truncated.trim()) continue;
         if (needsSeparator) lines.push(th.fg("dim", "───"));
         lines.push(th.fg("dim", "[Result]"));
-        for (const line of wrapTextWithAnsi(detab(truncated.trim()), width)) {
+        for (const line of wrapTextWithAnsi(truncated.trim(), width)) {
           lines.push(th.fg("dim", line));
         }
       } else if ((msg as any).role === "bashExecution") {
         const bash = msg as any;
         if (needsSeparator) lines.push(th.fg("dim", "───"));
-        lines.push(truncateToWidth(th.fg("muted", `  $ ${detab(bash.command)}`), width));
+        lines.push(truncateToWidth(th.fg("muted", `  $ ${bash.command}`), width));
         if (bash.output?.trim()) {
           const out = bash.output.length > 500
             ? bash.output.slice(0, 500) + "... (truncated)"
             : bash.output;
-          for (const line of wrapTextWithAnsi(detab(out.trim()), width)) {
+          for (const line of wrapTextWithAnsi(out.trim(), width)) {
             lines.push(th.fg("dim", line));
           }
         }
@@ -239,12 +357,6 @@ export class ConversationViewer implements Component {
       lines.push(truncateToWidth(th.fg("accent", "▍ ") + th.fg("dim", act), width));
     }
 
-    return lines.map(l => {
-      let truncated = truncateToWidth(l, width);
-      while (visibleWidth(truncated) > width && truncated.length > 0) {
-        truncated = truncated.slice(0, -1);
-      }
-      return truncated;
-    });
+    return lines.map(l => truncateToWidth(l, width));
   }
 }

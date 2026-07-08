@@ -8,7 +8,8 @@
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { AgentManager } from "../agent-manager.js";
 import { getConfig } from "../agent-types.js";
-import type { SubagentType } from "../types.js";
+import type { AgentInvocation, SubagentType, WidgetMode } from "../types.js";
+import { getLifetimeTotal, getSessionContextPercent, type LifetimeUsage, type SessionLike } from "../usage.js";
 
 // ---- Constants ----
 
@@ -20,7 +21,6 @@ export const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", 
 
 /** Statuses that indicate an error/non-success outcome (used for linger behavior and icon rendering). */
 export const ERROR_STATUSES = new Set(["error", "aborted", "steered", "stopped"]);
-const SUCCESS_LINGER_TURNS = 2;
 
 /** Tool name → human-readable action for activity descriptions. */
 const TOOL_DISPLAY: Record<string, string> = {
@@ -53,13 +53,14 @@ export type UICtx = {
 export interface AgentActivity {
   activeTools: Map<string, string>;
   toolUses: number;
-  tokens: string;
   responseText: string;
-  session?: { getSessionStats(): { tokens: { total: number } } };
+  session?: SessionLike;
   /** Current turn count. */
   turnCount: number;
   /** Effective max turns for this agent (undefined = unlimited). */
   maxTurns?: number;
+  /** Lifetime usage breakdown — see LifetimeUsage docs. */
+  lifetimeUsage: LifetimeUsage;
 }
 
 /** Metadata attached to Agent tool results for custom rendering. */
@@ -96,9 +97,38 @@ export function formatTokens(count: number): string {
   return `${count} token`;
 }
 
-/** Format turn count with optional max limit: "⟳5≤30" or "⟳5". */
+/**
+ * Token count with optional context-fill % and compaction-count annotations.
+ * Thresholds for percent: <70% dim, 70–85% warning, ≥85% error.
+ * Compaction count rendered as `⇊N` in dim.
+ *
+ *   "12.3k token"               — no annotations
+ *   "12.3k token (45%)"         — percent only
+ *   "12.3k token (⇊2)"          — compactions only (e.g. right after compact)
+ *   "12.3k token (45% · ⇊2)"    — both
+ */
+export function formatSessionTokens(
+  tokens: number,
+  percent: number | null,
+  theme: Theme,
+  compactions = 0,
+): string {
+  const tokenStr = formatTokens(tokens);
+  const annot: string[] = [];
+  if (percent !== null) {
+    const color = percent >= 85 ? "error" : percent >= 70 ? "warning" : "dim";
+    annot.push(theme.fg(color, `${Math.round(percent)}%`));
+  }
+  if (compactions > 0) {
+    annot.push(theme.fg("dim", `⇊${compactions}`));
+  }
+  if (annot.length === 0) return tokenStr;
+  return `${tokenStr} (${annot.join(" · ")})`;
+}
+
+/** Format turn count with optional max limit: "↻5≤30" or "↻5". */
 export function formatTurns(turnCount: number, maxTurns?: number | null): string {
-  return maxTurns != null ? `⟳${turnCount}≤${maxTurns}` : `⟳${turnCount}`;
+  return maxTurns != null ? `↻${turnCount}≤${maxTurns}` : `↻${turnCount}`;
 }
 
 /** Format milliseconds as human-readable duration. */
@@ -121,6 +151,21 @@ export function getDisplayName(type: SubagentType): string {
 export function getPromptModeLabel(type: SubagentType): string | undefined {
   const config = getConfig(type);
   return config.promptMode === "append" ? "twin" : undefined;
+}
+
+/** Mode label is not included — callers add it where they want it. */
+export function buildInvocationTags(
+  invocation: AgentInvocation | undefined,
+): { modelName?: string; tags: string[] } {
+  const tags: string[] = [];
+  if (!invocation) return { tags };
+  if (invocation.thinking) tags.push(`thinking: ${invocation.thinking}`);
+  if (invocation.isolated) tags.push("isolated");
+  if (invocation.isolation === "worktree") tags.push("worktree");
+  if (invocation.inheritContext) tags.push("inherit context");
+  if (invocation.runInBackground) tags.push("background");
+  if (invocation.maxTurns != null) tags.push(`max turns: ${invocation.maxTurns}`);
+  return { modelName: invocation.modelName, tags };
 }
 
 /** Truncate text to a single line, max `len` chars. */
@@ -179,7 +224,33 @@ export class AgentWidget {
   constructor(
     private manager: AgentManager,
     private agentActivity: Map<string, AgentActivity>,
+    /**
+     * Read live at render time. Selects which agents the widget shows — see
+     * `WidgetMode`. Defaults to `"all"` when a caller supplies no policy; the
+     * extension supplies one defaulting to `"background"`.
+     */
+    private mode: () => WidgetMode = () => "all",
   ) {}
+
+  /**
+   * Agents eligible for the widget, per the current `WidgetMode`:
+   *   - `off`: none (the widget's existing empty-state path hides it entirely).
+   *   - `background`: drop only agents *known* to be foreground
+   *     (`isBackground === false`); keep everything else — background, queued,
+   *     scheduled, or RPC-spawned (`undefined`). Keying off the `isBackground`
+   *     record flag rather than the UI-only `invocation` snapshot (which only the
+   *     Agent-tool path sets), and excluding rather than allow-listing, means
+   *     only proven-foreground runs drop out — nothing else silently vanishes.
+   *   - `all`: every agent.
+   */
+  private widgetAgents() {
+    const all = this.manager.listAgents();
+    switch (this.mode()) {
+      case "off": return [];
+      case "background": return all.filter(a => a.isBackground !== false);
+      default: return all;
+    }
+  }
 
   /** Set the UI context (grabbed from first tool execution). */
   setUICtx(ctx: UICtx) {
@@ -216,7 +287,7 @@ export class AgentWidget {
   /** Check if a finished agent should still be shown in the widget. */
   private shouldShowFinished(agentId: string, status: string): boolean {
     const age = this.finishedTurnAge.get(agentId) ?? 0;
-    const maxAge = ERROR_STATUSES.has(status) ? AgentWidget.ERROR_LINGER_TURNS : SUCCESS_LINGER_TURNS;
+    const maxAge = ERROR_STATUSES.has(status) ? AgentWidget.ERROR_LINGER_TURNS : 1;
     return age < maxAge;
   }
 
@@ -269,7 +340,7 @@ export class AgentWidget {
    * reading live state each time instead of capturing it in a closure.
    */
   private renderWidget(tui: any, theme: Theme): string[] {
-    const allAgents = this.manager.listAgents();
+    const allAgents = this.widgetAgents();
     const running = allAgents.filter(a => a.status === "running");
     const queued = allAgents.filter(a => a.status === "queued");
     const finished = allAgents.filter(a =>
@@ -306,10 +377,9 @@ export class AgentWidget {
 
       const bg = this.agentActivity.get(a.id);
       const toolUses = bg?.toolUses ?? a.toolUses;
-      let tokenText = "";
-      if (bg?.session) {
-        try { tokenText = formatTokens(bg.session.getSessionStats().tokens.total); } catch { /* */ }
-      }
+      const tokens = getLifetimeTotal(bg?.lifetimeUsage);
+      const contextPercent = getSessionContextPercent(bg?.session);
+      const tokenText = tokens > 0 ? formatSessionTokens(tokens, contextPercent, theme, a.compactionCount) : "";
 
       const parts: string[] = [];
       if (bg) parts.push(formatTurns(bg.turnCount, bg.maxTurns));
@@ -404,7 +474,7 @@ export class AgentWidget {
   /** Force an immediate widget update. */
   update() {
     if (!this.uiCtx) return;
-    const allAgents = this.manager.listAgents();
+    const allAgents = this.widgetAgents();
 
     // Lightweight existence checks — full categorization happens in renderWidget()
     let runningCount = 0;
@@ -448,13 +518,6 @@ export class AgentWidget {
     if (newStatusText !== this.lastStatusText) {
       this.uiCtx.setStatus("subagents", newStatusText);
       this.lastStatusText = newStatusText;
-    }
-
-    if (hasActive) {
-      this.ensureTimer();
-    } else if (this.widgetInterval) {
-      clearInterval(this.widgetInterval);
-      this.widgetInterval = undefined;
     }
 
     this.widgetFrame++;

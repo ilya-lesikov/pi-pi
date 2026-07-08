@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentRecord } from "../types.js";
+import type { AgentRecord } from "../src/types.js";
 
 // ── Mock wrapTextWithAnsi ──────────────────────────────────────────────
 // We need to control what wrapTextWithAnsi returns to simulate the
@@ -23,7 +23,7 @@ vi.mock("@earendil-works/pi-tui", async (importOriginal) => {
 // Must import AFTER vi.mock declaration (vitest hoists vi.mock but the
 // dynamic import of the test subject must happen after)
 const { visibleWidth } = await import("@earendil-works/pi-tui");
-const { ConversationViewer } = await import("./conversation-viewer.js");
+const { ConversationViewer } = await import("../src/ui/conversation-viewer.js");
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
@@ -39,7 +39,7 @@ function mockSession(messages: any[] = []) {
     messages,
     subscribe: vi.fn(() => vi.fn()),
     dispose: vi.fn(),
-    getSessionStats: () => ({ tokens: { total: 0 } }),
+    getSessionStats: () => ({ tokens: { input: 0, output: 0, cacheWrite: 0 } }),
   } as any;
 }
 
@@ -318,6 +318,156 @@ describe("ConversationViewer", () => {
         mockTui(30, w), mockSession(messages), mockRecord(), undefined, ansiTheme(), vi.fn(),
       );
       assertAllLinesFit(callBuildContentLines(viewer, w), w);
+    });
+  });
+
+  describe("stop key", () => {
+    const W = 80;
+
+    it("two-press x stops a running agent (first arms, second aborts)", () => {
+      const onStop = vi.fn();
+      const tui = mockTui(30, W);
+      const viewer = new ConversationViewer(
+        tui, mockSession(), mockRecord({ status: "running" }), undefined, ansiTheme(), vi.fn(), onStop,
+      );
+
+      // Idle footer offers the stop affordance.
+      expect(viewer.render(W).join("\n")).toContain("x stop");
+
+      // First press arms (no abort yet) and re-renders.
+      viewer.handleInput("x");
+      expect(onStop).not.toHaveBeenCalled();
+      expect(tui.requestRender).toHaveBeenCalled();
+      expect(viewer.render(W).join("\n")).toContain("x again to STOP");
+
+      // Second press aborts.
+      viewer.handleInput("x");
+      expect(onStop).toHaveBeenCalledTimes(1);
+    });
+
+    it("any other key disarms the confirm", () => {
+      const onStop = vi.fn();
+      const viewer = new ConversationViewer(
+        mockTui(30, W), mockSession(), mockRecord({ status: "running" }), undefined, ansiTheme(), vi.fn(), onStop,
+      );
+
+      viewer.handleInput("x");                       // arm
+      viewer.handleInput("j");                       // scroll → disarm
+      expect(viewer.render(W).join("\n")).toContain("x stop");
+      expect(viewer.render(W).join("\n")).not.toContain("x again to STOP");
+
+      viewer.handleInput("x");                       // arms again, does NOT stop
+      expect(onStop).not.toHaveBeenCalled();
+    });
+
+    it("does not offer or perform stop once the agent is no longer running", () => {
+      const onStop = vi.fn();
+      const viewer = new ConversationViewer(
+        mockTui(30, W), mockSession(), mockRecord({ status: "completed" }), undefined, ansiTheme(), vi.fn(), onStop,
+      );
+
+      expect(viewer.render(W).join("\n")).not.toContain("x stop");
+      viewer.handleInput("x");
+      viewer.handleInput("x");
+      expect(onStop).not.toHaveBeenCalled();
+    });
+
+    it("no stop affordance when no onStop handler is provided (read-only history)", () => {
+      const viewer = new ConversationViewer(
+        mockTui(30, W), mockSession(), mockRecord({ status: "running" }), undefined, ansiTheme(), vi.fn(),
+      );
+      expect(viewer.render(W).join("\n")).not.toContain("x stop");
+      expect(() => { viewer.handleInput("x"); viewer.handleInput("x"); }).not.toThrow();
+    });
+  });
+
+  describe("steer composer", () => {
+    const W = 80;
+
+    function makeViewer(opts: { status?: AgentRecord["status"]; onSteer?: (m: string) => void } = {}) {
+      const onSteer = opts.onSteer ?? vi.fn();
+      const tui = mockTui(30, W);
+      const viewer = new ConversationViewer(
+        tui, mockSession(), mockRecord({ status: opts.status ?? "running" }),
+        undefined, ansiTheme(), vi.fn(), undefined, undefined, onSteer,
+      );
+      return { viewer, tui, onSteer };
+    }
+
+    it("offers the steer affordance for a running agent and opens on Enter", () => {
+      const { viewer } = makeViewer();
+      expect(viewer.render(W).join("\n")).toContain("Enter steer");
+
+      viewer.handleInput("\r"); // Enter
+      // Composer is shown (its prompt + send/cancel hint), idle footer is gone.
+      const out = viewer.render(W).join("\n");
+      expect(out).toContain("Enter send · Esc cancel");
+      expect(out).not.toContain("Enter steer");
+    });
+
+    it("typing then Enter sends the trimmed message and closes the composer", () => {
+      const { viewer, onSteer } = makeViewer();
+      viewer.handleInput("\r"); // open composer
+      for (const ch of "  hello  ") viewer.handleInput(ch);
+      viewer.handleInput("\r"); // send
+
+      expect(onSteer).toHaveBeenCalledWith("hello");
+      expect(viewer.render(W).join("\n")).not.toContain("Enter send"); // composer closed
+    });
+
+    it("Esc cancels the composer without sending", () => {
+      const { viewer, onSteer } = makeViewer();
+      viewer.handleInput("\r"); // open composer
+      for (const ch of "draft") viewer.handleInput(ch);
+      viewer.handleInput("\x1b"); // Esc
+
+      expect(onSteer).not.toHaveBeenCalled();
+      expect(viewer.render(W).join("\n")).not.toContain("Enter send");
+    });
+
+    it("an empty submit just returns (like Esc), without calling onSteer", () => {
+      const { viewer, onSteer } = makeViewer();
+      viewer.handleInput("\r"); // open composer
+      viewer.handleInput("\r"); // empty submit
+      expect(onSteer).not.toHaveBeenCalled();
+      expect(viewer.render(W).join("\n")).not.toContain("Enter send"); // composer closed
+    });
+
+    it("scroll keys are inert while composing (input owns them)", () => {
+      const { viewer } = makeViewer();
+      viewer.handleInput("\r"); // open composer
+      // 'j' would normally scroll, but here it types into the composer.
+      viewer.handleInput("j");
+      expect(viewer.render(W).join("\n")).toContain("Enter send · Esc cancel");
+    });
+
+    it("no steer affordance once the agent is no longer running", () => {
+      const { viewer, onSteer } = makeViewer({ status: "completed" });
+      expect(viewer.render(W).join("\n")).not.toContain("Enter steer");
+      viewer.handleInput("\r");
+      expect(viewer.render(W).join("\n")).not.toContain("Enter send");
+      expect(onSteer).not.toHaveBeenCalled();
+    });
+
+    it("no steer affordance when no onSteer handler is provided", () => {
+      const viewer = new ConversationViewer(
+        mockTui(30, W), mockSession(), mockRecord({ status: "running" }), undefined, ansiTheme(), vi.fn(),
+      );
+      expect(viewer.render(W).join("\n")).not.toContain("Enter steer");
+      expect(() => viewer.handleInput("\r")).not.toThrow();
+    });
+
+    it("composer rows never exceed width", () => {
+      for (const w of [40, 80, 120]) {
+        const tui = mockTui(30, w);
+        const viewer = new ConversationViewer(
+          tui, mockSession(), mockRecord({ status: "running" }),
+          undefined, ansiTheme(), vi.fn(), undefined, undefined, vi.fn(),
+        );
+        viewer.handleInput("\r"); // open composer
+        for (const ch of "x".repeat(200)) viewer.handleInput(ch);
+        assertAllLinesFit(viewer.render(w), w);
+      }
     });
   });
 });
