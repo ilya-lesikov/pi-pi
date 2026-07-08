@@ -358,6 +358,9 @@ async function pauseTask(orchestrator: Orchestrator, ctx: any): Promise<string> 
   const type = orchestrator.active.type;
 
   orchestrator.active.state.reviewCycle = null;
+  // Drop any in-progress per-repo Plannotator cursor so a resumed task does not
+  // auto-reopen Plannotator; the user re-enters Review explicitly.
+  orchestrator.active.state.plannotatorCursor = undefined;
   saveTask(orchestrator.active.dir, orchestrator.active.state);
   unregisterAgentDefinitions(orchestrator.pi);
   await orchestrator.cleanupActive();
@@ -3696,9 +3699,11 @@ export async function showActiveTaskMenu(
       while (true) {
       // A review already running: block re-entry BEFORE any finalizeReviewCycle
       // (which would null the live cycle and hide it), so we never double-spawn.
+      // Notify and break back to the top-level menu with the live cycle intact
+      // rather than exiting /pp.
       if (isReviewCycleLive(task)) {
         ctx.ui.notify("A review is already running", "info");
-        return "A review is already running";
+        break;
       }
       const reviewOptions: OptionInput[] = [
         opt(autoLabel, `Run configured reviewers over ${reviewTarget}`),

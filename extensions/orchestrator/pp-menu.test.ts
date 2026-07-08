@@ -400,11 +400,14 @@ describe("showActiveTaskMenu Publish/Next Back navigation (#6)", () => {
     orchestrator.transitionController.isRunning = () => true;
     let notified = "";
     const notifyCtx = { ui: { notify: (t: string) => { notified = t; } }, waitForIdle: async () => {}, abort: () => {} };
-    askQueue.push("Review");
+    // Pick Review (blocked → notify + back to top-level menu), then Back to exit.
+    askQueue.push("Review", "Back");
     const result = await showActiveTaskMenu(orchestrator, notifyCtx, "/pp", "tool");
-    expect(result).toBe("A review is already running");
+    expect(result).toBe("");
     expect(notified).toBe("A review is already running");
-    // The live cycle is untouched (not finalized/nulled).
+    // The live cycle is untouched (not finalized/nulled) and the top-level menu
+    // re-rendered rather than /pp exiting.
     expect(orchestrator.active.state.reviewCycle).toEqual({ kind: "auto", step: "await_reviewers", pass: 1 });
+    expect(askQuestions.filter((q) => q.startsWith("/pp")).length).toBe(2);
   });
 });

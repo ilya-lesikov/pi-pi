@@ -2716,6 +2716,22 @@ describe("modified file tracking", () => {
     expect(orchestrator.active!.state.reviewApprovedClean).toBe(false);
   });
 
+  it("source write clears afterImplementRan so post-handoff edits re-run afterImplement (#1)", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "Rerun hooks");
+    await moveTaskToImplementPhase(pi, orchestrator, ctx, "call-rerun-brainstorm", "call-rerun-plan");
+    // Simulate the terminal handoff having already run afterImplement.
+    orchestrator.active!.state.afterImplementRan = true;
+
+    const toolResult = pi._handlers.get("tool_result")!;
+    await toolResult({ toolName: "write", input: { path: "src/d.ts" }, isError: false, content: [] }, {});
+
+    expect(orchestrator.active!.state.afterImplementRan).toBe(false);
+  });
+
   it("tool_result ignores writes inside .pp directory", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);

@@ -2239,6 +2239,10 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       orchestrator.active.modifiedFiles.add(resolvedWrite);
       orchestrator.active.state.modifiedFiles = [...orchestrator.active.modifiedFiles];
       orchestrator.active.state.reviewApprovedClean = false;
+      // New implement edits invalidate a prior afterImplement run (e.g. fixes made
+      // via the guided menu after the autonomous terminal handoff), so the hooks
+      // re-run and validate the final code on the next completion.
+      orchestrator.active.state.afterImplementRan = false;
       try { saveTask(orchestrator.active.dir, orchestrator.active.state); } catch {}
 
       const repos = orchestrator.active.state.repos ?? [];

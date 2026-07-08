@@ -82,6 +82,8 @@ export async function transitionToNextPhase(
 
   orchestrator.active.state.phase = next;
   orchestrator.active.state.reviewCycle = null;
+  orchestrator.active.state.plannotatorCursor = undefined;
+  orchestrator.active.state.afterImplementRan = false;
   orchestrator.active.state.reviewPass = 0;
   orchestrator.active.state.reviewApprovedClean = false;
   orchestrator.active.reviewPass = 0;
