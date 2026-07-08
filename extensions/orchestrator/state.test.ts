@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import lockfile from "proper-lockfile";
 import {
   createTask,
+  formatModeIndicator,
   getActiveTask,
   getEffectiveMode,
   getFirstPhase,
@@ -409,5 +410,13 @@ describe("getEffectiveMode", () => {
     const state: TaskState = { ...baseState() };
 
     expect(getEffectiveMode(state)).toBeUndefined();
+  });
+
+  it("formatModeIndicator: autonomous stays autonomous, quick shows nothing, else guided (#4)", () => {
+    expect(formatModeIndicator({ ...baseState(), mode: "autonomous" }, "implement")).toBe("autonomous");
+    expect(formatModeIndicator({ ...baseState(), effectiveMode: "autonomous" }, "implement")).toBe("autonomous");
+    expect(formatModeIndicator({ ...baseState(), mode: "guided" }, "implement")).toBe("guided");
+    expect(formatModeIndicator({ ...baseState() }, "implement")).toBe("guided");
+    expect(formatModeIndicator({ ...baseState(), mode: "autonomous" }, "quick")).toBeUndefined();
   });
 });
