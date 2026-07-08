@@ -9,6 +9,7 @@ import { registerExaTools } from "./exa.js";
 import { registerAstSearchTool } from "./ast-search.js";
 import { validatePlan, validateArtifact } from "./validate-artifacts.js";
 import { initFlantSync } from "./flant-infra.js";
+import { suppressPierreThemeSpam } from "./suppress-pierre-theme-spam.js";
 
 const ORCHESTRATOR_KEY = Symbol.for("pi-pi:orchestrator-initialized");
 const ORCHESTRATOR_CWD_KEY = Symbol.for("pi-pi:orchestrator-cwd");
@@ -18,6 +19,7 @@ const ORCHESTRATOR_CWD_KEY = Symbol.for("pi-pi:orchestrator-cwd");
 export const SUBAGENT_SESSION_KEY = Symbol.for("pi-pi:subagent-session");
 
 export default function (pi: ExtensionAPI) {
+  suppressPierreThemeSpam();
   if ((globalThis as any)[ORCHESTRATOR_KEY]) {
     if (!(globalThis as any)[SUBAGENT_SESSION_KEY]) {
       (globalThis as any)[SUBAGENT_SESSION_KEY] = { depth: 1 };
