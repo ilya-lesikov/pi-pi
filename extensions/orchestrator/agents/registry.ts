@@ -99,39 +99,63 @@ export function spawnViaRpc(
   });
 }
 
+const TERMINAL_STATUSES = ["completed", "steered", "aborted", "stopped", "error"];
+const FAILED_STATUSES = ["aborted", "stopped", "error"];
+
 export function waitForCompletion(
   pi: ExtensionAPI,
   agentId: string,
 ): Promise<{ result: string; status: string }> {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    let checkTimer: ReturnType<typeof setInterval> | undefined;
     const cleanup = () => {
-      clearInterval(checkTimer);
+      if (checkTimer) clearInterval(checkTimer);
       unsubCompleted();
       unsubFailed();
+    };
+    const done = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      fn();
     };
 
     const unsubCompleted = pi.events.on("subagents:completed", (data: any) => {
       if (data.id === agentId) {
-        cleanup();
-        resolve({ result: data.result ?? "", status: data.status ?? "completed" });
+        done(() => resolve({ result: data.result ?? "", status: data.status ?? "completed" }));
       }
     });
 
     const unsubFailed = pi.events.on("subagents:failed", (data: any) => {
       if (data.id === agentId) {
-        cleanup();
-        reject(new Error(data.error || `agent ${agentId} failed`));
+        done(() => reject(new Error(data.error || `agent ${agentId} failed`)));
       }
     });
 
-    const checkTimer = setInterval(() => {
+    // Reconcile against the manager record. This closes the race where the
+    // agent reached a terminal state in the gap between spawn and the event
+    // subscription above (the completion/failure event was emitted before we
+    // were listening) — resolve/reject from the record instead of hanging
+    // until the timer fires "not found".
+    const checkRecord = () => {
       const mgr = (globalThis as any)[Symbol.for("pi-subagents:manager")];
       const record = mgr?.getRecord?.(agentId);
       if (!record) {
-        cleanup();
-        reject(new Error(`agent ${agentId} not found in manager`));
+        done(() => reject(new Error(`agent ${agentId} not found in manager`)));
+        return;
       }
-    }, 30000);
+      if (TERMINAL_STATUSES.includes(record.status)) {
+        if (FAILED_STATUSES.includes(record.status)) {
+          done(() => reject(new Error(record.error || `agent ${agentId} failed`)));
+        } else {
+          done(() => resolve({ result: record.result ?? "", status: record.status }));
+        }
+      }
+    };
+
+    checkRecord();
+    if (!settled) checkTimer = setInterval(checkRecord, 30000);
   });
 }
 
