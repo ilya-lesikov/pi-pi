@@ -418,6 +418,14 @@ export async function stopTask(orchestrator: Orchestrator): Promise<string> {
   return `Task "${desc}" stopped. Use /pp → Resume to continue.`;
 }
 
+// A review is LIVE when its cycle exists and reviewers are still being awaited.
+// Guards the menu/autonomous callers against re-spawning reviewers on top of a
+// running cycle (the "6 agents" double-spawn). NOT "a cycle object exists": a
+// completed cycle is finalized (and nulled) legitimately before the next pass.
+export function isReviewCycleLive(task: ActiveTask): boolean {
+  return !!task.state.reviewCycle && task.state.reviewCycle.step === "await_reviewers";
+}
+
 export function finalizeReviewCycle(task: ActiveTask): void {
   if (!task.state.reviewCycle) return;
   const kind = task.state.reviewCycle.kind;

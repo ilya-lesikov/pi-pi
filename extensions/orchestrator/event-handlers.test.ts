@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { registerEventHandlers, checkoutPrHead } from "./event-handlers.js";
+import { registerEventHandlers, checkoutPrHead, isReviewCycleLive, finalizeReviewCycle } from "./event-handlers.js";
 import { Orchestrator, type ActiveTask } from "./orchestrator.js";
 import { getDefaultConfig } from "./config.js";
 
@@ -626,5 +626,38 @@ describe("pp_checkout_pr_head tool registration", () => {
     registerOrchestratorToolsForTest(orchestrator);
     const names = (pi.registerTool as any).mock.calls.map((c: any[]) => c[0].name);
     expect(names).toContain("pp_checkout_pr_head");
+  });
+});
+
+describe("isReviewCycleLive (#3b re-entrancy guard)", () => {
+  it("is true only for a cycle awaiting reviewers", () => {
+    const task = makeActiveTask();
+    task.state.reviewCycle = null;
+    expect(isReviewCycleLive(task)).toBe(false);
+    task.state.reviewCycle = { kind: "auto", step: "spawn_reviewers", pass: 1 };
+    expect(isReviewCycleLive(task)).toBe(false);
+    task.state.reviewCycle = { kind: "auto", step: "await_reviewers", pass: 1 };
+    expect(isReviewCycleLive(task)).toBe(true);
+    task.state.reviewCycle = { kind: "auto", step: "apply_feedback", pass: 1 };
+    expect(isReviewCycleLive(task)).toBe(false);
+  });
+
+  it("a live await_reviewers cycle is left intact when the guard blocks (no finalize)", () => {
+    const task = makeActiveTask();
+    task.state.reviewCycle = { kind: "auto", step: "await_reviewers", pass: 2 };
+    // The menu action returns early on isReviewCycleLive WITHOUT calling
+    // finalizeReviewCycle, so the running cycle survives a second selection.
+    expect(isReviewCycleLive(task)).toBe(true);
+    expect(task.state.reviewCycle).toEqual({ kind: "auto", step: "await_reviewers", pass: 2 });
+  });
+
+  it("finalizeReviewCycle only clears a completed (non-live) cycle for the next pass", () => {
+    const task = makeActiveTask();
+    task.dir = mkdtempSync(join(tmpdir(), "pp-review-"));
+    task.state.reviewCycle = { kind: "auto", step: "apply_feedback", pass: 1 };
+    expect(isReviewCycleLive(task)).toBe(false);
+    finalizeReviewCycle(task);
+    expect(task.state.reviewCycle).toBeNull();
+    rmSync(task.dir, { recursive: true, force: true });
   });
 });

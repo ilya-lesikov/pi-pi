@@ -26,7 +26,7 @@ import {
   loadPlanReviewOutputs,
   hasFinalPassAnchors,
 } from "./context.js";
-import { detectDefaultBranch, enterReviewCycle, finalizeReviewCycle } from "./event-handlers.js";
+import { detectDefaultBranch, enterReviewCycle, finalizeReviewCycle, isReviewCycleLive } from "./event-handlers.js";
 import { Orchestrator } from "./orchestrator.js";
 import { cancelPendingPlannotatorWait, openPlannotator, waitForPlannotatorResult } from "./plannotator.js";
 import { advanceBanner } from "./messages.js";
@@ -3584,6 +3584,17 @@ export async function showActiveTaskMenu(
     }
 
     if (choice === "Review") {
+      // The Review submenu runs its own loop so a recoverable choice (no reviewers
+      // enabled, preset cancelled, "Review on my own" Back, a plannotator early
+      // exit) returns HERE rather than overshooting to the top-level /pp menu.
+      // Only an explicit "Back" breaks out; start/wait/instruction paths return.
+      while (true) {
+      // A review already running: block re-entry BEFORE any finalizeReviewCycle
+      // (which would null the live cycle and hide it), so we never double-spawn.
+      if (isReviewCycleLive(task)) {
+        ctx.ui.notify("A review is already running", "info");
+        return "A review is already running";
+      }
       const reviewOptions: OptionInput[] = [
         opt(autoLabel, `Run configured reviewers over ${reviewTarget}`),
       ];
@@ -3598,7 +3609,7 @@ export async function showActiveTaskMenu(
       reviewOptions.push(opt("Back", "Return to the previous menu"));
 
       const reviewChoice = await selectOption(ctx, "Review", reviewOptions);
-      if (!reviewChoice || reviewChoice === "Back") continue;
+      if (!reviewChoice || reviewChoice === "Back") break;
 
       if (reviewChoice === "Review in Plannotator") {
         if (phase === "plan") {
@@ -3731,6 +3742,7 @@ export async function showActiveTaskMenu(
       const handled = handleReviewResult(ctx, text);
       if (handled.continueLoop) continue;
       return handled.text ?? text;
+      }
     }
   }
 }
