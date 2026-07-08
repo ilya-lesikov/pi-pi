@@ -24,8 +24,14 @@ export const BUILTIN_TOOL_NAMES: string[] = [
 /** Unified runtime registry of all agents (defaults + user-defined). */
 const agents = new Map<string, AgentConfig>();
 
+/** Extension-injected agents (highest priority, survive reloads). */
+const extensionAgents = new Map<string, AgentConfig>();
+
 /** When true, DEFAULT_AGENTS are skipped during registration. */
 let disableDefaults = false;
+
+/** When true, only extension-registered agents are used. Defaults and user .md files are skipped. */
+let extensionOnlyMode = false;
 
 /** Check whether default agents are disabled. */
 export function isDefaultsDisabled(): boolean { return disableDefaults; }
@@ -33,25 +39,67 @@ export function isDefaultsDisabled(): boolean { return disableDefaults; }
 /** Set whether default agents are disabled. */
 export function setDefaultsDisabled(b: boolean): void { disableDefaults = b; }
 
+/** Enable extension-only mode: skip defaults and user .md agents entirely. */
+export function setExtensionOnlyMode(enabled: boolean): void { extensionOnlyMode = enabled; }
+
 /**
  * Register agents into the unified registry.
- * Starts with DEFAULT_AGENTS, then overlays user agents (overrides defaults with same name).
+ * Priority (highest wins): extension agents > user .md files > defaults.
+ * In extension-only mode, defaults and user agents are skipped entirely.
  * Disabled agents (enabled === false) are kept in the registry but excluded from spawning.
  */
 export function registerAgents(userAgents: Map<string, AgentConfig>): void {
   agents.clear();
 
-  // Start with defaults (unless disabled via settings)
-  if (!disableDefaults) {
-    for (const [name, config] of DEFAULT_AGENTS) {
+  if (!extensionOnlyMode) {
+    // Start with defaults (unless disabled via settings)
+    if (!disableDefaults) {
+      for (const [name, config] of DEFAULT_AGENTS) {
+        agents.set(name, config);
+      }
+    }
+
+    // Overlay user agents (overrides defaults with same name)
+    for (const [name, config] of userAgents) {
       agents.set(name, config);
     }
   }
 
-  // Overlay user agents (overrides defaults with same name)
-  for (const [name, config] of userAgents) {
+  // Overlay extension-injected agents (highest priority, survive reloads)
+  for (const [name, config] of extensionAgents) {
     agents.set(name, config);
   }
+}
+
+/**
+ * Register agents from another extension (e.g. pi-pi orchestrator).
+ * These persist across reloadCustomAgents() calls and take highest priority.
+ */
+export function registerExtensionAgents(newAgents: Map<string, AgentConfig>): void {
+  for (const [name, config] of newAgents) {
+    extensionAgents.set(name, config);
+  }
+}
+
+/** Remove extension-registered agents by name. */
+export function unregisterExtensionAgents(names: string[]): void {
+  for (const name of names) {
+    extensionAgents.delete(name);
+  }
+}
+
+/** Remove extension-registered agents whose names start with a prefix. */
+export function unregisterExtensionAgentsByPrefix(prefix: string): void {
+  for (const name of extensionAgents.keys()) {
+    if (name.startsWith(prefix)) {
+      extensionAgents.delete(name);
+    }
+  }
+}
+
+/** Remove all extension-registered agents. */
+export function clearExtensionAgents(): void {
+  extensionAgents.clear();
 }
 
 /** Case-insensitive key resolution. */

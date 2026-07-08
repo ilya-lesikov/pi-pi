@@ -17,7 +17,7 @@ import { Container, Key, matchesKey, type SettingItem, SettingsList, Spacer, Tex
 import { Type } from "@sinclair/typebox";
 import { AgentManager } from "./agent-manager.js";
 import { getAgentConversation, getDefaultMaxTurns, getGraceTurns, normalizeMaxTurns, SUBAGENT_TOOL_NAMES, setDefaultMaxTurns, setGraceTurns, steerAgent } from "./agent-runner.js";
-import { BUILTIN_TOOL_NAMES, getAgentConfig, getAllTypes, getAvailableTypes, isDefaultsDisabled, registerAgents, resolveType, setDefaultsDisabled } from "./agent-types.js";
+import { BUILTIN_TOOL_NAMES, clearExtensionAgents, getAgentConfig, getAllTypes, getAvailableTypes, isDefaultsDisabled, registerAgents, registerExtensionAgents, resolveType, setDefaultsDisabled, setExtensionOnlyMode, unregisterExtensionAgents, unregisterExtensionAgentsByPrefix } from "./agent-types.js";
 import { registerRpcHandlers } from "./cross-extension-rpc.js";
 import { loadCustomAgents } from "./custom-agents.js";
 import { isModelInScope, readEnabledModels, resolveEnabledModels } from "./enabled-models.js";
@@ -447,6 +447,12 @@ export default function (pi: ExtensionAPI) {
     getRecord: (id: string) => manager.getRecord(id),
   };
 
+  // Expose the agents menu for cross-extension callers (e.g. pi-pi /pp > Info > Subagents).
+  const MENU_KEY = Symbol.for("pi-subagents:menu");
+  (globalThis as any)[MENU_KEY] = {
+    showMenu: (ctx: any) => showAgentsMenu(ctx),
+  };
+
   // --- Cross-extension RPC via pi.events ---
   let currentCtx: ExtensionContext | undefined;
 
@@ -490,6 +496,35 @@ export default function (pi: ExtensionAPI) {
     manager,
   });
 
+  // Allow other extensions to take full control of the agent registry
+  const unsubExtensionOnly = pi.events.on("subagents:set-extension-only", (data: any) => {
+    if (typeof data?.enabled === "boolean") {
+      setExtensionOnlyMode(data.enabled);
+      reloadCustomAgents();
+    }
+  });
+
+  // Allow other extensions to register in-memory agent types
+  const unsubRegisterAgents = pi.events.on("subagents:register-agents", (data: any) => {
+    if (data?.agents instanceof Map) {
+      registerExtensionAgents(data.agents);
+      reloadCustomAgents();
+    }
+  });
+
+  const unsubUnregisterAgents = pi.events.on("subagents:unregister-agents", (data: any) => {
+    if (data?.all === true) {
+      clearExtensionAgents();
+      reloadCustomAgents();
+    } else if (Array.isArray(data?.names)) {
+      unregisterExtensionAgents(data.names);
+      reloadCustomAgents();
+    } else if (typeof data?.prefix === "string") {
+      unregisterExtensionAgentsByPrefix(data.prefix);
+      reloadCustomAgents();
+    }
+  });
+
   // Broadcast readiness so extensions loaded after us can discover us
   pi.events.emit("subagents:ready", {});
 
@@ -499,8 +534,12 @@ export default function (pi: ExtensionAPI) {
     unsubSpawnRpc();
     unsubStopRpc();
     unsubPingRpc();
+    unsubExtensionOnly();
+    unsubRegisterAgents();
+    unsubUnregisterAgents();
     currentCtx = undefined;
     delete (globalThis as any)[MANAGER_KEY];
+    delete (globalThis as any)[MENU_KEY];
     scheduler.stop();
     manager.abortAll();
     for (const timer of pendingNudges.values()) clearTimeout(timer);
