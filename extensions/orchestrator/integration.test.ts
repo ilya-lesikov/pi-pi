@@ -2267,7 +2267,7 @@ describe("task modes and quick task", () => {
 
     const beforeStart = pi._handlers.get("before_agent_start")!;
     const prompt = (await beforeStart({ systemPrompt: "base" }, ctx))?.systemPrompt ?? "";
-    expect(prompt).toContain("<agents_md>");
+    expect(prompt).toContain(`<agents_md source="${join(cwd, "AGENTS.md")}">`);
     expect(prompt).toContain("ROOT_AGENTS_CONTENT");
     expect(prompt).not.toContain("NESTED_AGENTS_CONTENT");
   });
@@ -2283,12 +2283,12 @@ describe("task modes and quick task", () => {
 
     const beforeStart = pi._handlers.get("before_agent_start")!;
     const absent = (await beforeStart({ systemPrompt: "base" }, ctx))?.systemPrompt ?? "";
-    expect(absent).not.toContain("<agents_md>");
+    expect(absent).not.toContain("<agents_md");
 
     writeFileSync(join(cwd, "AGENTS.md"), "ROOT_AGENTS_CONTENT", "utf-8");
     orchestrator.config.general.injectAgentsMd = false;
     const disabled = (await beforeStart({ systemPrompt: "base" }, ctx))?.systemPrompt ?? "";
-    expect(disabled).not.toContain("<agents_md>");
+    expect(disabled).not.toContain("<agents_md");
     expect(disabled).not.toContain("ROOT_AGENTS_CONTENT");
   });
 

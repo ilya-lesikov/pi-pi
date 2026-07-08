@@ -2177,7 +2177,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     const agentsMdPath = join(orchestrator.cwd, "AGENTS.md");
     const agentsMd =
       orchestrator.config.general.injectAgentsMd && existsSync(agentsMdPath)
-        ? ["<agents_md>", readFileSync(agentsMdPath, "utf-8"), "</agents_md>"].join("\n")
+        ? [`<agents_md source="${agentsMdPath}">`, readFileSync(agentsMdPath, "utf-8"), "</agents_md>"].join("\n")
         : "";
     const checklistLine =
       phase === "implement" ? "Keep the plan checklist current: mark each item done (- [ ] → - [x]) as you complete it." : "";
