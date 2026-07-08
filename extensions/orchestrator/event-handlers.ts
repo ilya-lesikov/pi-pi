@@ -2425,16 +2425,22 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
         void handleMainRateLimit(orchestrator, ctx, activeModelId, activeProvider);
         return;
       }
-      // The SDK already auto-retries this class of error itself (abortable
-      // backoff bound to ESC, continuing the SAME turn). Running pi-pi's OWN
-      // independent retry on top would double-fire: its followUp races the SDK's
-      // continue() into "Agent is already processing", and it re-nudges a still-
-      // failing model. So for SDK-retryable errors we defer entirely to the SDK
-      // and do nothing here. pi-pi's own idle-gated retry remains only as the
-      // fallback for errors the SDK does NOT retry.
+      // The SDK ALSO auto-retries this class of error, but only with its own
+      // short budget (getRetrySettings default: maxRetries=3, baseDelayMs=2000 →
+      // ~14s of backoff) that runs INSIDE the prompt call. By the time this
+      // turn_end fires, the SDK's while-loop (_runAgentPrompt) has already
+      // exhausted that budget — the turn is terminally errored, no SDK retry is
+      // in flight. Previously we bailed here (`return`) and deferred entirely to
+      // the SDK; that shadowed pi-pi's OWN longer idle-gated retry (5×, up to
+      // 32s) for exactly the errors most worth retrying (5xx/503/stream-ended),
+      // so a transient gateway 503 killed the whole autonomous session in ~1min.
+      //
+      // We now let pi-pi's retry take over for SDK-retryable errors too. The
+      // original "Agent is already processing" race the old comment worried about
+      // cannot occur: sendUserMessageWhenIdle PRE-CHECKS isIdle() and defers on a
+      // bounded poll, so the followUp is never delivered while a run is active.
       if (isSdkRetryableError(errorMsg)) {
-        getLogger().debug({ s: "turn", err: errorMsg }, "deferring to SDK auto-retry; pi-pi retry skipped");
-        return;
+        getLogger().debug({ s: "turn", err: errorMsg }, "SDK retry budget exhausted; pi-pi idle-gated retry taking over");
       }
       // Halt guard: once the consecutive-error cap is exceeded we stop auto-
       // retrying until the user re-engages. errorRetryCount is NO LONGER reset on
@@ -2446,9 +2452,16 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
         return;
       }
       orchestrator.errorRetryCount = (orchestrator.errorRetryCount ?? 0) + 1;
-      const maxRetries = 5;
+      // 8 attempts with exponential backoff clamped at 60s: 2,4,8,16,32,60,60,60
+      // ≈ 242s (~4min) total window. A gateway 503 can persist for minutes, and
+      // an autonomous run has no human to "send any message to resume", so the
+      // window is sized to outlast a transient upstream outage rather than the
+      // SDK's ~14s in-prompt budget. The 60s clamp keeps late attempts from
+      // ballooning to 256s+ while still spacing out probes.
+      const maxRetries = 8;
+      const maxDelayMs = 60_000;
       if (orchestrator.errorRetryCount <= maxRetries) {
-        const delay = 2000 * Math.pow(2, orchestrator.errorRetryCount - 1);
+        const delay = Math.min(2000 * Math.pow(2, orchestrator.errorRetryCount - 1), maxDelayMs);
         ctx.ui.notify(`API error (attempt ${orchestrator.errorRetryCount}/${maxRetries}): ${errorMsg}. Retrying in ${delay / 1000}s...`, "warning");
         const taskToken = orchestrator.activeTaskToken;
         if (orchestrator.pendingRetryTimer) clearTimeout(orchestrator.pendingRetryTimer);

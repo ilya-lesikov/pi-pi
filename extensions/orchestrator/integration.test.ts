@@ -3462,10 +3462,10 @@ describe("tool blocking", () => {
 });
 
 describe("error retry", () => {
-  // Non-SDK-retryable error messages exercise pi-pi's OWN retry path. SDK-
-  // retryable errors (rate limit, overloaded, 5xx, stream-ended, timeout, etc.)
-  // are now deferred to the SDK's own auto-retry (see the defer test below), so
-  // these use a message the SDK does NOT retry.
+  // Both SDK-retryable and non-SDK-retryable errors now exercise pi-pi's OWN
+  // idle-gated retry. By the time turn_end fires, the SDK's short in-prompt
+  // retry budget is already exhausted, so pi-pi's longer retry (8×, up to ~4min)
+  // takes over instead of the session silently dying after the SDK's ~14s budget.
   it("turn_end with a non-SDK-retryable error uses pi-pi's idle-gated retry", async () => {
     vi.useFakeTimers();
     const cwd = makeTempDir();
@@ -3485,21 +3485,26 @@ describe("error retry", () => {
     vi.useRealTimers();
   });
 
-  it("turn_end defers SDK-retryable errors to the SDK (no pi-pi retry)", async () => {
+  it("turn_end retries SDK-retryable errors via pi-pi's idle-gated retry", async () => {
+    vi.useFakeTimers();
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);
     const ctx = makeCtx();
 
-    await orchestrator.startTask(ctx as any, "implement", "sdk defer test");
+    await orchestrator.startTask(ctx as any, "implement", "sdk retryable test");
     const turnEnd = pi._handlers.get("turn_end")!;
 
-    // "stream ended before message_stop" is SDK-retryable — pi-pi must NOT run
-    // its own retry (which would race the SDK's continue()).
+    // "stream ended before message_stop" is SDK-retryable, but by turn_end the
+    // SDK's own short retry budget is exhausted, so pi-pi's longer retry takes
+    // over rather than letting the autonomous session die.
     await turnEnd({ message: { stopReason: "error", errorMessage: "Anthropic stream ended before message_stop", content: [] } }, ctx);
 
-    expect(orchestrator.errorRetryCount).toBe(0);
-    expect(orchestrator.pendingRetryTimer).toBeNull();
-    expect(ctx.ui.notify).not.toHaveBeenCalledWith(expect.stringContaining("Retrying in"), "warning");
+    expect(orchestrator.errorRetryCount).toBe(1);
+    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Retrying in 2s"), "warning");
+
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(pi.sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("Previous request failed"), { deliverAs: "followUp" });
+    vi.useRealTimers();
   });
 
   it("turn_end stops retrying after max retries (non-SDK-retryable)", async () => {
@@ -3511,7 +3516,8 @@ describe("error retry", () => {
     await orchestrator.startTask(ctx as any, "implement", "retry max test");
     const turnEnd = pi._handlers.get("turn_end")!;
 
-    for (let i = 0; i < 6; i++) {
+    // 8 retries then a 9th error turn that trips the halt.
+    for (let i = 0; i < 9; i++) {
       await turnEnd({ message: { stopReason: "error", errorMessage: "invalid tool arguments", content: [] } }, ctx);
     }
 
