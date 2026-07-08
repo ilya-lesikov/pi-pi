@@ -55,6 +55,8 @@ interface Harness {
   /** Render the currently-registered below-editor widget at the given width. */
   render: (width?: number) => string[];
   setEditorText: (t: string) => void;
+  /** Simulate another overlay (e.g. /agents menu) being open above the fleet. */
+  setOverlayOpen: (v: boolean) => void;
   /** Whether an overlay has been opened. */
   overlayOpened: () => boolean;
   /** Whether the most recently opened overlay's `done` was invoked (closed). */
@@ -71,7 +73,8 @@ function harness(agents: AgentRecord[]): Harness {
   let closed = false;
   let overlayDone: ((r: undefined) => void) | undefined;
   let overlayComponent: { handleInput(data: string): void } | undefined;
-  const fakeTui = { requestRender: () => {}, terminal: { columns: 120, rows: 40 } };
+  let overlayOpen = false;
+  const fakeTui = { requestRender: () => {}, terminal: { columns: 120, rows: 40 }, hasOverlay: () => overlayOpen };
 
   const ui: FleetUICtx = {
     setWidget: (_key, content) => { widgetFactory = content as any; },
@@ -103,6 +106,7 @@ function harness(agents: AgentRecord[]): Harness {
     press: (data) => inputHandler?.(data),
     render: (width = 120) => (widgetFactory ? widgetFactory(fakeTui, theme).render(width) : []),
     setEditorText: (t) => { editorText = t; },
+    setOverlayOpen: (v: boolean) => { overlayOpen = v; },
     overlayOpened: () => opened,
     overlayClosed: () => closed,
     closeOverlay: async () => { overlayDone?.(undefined); await Promise.resolve(); },
@@ -152,6 +156,25 @@ describe("FleetList navigation", () => {
     const h = harness([makeRecord()]);
     h.setEditorText("hello");
     expect(h.press(DOWN)).toBeUndefined();
+  });
+
+  it("does NOT activate while another overlay is open (e.g. /agents menu)", () => {
+    const h = harness([makeRecord()]);
+    h.render(); // capture tui (widget renders before input in real usage)
+    h.setOverlayOpen(true);
+    // ↓ must fall through to the overlay, not be consumed by the fleet list.
+    expect(h.press(DOWN)).toBeUndefined();
+    expect(h.render().some(l => l.includes("enter view"))).toBe(false);
+  });
+
+  it("deactivates and releases keys when an overlay opens mid-navigation", () => {
+    const h = harness([makeRecord()]);
+    h.press(DOWN); // activate
+    expect(h.render().some(l => l.includes("enter view"))).toBe(true);
+    h.setOverlayOpen(true);
+    // Next key is released (not consumed) and the list deactivates.
+    expect(h.press(DOWN)).toBeUndefined();
+    expect(h.render().some(l => l.includes("← for agents"))).toBe(true);
   });
 
   it("ignores key-release events so one tap moves exactly one row", () => {

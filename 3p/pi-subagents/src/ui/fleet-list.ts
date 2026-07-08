@@ -215,8 +215,16 @@ export class FleetList {
     // emits both, and matchesKey matches either) — act on press only, or every
     // tap would move/fire twice. Repeats still pass through for held-key nav.
     if (isKeyRelease(data)) return undefined;
-    // While an overlay is open, let it own all input.
+    // While our own conversation overlay is open, let it own all input.
     if (this.viewerClose) return undefined;
+    // While any other overlay is open (e.g. /agents menu, model switcher), let
+    // it own arrow keys — extension input listeners run before the focused
+    // overlay in TUI.handleInput, so without this we'd steal navigation keys
+    // whenever the prompt happens to be empty.
+    if (this.tui?.hasOverlay?.()) {
+      if (this.active) this.deactivate();
+      return undefined;
+    }
 
     if (!this.active) {
       // Activate: ↓ or ← at an empty prompt moves focus into the list.

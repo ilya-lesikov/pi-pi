@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **FleetView no longer swallows arrow keys while another overlay is open.** Extension terminal-input listeners run before the focused overlay in `TUI.handleInput`, so FleetView — which activates on `↓`/`←` at an empty prompt — was hijacking navigation in overlays that leave the prompt empty (e.g. `/agents`, the model switcher), scrolling the subagent list instead of the menu. FleetView now bails out (and deactivates if it was navigating) whenever `tui.hasOverlay()` reports an active overlay, so overlays own their own arrow keys.
+
 ## [0.13.0] - 2026-06-30
 
 ### Added
