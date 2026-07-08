@@ -3419,6 +3419,11 @@ export async function showActiveTaskMenu(
   ctx: any,
   summary: string,
   mode: MenuMode = "command",
+  // Display-only override for the autonomous terminal implement handoff (#1):
+  // render the guided Next/Review menu even though the task is autonomous, WITHOUT
+  // mutating task.state.mode. Never persisted; does not affect the footer indicator
+  // or getEffectivePhaseMode.
+  forceGuided = false,
 ): Promise<string> {
   const continueMessage = advanceBanner("[PI-PI] User wants to continue. Run /pp when ready to advance.");
 
@@ -3449,7 +3454,7 @@ export async function showActiveTaskMenu(
 
     const opt = (title: string, description: string): OptionInput => ({ title, description });
 
-    if (effectiveMode === "autonomous") {
+    if (effectiveMode === "autonomous" && !forceGuided) {
       const { choice: autoChoice, cancelReason } = await selectOptionCancelable(ctx, `/pp\n\nTask: ${task.type}\nPhase: ${phase}${summary !== "/pp" ? `\n\n${summary}` : ""}`, [
         opt("Complete task", "Mark task as done and clean up"),
         opt("Pause task", "Suspend task to resume later"),

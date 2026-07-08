@@ -25,7 +25,7 @@ import { registerCbmTools } from "./cbm.js";
 import { registerExaTools } from "./exa.js";
 import { registerAstSearchTool } from "./ast-search.js";
 import { SUBAGENT_SESSION_KEY } from "./index.js";
-import { registerCommandHandlers } from "./command-handlers.js";
+import { registerCommandHandlers, runAfterImplementForActive } from "./command-handlers.js";
 import { registerStateFileTools } from "./pp-state-tools.js";
 import { isAiCommentOnlyChange } from "./ai-comment-cleanup.js";
 import { handleMainRateLimit, handleSubagentRateLimit, isRateLimitError, isSdkRetryableError } from "./rate-limit-fallback.js";
@@ -35,7 +35,7 @@ import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
 import { spawnCodeReviewers } from "./phases/review.js";
 import { spawnBrainstormReviewers } from "./phases/brainstorm.js";
 import { reviewPassUnanimousApprove } from "./phases/verdict.js";
-import { validateExitCriteria } from "./phases/machine.js";
+import { nextPhase, validateExitCriteria } from "./phases/machine.js";
 import { openPlannotator, waitForPlannotatorResult, cancelPendingPlannotatorWait } from "./plannotator.js";
 import { advanceBanner } from "./messages.js";
 import { Orchestrator, type ActiveTask } from "./orchestrator.js";
@@ -1123,6 +1123,33 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
           }
           if (!reviewText.includes("No") || !reviewText.includes("reviewers enabled")) {
             return { content: [{ type: "text" as const, text: reviewText }], details: {} };
+          }
+        }
+
+        // Terminal handoff (#1): an autonomous IMPLEMENT phase whose next phase is
+        // "done" should NOT auto-complete. Run afterImplement (transitionToNextPhase
+        // is skipped here, so run it explicitly — once), then open the GUIDED
+        // implement menu and wait, instead of tearing the task down.
+        if (phase === "implement" && nextPhase(orchestrator.active.type, phase) === "done") {
+          if (!orchestrator.active.state.afterImplementRan) {
+            const afterError = runAfterImplementForActive(orchestrator);
+            if (afterError) {
+              return { content: [{ type: "text" as const, text: `${afterError}\n\nDo NOT wait for the user — fix these and call pp_phase_complete again.` }], details: {} };
+            }
+            orchestrator.active.state.afterImplementRan = true;
+            saveTask(orchestrator.active.dir, orchestrator.active.state);
+          }
+          ctx.ui.setWorkingMessage?.("Waiting for user approval…");
+          try {
+            const { showActiveTaskMenu, USER_CANCELLED } = await import("./pp-menu.js");
+            const text = await showActiveTaskMenu(orchestrator, ctx, params.summary, "tool", true);
+            if (text === USER_CANCELLED) {
+              ctx.abort?.();
+              return { content: [{ type: "text" as const, text: "" }], details: {} };
+            }
+            return { content: [{ type: "text" as const, text: text ?? "" }], details: {} };
+          } finally {
+            ctx.ui.setWorkingMessage?.();
           }
         }
 

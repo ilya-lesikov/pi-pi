@@ -58,6 +58,10 @@ export interface TaskState {
   autonomousConfig?: AutonomousConfig;
   plannerFailureAutoRetried?: boolean;
   reviewerFailureAutoRetried?: boolean;
+  // Set once afterImplement has run for the current implement phase (either at
+  // the guided/autonomous transition or the autonomous terminal handoff), so the
+  // hooks never run twice for the same completion.
+  afterImplementRan?: boolean;
 }
 
 export interface TaskInfo {

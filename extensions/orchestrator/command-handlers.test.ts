@@ -309,6 +309,29 @@ describe("transitionToNextPhase", () => {
     expect(cleanupSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("does not re-run afterImplement when it already ran for this implement phase (#1)", async () => {
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi as any);
+    const taskDir = makeTempDir();
+    orchestrator.cwd = taskDir;
+    orchestrator.config = makeConfig() as any;
+    orchestrator.active = makeTransitionTask(taskDir, "implement");
+    orchestrator.active.state.repos = [{ path: taskDir, isRoot: true }];
+    orchestrator.active.state.afterImplementRan = true;
+    orchestrator.active.modifiedFiles = new Set([join(taskDir, "src", "root.ts")]);
+    const ctx = makeTransitionCtx();
+    vi.spyOn(machineModule, "validateExitCriteria").mockReturnValue({ ok: true });
+    const runSpy = vi.spyOn(commandsModule, "runAfterImplement").mockReturnValue([{ ok: true, command: "npm test", output: "ok" }]);
+    vi.spyOn(orchestrator, "cleanupActive").mockImplementation(async () => {
+      orchestrator.active = null;
+    });
+
+    const result = await transitionToNextPhase(orchestrator, ctx);
+
+    expect(result.ok).toBe(true);
+    expect(runSpy).not.toHaveBeenCalled();
+  });
+
   it("clears reviewCycle and review bookkeeping on the done transition (Issue 4)", async () => {
     const pi = makePi();
     const orchestrator = new Orchestrator(pi as any);

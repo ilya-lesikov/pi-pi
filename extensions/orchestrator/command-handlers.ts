@@ -13,6 +13,41 @@ function isEnabled(value: { enabled?: boolean }): boolean {
   return value.enabled !== false;
 }
 
+// Runs the configured afterImplement commands per repo (root + extra repos when
+// enabled), grouping by the repo each modified file belongs to. Returns an error
+// string when any command fails (same wording the transition surfaces), or null
+// on success. Shared by the guided/autonomous implement→done transition AND the
+// autonomous terminal handoff, which opens the guided menu instead of advancing.
+export function runAfterImplementForActive(orchestrator: Orchestrator): string | null {
+  if (!orchestrator.active) return null;
+  const repos = orchestrator.active.state.repos ?? [];
+  const grouped = groupFilesByRepo(repos, [...orchestrator.active.modifiedFiles]);
+  const afterResults: Array<{ ok: boolean; command: string; output: string }> = [];
+  for (const [repoPath] of grouped) {
+    if (!repoPath) continue;
+    const repo = repos.find((r) => r.path === repoPath);
+    if (!repo) continue;
+    if (repo.isRoot) {
+      afterResults.push(...runAfterImplement(
+        orchestrator.config.commands.afterImplement,
+        orchestrator.config.performance.commands.afterImplement,
+        orchestrator.cwd,
+      ));
+      continue;
+    }
+    if (!orchestrator.config.general.loadExtraRepoConfigs) continue;
+    const extraCommands = loadRepoAfterImplementCommands(repoPath);
+    if (!extraCommands || Object.keys(extraCommands).length === 0) continue;
+    afterResults.push(...runAfterImplement(extraCommands, orchestrator.config.performance.commands.afterImplement, repoPath));
+  }
+  const failures = afterResults.filter((r) => !r.ok);
+  if (failures.length > 0) {
+    const failureText = failures.map((f) => `${f.command}: ${f.output}`).join("\n");
+    return `afterImplement commands failed:\n${failureText}\n\nFix these issues before advancing.`;
+  }
+  return null;
+}
+
 export async function transitionToNextPhase(
   orchestrator: Orchestrator,
   ctx: any,
@@ -39,32 +74,10 @@ export async function transitionToNextPhase(
   const next = nextPhase(orchestrator.active.type, currentPhase);
   if (!next) return { ok: false, error: "No next phase available." };
 
-  if (currentPhase === "implement") {
-    const repos = orchestrator.active.state.repos ?? [];
-    const grouped = groupFilesByRepo(repos, [...orchestrator.active.modifiedFiles]);
-    const afterResults: Array<{ ok: boolean; command: string; output: string }> = [];
-    for (const [repoPath] of grouped) {
-      if (!repoPath) continue;
-      const repo = repos.find((r) => r.path === repoPath);
-      if (!repo) continue;
-      if (repo.isRoot) {
-        afterResults.push(...runAfterImplement(
-          orchestrator.config.commands.afterImplement,
-          orchestrator.config.performance.commands.afterImplement,
-          orchestrator.cwd,
-        ));
-        continue;
-      }
-      if (!orchestrator.config.general.loadExtraRepoConfigs) continue;
-      const extraCommands = loadRepoAfterImplementCommands(repoPath);
-      if (!extraCommands || Object.keys(extraCommands).length === 0) continue;
-      afterResults.push(...runAfterImplement(extraCommands, orchestrator.config.performance.commands.afterImplement, repoPath));
-    }
-    const failures = afterResults.filter((r) => !r.ok);
-    if (failures.length > 0) {
-      const failureText = failures.map((f) => `${f.command}: ${f.output}`).join("\n");
-      return { ok: false, error: `afterImplement commands failed:\n${failureText}\n\nFix these issues before advancing.` };
-    }
+  if (currentPhase === "implement" && !orchestrator.active.state.afterImplementRan) {
+    const afterError = runAfterImplementForActive(orchestrator);
+    if (afterError) return { ok: false, error: afterError };
+    orchestrator.active.state.afterImplementRan = true;
   }
 
   orchestrator.active.state.phase = next;

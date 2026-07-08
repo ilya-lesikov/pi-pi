@@ -679,8 +679,12 @@ describe("review cycle lifecycle", () => {
     await ppPhaseComplete.execute("call-2", { summary: "plan done" }, undefined, undefined, ctx);
     await new Promise((r) => setTimeout(r, 10));
 
+    // Pick the auto preset first: with zero enabled reviewers it notifies and
+    // (#3d) loops back to the Review submenu — NOT the top-level /pp menu — so the
+    // next expectation is the Review submenu directly, without re-selecting "Review".
     expectReviewAuto(menu);
-    expectReviewOnMyOwn(menu, "Skip markers");
+    menu.expect({ question: "Review", options: { include: ["Review on my own"] }, choose: "Review on my own" });
+    menu.expect({ question: "Editor review", options: { include: ["Skip markers"] }, choose: "Skip markers" });
     const result = await ppPhaseComplete.execute("call-3", { summary: "implemented" }, undefined, undefined, ctx);
 
     expect(result.content[0].text).toContain("continue");
@@ -1867,8 +1871,11 @@ describe("task modes and quick task", () => {
     emitSubagentCreated(pi, "reviewer-2", "Code reviewer (test)");
     emitSubagentCompleted(pi, "reviewer-2", "Code reviewer (test)");
 
+    // Terminal handoff (#1): at the cap the autonomous implement no longer auto-
+    // completes — it opens the guided menu; the user drives Next→Complete to finish.
+    expectImplementToDone(menu);
     const fourth = await ppPhaseComplete.execute("call-4", { summary: "applied 2" }, undefined, undefined, ctx);
-    expect(fourth.content[0].text).toBe("");
+    expect(fourth.content[0].text).toMatch(/completed/);
     expect(orchestrator.active).toBeNull();
     expect(loadTask(taskDir).phase).toBe("done");
   });
@@ -1910,8 +1917,11 @@ describe("task modes and quick task", () => {
     emitSubagentCreated(pi, "reviewer-1", "Code reviewer (test)");
     emitSubagentCompleted(pi, "reviewer-1", "Code reviewer (test)");
 
+    // Terminal handoff (#1): instead of auto-completing, the guided menu opens
+    // and the user drives Next→Complete to finish.
+    expectImplementToDone(menu);
     const second = await ppPhaseComplete.execute("call-2", { summary: "applied" }, undefined, undefined, ctx);
-    expect(second.content[0].text).toBe("");
+    expect(second.content[0].text).toMatch(/completed/);
     expect(orchestrator.active).toBeNull();
     const finalState = loadTask(taskDir);
     expect(finalState.phase).toBe("done");
@@ -1991,8 +2001,11 @@ describe("task modes and quick task", () => {
     );
 
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
+    // Terminal handoff (#1): clean-approved re-entry opens the guided menu rather
+    // than auto-completing; the user drives Next→Complete to finish.
+    expectImplementToDone(menu);
     const result = await ppPhaseComplete.execute("call-1", { summary: "checklist repaired" }, undefined, undefined, ctx);
-    expect(result.content[0].text).toBe("");
+    expect(result.content[0].text).toMatch(/completed/);
     expect(orchestrator.active).toBeNull();
     expect(loadTask(taskDir).phase).toBe("done");
   });
@@ -2486,8 +2499,11 @@ describe("task modes and quick task", () => {
     emitSubagentCreated(pi, "reviewer-auto-1", "Code reviewer (test)");
     emitSubagentCompleted(pi, "reviewer-auto-1", "Code reviewer (test)");
 
+    // Terminal handoff (#1): the clean second pass opens the guided menu; the user
+    // drives Next→Complete to finish rather than auto-completing.
+    expectImplementToDone(menu);
     const second = await ppPhaseComplete.execute("call-autonomous-review-2", { summary: "applied" }, undefined, undefined, ctx);
-    expect(second.content[0].text).toBe("");
+    expect(second.content[0].text).toMatch(/completed/);
     expect(orchestrator.active).toBeNull();
   });
 
@@ -2603,6 +2619,11 @@ describe("review task lifecycle", () => {
 
     await orchestrator.startTask(ctx as any, "review", "Review flow");
     const taskDir = orchestrator.active!.dir;
+
+    // #10: the review phase cannot complete without an ANCHORS-bearing final_pass file.
+    const reviewsDir = join(taskDir, "code-reviews");
+    mkdirSync(reviewsDir, { recursive: true });
+    writeFileSync(join(reviewsDir, "1_final_pass-1.md"), "# Review\nANCHORS: (none)\n", "utf-8");
 
     await moveTaskToImplementPhase(pi, orchestrator, ctx, "call-review-to-plan", "call-plan-to-implement");
     expect(orchestrator.active!.state.phase).toBe("implement");
@@ -4490,6 +4511,9 @@ describe("full user flows", () => {
     emitSubagentCreated(pi, "flow-auto-reviewer", "Code reviewer (test)");
     emitSubagentCompleted(pi, "flow-auto-reviewer", "Code reviewer (test)");
 
+    // Terminal handoff (#1): autonomous implement does NOT auto-complete. It opens
+    // the GUIDED implement menu and waits; the user drives Next→Complete to finish.
+    expectImplementToDone(menu);
     await ppPhaseComplete.execute("flow-auto-4", { summary: "feedback applied" }, undefined, undefined, ctx);
 
     expect(orchestrator.active).toBeNull();
