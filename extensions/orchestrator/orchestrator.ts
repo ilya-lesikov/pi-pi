@@ -121,6 +121,11 @@ export class Orchestrator {
   // switch-back probe); subSwitchBackTimer is the fixed-interval probe timer.
   subFallbackActive = false;
   subFallbackDialogPending = false;
+  // True while a user-facing dialogue (ask_user / the /pp menu / any interactive
+  // selectOption) is open. The main-turn watchdog skips while set so a turn
+  // legitimately parked on a human is not aborted. Set on dialogue open, cleared
+  // in finally on every exit (resolve, ESC/cancel, error).
+  interactivePromptOpen = false;
   // Set SYNCHRONOUSLY the moment a sub-429 is detected (before any async dialog),
   // and cleared once the decision resolves. The autonomous planner/reviewer
   // auto-retry consults this to avoid re-spawning a failed variant on the still-
@@ -147,10 +152,16 @@ export class Orchestrator {
   checkPlannerCompletion: () => void = () => {};
   readonly transitionController: TransitionController;
 
+  // The single live instance, so module-level dialogue wrappers (selectOption in
+  // event-handlers/pp-menu) can toggle interactivePromptOpen without threading a
+  // reference through ~70 call sites.
+  static current: Orchestrator | null = null;
+
   constructor(readonly pi: ExtensionAPI) {
     // The controller calls pi (the main session) directly for sends, and uses the
     // host only for live-ctx-dependent bits (compact/isIdle/currentStep).
     this.transitionController = new TransitionController(this.makeTransitionHost(), this.pi);
+    Orchestrator.current = this;
   }
 
   // Live-session host the TransitionController uses for compaction/idle/step.
@@ -657,6 +668,7 @@ export class Orchestrator {
     }
     this.subFallbackActive = false;
     this.subFallbackDialogPending = false;
+    this.interactivePromptOpen = false;
     this.subFallbackPendingDecision = false;
     this.subFallbackModelId = null;
     setSubscriptionFallbackActive(false);

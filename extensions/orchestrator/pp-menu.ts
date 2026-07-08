@@ -106,16 +106,22 @@ async function selectOptionCancelable(
   question: string,
   options: OptionInput[],
 ): Promise<{ choice?: string; cancelReason?: CancelReason }> {
-  const result = await askUser(ctx, {
-    question,
-    options,
-    allowFreeform: false,
-    allowComment: false,
-    allowMultiple: false,
-  });
-  if (result && isCancel(result)) return { cancelReason: result.reason };
-  if (!result || result.kind !== "selection") return {};
-  return { choice: result.selections[0] };
+  const orchestrator = Orchestrator.current;
+  if (orchestrator) orchestrator.interactivePromptOpen = true;
+  try {
+    const result = await askUser(ctx, {
+      question,
+      options,
+      allowFreeform: false,
+      allowComment: false,
+      allowMultiple: false,
+    });
+    if (result && isCancel(result)) return { cancelReason: result.reason };
+    if (!result || result.kind !== "selection") return {};
+    return { choice: result.selections[0] };
+  } finally {
+    if (orchestrator) orchestrator.interactivePromptOpen = false;
+  }
 }
 
 function opt(title: string, description: string): OptionInput {

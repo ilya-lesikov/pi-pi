@@ -452,6 +452,37 @@ describe("main-turn stall watchdog (BUG-2)", () => {
     vi.advanceTimersByTime(120000);
     expect(sendSpy).not.toHaveBeenCalled();
   });
+
+  it("does not fire while an interactive dialogue is open (#11)", async () => {
+    orchestrator.active = makeActiveTask();
+    orchestrator.config.performance.internals.mainTurnStale = 60000;
+    const sendSpy = vi.spyOn(orchestrator, "sendUserMessageWhenIdle").mockImplementation(() => {});
+    orchestrator.lastCtx = { isIdle: () => true } as any;
+
+    await getHandler("turn_start")({ type: "turn_start", turnIndex: 0 }, {});
+    orchestrator.interactivePromptOpen = true;
+    // Well past the stale threshold: the user is parked on a prompt, not wedged.
+    vi.advanceTimersByTime(600000);
+    expect(sendSpy).not.toHaveBeenCalled();
+
+    // Once the dialogue closes, a genuinely stalled turn recovers again.
+    orchestrator.interactivePromptOpen = false;
+    vi.advanceTimersByTime(61000);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fire while the subscription fallback dialogue is open (#11)", async () => {
+    orchestrator.active = makeActiveTask();
+    orchestrator.config.performance.internals.mainTurnStale = 60000;
+    const sendSpy = vi.spyOn(orchestrator, "sendUserMessageWhenIdle").mockImplementation(() => {});
+    orchestrator.lastCtx = { isIdle: () => true } as any;
+
+    await getHandler("turn_start")({ type: "turn_start", turnIndex: 0 }, {});
+    orchestrator.subFallbackDialogPending = true;
+    vi.advanceTimersByTime(600000);
+    expect(sendSpy).not.toHaveBeenCalled();
+    orchestrator.subFallbackDialogPending = false;
+  });
 });
 
 describe("checkoutPrHead", () => {

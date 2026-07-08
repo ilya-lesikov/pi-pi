@@ -122,15 +122,21 @@ export async function detectDefaultBranch(orchestrator: Orchestrator, repos: Rep
 }
 
 export async function selectOption(ctx: any, question: string, options: string[]): Promise<string | undefined> {
-  const result = await askUser(ctx, {
-    question,
-    options,
-    allowFreeform: false,
-    allowComment: false,
-    allowMultiple: false,
-  });
-  if (!result || isCancel(result) || result.kind !== "selection") return undefined;
-  return result.selections[0];
+  const orchestrator = Orchestrator.current;
+  if (orchestrator) orchestrator.interactivePromptOpen = true;
+  try {
+    const result = await askUser(ctx, {
+      question,
+      options,
+      allowFreeform: false,
+      allowComment: false,
+      allowMultiple: false,
+    });
+    if (!result || isCancel(result) || result.kind !== "selection") return undefined;
+    return result.selections[0];
+  } finally {
+    if (orchestrator) orchestrator.interactivePromptOpen = false;
+  }
 }
 
 function resolveReviewers(
@@ -1292,6 +1298,10 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       if (orchestrator.transitionController.isTransitioning()) return;
       const step = orchestrator.active.state.step;
       if (step === "await_planners" || step === "await_reviewers") return;
+      // A turn parked on an open user-facing dialogue (ask_user / the /pp menu /
+      // any interactive selectOption / the rate-limit fallback switch) is
+      // user-gated, not wedged — do not abort it out from under the user.
+      if (orchestrator.interactivePromptOpen || orchestrator.subFallbackDialogPending) return;
       const staleMs = orchestrator.config.performance.internals.mainTurnStale;
       if (Date.now() - orchestrator.mainTurnLastActivity <= staleMs) return;
 
