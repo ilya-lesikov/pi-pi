@@ -39,6 +39,8 @@ tools: read, grep, find
 model: anthropic/claude-opus-4-6
 thinking: high
 max_turns: 30
+persist_session: true
+session_dir: .seams/pi-sessions/seam-plan-reviewer
 prompt_mode: replace
 inherit_context: true
 run_in_background: true
@@ -57,6 +59,8 @@ You are a security auditor.`);
     expect(agent.model).toBe("anthropic/claude-opus-4-6");
     expect(agent.thinking).toBe("high");
     expect(agent.maxTurns).toBe(30);
+    expect(agent.persistSession).toBe(true);
+    expect(agent.sessionDir).toBe(".seams/pi-sessions/seam-plan-reviewer");
     expect(agent.promptMode).toBe("replace");
     expect(agent.inheritContext).toBe(true);
     expect(agent.runInBackground).toBe(true);
@@ -81,6 +85,8 @@ Just a prompt.`);
     expect(agent.model).toBeUndefined();
     expect(agent.thinking).toBeUndefined();
     expect(agent.maxTurns).toBeUndefined();
+    expect(agent.persistSession).toBeUndefined();
+    expect(agent.sessionDir).toBeUndefined();
     expect(agent.promptMode).toBe("replace");
     expect(agent.inheritContext).toBeUndefined();
     expect(agent.runInBackground).toBeUndefined();
@@ -139,6 +145,49 @@ Partial access.`);
     expect(agent.skills).toEqual(["planning", "review"]);
   });
 
+  it("parses exclude_extensions CSV", () => {
+    writeAgent("no-notify", `---
+extensions: true
+exclude_extensions: pi-notify, telemetry
+---
+
+No notifications.`);
+
+    const result = loadCustomAgents(tmpDir);
+    const agent = result.get("no-notify")!;
+    expect(agent.extensions).toBe(true);
+    expect(agent.excludeExtensions).toEqual(["pi-notify", "telemetry"]);
+  });
+
+  it("parses exclude_extensions YAML list", () => {
+    writeAgent("no-notify-yaml", `---
+exclude_extensions:
+  - pi-notify
+---
+
+No notifications.`);
+
+    const result = loadCustomAgents(tmpDir);
+    expect(result.get("no-notify-yaml")!.excludeExtensions).toEqual(["pi-notify"]);
+  });
+
+  it("exclude_extensions omitted or none → undefined", () => {
+    writeAgent("plain", `---
+description: plain
+---
+
+Plain.`);
+    writeAgent("explicit-none", `---
+exclude_extensions: none
+---
+
+None.`);
+
+    const result = loadCustomAgents(tmpDir);
+    expect(result.get("plain")!.excludeExtensions).toBeUndefined();
+    expect(result.get("explicit-none")!.excludeExtensions).toBeUndefined();
+  });
+
   it("passes through unknown tool names (not filtered)", () => {
     writeAgent("custom-tools", `---
 tools: read, my_custom_tool, grep
@@ -149,6 +198,77 @@ Custom tools.`);
     const result = loadCustomAgents(tmpDir);
     // Unknown tool names are passed through — filtering happens at tool creation time
     expect(result.get("custom-tools")!.builtinToolNames).toEqual(["read", "my_custom_tool", "grep"]);
+  });
+
+  it("partitions tools: ext: entries out of builtinToolNames into extSelectors", () => {
+    writeAgent("ext-agent", `---
+tools: read, ext:foo, ext:bar/x
+---
+
+Extension selectors.`);
+
+    const agent = loadCustomAgents(tmpDir).get("ext-agent")!;
+    expect(agent.builtinToolNames).toEqual(["read"]);
+    expect(agent.extSelectors).toEqual(["ext:foo", "ext:bar/x"]);
+  });
+
+  it("tools: with only ext: entries yields zero built-ins", () => {
+    writeAgent("ext-only", `---
+tools: ext:foo/bar
+---
+
+Ext only.`);
+
+    const agent = loadCustomAgents(tmpDir).get("ext-only")!;
+    expect(agent.builtinToolNames).toEqual([]);
+    expect(agent.extSelectors).toEqual(["ext:foo/bar"]);
+  });
+
+  it("tools: '*' expands to all built-ins and composes with ext: selectors", () => {
+    writeAgent("wild", `---
+tools: "*, ext:foo"
+---
+
+Wildcard plus ext.`);
+
+    const agent = loadCustomAgents(tmpDir).get("wild")!;
+    expect(agent.builtinToolNames).toEqual(BUILTIN_TOOL_NAMES);
+    expect(agent.extSelectors).toEqual(["ext:foo"]);
+  });
+
+  it("tools: 'all' is a case-insensitive alias for '*' (closes #75)", () => {
+    // `tools: all` previously parsed "all" as a single tool name → allowlist
+    // containing the non-existent tool "all" → silent zero-tool agent.
+    for (const [name, value] of [["all-lower", "all"], ["all-upper", "ALL"], ["all-mixed", "All"]]) {
+      writeAgent(name, `---\ntools: ${value}\n---\n\nAlias.`);
+      const agent = loadCustomAgents(tmpDir).get(name)!;
+      expect(agent.builtinToolNames).toEqual(BUILTIN_TOOL_NAMES);
+      expect(agent.extSelectors).toBeUndefined();
+    }
+  });
+
+  it("tools: 'all' composes with ext: selectors like '*'", () => {
+    writeAgent("all-plus-ext", `---
+tools: "all, ext:foo"
+---
+
+All plus ext.`);
+
+    const agent = loadCustomAgents(tmpDir).get("all-plus-ext")!;
+    expect(agent.builtinToolNames).toEqual(BUILTIN_TOOL_NAMES);
+    expect(agent.extSelectors).toEqual(["ext:foo"]);
+  });
+
+  it("leaves extSelectors undefined when tools: has no ext: entries", () => {
+    writeAgent("plain", `---
+tools: read, bash
+---
+
+Plain tools.`);
+
+    const agent = loadCustomAgents(tmpDir).get("plain")!;
+    expect(agent.builtinToolNames).toEqual(["read", "bash"]);
+    expect(agent.extSelectors).toBeUndefined();
   });
 
   it("passes through thinking level as-is (no validation)", () => {
@@ -435,5 +555,29 @@ Bad isolation.`);
 
     const result = loadCustomAgents(tmpDir);
     expect(result.get("bad-isolation")!.isolation).toBeUndefined();
+  });
+
+  it("honors PI_CODING_AGENT_DIR for global custom agent discovery", () => {
+    const altAgentDir = mkdtempSync(join(tmpdir(), "pi-alt-agent-"));
+    const originalEnv = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = altAgentDir;
+    try {
+      const globalAgentsDir = join(altAgentDir, "agents");
+      mkdirSync(globalAgentsDir, { recursive: true });
+      writeFileSync(
+        join(globalAgentsDir, "via-env.md"),
+        "---\ndescription: Discovered via env var\n---\n\nTest body.",
+      );
+
+      const result = loadCustomAgents(tmpDir);
+
+      // Agent is found at $PI_CODING_AGENT_DIR/agents, not at $HOME/.pi/agent/agents
+      expect(result.has("via-env")).toBe(true);
+      expect(result.get("via-env")!.description).toBe("Discovered via env var");
+    } finally {
+      if (originalEnv == null) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = originalEnv;
+      rmSync(altAgentDir, { recursive: true, force: true });
+    }
   });
 });

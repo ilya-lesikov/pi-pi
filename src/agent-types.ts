@@ -5,36 +5,33 @@
  * User agents override defaults with the same name. Disabled agents are kept but excluded from spawning.
  */
 
-import type { AgentTool } from "@mariozechner/pi-agent-core";
-import {
-  createBashTool,
-  createEditTool,
-  createFindTool,
-  createGrepTool,
-  createLsTool,
-  createReadTool,
-  createWriteTool,
-} from "@mariozechner/pi-coding-agent";
+import { createCodingTools, createReadOnlyTools } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_AGENTS } from "./default-agents.js";
 import type { AgentConfig } from "./types.js";
 
-type ToolFactory = (cwd: string) => AgentTool<any>;
-
-const TOOL_FACTORIES: Record<string, ToolFactory> = {
-  read: (cwd) => createReadTool(cwd),
-  bash: (cwd) => createBashTool(cwd),
-  edit: (cwd) => createEditTool(cwd),
-  write: (cwd) => createWriteTool(cwd),
-  grep: (cwd) => createGrepTool(cwd),
-  find: (cwd) => createFindTool(cwd),
-  ls: (cwd) => createLsTool(cwd),
-};
-
-/** All known built-in tool names, derived from the factory registry. */
-export const BUILTIN_TOOL_NAMES = Object.keys(TOOL_FACTORIES);
+/**
+ * All known built-in tool names, derived from pi's own tool factories rather
+ * than hardcoded so the set tracks pi-mono if it adds/renames a built-in.
+ * `createCodingTools` → read/bash/edit/write; `createReadOnlyTools` →
+ * read/grep/find/ls; their de-duplicated union is the 7 built-ins
+ * (read, bash, edit, write, grep, find, ls). The `cwd` only binds tool
+ * operations we never invoke here — we read each tool's `.name` and discard it.
+ */
+export const BUILTIN_TOOL_NAMES: string[] = [
+  ...new Set([...createCodingTools("."), ...createReadOnlyTools(".")].map((t) => t.name)),
+];
 
 /** Unified runtime registry of all agents (defaults + user-defined). */
 const agents = new Map<string, AgentConfig>();
+
+/** When true, DEFAULT_AGENTS are skipped during registration. */
+let disableDefaults = false;
+
+/** Check whether default agents are disabled. */
+export function isDefaultsDisabled(): boolean { return disableDefaults; }
+
+/** Set whether default agents are disabled. */
+export function setDefaultsDisabled(b: boolean): void { disableDefaults = b; }
 
 /**
  * Register agents into the unified registry.
@@ -44,9 +41,11 @@ const agents = new Map<string, AgentConfig>();
 export function registerAgents(userAgents: Map<string, AgentConfig>): void {
   agents.clear();
 
-  // Start with defaults
-  for (const [name, config] of DEFAULT_AGENTS) {
-    agents.set(name, config);
+  // Start with defaults (unless disabled via settings)
+  if (!disableDefaults) {
+    for (const [name, config] of DEFAULT_AGENTS) {
+      agents.set(name, config);
+    }
   }
 
   // Overlay user agents (overrides defaults with same name)
@@ -113,35 +112,30 @@ export function isValidType(type: string): boolean {
 const MEMORY_TOOL_NAMES = ["read", "write", "edit"];
 
 /**
- * Get the tools needed for memory management (read, write, edit).
- * Only returns tools that are NOT already in the provided set.
+ * Get memory tool names (read/write/edit) not already in the provided set.
  */
-export function getMemoryTools(cwd: string, existingToolNames: Set<string>): AgentTool<any>[] {
-  return MEMORY_TOOL_NAMES
-    .filter(n => !existingToolNames.has(n) && n in TOOL_FACTORIES)
-    .map(n => TOOL_FACTORIES[n](cwd));
+export function getMemoryToolNames(existingToolNames: Set<string>): string[] {
+  return MEMORY_TOOL_NAMES.filter(n => !existingToolNames.has(n));
 }
 
 /** Tool names needed for read-only memory access. */
 const READONLY_MEMORY_TOOL_NAMES = ["read"];
 
 /**
- * Get only the read tool for read-only memory access.
- * Only returns tools that are NOT already in the provided set.
+ * Get read-only memory tool names not already in the provided set.
  */
-export function getReadOnlyMemoryTools(cwd: string, existingToolNames: Set<string>): AgentTool<any>[] {
-  return READONLY_MEMORY_TOOL_NAMES
-    .filter(n => !existingToolNames.has(n) && n in TOOL_FACTORIES)
-    .map(n => TOOL_FACTORIES[n](cwd));
+export function getReadOnlyMemoryToolNames(existingToolNames: Set<string>): string[] {
+  return READONLY_MEMORY_TOOL_NAMES.filter(n => !existingToolNames.has(n));
 }
 
-/** Get built-in tools for a type (case-insensitive). */
-export function getToolsForType(type: string, cwd: string): AgentTool<any>[] {
+/** Get built-in tool names for a type (case-insensitive). */
+export function getToolNamesForType(type: string): string[] {
   const key = resolveKey(type);
   const raw = key ? agents.get(key) : undefined;
   const config = raw?.enabled !== false ? raw : undefined;
-  const toolNames = config?.builtinToolNames?.length ? config.builtinToolNames : BUILTIN_TOOL_NAMES;
-  return toolNames.filter((n) => n in TOOL_FACTORIES).map((n) => TOOL_FACTORIES[n](cwd));
+  // `undefined` (definition omitted the field) → all built-ins; an explicit `[]`
+  // (`tools: none` or a `tools:` with only `ext:` entries) → zero built-ins.
+  return config?.builtinToolNames ?? [...BUILTIN_TOOL_NAMES];
 }
 
 /** Get config for a type (case-insensitive, returns a SubagentTypeConfig-compatible object). Falls back to general-purpose. */
@@ -150,6 +144,7 @@ export function getConfig(type: string): {
   description: string;
   builtinToolNames: string[];
   extensions: true | string[] | false;
+  excludeExtensions?: string[];
   skills: true | string[] | false;
   promptMode: "replace" | "append";
 } {
@@ -161,6 +156,7 @@ export function getConfig(type: string): {
       description: config.description,
       builtinToolNames: config.builtinToolNames ?? BUILTIN_TOOL_NAMES,
       extensions: config.extensions,
+      excludeExtensions: config.excludeExtensions,
       skills: config.skills,
       promptMode: config.promptMode,
     };
@@ -174,6 +170,7 @@ export function getConfig(type: string): {
       description: gp.description,
       builtinToolNames: gp.builtinToolNames ?? BUILTIN_TOOL_NAMES,
       extensions: gp.extensions,
+      excludeExtensions: gp.excludeExtensions,
       skills: gp.skills,
       promptMode: gp.promptMode,
     };
