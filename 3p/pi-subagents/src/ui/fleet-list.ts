@@ -84,6 +84,12 @@ export class FleetList {
   private enabled = true;
   /** Whether arrow keys currently navigate the list (vs. flow to the editor). */
   private active = false;
+  /**
+   * Set by Esc: the panel is hidden and stays hidden even as agents spawn or
+   * finish — no auto-reopen. Cleared only by an explicit ↓/← activation (manual
+   * reopen) or a settings re-enable, so the user keeps full control.
+   */
+  private dismissed = false;
   /** 0 = `main`, 1..N = subagents. */
   private selectedIndex = 0;
   /** Set while a conversation overlay is open; calling it closes the overlay. */
@@ -101,6 +107,7 @@ export class FleetList {
     if (enabled === this.enabled) return;
     this.enabled = enabled;
     if (!enabled) this.active = false;
+    else this.dismissed = false; // re-enabling from settings un-dismisses
     this.update();
   }
 
@@ -146,7 +153,9 @@ export class FleetList {
     if (!this.ui) return;
     const hasAgents = this.enabled && this.agentRecords().length > 0;
 
-    if (!hasAgents) {
+    // Hidden either because nothing is running, or because Esc dismissed it (and
+    // it must stay hidden through subsequent spawns until a manual ↓/← reopen).
+    if (!hasAgents || this.dismissed) {
       if (this.widgetRegistered) {
         this.ui.setWidget(FLEET_KEY, undefined);
         this.widgetRegistered = false;
@@ -230,6 +239,7 @@ export class FleetList {
       // Activate: ↓ or ← at an empty prompt moves focus into the list.
       const isActivator = matchesKey(data, "down") || matchesKey(data, "left");
       if (isActivator && this.agentRecords().length > 0 && this.ui.getEditorText() === "") {
+        this.dismissed = false; // manual reopen clears a prior Esc dismissal
         this.active = true;
         this.selectedIndex = 0;
         this.update();
@@ -251,7 +261,7 @@ export class FleetList {
       this.update();
       return { consume: true };
     }
-    if (matchesKey(data, "escape")) { this.deactivate(); return { consume: true }; }
+    if (matchesKey(data, "escape")) { this.dismiss(); return { consume: true }; }
     if (matchesKey(data, Key.enter)) { this.openSelected(); return { consume: true }; }
 
     // Any other key cancels navigation and flows to the editor.
@@ -262,6 +272,14 @@ export class FleetList {
   private deactivate(): void {
     this.active = false;
     this.selectedIndex = 0;
+    this.update();
+  }
+
+  /** Esc: fully hide the panel and keep it hidden until a manual ↓/← reopen. */
+  private dismiss(): void {
+    this.active = false;
+    this.selectedIndex = 0;
+    this.dismissed = true;
     this.update();
   }
 
@@ -331,7 +349,7 @@ export class FleetList {
     const sel = Math.min(this.selectedIndex, agents.length);
 
     const hint = this.active
-      ? "↑↓ select · enter view · esc back"
+      ? "↑↓ select · enter view · esc close"
       : "esc to interrupt · ← for agents · ↓ to manage";
     const lines: string[] = [];
     lines.push(truncateToWidth("  " + theme.fg("dim", hint), width));

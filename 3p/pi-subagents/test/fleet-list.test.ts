@@ -214,11 +214,35 @@ describe("FleetList navigation", () => {
     expect(h.render().some(l => l.includes("← for agents"))).toBe(true);
   });
 
-  it("Esc deactivates", () => {
+  it("Esc closes the panel entirely (not just back to the prompt)", () => {
     const h = harness([makeRecord()]);
     h.press(DOWN);
     expect(h.press(ESC)).toEqual({ consume: true });
-    expect(h.render().some(l => l.includes("← for agents"))).toBe(true);
+    // Fully hidden — no rows, no hint.
+    expect(h.render()).toEqual([]);
+  });
+
+  it("stays closed after Esc even when a new agent spawns (no auto-reopen)", () => {
+    const agents = [makeRecord({ id: "a1" })];
+    const h = harness(agents);
+    h.press(DOWN);
+    h.press(ESC);
+    expect(h.render()).toEqual([]);
+    // A later spawn changes the roster and calls update()…
+    agents.push(makeRecord({ id: "a2", description: "second" }));
+    h.fleet.update();
+    // …but the panel remains dismissed.
+    expect(h.render()).toEqual([]);
+  });
+
+  it("reopens on manual ↓ after an Esc dismissal", () => {
+    const h = harness([makeRecord()]);
+    h.press(DOWN);
+    h.press(ESC);
+    expect(h.render()).toEqual([]);
+    // Arrow key at the empty prompt brings it back, active.
+    expect(h.press(DOWN)).toEqual({ consume: true });
+    expect(h.render().some(l => l.includes("enter view"))).toBe(true);
   });
 
   it("passes non-nav keys through and cancels navigation", () => {
