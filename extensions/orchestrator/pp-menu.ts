@@ -24,6 +24,7 @@ import {
   loadBrainstormReviewOutputs,
   loadCodeReviewOutputs,
   loadPlanReviewOutputs,
+  hasFinalPassAnchors,
 } from "./context.js";
 import { detectDefaultBranch, enterReviewCycle, finalizeReviewCycle } from "./event-handlers.js";
 import { Orchestrator } from "./orchestrator.js";
@@ -283,20 +284,12 @@ export function publishPrCommentsBanner(taskDir: string): string {
 // latest `code-reviews/*_final_pass-*.md`. If no such file exists, or the newest one
 // carries no `ANCHORS:` block, publishing would spawn an agent that immediately fails.
 // Returns a user-facing message to show instead, or undefined when publishing can proceed.
+export const MISSING_FINAL_PASS_ANCHORS =
+  "No ANCHORS-bearing final review file exists yet. Run or finish a review pass first " +
+  "(/pp → Review) so the findings are synthesized into `code-reviews/*_final_pass-*.md`.";
+
 export function publishGuard(taskDir: string): string | undefined {
-  const reviewsDir = join(taskDir, "code-reviews");
-  const runFirst =
-    "No ANCHORS-bearing final review file exists yet. Run or finish a review pass first " +
-    "(/pp → Review) so the findings are synthesized into `code-reviews/*_final_pass-*.md`.";
-  if (!existsSync(reviewsDir)) return runFirst;
-  const finalPassFiles = readdirSync(reviewsDir)
-    .filter((f) => f.endsWith(".md") && f.includes("_final_pass-"))
-    .sort();
-  if (finalPassFiles.length === 0) return runFirst;
-  const latest = finalPassFiles[finalPassFiles.length - 1];
-  const content = readFileSync(join(reviewsDir, latest), "utf8");
-  if (!/^ANCHORS:/m.test(content)) return runFirst;
-  return undefined;
+  return hasFinalPassAnchors(taskDir) ? undefined : MISSING_FINAL_PASS_ANCHORS;
 }
 
 const AI_REVIEW_MARKER_SYNTAX =
@@ -388,6 +381,13 @@ async function pauseTask(orchestrator: Orchestrator, ctx: any): Promise<string> 
 
 async function finishTask(orchestrator: Orchestrator, ctx: any): Promise<string> {
   if (!orchestrator.active) return "No active task.";
+
+  // The review phase must produce the ANCHORS-bearing final_pass file Publish
+  // consumes; block the direct Complete path too (it bypasses validateExitCriteria).
+  if (orchestrator.active.state.phase === "review" && !hasFinalPassAnchors(orchestrator.active.dir)) {
+    ctx.ui.notify(MISSING_FINAL_PASS_ANCHORS, "warning");
+    return MISSING_FINAL_PASS_ANCHORS;
+  }
 
   cancelPendingPlannotatorWait(orchestrator);
   orchestrator.abortAllSubagents();

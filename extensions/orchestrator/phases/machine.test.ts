@@ -297,6 +297,42 @@ Fix bug.
     expect(validateExitCriteria(pass, "debug", "debug")).toEqual({ ok: true });
   });
 
+  it("validates review phase — requires artifacts and an ANCHORS-bearing final_pass file", () => {
+    const missing = makeTempDir();
+    expect(validateExitCriteria(missing, "review", "review")).toEqual({
+      ok: false,
+      reason: "USER_REQUEST.md does not exist or is empty",
+    });
+
+    const noAnchors = makeTempDir();
+    writeFileSync(join(noAnchors, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(noAnchors, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+    const res1 = validateExitCriteria(noAnchors, "review", "review");
+    expect(res1.ok).toBe(false);
+    expect((res1 as { reason: string }).reason).toContain("ANCHORS");
+
+    const emptyAnchorsFile = makeTempDir();
+    writeFileSync(join(emptyAnchorsFile, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(emptyAnchorsFile, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+    mkdirSync(join(emptyAnchorsFile, "code-reviews"), { recursive: true });
+    writeFileSync(join(emptyAnchorsFile, "code-reviews", "1_final_pass-1.md"), "no anchors here", "utf-8");
+    expect(validateExitCriteria(emptyAnchorsFile, "review", "review").ok).toBe(false);
+
+    const zeroFindings = makeTempDir();
+    writeFileSync(join(zeroFindings, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(zeroFindings, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+    mkdirSync(join(zeroFindings, "code-reviews"), { recursive: true });
+    writeFileSync(join(zeroFindings, "code-reviews", "1_final_pass-1.md"), "# Review\nANCHORS: (none)\n", "utf-8");
+    expect(validateExitCriteria(zeroFindings, "review", "review")).toEqual({ ok: true });
+
+    const withFindings = makeTempDir();
+    writeFileSync(join(withFindings, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(withFindings, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+    mkdirSync(join(withFindings, "code-reviews"), { recursive: true });
+    writeFileSync(join(withFindings, "code-reviews", "1_final_pass-2.md"), "ANCHORS:\n- src/a.ts:12 must fix\n", "utf-8");
+    expect(validateExitCriteria(withFindings, "review", "review")).toEqual({ ok: true });
+  });
+
   it("returns unknown phase error for done", () => {
     const dir = makeTempDir();
     expect(validateExitCriteria(dir, "implement", "done")).toEqual({

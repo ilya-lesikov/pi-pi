@@ -279,6 +279,22 @@ export function getLatestSynthesizedPlan(taskDir: string): string | null {
   return readFileSync(join(plansDir, synthFiles[synthFiles.length - 1]), "utf-8");
 }
 
+// True when the newest `code-reviews/*_final_pass-*.md` exists and carries an
+// `ANCHORS:` block. Shared by publishGuard (Publish menu) and the review-phase
+// completion gates so a review cannot finish without the deliverable Publish
+// consumes. A zero-findings `ANCHORS: (none)` still satisfies this (the line exists).
+export function hasFinalPassAnchors(taskDir: string): boolean {
+  const reviewsDir = join(taskDir, "code-reviews");
+  if (!existsSync(reviewsDir)) return false;
+  const finalPassFiles = readdirSync(reviewsDir)
+    .filter((f) => f.endsWith(".md") && f.includes("_final_pass-"))
+    .sort();
+  if (finalPassFiles.length === 0) return false;
+  const latest = finalPassFiles[finalPassFiles.length - 1];
+  const content = readFileSync(join(reviewsDir, latest), "utf8");
+  return /^ANCHORS:/m.test(content);
+}
+
 function getLatestSynthesizedPlanPath(taskDir: string): string | null {
   const plansDir = join(taskDir, "plans");
   if (!existsSync(plansDir)) return null;

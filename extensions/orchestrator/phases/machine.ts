@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import type { TaskType, Phase } from "../state.js";
-import { getLatestSynthesizedPlan } from "../context.js";
+import { getLatestSynthesizedPlan, hasFinalPassAnchors } from "../context.js";
 import { validatePlan, validateResearch, validateUserRequest } from "../validate-artifacts.js";
 
 const USER_REQUEST_TEMPLATE = [
@@ -153,6 +153,16 @@ export function validateExitCriteria(
         return {
           ok: false,
           reason: formatValidationErrors("RESEARCH.md", researchValidation.errors, RESEARCH_TEMPLATE),
+        };
+      }
+
+      if (!hasFinalPassAnchors(taskDir)) {
+        return {
+          ok: false,
+          reason:
+            "No ANCHORS-bearing final review file exists. Write the review findings to " +
+            "`code-reviews/*_final_pass-*.md` with an `ANCHORS:` block (use `ANCHORS: (none)` " +
+            "if there are no findings) before completing the review.",
         };
       }
 
