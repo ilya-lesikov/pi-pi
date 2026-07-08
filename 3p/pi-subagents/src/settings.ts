@@ -67,12 +67,6 @@ export interface SubagentsSettings {
    */
   toolDescriptionMode?: ToolDescriptionMode;
   /**
-   * Whether the Claude Code-style FleetView (the navigable main+subagents list
-   * rendered below the editor) is shown. Defaults to `true`. Pure-UI: when off,
-   * the list never registers and the global key handler never captures input.
-   */
-  fleetView?: boolean;
-  /**
    * Display mode for the persistent above-editor agent widget:
    *   - `all`: show every agent (foreground + background).
    *   - `background`: hide foreground agents — they already render inline as the
@@ -97,7 +91,6 @@ export interface SettingsAppliers {
   setScopeModels: (enabled: boolean) => void;
   setDisableDefaultAgents: (b: boolean) => void;
   setToolDescriptionMode: (mode: ToolDescriptionMode) => void;
-  setFleetView: (b: boolean) => void;
   setWidgetMode: (mode: WidgetMode) => void;
 }
 
@@ -155,9 +148,6 @@ function sanitize(raw: unknown): SubagentsSettings {
   }
   if (typeof r.toolDescriptionMode === "string" && VALID_TOOL_DESCRIPTION_MODES.has(r.toolDescriptionMode)) {
     out.toolDescriptionMode = r.toolDescriptionMode as ToolDescriptionMode;
-  }
-  if (typeof r.fleetView === "boolean") {
-    out.fleetView = r.fleetView;
   }
   if (typeof r.widgetMode === "string" && VALID_WIDGET_MODES.has(r.widgetMode)) {
     out.widgetMode = r.widgetMode as WidgetMode;
@@ -220,7 +210,6 @@ export function applySettings(s: SubagentsSettings, appliers: SettingsAppliers):
   if (typeof s.scopeModels === "boolean") appliers.setScopeModels(s.scopeModels);
   if (typeof s.disableDefaultAgents === "boolean") appliers.setDisableDefaultAgents(s.disableDefaultAgents);
   if (s.toolDescriptionMode) appliers.setToolDescriptionMode(s.toolDescriptionMode);
-  if (typeof s.fleetView === "boolean") appliers.setFleetView(s.fleetView);
   if (s.widgetMode) appliers.setWidgetMode(s.widgetMode);
 }
 

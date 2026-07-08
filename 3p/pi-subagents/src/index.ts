@@ -46,7 +46,6 @@ import {
   type Theme,
   type UICtx,
 } from "./ui/agent-widget.js";
-import { FleetList, type FleetUICtx } from "./ui/fleet-list.js";
 import { showSchedulesMenu } from "./ui/schedule-menu.js";
 import { addUsage, getLifetimeTotal, getSessionContextPercent, type LifetimeUsage } from "./usage.js";
 
@@ -312,7 +311,6 @@ export default function (pi: ExtensionAPI) {
   function sendIndividualNudge(record: AgentRecord) {
     agentActivity.delete(record.id);
     widget.markFinished(record.id);
-    fleet.onAgentFinished(record.id);
     scheduleNudge(record.id, () => emitIndividualNudge(record));
     widget.update();
   }
@@ -320,7 +318,7 @@ export default function (pi: ExtensionAPI) {
   // ---- Group join manager ----
   const groupJoin = new GroupJoinManager(
     (records, partial) => {
-      for (const r of records) { agentActivity.delete(r.id); widget.markFinished(r.id); fleet.onAgentFinished(r.id); }
+      for (const r of records) { agentActivity.delete(r.id); widget.markFinished(r.id); }
 
       const groupKey = `group:${records.map(r => r.id).join(",")}`;
       scheduleNudge(groupKey, () => {
@@ -398,7 +396,6 @@ export default function (pi: ExtensionAPI) {
     if (record.resultConsumed) {
       agentActivity.delete(record.id);
       widget.markFinished(record.id);
-      fleet.onAgentFinished(record.id);
       widget.update();
       return;
     }
@@ -447,10 +444,14 @@ export default function (pi: ExtensionAPI) {
     getRecord: (id: string) => manager.getRecord(id),
   };
 
-  // Expose the agents menu for cross-extension callers (e.g. pi-pi /pp > Info > Subagents).
+  // Expose the agents menu for cross-extension callers (e.g. pi-pi /pp > Subagents).
+  // `showMenu` opens the full /agents menu; `showFleet` jumps straight to the
+  // navigable running-agents list (the /pp > Subagents entry, the FleetView
+  // replacement).
   const MENU_KEY = Symbol.for("pi-subagents:menu");
   (globalThis as any)[MENU_KEY] = {
     showMenu: (ctx: any) => showAgentsMenu(ctx),
+    showFleet: (ctx: any) => showRunningAgents(ctx),
   };
 
   // --- Cross-extension RPC via pi.events ---
@@ -544,7 +545,6 @@ export default function (pi: ExtensionAPI) {
     manager.abortAll();
     for (const timer of pendingNudges.values()) clearTimeout(timer);
     pendingNudges.clear();
-    fleet.dispose();
     manager.dispose();
   });
 
@@ -557,12 +557,6 @@ export default function (pi: ExtensionAPI) {
   function getWidgetMode(): WidgetMode { return widgetMode; }
   const widget = new AgentWidget(manager, agentActivity, getWidgetMode);
   function setWidgetMode(m: WidgetMode): void { widgetMode = m; widget.update(); }
-
-  // Claude Code-style FleetView: navigable list of main + subagents below the editor.
-  const fleet = new FleetList(manager, agentActivity);
-  let fleetViewEnabled = true;
-  function isFleetViewEnabled(): boolean { return fleetViewEnabled; }
-  function setFleetViewEnabled(b: boolean): void { fleetViewEnabled = b; fleet.setEnabled(b); }
 
   // ---- Join mode configuration ----
   let defaultJoinMode: JoinMode = 'smart';
@@ -656,7 +650,6 @@ export default function (pi: ExtensionAPI) {
   // Grab UI context from first tool execution + clear lingering widget on new turn
   pi.on("tool_execution_start", async (_event, ctx) => {
     widget.setUICtx(ctx.ui as UICtx);
-    fleet.setUICtx(ctx.ui as unknown as FleetUICtx);
     widget.onTurnStart();
   });
 
@@ -716,7 +709,6 @@ export default function (pi: ExtensionAPI) {
       setScopeModels: setScopeModelsEnabled,
       setDisableDefaultAgents: setDisableDefaultAgents,
       setToolDescriptionMode: setToolDescriptionMode,
-      setFleetView: setFleetViewEnabled,
       setWidgetMode: setWidgetMode,
     },
     (event, payload) => pi.events.emit(event, payload),
@@ -1221,8 +1213,6 @@ Terse command-style prompts produce shallow, generic work.
         agentActivity.set(id, bgState);
         widget.ensureTimer();
         widget.update();
-        fleet.ensureTimer();
-        fleet.update();
 
         // Emit created event
         pi.events.emit("subagents:created", {
@@ -1283,8 +1273,6 @@ Terse command-style prompts produce shallow, generic work.
             fgId = a.id;
             agentActivity.set(a.id, fgState);
             widget.ensureTimer();
-            fleet.ensureTimer();
-            fleet.update();
             break;
           }
         }
@@ -1339,7 +1327,6 @@ Terse command-style prompts produce shallow, generic work.
       if (fgId) {
         agentActivity.delete(fgId);
         widget.markFinished(fgId);
-        fleet.onAgentFinished(fgId);
       }
 
       // Get final token count
@@ -2075,7 +2062,6 @@ ${systemPrompt}
       scopeModels: isScopeModelsEnabled(),
       disableDefaultAgents: isDefaultsDisabled(),
       toolDescriptionMode: getToolDescriptionMode(),
-      fleetView: isFleetViewEnabled(),
       widgetMode: getWidgetMode(),
     };
   }
@@ -2136,13 +2122,6 @@ ${systemPrompt}
           label: "Disable defaults",
           description: "Hide built-in agents (general-purpose, Explore, Plan) — custom agents are unaffected",
           currentValue: isDefaultsDisabled() ? "on" : "off",
-          values: ["on", "off"],
-        },
-        {
-          id: "fleetView",
-          label: "Fleet view",
-          description: "Claude Code-style main+subagents list below the editor (↓/← to navigate, Enter to view)",
-          currentValue: isFleetViewEnabled() ? "on" : "off",
           values: ["on", "off"],
         },
         {
@@ -2210,10 +2189,6 @@ ${systemPrompt}
       } else if (id === "toolDescriptionMode") {
         setToolDescriptionMode(value as ToolDescriptionMode);
         notifyApplied(ctx, `Tool description set to ${value}. Takes effect on next pi session.`);
-      } else if (id === "fleetView") {
-        const enabled = value === "on";
-        setFleetViewEnabled(enabled);
-        notifyApplied(ctx, `Fleet view ${enabled ? "enabled" : "disabled"}`);
       } else if (id === "widgetMode") {
         setWidgetMode(value as WidgetMode);
         notifyApplied(ctx, `Widget set to ${value}`);

@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- **FleetView (the below-editor subagent list) has been removed.** The navigable running-agents list is now a regular menu entry — open it from `/pp → Subagents` (or `/agents → Running agents`) instead of pressing `↓`/`←` at an empty prompt. `↑`/`↓` select and `Enter` opens the selected agent's live conversation overlay (with in-viewer steering, unchanged). The `fleetView` setting and the `/agents → Settings → Fleet view` toggle are gone; a leftover `fleetView` key in `subagents.json` is ignored.
+
 ### Changed
 - **Esc now fully closes FleetView instead of just returning to the prompt.** While navigating the list (after `↓`/`←`), `Esc` hides the whole panel and keeps it hidden — it will **not** auto-reopen when new agents spawn. Reopen it on demand with `↓`/`←` at an empty prompt (or re-enable via `/agents → Settings → Fleet view`). `↑` past `main` still just returns to the prompt with the panel visible, so both affordances remain. The active-state hint now reads `↑↓ select · enter view · esc close`.
 

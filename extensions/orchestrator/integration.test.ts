@@ -4105,8 +4105,8 @@ describe("menu contracts", () => {
       .expect({
         question: "Info",
         options: {
-          include: ["Subagents", "Usage", "Doctor", "Back"],
-          exclude: ["LSP"],
+          include: ["Usage", "Doctor", "Back"],
+          exclude: ["LSP", "Subagents"],
         },
         choose: "Back",
       })
@@ -4202,7 +4202,7 @@ describe("menu contracts", () => {
     menu.expect({
       question: m.taskMenu("implement", "brainstorm"),
       options: {
-        exact: ["Next", "Review", "Info", "Settings", "Back"],
+        exact: ["Next", "Review", "Subagents", "Info", "Settings", "Back"],
       },
       choose: "Back",
     });
@@ -4224,7 +4224,7 @@ describe("menu contracts", () => {
     menu.expect({
       question: m.taskMenu("implement", "plan"),
       options: {
-        exact: ["Next", "Info", "Settings", "Back"],
+        exact: ["Next", "Subagents", "Info", "Settings", "Back"],
       },
       choose: "Back",
     });
@@ -4245,7 +4245,7 @@ describe("menu contracts", () => {
     menu.expect({
       question: m.taskMenu("implement", "brainstorm"),
       options: {
-        exact: ["Next", "Review", "Info", "Settings", "Back"],
+        exact: ["Next", "Review", "Subagents", "Info", "Settings", "Back"],
       },
       choose: "Back",
     });
@@ -4264,7 +4264,7 @@ describe("menu contracts", () => {
     menu.expect({
       question: m.taskMenu("debug", "debug"),
       options: {
-        exact: ["Next", "Review", "Info", "Settings", "Back"],
+        exact: ["Next", "Review", "Subagents", "Info", "Settings", "Back"],
       },
       choose: "Back",
     });
@@ -4283,7 +4283,7 @@ describe("menu contracts", () => {
     menu.expect({
       question: m.taskMenu("review", "review"),
       options: {
-        exact: ["Next", "Review", "Info", "Settings", "Back"],
+        exact: ["Next", "Review", "Subagents", "Info", "Settings", "Back"],
       },
       choose: "Back",
     });
@@ -4384,7 +4384,7 @@ describe("menu contracts", () => {
     menu.expect({
       question: m.taskMenu("quick", "quick"),
       options: {
-        exact: ["Complete", "Pause", "Info", "Settings", "Back"],
+        exact: ["Complete", "Pause", "Subagents", "Info", "Settings", "Back"],
       },
       choose: "Back",
     });
