@@ -62,6 +62,10 @@ export interface TaskState {
   // the guided/autonomous transition or the autonomous terminal handoff), so the
   // hooks never run twice for the same completion.
   afterImplementRan?: boolean;
+  // Per-repo interleaved Plannotator review cursor (#3a). repoPaths is the ordered
+  // set of repos to review; index is the next repo. Persisted so the loop resumes
+  // on the next /pp after the agent fixes one repo's feedback. Undefined = no loop.
+  plannotatorCursor?: { repoPaths: string[]; index: number };
 }
 
 export interface TaskInfo {

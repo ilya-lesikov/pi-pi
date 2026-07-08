@@ -21,6 +21,14 @@ vi.mock("../../3p/pi-ask-user/index.js", () => ({
   }),
 }));
 
+// Scripts per-repo Plannotator outcomes for the #3a interleaved cursor tests.
+const plannotatorResults: Array<{ approved: boolean; feedback?: string }> = [];
+vi.mock("./plannotator.js", () => ({
+  cancelPendingPlannotatorWait: () => {},
+  openPlannotator: vi.fn(async () => ({ opened: true, reviewId: "rev" })),
+  waitForPlannotatorResult: vi.fn(async () => plannotatorResults.shift() ?? { approved: true }),
+}));
+
 const USAGE_TRACKER_SYMBOL = Symbol.for("pi-pi:usage-tracker");
 
 afterEach(() => {
@@ -340,5 +348,63 @@ describe("showActiveTaskMenu Publish/Next Back navigation (#6)", () => {
     expect(askQuestions.filter((q) => q === "Next").length).toBe(1);
     // Top-level rendered twice (initial + after Next's Back), Next once.
     expect(askQuestions.filter((q) => q.startsWith("/pp")).length).toBe(2);
+  });
+
+  it("Review submenu 'Editor review' Back returns to Review, not the top-level menu (#3d)", async () => {
+    const orchestrator = makeReviewOrchestrator();
+    // /pp -> Review -> Review on my own -> Editor review Back (should return to
+    // Review) -> Review Back (to top-level) -> top-level Back (exit).
+    askQueue.push("Review", "Review on my own", "Back", "Back", "Back");
+    const result = await showActiveTaskMenu(orchestrator, ctx, "/pp", "tool");
+    expect(result).toBe("");
+    // Review submenu rendered twice (initial + after the Editor-review Back).
+    expect(askQuestions.filter((q) => q === "Review").length).toBe(2);
+    // Top-level rendered twice (initial + after Review's explicit Back).
+    expect(askQuestions.filter((q) => q.startsWith("/pp")).length).toBe(2);
+  });
+
+  it("resumes the per-repo Plannotator cursor and interleaves fixes (#3a)", async () => {
+    const orchestrator = makeReviewOrchestrator();
+    orchestrator.active.type = "implement";
+    orchestrator.active.state.phase = "implement";
+    orchestrator.active.state.repos = [
+      { path: "/repo/a", isRoot: true },
+      { path: "/repo/b", isRoot: false },
+    ];
+    orchestrator.active.state.plannotatorCursor = { repoPaths: ["/repo/a", "/repo/b"], index: 0 };
+    orchestrator.pi = { exec: vi.fn(async () => ({ code: 0, stdout: "", stderr: "" })) };
+    orchestrator.config = getDefaultConfig();
+
+    // First repo: choose a diff scope, Plannotator returns NEEDS_CHANGES → the
+    // menu exits with a work instruction and the cursor advances to repo b.
+    plannotatorResults.push({ approved: false, feedback: "fix the thing" });
+    askQueue.push("Uncommitted changes");
+    const first = await showActiveTaskMenu(orchestrator, ctx, "/pp", "tool");
+    expect(first).toContain("Plannotator requested changes");
+    expect(first).toContain("fix the thing");
+    expect(orchestrator.active.state.plannotatorCursor).toEqual({ repoPaths: ["/repo/a", "/repo/b"], index: 1 });
+
+    // Next /pp resumes at repo b; APPROVED → cursor is cleared and the loop ends,
+    // falling through to the normal menu (top-level Back exits).
+    plannotatorResults.push({ approved: true });
+    askQueue.push("Uncommitted changes", "Back");
+    const second = await showActiveTaskMenu(orchestrator, ctx, "/pp", "tool");
+    expect(second).toBe("");
+    expect(orchestrator.active.state.plannotatorCursor).toBeUndefined();
+  });
+
+  it("blocks a second review while one is already running (#3b)", async () => {
+    const orchestrator = makeReviewOrchestrator();
+    orchestrator.active.state.reviewCycle = { kind: "auto", step: "await_reviewers", pass: 1 };
+    // isRunning() true so the top-level "Review" option is offered.
+    orchestrator.transitionController.isRunning = () => true;
+    let notified = "";
+    const notifyCtx = { ui: { notify: (t: string) => { notified = t; } }, waitForIdle: async () => {}, abort: () => {} };
+    askQueue.push("Review");
+    const result = await showActiveTaskMenu(orchestrator, notifyCtx, "/pp", "tool");
+    expect(result).toBe("A review is already running");
+    expect(notified).toBe("A review is already running");
+    // The live cycle is untouched (not finalized/nulled).
+    expect(orchestrator.active.state.reviewCycle).toEqual({ kind: "auto", step: "await_reviewers", pass: 1 });
   });
 });

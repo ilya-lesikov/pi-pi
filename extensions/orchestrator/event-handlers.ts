@@ -1,5 +1,4 @@
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "fs";
-import { tmpdir } from "os";
+import { existsSync, readdirSync, readFileSync, statSync } from "fs";
 import { resolve, basename, join, relative, dirname, isAbsolute, sep } from "path";
 import { validateUserRequest, validateResearch, validateArtifact } from "./validate-artifacts.js";
 import { Type } from "@sinclair/typebox";
@@ -325,7 +324,9 @@ export async function enterReviewCycle(
     orchestrator.active.state.reviewCycle = null;
     orchestrator.active.state.step = "llm_work";
     saveTask(orchestrator.active.dir, orchestrator.active.state);
-    return "User wants a Plannotator code review. Call pp_specify_reviews with the list of repositories and commit ranges to review. Include all repos where you made changes.";
+    // Implement/review-phase Plannotator is driven entirely by the menu's per-repo
+    // interleaved loop (pp-menu runPlannotatorCursor); it never enters this path.
+    return "Plannotator code review runs per-repo from the /pp Review menu. Open /pp → Review → Review in Plannotator.";
   }
 
   const phase = orchestrator.active.state.phase;
@@ -472,7 +473,6 @@ function registerOrchestratorTools(orchestrator: Orchestrator): void {
   registerCheckoutPrHeadTool(orchestrator);
   registerPhaseCompleteTool(orchestrator);
   registerCommitTool(orchestrator);
-  registerSpecifyReviewsTool(orchestrator);
   registerStateFileTools(orchestrator);
 }
 
@@ -769,190 +769,6 @@ function registerRepoTool(orchestrator: Orchestrator): void {
         content: [{ type: "text" as const, text: `${action} repository: ${registered.path}${rootLabel}${baseLabel}` }],
         details: {},
       };
-    },
-  });
-}
-
-async function openCodeReviewDirect(
-  orchestrator: Orchestrator,
-  payload: Record<string, unknown>,
-): Promise<{ approved: boolean; feedback?: string } | { error: string }> {
-  const { opened, reviewId } = await openPlannotator(orchestrator.pi, "code-review", payload);
-  if (!opened) {
-    return { error: "Plannotator not available" };
-  }
-  let result: { approved: boolean; feedback?: string; error?: string };
-  try {
-    result = await waitForPlannotatorResult(orchestrator, reviewId, null);
-  } catch (err) {
-    return { error: err instanceof Error ? err.message : "Plannotator review failed" };
-  }
-  if (result.error) {
-    return { error: result.error };
-  }
-  return { approved: result.approved, feedback: result.feedback };
-}
-
-function registerSpecifyReviewsTool(orchestrator: Orchestrator): void {
-  const pi = orchestrator.pi;
-
-  pi.registerTool({
-    name: "pp_specify_reviews",
-    label: "pi-pi",
-    description:
-      "Specify which repositories and commit ranges to open in Plannotator for code review. " +
-      "Called when the user requests a Plannotator code review. " +
-      "Plannotator will open sequentially for each entry. Results are returned after all reviews complete. " +
-      "Range supports both 'base..HEAD' and 'base..target' (non-HEAD target is reviewed via temporary worktree checkout).",
-    parameters: Type.Object({
-      reviews: Type.Array(Type.Object({
-        cwd: Type.String({ description: "Absolute path to the git repository" }),
-        range: Type.String({ description: "Git commit range, e.g. 'origin/main..HEAD', 'abc123..def456', 'HEAD~3..HEAD'" }),
-      })),
-    }),
-    async execute(_toolCallId, params: any, _signal, _onUpdate, ctx) {
-      if (orchestrator.active && getEffectiveMode(orchestrator.active.state) === "autonomous") {
-        return { content: [{ type: "text" as const, text: "Plannotator review is not available in autonomous mode. Continue with automated reviews via pp_phase_complete." }], isError: true as const, details: {} };
-      }
-      if (!params.reviews || params.reviews.length === 0) {
-        return { content: [{ type: "text" as const, text: "No reviews specified." }], isError: true as const, details: {} };
-      }
-
-      const results: string[] = [];
-      let hasNeedsChanges = false;
-      for (const review of params.reviews) {
-        ctx.ui?.setWorkingMessage?.(`Waiting for Plannotator review: ${review.range}…`);
-        const range = String(review.range ?? "").trim();
-        let compareBase = range;
-        let compareTarget = "HEAD";
-        const rangeSeparatorIdx = range.indexOf("..");
-        if (rangeSeparatorIdx >= 0) {
-          compareBase = range.slice(0, rangeSeparatorIdx).trim();
-          compareTarget = range.slice(rangeSeparatorIdx + 2).trim() || "HEAD";
-        }
-
-        if (!compareBase) {
-          results.push(`${review.cwd} (${review.range}): Invalid range (missing base).`);
-          continue;
-        }
-
-        let reviewCwd = review.cwd;
-        let tempWorktreePath: string | null = null;
-        let tempWorktreeParent: string | null = null;
-        let setupError: string | null = null;
-
-        if (compareTarget !== "HEAD") {
-          tempWorktreeParent = mkdtempSync(join(tmpdir(), "pi-pi-review-worktree-"));
-          tempWorktreePath = join(tempWorktreeParent, "checkout");
-          try {
-            const addResult = await pi.exec("git", ["worktree", "add", "--detach", tempWorktreePath, compareTarget], {
-              cwd: review.cwd,
-              timeout: 20000,
-            });
-            if (addResult.code !== 0) {
-              setupError = addResult.stderr?.trim() || addResult.stdout?.trim() || "Failed to prepare temporary worktree";
-            } else {
-              reviewCwd = tempWorktreePath;
-            }
-          } catch (error: any) {
-            setupError = error?.message ?? String(error);
-          }
-        }
-
-        if (setupError) {
-          results.push(`${review.cwd} (${review.range}): ${setupError}`);
-          if (tempWorktreePath) {
-            try {
-              await pi.exec("git", ["worktree", "remove", "--force", tempWorktreePath], {
-                cwd: review.cwd,
-                timeout: 20000,
-              });
-            } catch {}
-          }
-          if (tempWorktreePath) {
-            try {
-              rmSync(tempWorktreePath, { recursive: true, force: true });
-            } catch {}
-          }
-          if (tempWorktreeParent) {
-            try {
-              rmSync(tempWorktreeParent, { recursive: true, force: true });
-            } catch {}
-          }
-          continue;
-        }
-
-        const result = await openCodeReviewDirect(orchestrator, {
-          cwd: reviewCwd,
-          diffType: "branch",
-          defaultBranch: compareBase,
-        });
-
-        if (tempWorktreePath) {
-          try {
-            await pi.exec("git", ["worktree", "remove", "--force", tempWorktreePath], {
-              cwd: review.cwd,
-              timeout: 20000,
-            });
-          } catch {}
-          try {
-            rmSync(tempWorktreePath, { recursive: true, force: true });
-          } catch {}
-          if (tempWorktreeParent) {
-            try {
-              rmSync(tempWorktreeParent, { recursive: true, force: true });
-            } catch {}
-          }
-        }
-
-        if ("error" in result) {
-          results.push(`${review.cwd} (${review.range}): ${result.error}`);
-        } else {
-          const status = result.approved ? "APPROVED" : "NEEDS_CHANGES";
-          if (!result.approved) hasNeedsChanges = true;
-          const feedback = result.feedback ? `\nFeedback: ${result.feedback}` : "";
-          results.push(`${review.cwd} (${review.range}): ${status}${feedback}`);
-        }
-      }
-      ctx.ui?.setWorkingMessage?.();
-
-      const summary = results.join("\n\n");
-
-      if (hasNeedsChanges) {
-        if (orchestrator.active) {
-          orchestrator.active.state.step = "llm_work";
-          saveTask(orchestrator.active.dir, orchestrator.active.state);
-        }
-        return {
-          content: [{ type: "text" as const, text: `Plannotator review complete.\n\n${summary}\n\nAddress the user's feedback. If the feedback contains questions, answer them. If it requests changes, make the changes. Then call pp_phase_complete when done.` }],
-          details: {},
-        };
-      }
-
-      ctx.ui?.setWorkingMessage?.("Waiting for user input…");
-      try {
-        const { showActiveTaskMenu, USER_CANCELLED } = await import("./pp-menu.js");
-        const text = await showActiveTaskMenu(orchestrator, ctx, `Plannotator review complete.\n\n${summary}`, "tool");
-        // Deliberate user ESC: stop the turn cleanly (mirror ask_user), no
-        // reminder text that would start a new LLM turn.
-        if (text === USER_CANCELLED) {
-          ctx.abort?.();
-          return { content: [{ type: "text" as const, text: "" }], details: {} };
-        }
-        // A transition may have started while the menu was open. The controller
-        // is the source of truth; abort the agent's pending turn so it doesn't
-        // race the transition. (Interactive-UX abort — stays local, not routed.)
-        if (!orchestrator.transitionController.isRunning()) {
-          ctx.abort?.();
-          return { content: [{ type: "text" as const, text: "" }], details: {} };
-        }
-        if (!text) {
-          return { content: [{ type: "text" as const, text: "User dismissed the menu. Wait for the user's next message. When you resume work, update USER_REQUEST.md and RESEARCH.md with any new findings before calling pp_phase_complete." }], details: {} };
-        }
-        return { content: [{ type: "text" as const, text }], details: {} };
-      } finally {
-        ctx.ui?.setWorkingMessage?.();
-      }
     },
   });
 }

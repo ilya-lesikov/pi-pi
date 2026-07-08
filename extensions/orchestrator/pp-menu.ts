@@ -3215,6 +3215,97 @@ async function openCodeReviewInPlannotator(
   return { status: result.approved ? "approved" : "needs_changes", feedback };
 }
 
+// Per-repo interleaved Plannotator loop (#3a). Runs from the persisted cursor: for
+// each repo, ask the diff scope, open Plannotator and WAIT (dialogue closed). On
+// NEEDS_CHANGES, persist the cursor advanced past this repo and return a work
+// instruction (mirrors the plan path: answer questions + apply changes) so the
+// agent fixes THIS repo before the next opens; the next /pp resumes the loop. On
+// approved/error/skip, advance and continue in-loop. When the cursor is exhausted
+// or the user stops, clear the cursor and return null (fall back to the menu).
+async function runPlannotatorCursor(orchestrator: Orchestrator, ctx: any): Promise<string | null> {
+  const task = orchestrator.active;
+  if (!task) return null;
+  const cursor = task.state.plannotatorCursor;
+  if (!cursor) return null;
+
+  while (task.state.plannotatorCursor && task.state.plannotatorCursor.index < task.state.plannotatorCursor.repoPaths.length) {
+    const cur = task.state.plannotatorCursor;
+    const repoPath = cur.repoPaths[cur.index];
+    const repo = getRegisteredRepos(orchestrator).find((r) => r.path === repoPath) ?? { path: repoPath, isRoot: false };
+
+    const diffChoice = await selectOption(ctx, `Review: ${formatRepoLabel(repo)}`, [
+      opt("All branch changes", "Committed changes vs base branch"),
+      opt("Last commit", "Changes in the most recent commit"),
+      opt("Since commit", "Review all changes since a specific commit"),
+      opt("Uncommitted changes", "Working directory changes"),
+      opt("Skip this repo", "Move to the next repository"),
+      opt("Done (stop reviewing)", "Stop iterating repositories"),
+    ]);
+
+    if (!diffChoice || diffChoice === "Done (stop reviewing)") {
+      task.state.plannotatorCursor = undefined;
+      saveTask(task.dir, task.state);
+      return null;
+    }
+    if (diffChoice === "Skip this repo") {
+      cur.index += 1;
+      saveTask(task.dir, task.state);
+      continue;
+    }
+
+    let diffType: string;
+    let defaultBranch: string | undefined;
+    if (diffChoice === "All branch changes") {
+      diffType = "branch";
+      defaultBranch = await detectDefaultBranch(orchestrator, getRegisteredRepos(orchestrator), repo.path);
+    } else if (diffChoice === "Last commit") {
+      diffType = "last-commit";
+    } else if (diffChoice === "Since commit") {
+      const pickedHash = await pickCommitForRepo(orchestrator, ctx, repo);
+      if (!pickedHash) continue;
+      diffType = "branch";
+      defaultBranch = pickedHash;
+    } else {
+      diffType = "uncommitted";
+    }
+
+    const result = await openCodeReviewInPlannotator(orchestrator, { cwd: repo.path, diffType, defaultBranch });
+
+    // Advance past this repo regardless of outcome; on needs_changes the agent
+    // fixes it during the turn started by the returned instruction, then the next
+    // /pp resumes at the following repo.
+    cur.index += 1;
+    const exhausted = cur.index >= cur.repoPaths.length;
+
+    if (result.status === "needs_changes") {
+      if (exhausted) task.state.plannotatorCursor = undefined;
+      setStep(orchestrator, "llm_work");
+      saveTask(task.dir, task.state);
+      const feedback = result.feedback ? `\n\nFeedback:\n${result.feedback}` : "";
+      const more = exhausted
+        ? "This was the last repo to review."
+        : "After you finish, run /pp to continue Plannotator review of the remaining repositories.";
+      return advanceBanner(
+        `[PI-PI] Plannotator requested changes for ${formatRepoLabel(repo)}.${feedback}\n\n` +
+        "Address the user's feedback. If the feedback contains questions, answer them. If it requests changes, " +
+        `make the changes. Then call pp_phase_complete when done.\n\n${more}`,
+      );
+    }
+
+    if (result.status === "error") {
+      ctx.ui.notify(`${formatRepoLabel(repo)}: ERROR${result.error ? ` — ${result.error}` : ""}`, "warning");
+    } else {
+      ctx.ui.notify(`${formatRepoLabel(repo)}: APPROVED`, "info");
+    }
+    saveTask(task.dir, task.state);
+  }
+
+  // Cursor exhausted with no outstanding changes: clear it and fall back to /pp.
+  task.state.plannotatorCursor = undefined;
+  saveTask(task.dir, task.state);
+  return null;
+}
+
 async function showReviewMenu(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK | "started"> {
   while (true) {
     const choice = await selectOption(ctx, "Review", [
@@ -3434,6 +3525,15 @@ export async function showActiveTaskMenu(
     if (task.type === "quick") {
       return showQuickTaskMenu(orchestrator, ctx, summary, mode);
     }
+    // Auto-resume an in-progress per-repo Plannotator review (#3a): if the agent
+    // just finished fixing one repo's feedback and ran /pp, continue the loop at
+    // the next repo instead of showing the top-level menu. On another
+    // needs_changes this returns a fresh work instruction; when exhausted it
+    // clears the cursor and falls through to the normal menu.
+    if (task.state.plannotatorCursor) {
+      const resumeText = await runPlannotatorCursor(orchestrator, ctx);
+      if (resumeText) return resumeText;
+    }
     const phase = task.state.phase;
     const step = task.state.step;
     const effectiveMode = getEffectivePhaseMode(task.state);
@@ -3627,84 +3727,24 @@ export async function showActiveTaskMenu(
           return handled.text ?? text;
         }
         const allRepos = getRegisteredRepos(orchestrator);
-        const summaries: string[] = [];
-        const repos: RepoInfo[] = [];
+        const eligible: string[] = [];
         for (const repo of allRepos) {
           const base = await detectDefaultBranch(orchestrator, allRepos, repo.path);
           const { changed, error } = await repoHasReviewableChanges(orchestrator, repo, base);
-          if (error) {
-            summaries.push(`${formatRepoLabel(repo)}: ERROR — ${error}`);
-            repos.push(repo);
-          } else if (changed) {
-            repos.push(repo);
-          }
+          if (error || changed) eligible.push(repo.path);
         }
-        if (repos.length === 0) {
+        if (eligible.length === 0) {
           ctx.ui.notify("No registered repositories have changes to review.", "info");
           continue;
         }
-        let stopReviewing = false;
-
-        for (const repo of repos) {
-          if (stopReviewing) break;
-
-          while (true) {
-            const diffChoice = await selectOption(ctx, `Review: ${formatRepoLabel(repo)}`, [
-              opt("All branch changes", "Committed changes vs base branch"),
-              opt("Last commit", "Changes in the most recent commit"),
-              opt("Since commit", "Review all changes since a specific commit"),
-              opt("Uncommitted changes", "Working directory changes"),
-              opt("Skip this repo", "Move to the next repository"),
-              opt("Done (stop reviewing)", "Stop iterating repositories"),
-            ]);
-
-            if (!diffChoice || diffChoice === "Done (stop reviewing)") {
-              stopReviewing = true;
-              break;
-            }
-            if (diffChoice === "Skip this repo") {
-              summaries.push(`${formatRepoLabel(repo)}: SKIPPED`);
-              break;
-            }
-
-            let diffType: string | undefined;
-            let defaultBranch: string | undefined;
-
-            if (diffChoice === "All branch changes") {
-              diffType = "branch";
-              defaultBranch = await detectDefaultBranch(orchestrator, repos, repo.path);
-            } else if (diffChoice === "Last commit") {
-              diffType = "last-commit";
-            } else if (diffChoice === "Since commit") {
-              const pickedHash = await pickCommitForRepo(orchestrator, ctx, repo);
-              if (!pickedHash) continue;
-              diffType = "branch";
-              defaultBranch = pickedHash;
-            } else {
-              diffType = "uncommitted";
-            }
-
-            const result = await openCodeReviewInPlannotator(orchestrator, {
-              cwd: repo.path,
-              diffType,
-              defaultBranch,
-            });
-            if (result.status === "error") {
-              summaries.push(`${formatRepoLabel(repo)}: ERROR${result.error ? ` — ${result.error}` : ""}`);
-            } else if (result.status === "approved") {
-              summaries.push(`${formatRepoLabel(repo)}: APPROVED`);
-            } else {
-              summaries.push(`${formatRepoLabel(repo)}: NEEDS_CHANGES${result.feedback ? `\nFeedback: ${result.feedback}` : ""}`);
-            }
-            break;
-          }
-        }
-
-        if (summaries.length > 0) {
-          ctx.ui.notify(`Plannotator review summary:\n\n${summaries.join("\n\n")}`, "info");
-        } else {
-          ctx.ui.notify("No repositories were reviewed in Plannotator.", "info");
-        }
+        // Start (or restart) the interleaved per-repo cursor and run it. On
+        // needs_changes runPlannotatorCursor persists the cursor and returns a
+        // work instruction (exits the menu to start the agent turn); the next /pp
+        // resumes at the following repo.
+        task.state.plannotatorCursor = { repoPaths: eligible, index: 0 };
+        saveTask(task.dir, task.state);
+        const cursorText = await runPlannotatorCursor(orchestrator, ctx);
+        if (cursorText) return cursorText;
         continue;
       }
 
