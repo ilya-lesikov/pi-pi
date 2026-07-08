@@ -843,16 +843,13 @@ function listCompletedFromTasks(cwd: string): TaskInfo[] {
 async function showSubagentsMenu(ctx: any): Promise<void> {
   const api = (globalThis as any)[Symbol.for("pi-subagents:menu")] as {
     showFleet?: (menuCtx: any) => Promise<void>;
-    showMenu?: (menuCtx: any) => Promise<void>;
   } | undefined;
-  // Prefer showFleet — the navigable running-agents list that replaced the
-  // below-editor FleetView. Fall back to the full /agents menu if unavailable.
-  const open = api?.showFleet ?? api?.showMenu;
-  if (!open) {
+  // showFleet opens the navigable running-agents list (the FleetView replacement).
+  if (!api?.showFleet) {
     ctx.ui.notify("Subagents menu API is not available.", "warning");
     return;
   }
-  await open(ctx);
+  await api.showFleet(ctx);
 }
 
 function countFlantProviders(settings: FlantSettings): { anthropic: number; openai: number } {
