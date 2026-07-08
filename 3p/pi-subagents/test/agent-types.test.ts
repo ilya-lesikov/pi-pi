@@ -11,9 +11,14 @@ import {
   getUserAgentNames,
   isDefaultsDisabled,
   isValidType,
+  clearExtensionAgents,
   registerAgents,
+  registerExtensionAgents,
   resolveType,
   setDefaultsDisabled,
+  setExtensionOnlyMode,
+  unregisterExtensionAgents,
+  unregisterExtensionAgentsByPrefix,
 } from "../src/agent-types.js";
 import { DEFAULT_AGENTS } from "../src/default-agents.js";
 import type { AgentConfig } from "../src/types.js";
@@ -182,6 +187,114 @@ describe("agent type registry", () => {
       expect(config.displayName).toBe("Agent");
       expect(config.builtinToolNames).toEqual(BUILTIN_TOOL_NAMES);
       expect(config.promptMode).toBe("append");
+    });
+  });
+
+  describe("extension-injected agents (pi-pi orchestrator wiring)", () => {
+    // These mirror the restored fork commits d21d2cd / e20abcb. They exercise
+    // the REAL registry (no mocks) — the exact wiring the mocked integration
+    // suite never covers.
+    afterEach(() => {
+      clearExtensionAgents();
+      setExtensionOnlyMode(false);
+      setDefaultsDisabled(false);
+      registerAgents(new Map());
+    });
+
+    it("registered extension agents appear in getAvailableTypes and resolveType", () => {
+      registerExtensionAgents(new Map([["explore", makeAgentConfig({ name: "explore" })]]));
+      registerAgents(new Map());
+
+      expect(getAvailableTypes()).toContain("explore");
+      expect(resolveType("explore")).toBe("explore");
+    });
+
+    it("extension agents survive a subsequent registerAgents (reload) — not clobbered", () => {
+      registerExtensionAgents(new Map([["explore", makeAgentConfig({ name: "explore" })]]));
+      registerAgents(new Map());
+      expect(resolveType("explore")).toBe("explore");
+
+      // Simulate reloadCustomAgents() firing again on the next Agent invocation.
+      registerAgents(new Map([["auditor", makeAgentConfig({ name: "auditor" })]]));
+      expect(resolveType("explore")).toBe("explore");
+      expect(resolveType("auditor")).toBe("auditor");
+    });
+
+    it("clearExtensionAgents removes all extension agents on next reload", () => {
+      setExtensionOnlyMode(true);
+      registerExtensionAgents(new Map([
+        ["explore", makeAgentConfig({ name: "explore" })],
+        ["planner_opus", makeAgentConfig({ name: "planner_opus" })],
+      ]));
+      registerAgents(new Map());
+      expect(getAvailableTypes()).toEqual(expect.arrayContaining(["explore", "planner_opus"]));
+
+      clearExtensionAgents();
+      registerAgents(new Map());
+      expect(isValidType("explore")).toBe(false);
+      expect(isValidType("planner_opus")).toBe(false);
+    });
+
+    it("unregisterExtensionAgents removes named agents", () => {
+      setExtensionOnlyMode(true);
+      registerExtensionAgents(new Map([
+        ["explore", makeAgentConfig({ name: "explore" })],
+        ["librarian", makeAgentConfig({ name: "librarian" })],
+      ]));
+      unregisterExtensionAgents(["explore"]);
+      registerAgents(new Map());
+
+      expect(isValidType("explore")).toBe(false);
+      expect(isValidType("librarian")).toBe(true);
+    });
+
+    it("unregisterExtensionAgentsByPrefix removes matching agents", () => {
+      setExtensionOnlyMode(true);
+      registerExtensionAgents(new Map([
+        ["planner_opus", makeAgentConfig({ name: "planner_opus" })],
+        ["planner_gpt", makeAgentConfig({ name: "planner_gpt" })],
+        ["explore", makeAgentConfig({ name: "explore" })],
+      ]));
+      unregisterExtensionAgentsByPrefix("planner_");
+      registerAgents(new Map());
+
+      expect(isValidType("planner_opus")).toBe(false);
+      expect(isValidType("planner_gpt")).toBe(false);
+      expect(isValidType("explore")).toBe(true);
+    });
+
+    it("extension-only mode exposes ONLY extension agents — defaults and user .md are skipped", () => {
+      registerExtensionAgents(new Map([["deep-debugger", makeAgentConfig({ name: "deep-debugger" })]]));
+      setExtensionOnlyMode(true);
+      registerAgents(new Map([["auditor", makeAgentConfig({ name: "auditor" })]]));
+
+      expect(getAvailableTypes()).toEqual(["deep-debugger"]);
+      expect(isValidType("general-purpose")).toBe(false);
+      expect(isValidType("Explore")).toBe(false);
+      expect(isValidType("Plan")).toBe(false);
+      expect(isValidType("auditor")).toBe(false);
+    });
+
+    it("in extension-only mode the pi-pi lowercase 'explore' resolves cleanly — no capitalized default to collide with", () => {
+      // Production always runs extension-only, so the default capitalized
+      // 'Explore' is never in the registry alongside the lowercase pi-pi one.
+      registerExtensionAgents(new Map([["explore", makeAgentConfig({ name: "explore", description: "pi-pi explore" })]]));
+      setExtensionOnlyMode(true);
+      registerAgents(new Map());
+
+      expect(getAgentConfig("explore")?.description).toBe("pi-pi explore");
+      expect(getAgentConfig("EXPLORE")?.description).toBe("pi-pi explore");
+      expect(resolveType("Explore")).toBe("explore");
+    });
+
+    it("disabling extension-only mode restores defaults on next reload", () => {
+      setExtensionOnlyMode(true);
+      registerAgents(new Map());
+      expect(isValidType("general-purpose")).toBe(false);
+
+      setExtensionOnlyMode(false);
+      registerAgents(new Map());
+      expect(isValidType("general-purpose")).toBe(true);
     });
   });
 
