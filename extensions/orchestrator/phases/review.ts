@@ -1,7 +1,7 @@
 import { readFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs";
 import { join } from "path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { resolvePreset, type PiPiConfig, type VariantConfig } from "../config.js";
+import { resolvePreset, reviewPresetGroupForPhase, type PiPiConfig, type VariantConfig } from "../config.js";
 import { registerAgentDefinitions, spawnViaRpc, waitForCompletion } from "../agents/registry.js";
 import { createCodeReviewerAgent } from "../agents/code-reviewer.js";
 import { getContextDirs, getLatestSynthesizedPlan, getArtifactManifest } from "../context.js";
@@ -15,19 +15,23 @@ function isEnabled(value: { enabled?: boolean } | undefined): boolean {
 
 export function reviewSystemPrompt(taskDir: string, pass: number, phase?: string, mode?: "guided" | "autonomous"): string {
   // Each phase writes/loads its review outputs in a distinct directory:
-  // brainstorm -> brainstorm-reviews, plan -> plan-reviews, everything else
+  // brainstorm/debug -> brainstorm-reviews, plan -> plan-reviews, everything else
   // (implement/review) -> code-reviews. The apply_feedback prompt must point the
   // agent at the SAME directory the reviewers wrote to (see planning.ts /
   // context.ts), otherwise it synthesizes against the wrong (empty) directory.
-  const reviewsDirName = phase === "brainstorm" ? "brainstorm-reviews" : phase === "plan" ? "plan-reviews" : "code-reviews";
+  const reviewsDirName = reviewPresetGroupForPhase(phase ?? "") === "brainstormReviewers"
+    ? "brainstorm-reviews"
+    : phase === "plan"
+    ? "plan-reviews"
+    : "code-reviews";
   const reviewsDir = join(taskDir, reviewsDirName);
   const plansDir = join(taskDir, "plans");
 
-  if (phase === "brainstorm") {
+  if (reviewPresetGroupForPhase(phase ?? "") === "brainstormReviewers") {
     return [
-      `[PI-PI — BRAINSTORM REVIEW CYCLE (pass ${pass})]`,
+      `[PI-PI — ${phase === "debug" ? "DEBUG" : "BRAINSTORM"} REVIEW CYCLE (pass ${pass})]`,
       "",
-      "Brainstorm reviewer outputs are ready.",
+      `${phase === "debug" ? "Debug" : "Brainstorm"} reviewer outputs are ready.`,
       `Read them from ${reviewsDir}/.`,
       "",
       "# FORBIDDEN:",

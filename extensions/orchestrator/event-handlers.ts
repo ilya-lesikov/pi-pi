@@ -238,8 +238,8 @@ function tryCompleteReviewCycle(orchestrator: Orchestrator, spawnedReviewers?: n
 }
 
 function reviewReadyMessage(phase: string, mode: TaskMode): string {
-  if (phase === "brainstorm") {
-    return "[PI-PI] Review cycle is ready for apply_feedback. The reviewers assessed your artifacts (USER_REQUEST.md, RESEARCH.md, and artifacts/), not a code diff. Read their outputs and update those artifacts as needed.";
+  if (reviewPresetGroupForPhase(phase) === "brainstormReviewers") {
+    return "[PI-PI] Review cycle is ready for apply_feedback. The reviewers assessed your research artifacts (USER_REQUEST.md, RESEARCH.md, and artifacts/), not a code diff. Read their outputs and update those artifacts as needed.";
   }
   // Only autonomous plan/implement auto-advance: those must re-call
   // pp_phase_complete to finalize the pass and transition. Guided phases
@@ -331,12 +331,13 @@ export async function enterReviewCycle(
   if (enabledCount === 0) {
     orchestrator.active.state.reviewCycle = null;
     saveTask(orchestrator.active.dir, orchestrator.active.state);
-    const label = phase === "brainstorm" ? "brainstorm" : phase === "plan" ? "plan" : "code";
+    const labelGroup = reviewPresetGroupForPhase(phase);
+    const label = labelGroup === "brainstormReviewers" ? "artifact" : labelGroup === "planReviewers" ? "plan" : "code";
     return `No ${label} reviewers enabled. Choose another option.`;
   }
 
   orchestrator.pendingSubagentSpawns = enabledCount;
-    const spawnFn = phase === "brainstorm"
+    const spawnFn = reviewPresetGroupForPhase(phase) === "brainstormReviewers"
       ? () => spawnBrainstormReviewers(
         pi,
         orchestrator.cwd,
@@ -348,7 +349,7 @@ export async function enterReviewCycle(
         reviewers,
         orchestrator.active?.state.repos ?? [],
       )
-      : phase === "plan"
+      : reviewPresetGroupForPhase(phase) === "planReviewers"
       ? () => spawnPlanReviewers(
         pi,
         orchestrator.cwd,
@@ -1541,7 +1542,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
         }
         const retryCount = Object.keys(scopedReviewers).length;
         if (retryCount > 0) {
-          const spawnFn = phase === "brainstorm"
+          const spawnFn = reviewPresetGroupForPhase(phase) === "brainstormReviewers"
             ? () => spawnBrainstormReviewers(
               pi,
               orchestrator.cwd,
@@ -1553,7 +1554,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
               scopedReviewers,
               orchestrator.active?.state.repos ?? [],
             )
-            : phase === "plan"
+            : reviewPresetGroupForPhase(phase) === "planReviewers"
             ? () => spawnPlanReviewers(
               pi,
               orchestrator.cwd,
@@ -1637,7 +1638,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
               }
               const retryCount = Object.keys(scopedReviewers).length;
               if (retryCount > 0) {
-                const spawnFn = phase === "brainstorm"
+                const spawnFn = reviewPresetGroupForPhase(phase) === "brainstormReviewers"
                   ? () => spawnBrainstormReviewers(
                     pi,
                     orchestrator.cwd,
@@ -1649,7 +1650,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
                     scopedReviewers,
                     orchestrator.active?.state.repos ?? [],
                   )
-                  : phase === "plan"
+                  : reviewPresetGroupForPhase(phase) === "planReviewers"
                   ? () => spawnPlanReviewers(
                     pi,
                     orchestrator.cwd,

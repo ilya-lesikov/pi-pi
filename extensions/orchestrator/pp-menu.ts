@@ -716,7 +716,7 @@ export async function resumeTask(
           orchestrator.active.state.activeReviewPreset = presetName;
           saveTask(orchestrator.active.dir, orchestrator.active.state);
           orchestrator.pendingSubagentSpawns = missingVariants.length;
-          const spawnFn = phase === "brainstorm"
+          const spawnFn = reviewPresetGroupForPhase(phase) === "brainstormReviewers"
             ? () => spawnBrainstormReviewers(
               pi,
               orchestrator.cwd,
@@ -728,7 +728,7 @@ export async function resumeTask(
               missingReviewerConfig,
               orchestrator.active?.state.repos ?? [],
             )
-            : phase === "plan"
+            : reviewPresetGroupForPhase(phase) === "planReviewers"
             ? () => spawnPlanReviewers(
               pi,
               orchestrator.cwd,
@@ -3555,12 +3555,17 @@ export async function showActiveTaskMenu(
     const { autoLabel } = getReviewLabels(orchestrator);
     const isReviewPhase = phase === "review";
     const hasPlannotator = phase === "plan" || phase === "implement" || isReviewPhase;
-    // The artifact the automated reviewers scan, mirroring getReviewPresetGroup: brainstorm →
-    // brainstormReviewers (state files), plan → planReviewers (synthesized plan), every other
-    // phase → codeReviewers (code changes). This is the primary "Review" target named at the
-    // top level; the per-phase "Review on my own" description names the manual editor pass's
-    // target separately (it can differ, e.g. state files in a debug/review phase).
-    const reviewTarget = phase === "plan" ? "the synthesized plan" : phase === "brainstorm" ? "this phase's state files" : "the code changes";
+    // The artifact the automated reviewers scan, mirroring reviewPresetGroupForPhase:
+    // brainstorm/debug → brainstormReviewers (research artifacts), plan → planReviewers
+    // (synthesized plan), implement/review → codeReviewers (code changes). This is the primary
+    // "Review" target named at the top level; the per-phase "Review on my own" description names
+    // the manual editor pass's target separately (it can differ).
+    const reviewGroup = reviewPresetGroupForPhase(phase);
+    const reviewTarget = reviewGroup === "planReviewers"
+      ? "the synthesized plan"
+      : reviewGroup === "brainstormReviewers"
+      ? "this phase's research artifacts"
+      : "the code changes";
 
     const opt = (title: string, description: string): OptionInput => ({ title, description });
 
@@ -3799,7 +3804,8 @@ export async function showActiveTaskMenu(
       if (!reviewPreset) continue;
       finalizeReviewCycle(task);
       if (!hasEnabledReviewers(orchestrator, reviewPreset)) {
-        const label = phase === "brainstorm" ? "brainstorm" : phase === "plan" ? "plan" : "code";
+        const reviewGroup = reviewPresetGroupForPhase(phase);
+        const label = reviewGroup === "brainstormReviewers" ? "artifact" : reviewGroup === "planReviewers" ? "plan" : "code";
         ctx.ui.notify(`No ${label} reviewers enabled.`, "info");
         continue;
       }
