@@ -2808,6 +2808,7 @@ async function showLspSettings(ctx: any): Promise<typeof BACK> {
 async function showSettingsMenu(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
   while (true) {
     const options: OptionInput[] = [
+      opt("Info", "Usage and task status"),
       opt("General", "Commit, log level, Flant AI, repos"),
       opt("Agents", "Orchestrator and subagent configuration"),
       opt("Commands", "After file edit and after implementation"),
@@ -2819,7 +2820,8 @@ async function showSettingsMenu(orchestrator: Orchestrator, ctx: any): Promise<t
     const choice = await selectOption(ctx, "Settings", options);
     if (!choice || choice === "Back") return BACK;
 
-    if (choice === "General") await showGeneralSettings(orchestrator, ctx);
+    if (choice === "Info") await showInfoMenu(orchestrator, ctx);
+    else if (choice === "General") await showGeneralSettings(orchestrator, ctx);
     else if (choice === "Agents") await showAgentsSettings(orchestrator, ctx);
     else if (choice === "Commands") await showCommandsSettings(orchestrator, ctx);
     else if (choice === "Performance") await showPerformanceSettings(orchestrator, ctx);
@@ -3478,11 +3480,10 @@ async function showNoActiveMenu(orchestrator: Orchestrator, ctx: any): Promise<s
     const choice = await selectOption(ctx, title, [
       { title: "Task", description: "Start a new task or resume a paused one" },
       { title: "Subagents", description: "View and manage running subagents" },
-      { title: "Info", description: "Usage and task status" },
       { title: "Settings", description: "Models, agents, commands, and other configuration" },
-      { title: "Back", description: "Close this menu" },
+      { title: "Back to prompt", description: "Close this menu" },
     ]);
-    if (!choice || choice === "Back") return undefined;
+    if (!choice || choice === "Back to prompt") return undefined;
 
     if (choice === "Task") {
       const result = await showTaskMenu(orchestrator, ctx);
@@ -3492,11 +3493,6 @@ async function showNoActiveMenu(orchestrator: Orchestrator, ctx: any): Promise<s
 
     if (choice === "Subagents") {
       await showSubagentsMenu(ctx);
-      continue;
-    }
-
-    if (choice === "Info") {
-      await showInfoMenu(orchestrator, ctx);
       continue;
     }
 
@@ -3545,20 +3541,15 @@ async function showQuickTaskMenu(
       opt("Complete", "Mark task as done and clean up"),
       opt("Pause", "Suspend task to resume later"),
       opt("Subagents", "View and manage running subagents"),
-      opt("Info", "Usage and task status"),
       opt("Settings", "Models, agents, commands, and other configuration"),
-      opt("Back", "Return to the prompt and keep working"),
+      opt("Back to prompt", "Return to the prompt and keep working"),
     ]);
     // A deliberate ESC in tool mode must stop the turn cleanly (mirror the
     // guided/autonomous branches); in command mode ESC just closes the menu.
     if (cancelReason === "user" && mode === "tool") return USER_CANCELLED;
-    if (!choice || choice === "Back") return "";
+    if (!choice || choice === "Back to prompt") return "";
     if (choice === "Subagents") {
       await showSubagentsMenu(ctx);
-      continue;
-    }
-    if (choice === "Info") {
-      await showInfoMenu(orchestrator, ctx);
       continue;
     }
     if (choice === "Settings") {
@@ -3633,21 +3624,16 @@ export async function showActiveTaskMenu(
         opt("Complete task", "Mark task as done and clean up"),
         opt("Pause task", "Suspend task to resume later"),
         opt("Subagents", "View and manage running subagents"),
-        opt("Info", "Usage and task status"),
         opt("Settings", "Models, agents, commands, and other configuration"),
-        opt("Back", "Return to the prompt and keep working"),
+        opt("Back to prompt", "Return to the prompt and keep working"),
       ]);
       // A deliberate ESC only needs distinct handling in tool mode (so
       // pp_phase_complete can stop the turn); in command mode ESC just closes
       // the menu like "Back".
       if (cancelReason === "user" && mode === "tool") return USER_CANCELLED;
-      if (!autoChoice || autoChoice === "Back") return "";
+      if (!autoChoice || autoChoice === "Back to prompt") return "";
       if (autoChoice === "Subagents") {
         await showSubagentsMenu(ctx);
-        continue;
-      }
-      if (autoChoice === "Info") {
-        await showInfoMenu(orchestrator, ctx);
         continue;
       }
       if (autoChoice === "Settings") {
@@ -3668,25 +3654,20 @@ export async function showActiveTaskMenu(
       options.push(opt("Review", `Review ${reviewTarget}: automated reviewers${hasPlannotator ? ", Plannotator, or" : " or"} your own editor pass`));
     }
     options.push(opt("Subagents", "View and manage running subagents"));
-    options.push(opt("Info", "Usage and task status"));
     options.push(opt("Settings", "Models, agents, commands, and other configuration"));
-    options.push(opt("Back", "Return to the prompt and keep working"));
+    options.push(opt("Back to prompt", "Return to the prompt and keep working"));
 
     const headerLines = [`/pp\n\nTask: ${task.type}\nPhase: ${phase}`];
     if (summary !== "/pp") headerLines.push(`\n\n${summary}`);
     const menuTitle = headerLines.join("");
     const { choice, cancelReason } = await selectOptionCancelable(ctx, menuTitle, options);
     if (cancelReason === "user" && mode === "tool") return USER_CANCELLED;
-    if (!choice || choice === "Back") {
+    if (!choice || choice === "Back to prompt") {
       return "";
     }
 
     if (choice === "Subagents") {
       await showSubagentsMenu(ctx);
-      continue;
-    }
-    if (choice === "Info") {
-      await showInfoMenu(orchestrator, ctx);
       continue;
     }
     if (choice === "Settings") {
