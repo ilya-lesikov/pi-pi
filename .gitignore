@@ -7,3 +7,6 @@ node_modules/
 # stray patch/diff dumps
 *.patch
 diff.patch
+
+# Generated coverage reports
+coverage/
