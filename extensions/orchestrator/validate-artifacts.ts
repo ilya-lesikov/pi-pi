@@ -182,6 +182,31 @@ export function validateResearch(content: string): ValidationResult {
   return errors.length > 0 ? { ok: false, errors } : { ok: true };
 }
 
+// Heuristic scan for RESEARCH.md open questions that a task still needs a human
+// to resolve. Autonomous-only gate (#1): the last interactive phase must leave
+// nothing open before handing off to a phase that runs without a user. Lenient
+// by design to avoid blocking on benign/legacy prose: it flags a line ONLY when
+// it has the shape of an open question (ends with "?" or is a `Q<n>` item) AND
+// carries no DECIDED/ASSUMED resolution marker anywhere on the line. Whitespace,
+// empty list markers, intro prose, and an absent/empty section are all ignored.
+export function findUnresolvedOpenQuestions(content: string): string[] {
+  const sections = parseH2Sections(content, RESEARCH_ALLOWED_SECTIONS);
+  const section = sections.find((s) => s.name === "Open Questions");
+  if (!section) return [];
+  const body = sectionBody(content, section);
+  const unresolved: string[] = [];
+  for (const raw of splitLines(body)) {
+    let line = raw.trim();
+    if (line.length === 0) continue;
+    line = line.replace(/^(?:[-*]|\d+[.)])\s*/, "").trim();
+    if (line.length === 0) continue;
+    if (/\b(?:decided|assumed)\b/i.test(line)) continue;
+    const looksLikeQuestion = line.endsWith("?") || /^Q\d+\b/i.test(line);
+    if (looksLikeQuestion) unresolved.push(line);
+  }
+  return unresolved;
+}
+
 export function validatePlan(content: string): ValidationResult {
   const errors: string[] = [];
   const h1 = getH1(content);

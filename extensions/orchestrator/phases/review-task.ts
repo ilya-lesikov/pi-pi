@@ -38,6 +38,7 @@ export function reviewSystemPrompt(taskDir: string, cwd: string): string {
     "  ## Open Questions",
     "  <Low-confidence concerns or items needing user input. Omit section if none.>",
     "",
+    "This is the LAST interactive phase. If the task continues in autonomous mode, the downstream plan/implement phases cannot ask the user anything — so resolve every Open Question now (answer it, or mark it DECIDED:/ASSUMED: with rationale). Do NOT defer questions to the plan phase.",
     "These files are validated programmatically. Missing sections or unexpected sections will be rejected.",
     "Use pp_write_state_file / pp_edit_state_file (NOT the generic write/edit) for these .pp state files — they keep the output compact and validate structure.",
     "Keep USER_REQUEST.md current: update it whenever the user clarifies the review scope, so it never goes stale.",

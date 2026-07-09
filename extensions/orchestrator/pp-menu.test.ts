@@ -334,7 +334,7 @@ describe("showActiveTaskMenu Publish/Next Back navigation (#6)", () => {
   it("Publish 'Back' re-renders the Next submenu instead of the top-level menu", async () => {
     const orchestrator = makeReviewOrchestrator();
     // /pp -> Next -> Publish -> Back (should return to Next) -> Back (to top-level) -> Back (exit).
-    askQueue.push("Next", "Publish", "Back", "Back", "Back");
+    askQueue.push("Next", "Publish", "Back", "Back", "Back to prompt");
     const result = await showActiveTaskMenu(orchestrator, ctx, "/pp", "tool");
     expect(result).toBe("");
     // After Publish's Back we must see the "Next" submenu rendered again before the
@@ -346,7 +346,7 @@ describe("showActiveTaskMenu Publish/Next Back navigation (#6)", () => {
 
   it("Next 'Back' returns straight to the top-level menu", async () => {
     const orchestrator = makeReviewOrchestrator();
-    askQueue.push("Next", "Back", "Back");
+    askQueue.push("Next", "Back", "Back to prompt");
     const result = await showActiveTaskMenu(orchestrator, ctx, "/pp", "tool");
     expect(result).toBe("");
     expect(askQuestions.filter((q) => q === "Next").length).toBe(1);
@@ -358,7 +358,7 @@ describe("showActiveTaskMenu Publish/Next Back navigation (#6)", () => {
     const orchestrator = makeReviewOrchestrator();
     // /pp -> Review -> Review on my own -> Editor review Back (should return to
     // Review) -> Review Back (to top-level) -> top-level Back (exit).
-    askQueue.push("Review", "Review on my own", "Back", "Back", "Back");
+    askQueue.push("Review", "Review on my own", "Back", "Back", "Back to prompt");
     const result = await showActiveTaskMenu(orchestrator, ctx, "/pp", "tool");
     expect(result).toBe("");
     // Review submenu rendered twice (initial + after the Editor-review Back).
@@ -391,7 +391,7 @@ describe("showActiveTaskMenu Publish/Next Back navigation (#6)", () => {
     // Next /pp resumes at repo b; APPROVED → cursor is cleared and the loop ends,
     // falling through to the normal menu (top-level Back exits).
     plannotatorResults.push({ approved: true });
-    askQueue.push("Uncommitted changes", "Back");
+    askQueue.push("Uncommitted changes", "Back to prompt");
     const second = await showActiveTaskMenu(orchestrator, ctx, "/pp", "tool");
     expect(second).toBe("");
     expect(orchestrator.active.state.plannotatorCursor).toBeUndefined();
@@ -416,7 +416,7 @@ describe("showActiveTaskMenu Publish/Next Back navigation (#6)", () => {
     plannotatorResults.push({ approved: false, error: "boom" });
     plannotatorResults.push({ approved: true });
     plannotatorResults.push({ approved: true });
-    askQueue.push("Uncommitted changes", "Retry", "Uncommitted changes", "Uncommitted changes", "Back");
+    askQueue.push("Uncommitted changes", "Retry", "Uncommitted changes", "Uncommitted changes", "Back to prompt");
     const result = await showActiveTaskMenu(orchestrator, ctx, "/pp", "tool");
     expect(result).toBe("");
     // Retry re-opened repo a (opened twice) before advancing to b; none dropped.
@@ -431,7 +431,7 @@ describe("showActiveTaskMenu Publish/Next Back navigation (#6)", () => {
     // Repo a errors; Skip advances to repo b, which approves and clears the cursor.
     plannotatorResults.push({ approved: false, error: "boom" });
     plannotatorResults.push({ approved: true });
-    askQueue.push("Uncommitted changes", "Skip this repo", "Uncommitted changes", "Back");
+    askQueue.push("Uncommitted changes", "Skip this repo", "Uncommitted changes", "Back to prompt");
     await showActiveTaskMenu(orchestrator, ctx, "/pp", "tool");
     // Skip moved on to repo b (each repo opened exactly once — a not retried, b reached).
     expect(plannotatorOpenCwds).toEqual(["/repo/a", "/repo/b"]);
@@ -454,7 +454,7 @@ describe("showActiveTaskMenu Publish/Next Back navigation (#6)", () => {
     let notified = "";
     const notifyCtx = { ui: { notify: (t: string) => { notified = t; } }, waitForIdle: async () => {}, abort: () => {} };
     // Pick Review (blocked → notify + back to top-level menu), then Back to exit.
-    askQueue.push("Review", "Back");
+    askQueue.push("Review", "Back to prompt");
     const result = await showActiveTaskMenu(orchestrator, notifyCtx, "/pp", "tool");
     expect(result).toBe("");
     expect(notified).toBe("A review is already running");
