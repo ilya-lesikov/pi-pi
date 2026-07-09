@@ -325,6 +325,7 @@ function makeMenuOrchestrator(phase: string, type = "implement"): any {
       dir: "/tmp/pp-menu-task",
       state: { phase, step: "llm_work", mode: "guided" },
     },
+    cwd: "/tmp/pp-menu-nonexistent",
     config: getDefaultConfig(),
     transitionController: {
       isRunning: () => false,

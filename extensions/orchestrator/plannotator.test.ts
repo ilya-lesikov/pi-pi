@@ -79,7 +79,7 @@ describe("openPlannotator", () => {
     });
     const pi = { events } as any;
     const result = await openPlannotator(pi, "open", {});
-    expect(result).toEqual({ opened: true, reviewId: "rev-9" });
+    expect(result).toEqual({ opened: true, reviewId: "rev-9", outcome: "opened" });
     expect(clearSpy).toHaveBeenCalled();
   });
 });
