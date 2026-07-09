@@ -4,7 +4,7 @@ import { validateUserRequest, validateResearch, validateArtifact } from "./valid
 import { Type } from "@sinclair/typebox";
 import { loadConfig, resolvePreset, reviewPresetGroupForPhase, getDefaultConfig, normalizeConfigDurations } from "./config.js";
 import { runAfterEdit, autoCommit, loadRepoAfterEditCommands } from "./commands.js";
-import { taskName, getActiveTask, getEffectiveMode, getEffectivePhaseMode, saveTask, type Phase, type TaskMode } from "./state.js";
+import { taskName, getActiveTaskStatus, getEffectiveMode, getEffectivePhaseMode, saveTask, type Phase, type TaskMode } from "./state.js";
 import { getLogger, initSessionLogger, addTaskDestination, setLogLevel, flushLogs } from "./log.js";
 import { initTracer, finalizeTracer, getTracer } from "./tracer.js";
 import { handleSpawnResult } from "./spawn-cleanup.js";
@@ -1951,10 +1951,16 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     setExtensionOnlyMode(pi);
     orchestrator.registerAgents();
 
-    const found = getActiveTask(orchestrator.cwd, orchestrator.config.performance.internals.taskLockStale);
-    if (found) {
+    const status = getActiveTaskStatus(orchestrator.cwd, orchestrator.config.performance.internals.taskLockStale);
+    if (status.kind === "single") {
+      const found = status.task;
       ctx.ui.notify(
           `Paused task: "${taskName(found.dir)}" (${found.type}, phase: ${found.state.phase}). Run /pp and choose Resume to continue.`,
+        "info",
+      );
+    } else if (status.kind === "ambiguous") {
+      ctx.ui.notify(
+        `${status.tasks.length} paused tasks found (their locks are free). Run /pp and choose Resume to pick one.`,
         "info",
       );
     }

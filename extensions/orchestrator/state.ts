@@ -229,9 +229,9 @@ export async function lockTask(taskDir: string, timeouts: TimeoutConfig): Promis
   return release;
 }
 
-export function getActiveTask(cwd: string, lockStale?: number): TaskInfo | null {
+export function getUnlockedTasks(cwd: string, lockStale?: number): TaskInfo[] {
   const tasks = listTasks(cwd);
-  if (tasks.length === 0) return null;
+  if (tasks.length === 0) return [];
 
   const stale = lockStale ?? 600000;
   const unlocked: TaskInfo[] = [];
@@ -245,9 +245,24 @@ export function getActiveTask(cwd: string, lockStale?: number): TaskInfo | null 
       getLogger().warn({ s: "state", dir: task.dir }, "failed to check lock");
     }
   }
+  return unlocked;
+}
 
-  if (unlocked.length !== 1) return null;
-  return unlocked[0];
+export type ActiveTaskStatus =
+  | { kind: "none" }
+  | { kind: "single"; task: TaskInfo }
+  | { kind: "ambiguous"; tasks: TaskInfo[] };
+
+export function getActiveTaskStatus(cwd: string, lockStale?: number): ActiveTaskStatus {
+  const unlocked = getUnlockedTasks(cwd, lockStale);
+  if (unlocked.length === 0) return { kind: "none" };
+  if (unlocked.length === 1) return { kind: "single", task: unlocked[0]! };
+  return { kind: "ambiguous", tasks: unlocked };
+}
+
+export function getActiveTask(cwd: string, lockStale?: number): TaskInfo | null {
+  const status = getActiveTaskStatus(cwd, lockStale);
+  return status.kind === "single" ? status.task : null;
 }
 
 export function validateFromPath(cwd: string, fromPath: string): { ok: true; dir: string } | { ok: false; reason: string } {
