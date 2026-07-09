@@ -3270,7 +3270,30 @@ async function runPlannotatorCursor(orchestrator: Orchestrator, ctx: any): Promi
 
     const result = await openCodeReviewInPlannotator(orchestrator, { cwd: repo.path, diffType, defaultBranch });
 
-    // Advance past this repo regardless of outcome; on needs_changes the agent
+    // On error the repo is UNREVIEWED: do not advance the cursor (that would
+    // silently drop it from the pass). Keep it as the current repo until the
+    // user retries, explicitly skips, or stops.
+    if (result.status === "error") {
+      ctx.ui.notify(`${formatRepoLabel(repo)}: ERROR${result.error ? ` — ${result.error}` : ""}`, "warning");
+      const errorChoice = await selectOption(ctx, `Review failed: ${formatRepoLabel(repo)}`, [
+        opt("Retry", "Try reviewing this repository again"),
+        opt("Skip this repo", "Leave this repository unreviewed and move on"),
+        opt("Done (stop reviewing)", "Stop iterating repositories"),
+      ]);
+      if (!errorChoice || errorChoice === "Done (stop reviewing)") {
+        task.state.plannotatorCursor = undefined;
+        saveTask(task.dir, task.state);
+        return null;
+      }
+      if (errorChoice === "Skip this repo") {
+        cur.index += 1;
+        saveTask(task.dir, task.state);
+      }
+      // Retry: leave cur.index unchanged so the loop re-reviews this repo.
+      continue;
+    }
+
+    // Advance past this repo on a resolved outcome; on needs_changes the agent
     // fixes it during the turn started by the returned instruction, then the next
     // /pp resumes at the following repo.
     cur.index += 1;
@@ -3291,11 +3314,7 @@ async function runPlannotatorCursor(orchestrator: Orchestrator, ctx: any): Promi
       );
     }
 
-    if (result.status === "error") {
-      ctx.ui.notify(`${formatRepoLabel(repo)}: ERROR${result.error ? ` — ${result.error}` : ""}`, "warning");
-    } else {
-      ctx.ui.notify(`${formatRepoLabel(repo)}: APPROVED`, "info");
-    }
+    ctx.ui.notify(`${formatRepoLabel(repo)}: APPROVED`, "info");
     saveTask(task.dir, task.state);
   }
 
