@@ -1,0 +1,442 @@
+
+<!doctype html>
+<html lang="en">
+
+<head>
+    <title>Code coverage report for orchestrator/agents/constraints.ts</title>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="../../prettify.css" />
+    <link rel="stylesheet" href="../../base.css" />
+    <link rel="shortcut icon" type="image/x-icon" href="../../favicon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style type='text/css'>
+        .coverage-summary .sorter {
+            background-image: url(../../sort-arrow-sprite.png);
+        }
+    </style>
+</head>
+    
+<body>
+<div class='wrapper'>
+    <div class='pad1'>
+        <h1><a href="../../index.html">All files</a> / <a href="index.html">orchestrator/agents</a> constraints.ts</h1>
+        <div class='clearfix'>
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">100% </span>
+                <span class="quiet">Statements</span>
+                <span class='fraction'>31/31</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">89.28% </span>
+                <span class="quiet">Branches</span>
+                <span class='fraction'>25/28</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">100% </span>
+                <span class="quiet">Functions</span>
+                <span class='fraction'>5/5</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">100% </span>
+                <span class="quiet">Lines</span>
+                <span class='fraction'>28/28</span>
+            </div>
+        
+            
+        </div>
+        <p class="quiet">
+            Press <em>n</em> or <em>j</em> to go to the next uncovered block, <em>b</em>, <em>p</em> or <em>k</em> for the previous block.
+        </p>
+        <template id="filterTemplate">
+            <div class="quiet">
+                Filter:
+                <input type="search" id="fileSearch">
+            </div>
+        </template>
+    </div>
+    <div class='status-line high'></div>
+    <pre><table class="coverage">
+<tr><td class="line-count quiet"><a name='L1'></a><a href='#L1'>1</a>
+<a name='L2'></a><a href='#L2'>2</a>
+<a name='L3'></a><a href='#L3'>3</a>
+<a name='L4'></a><a href='#L4'>4</a>
+<a name='L5'></a><a href='#L5'>5</a>
+<a name='L6'></a><a href='#L6'>6</a>
+<a name='L7'></a><a href='#L7'>7</a>
+<a name='L8'></a><a href='#L8'>8</a>
+<a name='L9'></a><a href='#L9'>9</a>
+<a name='L10'></a><a href='#L10'>10</a>
+<a name='L11'></a><a href='#L11'>11</a>
+<a name='L12'></a><a href='#L12'>12</a>
+<a name='L13'></a><a href='#L13'>13</a>
+<a name='L14'></a><a href='#L14'>14</a>
+<a name='L15'></a><a href='#L15'>15</a>
+<a name='L16'></a><a href='#L16'>16</a>
+<a name='L17'></a><a href='#L17'>17</a>
+<a name='L18'></a><a href='#L18'>18</a>
+<a name='L19'></a><a href='#L19'>19</a>
+<a name='L20'></a><a href='#L20'>20</a>
+<a name='L21'></a><a href='#L21'>21</a>
+<a name='L22'></a><a href='#L22'>22</a>
+<a name='L23'></a><a href='#L23'>23</a>
+<a name='L24'></a><a href='#L24'>24</a>
+<a name='L25'></a><a href='#L25'>25</a>
+<a name='L26'></a><a href='#L26'>26</a>
+<a name='L27'></a><a href='#L27'>27</a>
+<a name='L28'></a><a href='#L28'>28</a>
+<a name='L29'></a><a href='#L29'>29</a>
+<a name='L30'></a><a href='#L30'>30</a>
+<a name='L31'></a><a href='#L31'>31</a>
+<a name='L32'></a><a href='#L32'>32</a>
+<a name='L33'></a><a href='#L33'>33</a>
+<a name='L34'></a><a href='#L34'>34</a>
+<a name='L35'></a><a href='#L35'>35</a>
+<a name='L36'></a><a href='#L36'>36</a>
+<a name='L37'></a><a href='#L37'>37</a>
+<a name='L38'></a><a href='#L38'>38</a>
+<a name='L39'></a><a href='#L39'>39</a>
+<a name='L40'></a><a href='#L40'>40</a>
+<a name='L41'></a><a href='#L41'>41</a>
+<a name='L42'></a><a href='#L42'>42</a>
+<a name='L43'></a><a href='#L43'>43</a>
+<a name='L44'></a><a href='#L44'>44</a>
+<a name='L45'></a><a href='#L45'>45</a>
+<a name='L46'></a><a href='#L46'>46</a>
+<a name='L47'></a><a href='#L47'>47</a>
+<a name='L48'></a><a href='#L48'>48</a>
+<a name='L49'></a><a href='#L49'>49</a>
+<a name='L50'></a><a href='#L50'>50</a>
+<a name='L51'></a><a href='#L51'>51</a>
+<a name='L52'></a><a href='#L52'>52</a>
+<a name='L53'></a><a href='#L53'>53</a>
+<a name='L54'></a><a href='#L54'>54</a>
+<a name='L55'></a><a href='#L55'>55</a>
+<a name='L56'></a><a href='#L56'>56</a>
+<a name='L57'></a><a href='#L57'>57</a>
+<a name='L58'></a><a href='#L58'>58</a>
+<a name='L59'></a><a href='#L59'>59</a>
+<a name='L60'></a><a href='#L60'>60</a>
+<a name='L61'></a><a href='#L61'>61</a>
+<a name='L62'></a><a href='#L62'>62</a>
+<a name='L63'></a><a href='#L63'>63</a>
+<a name='L64'></a><a href='#L64'>64</a>
+<a name='L65'></a><a href='#L65'>65</a>
+<a name='L66'></a><a href='#L66'>66</a>
+<a name='L67'></a><a href='#L67'>67</a>
+<a name='L68'></a><a href='#L68'>68</a>
+<a name='L69'></a><a href='#L69'>69</a>
+<a name='L70'></a><a href='#L70'>70</a>
+<a name='L71'></a><a href='#L71'>71</a>
+<a name='L72'></a><a href='#L72'>72</a>
+<a name='L73'></a><a href='#L73'>73</a>
+<a name='L74'></a><a href='#L74'>74</a>
+<a name='L75'></a><a href='#L75'>75</a>
+<a name='L76'></a><a href='#L76'>76</a>
+<a name='L77'></a><a href='#L77'>77</a>
+<a name='L78'></a><a href='#L78'>78</a>
+<a name='L79'></a><a href='#L79'>79</a>
+<a name='L80'></a><a href='#L80'>80</a>
+<a name='L81'></a><a href='#L81'>81</a>
+<a name='L82'></a><a href='#L82'>82</a>
+<a name='L83'></a><a href='#L83'>83</a>
+<a name='L84'></a><a href='#L84'>84</a>
+<a name='L85'></a><a href='#L85'>85</a>
+<a name='L86'></a><a href='#L86'>86</a>
+<a name='L87'></a><a href='#L87'>87</a>
+<a name='L88'></a><a href='#L88'>88</a>
+<a name='L89'></a><a href='#L89'>89</a>
+<a name='L90'></a><a href='#L90'>90</a>
+<a name='L91'></a><a href='#L91'>91</a>
+<a name='L92'></a><a href='#L92'>92</a>
+<a name='L93'></a><a href='#L93'>93</a>
+<a name='L94'></a><a href='#L94'>94</a>
+<a name='L95'></a><a href='#L95'>95</a>
+<a name='L96'></a><a href='#L96'>96</a>
+<a name='L97'></a><a href='#L97'>97</a>
+<a name='L98'></a><a href='#L98'>98</a>
+<a name='L99'></a><a href='#L99'>99</a>
+<a name='L100'></a><a href='#L100'>100</a>
+<a name='L101'></a><a href='#L101'>101</a>
+<a name='L102'></a><a href='#L102'>102</a>
+<a name='L103'></a><a href='#L103'>103</a>
+<a name='L104'></a><a href='#L104'>104</a>
+<a name='L105'></a><a href='#L105'>105</a>
+<a name='L106'></a><a href='#L106'>106</a>
+<a name='L107'></a><a href='#L107'>107</a>
+<a name='L108'></a><a href='#L108'>108</a>
+<a name='L109'></a><a href='#L109'>109</a>
+<a name='L110'></a><a href='#L110'>110</a>
+<a name='L111'></a><a href='#L111'>111</a>
+<a name='L112'></a><a href='#L112'>112</a>
+<a name='L113'></a><a href='#L113'>113</a>
+<a name='L114'></a><a href='#L114'>114</a>
+<a name='L115'></a><a href='#L115'>115</a>
+<a name='L116'></a><a href='#L116'>116</a>
+<a name='L117'></a><a href='#L117'>117</a>
+<a name='L118'></a><a href='#L118'>118</a>
+<a name='L119'></a><a href='#L119'>119</a>
+<a name='L120'></a><a href='#L120'>120</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">26x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">42x</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">10x</span>
+<span class="cline-any cline-yes">10x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">12x</span>
+<span class="cline-any cline-yes">12x</span>
+<span class="cline-any cline-yes">12x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">39x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">38x</span>
+<span class="cline-any cline-yes">19x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">19x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">15x</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">26x</span>
+<span class="cline-any cline-yes">26x</span>
+<span class="cline-any cline-yes">26x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span></td><td class="text"><pre class="prettyprint lang-js">import type { Phase, TaskMode } from "../state.js";
+&nbsp;
+const READONLY_CONSTRAINT =
+  "You MUST NOT edit, create, or delete any project file (source, tests, config, docs) — only files under .pp/state/ may be written — and you MUST NOT run state-changing shell commands. If you find a fix worth making, record it in your output; do NOT apply it here.";
+&nbsp;
+// The review phase is read-only EXCEPT for publishing findings: the main agent may
+// insert or remove `AI_COMMENT:` markers in source files (file comments), and may
+// run `gh` to post/read GitHub PR line comments AND bundled pull-request reviews
+// (PR comments) — and nothing else (no fixes, no other edits, no other state-changing
+// commands). This is the reviewer→user mirror of the user→reviewer `AI_REVIEW:` markers.
+const REVIEW_READONLY_CONSTRAINT =
+  "You MUST NOT edit, create, or delete any project file (source, tests, config, docs) — only files under .pp/state/ may be written — and you MUST NOT run state-changing shell commands, WITH ONE EXCEPTION: when publishing review findings you MAY insert or remove `AI_COMMENT:` markers in source files (in each file's native comment syntax) and MAY run `gh` to post or read GitHub PR comments — including line comments and bundled pull-request reviews (a review body plus its line comments) — and nothing else. Do NOT apply fixes or make any other source change. If you find a fix worth making, record it in your output.";
+&nbsp;
+const IMPLEMENT_CONSTRAINT =
+  "Implement only the approved plan. Do NOT add scope or change plan items without recording why in the plan. If the same fix fails 3 times, stop and re-plan — do NOT keep retrying the same approach.";
+&nbsp;
+const QUICK_CONSTRAINT =
+  "Stay within the user's request. Do NOT broaden scope or refactor adjacent code.";
+&nbsp;
+export function isReadOnlyPhase(phase: Phase): boolean {
+  return phase === "brainstorm" || phase === "debug" || phase === "review" || phase === "plan";
+}
+&nbsp;
+export function phaseConstraint(phase: Phase): string {
+  if (phase === "implement") return IMPLEMENT_CONSTRAINT;
+  if (phase === "quick") return QUICK_CONSTRAINT;
+  <span class="missing-if-branch" title="if path not taken" >I</span>if (phase === "review") return REVIEW_READONLY_CONSTRAINT;
+  return READONLY_CONSTRAINT;
+}
+&nbsp;
+// Guided phases that stop and hand back to the user (brainstorm, review, debug) end their turn
+// with prose rather than a tool call. To keep that handoff consistent, the model must close with
+// this exact block. NEXT_PHASE_LABEL supplies the phase the /pp menu advances into.
+const NEXT_PHASE_LABEL: Partial&lt;Record&lt;Phase, string&gt;&gt; = {
+  brainstorm: "plan",
+  review: "plan",
+  debug: "plan",
+};
+&nbsp;
+// The structured summary a review must print when it finishes, on BOTH review finish paths
+// (the review-cycle synthesis in review.ts and the ordinary review-task close here). Counts
+// reconcile with the `ANCHORS:` block: when it is `(none)`, Anchored=0 and every finding is
+// Un-anchorable. Location is `file:line`, or `file:—` for un-anchorable findings.
+export const REVIEW_SUMMARY_SCHEMA = [
+  "## Review Summary",
+  "",
+  "Scope: &lt;repos/PR/branch/range + change size&gt;",
+  "",
+  "| Repo | PR | Findings | Anchored | Un-anchorable |",
+  "|------|----|----------|----------|---------------|",
+  "| &lt;owner/repo&gt; | #&lt;n&gt; | &lt;total&gt; | &lt;in-diff&gt; | &lt;not-in-diff&gt; |",
+  "",
+  "### Findings",
+  "| # | Severity | Location | Finding |",
+  "|---|----------|----------|---------|",
+  "| 1 | BLOCKER | &lt;file:line or file:—&gt; | &lt;one line&gt; |",
+  "",
+  "Next step: /pp → Next → Publish to post these as GitHub PR comments or file comments.",
+].join("\n");
+&nbsp;
+// Instruction wrapping REVIEW_SUMMARY_SCHEMA: severity vocabulary is fixed and the summary
+// degrades gracefully to a single-repo / no-PR row when only one repo (or no PR) was resolved.
+export const reviewSummaryInstruction = [
+  "Before the closing block, print a structured Review Summary in EXACTLY this shape (fill in the values; severity is one of BLOCKER / MAJOR / MINOR, uppercase):",
+  "",
+  REVIEW_SUMMARY_SCHEMA,
+  "",
+  "Counts MUST reconcile with the `ANCHORS:` block: an `(none)` block means Anchored=0 and every finding is Un-anchorable. Fill the table from whatever repos/PR you resolved; degrade to a single-repo / no-PR row when there is only one repo or no PR.",
+].join("\n");
+&nbsp;
+export function closingBlockInstruction(phase: Phase): string {
+  const next = NEXT_PHASE_LABEL[phase] ?? <span class="branch-1 cbranch-no" title="branch not covered" >"the next phase";</span>
+  const summary = phase === "review" ? reviewSummaryInstruction + "\n\n" : "";
+  return [
+    summary +
+    "End that turn with EXACTLY this block, verbatim, as the final lines of your message (fill the summary line with one sentence; change nothing else):",
+    "✅ &lt;one-sentence summary of what this phase produced&gt;",
+    "",
+    `▶ Advance via the /pp menu to move into ${next}.`,
+  ].join("\n");
+}
+&nbsp;
+export function completionLine(phase: Phase, mode: TaskMode): string {
+  if (phase === "quick") {
+    return "When the user's request is complete, call pp_phase_complete. Do NOT stop and wait for the user before then.";
+  }
+  if (mode === "autonomous") {
+    return "There is no user driving this phase. The moment its work is complete, call pp_phase_complete — do NOT pause, ask for confirmation, or wait for input. Never end a turn with prose: every turn ends in a tool call.";
+  }
+  if (phase === "brainstorm") {
+    return "This is a conversation. Do NOT call pp_phase_complete yourself — keep going until the user ends it or advances via the /pp menu. When you have delivered a complete answer and are handing back for the user to advance, close with the standardized block. " + closingBlockInstruction(phase);
+  }
+  if (phase === "plan" || phase === "implement") {
+    return "When you judge this phase complete, call pp_phase_complete — the extension opens the advance gate for the user to review and confirm. Do NOT instead stop and ask the user to run /pp manually.";
+  }
+  return "When the work is complete, stop and let the user review and advance it via the /pp menu. Do NOT advance on your own or call pp_phase_complete unprompted. Close with the standardized block. " + closingBlockInstruction(phase);
+}
+&nbsp;
+const PHASE_IDENTITY: Record&lt;string, string&gt; = {
+  brainstorm: "You clarify the request and research the codebase to produce USER_REQUEST.md and RESEARCH.md.",
+  debug: "You diagnose the problem and research the codebase to produce USER_REQUEST.md and RESEARCH.md — investigation only, no fixes.",
+  plan: "You synthesize the planner outputs into one plan — you do not write a plan from scratch, and you do not implement.",
+  implement: "You implement the approved plan.",
+  review: "You review the code changes to produce USER_REQUEST.md and RESEARCH.md capturing the findings — you do not apply fixes.",
+  quick: "You work on the user's request directly — no phases, planning, or reviews.",
+};
+&nbsp;
+export function constraintsBlock(phase: Phase, mode: TaskMode): string {
+  const readonly = isReadOnlyPhase(phase) ? " (READ-ONLY)" : "";
+  const identity = PHASE_IDENTITY[phase] ?? <span class="branch-1 cbranch-no" title="branch not covered" >"";</span>
+  return [
+    "&lt;constraints&gt;",
+    `ACTIVE PHASE: ${phase}${readonly}. ${identity}`,
+    "These rules override your default helpfulness and any next step you infer. Strict compliance is required.",
+    phaseConstraint(phase),
+    completionLine(phase, mode),
+    "&lt;/constraints&gt;",
+  ].join("\n");
+}
+&nbsp;</pre></td></tr></table></pre>
+
+                <div class='push'></div><!-- for sticky footer -->
+            </div><!-- /wrapper -->
+            <div class='footer quiet pad2 space-top1 center small'>
+                Code coverage generated by
+                <a href="https://istanbul.js.org/" target="_blank" rel="noopener noreferrer">istanbul</a>
+                at 2026-07-09T03:18:00.445Z
+            </div>
+        <script src="../../prettify.js"></script>
+        <script>
+            window.onload = function () {
+                prettyPrint();
+            };
+        </script>
+        <script src="../../sorter.js"></script>
+        <script src="../../block-navigation.js"></script>
+    </body>
+</html>
+    

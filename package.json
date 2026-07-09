@@ -35,7 +35,10 @@
   "scripts": {
     "postinstall": "bash scripts/postinstall.sh",
     "test": "vitest run --exclude '3p/**'",
-    "test:watch": "vitest --exclude '3p/**'"
+    "test:watch": "vitest --exclude '3p/**'",
+    "test:3p": "bash scripts/test-3p.sh",
+    "test:all": "vitest run --exclude '3p/**' && bash scripts/test-3p.sh",
+    "coverage": "vitest run --exclude '3p/**' --coverage"
   },
   "pi": {
     "extensions": [
