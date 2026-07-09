@@ -108,7 +108,26 @@ export function registerRpcHandlers(deps: RpcDeps): RpcHandle {
         normalizedOptions = { ...normalizedOptions, model: resolved };
       }
 
-      return { id: manager.spawn(pi, ctx, type, prompt, normalizedOptions) };
+      // Cross-extension RPC callers (e.g. pi-pi orchestrator planners/
+      // reviewers) forward `run_in_background`; map it to the manager's
+      // `isBackground` flag so background RPC spawns are queued/tracked and
+      // stay visible in the widget rather than being treated as foreground.
+      if (normalizedOptions.isBackground === undefined && normalizedOptions.run_in_background !== undefined) {
+        normalizedOptions = { ...normalizedOptions, isBackground: normalizedOptions.run_in_background };
+      }
+
+      const id = manager.spawn(pi, ctx, type, prompt, normalizedOptions);
+      // Announce the spawn so orchestrating extensions can wire the widget's
+      // UICtx and track the agent. RPC spawns happen outside an LLM turn, so
+      // without this event the above-editor widget never receives a UICtx and
+      // stays blank while orchestrator subagents run.
+      events.emit("subagents:created", {
+        id,
+        type,
+        description: normalizedOptions.description ?? type,
+        isBackground: normalizedOptions.isBackground ?? true,
+      });
+      return { id };
     },
   );
 

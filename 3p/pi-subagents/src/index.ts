@@ -441,6 +441,17 @@ export default function (pi: ExtensionAPI) {
     spawn: (piRef: any, ctx: any, type: string, prompt: string, options: any) =>
       manager.spawn(piRef, ctx, type, prompt, options),
     getRecord: (id: string) => manager.getRecord(id),
+    // Refresh the above-editor widget from outside an LLM turn. Agents spawned
+    // via cross-extension RPC (e.g. pi-pi orchestrator planners/reviewers)
+    // start while the main agent is only waiting, so no tool_execution_start
+    // fires to hand the widget a UICtx. Callers pass their own ctx.ui so the
+    // widget can register and render. Restored after the v0.13.0 subtree
+    // update dropped this local patch.
+    refreshWidget: (uiCtx?: any) => {
+      if (uiCtx) widget.setUICtx(uiCtx as UICtx);
+      widget.ensureTimer();
+      widget.update();
+    },
   };
 
   // Expose the running-agents list for cross-extension callers (pi-pi /pp > Subagents).

@@ -83,6 +83,57 @@ describe("cross-extension RPC", () => {
       );
     });
 
+    it("emits subagents:created after a successful spawn", async () => {
+      registerRpcHandlers(deps);
+      const created = vi.fn();
+      events.on("subagents:created", created);
+      events.emit("subagents:rpc:spawn", {
+        requestId: "req-created", type: "code_reviewer_a", prompt: "review",
+        options: { description: "Code reviewer (a)", run_in_background: true },
+      });
+
+      await vi.waitFor(() => expect(created).toHaveBeenCalled());
+      expect(created).toHaveBeenCalledWith({
+        id: "agent-42",
+        type: "code_reviewer_a",
+        description: "Code reviewer (a)",
+        isBackground: true,
+      });
+    });
+
+    it("maps run_in_background to isBackground for manager.spawn", async () => {
+      registerRpcHandlers(deps);
+      const reply = vi.fn();
+      events.on("subagents:rpc:spawn:reply:req-bg", reply);
+      events.emit("subagents:rpc:spawn", {
+        requestId: "req-bg", type: "Explore", prompt: "find it",
+        options: { description: "search", run_in_background: true },
+      });
+
+      await vi.waitFor(() => expect(reply).toHaveBeenCalled());
+      expect(manager.spawn).toHaveBeenCalledWith(
+        deps.pi, ctx, "Explore", "find it",
+        { description: "search", run_in_background: true, isBackground: true },
+      );
+    });
+
+    it("does not emit subagents:created when spawn throws", async () => {
+      (manager.spawn as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        throw new Error("boom");
+      });
+      registerRpcHandlers(deps);
+      const created = vi.fn();
+      const reply = vi.fn();
+      events.on("subagents:created", created);
+      events.on("subagents:rpc:spawn:reply:req-err", reply);
+      events.emit("subagents:rpc:spawn", {
+        requestId: "req-err", type: "general-purpose", prompt: "x",
+      });
+
+      await vi.waitFor(() => expect(reply).toHaveBeenCalled());
+      expect(created).not.toHaveBeenCalled();
+    });
+
     it("passes options through to manager.spawn", async () => {
       registerRpcHandlers(deps);
       const reply = vi.fn();
