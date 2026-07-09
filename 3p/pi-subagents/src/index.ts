@@ -432,33 +432,43 @@ export default function (pi: ExtensionAPI) {
     });
   });
 
-  // Expose manager via Symbol.for() global registry for cross-package access.
-  // Standard Node.js pattern for cross-package singletons (used by OpenTelemetry, etc.).
+  // Expose manager + running-agents menu via Symbol.for() global registry for
+  // cross-package access. Standard Node.js pattern for cross-package singletons
+  // (used by OpenTelemetry, etc.).
   const MANAGER_KEY = Symbol.for("pi-subagents:manager");
-  (globalThis as any)[MANAGER_KEY] = {
-    waitForAll: () => manager.waitForAll(),
-    hasRunning: () => manager.hasRunning(),
-    spawn: (piRef: any, ctx: any, type: string, prompt: string, options: any) =>
-      manager.spawn(piRef, ctx, type, prompt, options),
-    getRecord: (id: string) => manager.getRecord(id),
-    // Refresh the above-editor widget from outside an LLM turn. Agents spawned
-    // via cross-extension RPC (e.g. pi-pi orchestrator planners/reviewers)
-    // start while the main agent is only waiting, so no tool_execution_start
-    // fires to hand the widget a UICtx. Callers pass their own ctx.ui so the
-    // widget can register and render. Restored after the v0.13.0 subtree
-    // update dropped this local patch.
-    refreshWidget: (uiCtx?: any) => {
-      if (uiCtx) widget.setUICtx(uiCtx as UICtx);
-      widget.ensureTimer();
-      widget.update();
-    },
-  };
-
-  // Expose the running-agents list for cross-extension callers (pi-pi /pp > Subagents).
   const MENU_KEY = Symbol.for("pi-subagents:menu");
-  (globalThis as any)[MENU_KEY] = {
-    showFleet: (ctx: any) => showRunningAgents(ctx),
-  };
+  // Nested in-process subagent sessions re-run this factory (the resource loader
+  // disables module caching, so every session's reload() re-executes extension
+  // factories). Only the first/owning invocation may publish these globals: a
+  // nested re-run must leave them pointing at the root session's manager. If it
+  // overwrote them with its own fresh, empty manager, `/pp > Subagents` (which
+  // reads globalThis[MENU_KEY]) would bind to that empty manager while the real
+  // agents live in the original one — the "background agents never show" bug.
+  const ownsGlobals = (globalThis as any)[MANAGER_KEY] === undefined;
+  if (ownsGlobals) {
+    (globalThis as any)[MANAGER_KEY] = {
+      waitForAll: () => manager.waitForAll(),
+      hasRunning: () => manager.hasRunning(),
+      spawn: (piRef: any, ctx: any, type: string, prompt: string, options: any) =>
+        manager.spawn(piRef, ctx, type, prompt, options),
+      getRecord: (id: string) => manager.getRecord(id),
+      // Refresh the above-editor widget from outside an LLM turn. Agents spawned
+      // via cross-extension RPC (e.g. pi-pi orchestrator planners/reviewers)
+      // start while the main agent is only waiting, so no tool_execution_start
+      // fires to hand the widget a UICtx. Callers pass their own ctx.ui so the
+      // widget can register and render. Restored after the v0.13.0 subtree
+      // update dropped this local patch.
+      refreshWidget: (uiCtx?: any) => {
+        if (uiCtx) widget.setUICtx(uiCtx as UICtx);
+        widget.ensureTimer();
+        widget.update();
+      },
+    };
+
+    (globalThis as any)[MENU_KEY] = {
+      showFleet: (ctx: any) => showRunningAgents(ctx),
+    };
+  }
 
   // --- Cross-extension RPC via pi.events ---
   let currentCtx: ExtensionContext | undefined;
@@ -545,8 +555,12 @@ export default function (pi: ExtensionAPI) {
     unsubRegisterAgents();
     unsubUnregisterAgents();
     currentCtx = undefined;
-    delete (globalThis as any)[MANAGER_KEY];
-    delete (globalThis as any)[MENU_KEY];
+    // Only the owning (root) invocation may retract the shared globals; a nested
+    // subagent session shutting down must not delete the root session's manager.
+    if (ownsGlobals) {
+      delete (globalThis as any)[MANAGER_KEY];
+      delete (globalThis as any)[MENU_KEY];
+    }
     scheduler.stop();
     manager.abortAll();
     for (const timer of pendingNudges.values()) clearTimeout(timer);
