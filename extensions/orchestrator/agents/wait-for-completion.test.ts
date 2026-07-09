@@ -151,7 +151,7 @@ describe("waitForCompletion", () => {
 
   it("does not reject 'not found' while the agent is still running", async () => {
     vi.useFakeTimers();
-    const records = new Map([["a1", { status: "running" }]]);
+    const records = new Map<string, { status: string; result?: string }>([["a1", { status: "running" }]]);
     setManagerRecords(records);
     const pi = makePi();
 
