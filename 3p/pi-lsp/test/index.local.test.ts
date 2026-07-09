@@ -129,10 +129,12 @@ describe('zero-config entrypoint (local fork)', () => {
 
     const out = ui.notifications.at(-1) ?? '';
     expect(out.startsWith('LSP Status:')).toBe(true);
-    // Never mentions the removed config files as a required setup step beyond the hint branch.
-    if (out.includes('No servers configured.')) {
-      expect(out).toContain('.pi/lsp.json');
-    } else {
+    // The no-servers branch of the vendored index.ts still prints a config-file remediation hint
+    // that the zero-config rewrite made obsolete (it auto-detects via `which`, ignoring those
+    // files). That is a known vendored-source discrepancy we deliberately do NOT assert on here,
+    // so this local test does not lock in the misleading hint. We only assert the delta that the
+    // fork guarantees: a status header, and — when servers ARE auto-detected — a lazy/running line.
+    if (!out.includes('No servers configured.')) {
       expect(out).toMatch(/available \(lazy start\)|running/);
     }
   });
