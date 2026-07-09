@@ -48,6 +48,7 @@ import {
   taskAge,
   taskName,
   taskNameFromState,
+  taskFullName,
   taskShortId,
   type AutonomousConfig,
   type TaskMode,
@@ -3037,7 +3038,12 @@ function resumeOptionDescription(t: TaskInfo, cwd: string): string {
   }
 
   parts.push(`id ${taskShortId(t.dir)}`);
-  return parts.join(" · ");
+
+  // Full (untrimmed) intent on its own line ABOVE the metadata, so the right pane
+  // shows the real task even when the title was trimmed to one line.
+  const full = taskFullName(t.dir, s);
+  const meta = parts.join(" · ");
+  return full && full !== meta ? `${full}\n${meta}` : meta;
 }
 
 // Build menu options with a stable option->task index. Titles are made unique
@@ -3208,7 +3214,10 @@ async function showFromMenu(orchestrator: Orchestrator, ctx: any): Promise<typeo
 
     const modeSelection = await pickModeForTaskStart(orchestrator, ctx, "implement");
     if (!modeSelection) continue;
-    await orchestrator.startTask(ctx, "implement", "implement", selected.dir, true, modeSelection.mode);
+    // Carry the source task's resolved name so the new implement task shows a
+    // real name instead of the literal "implement" (#7).
+    const inheritedName = taskFullName(selected.dir, selected.state);
+    await orchestrator.startTask(ctx, "implement", inheritedName, selected.dir, true, modeSelection.mode);
     if (orchestrator.active) {
       orchestrator.active.state.autonomousConfig = modeSelection.autonomousConfig;
       saveTask(orchestrator.active.dir, orchestrator.active.state);

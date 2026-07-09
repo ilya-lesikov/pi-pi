@@ -2046,6 +2046,22 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       // fresh request can auto-retry again from a clean counter.
       orchestrator.errorNudgeHalted = false;
       orchestrator.errorRetryCount = 0;
+      // Capture a real task name (#7): review/quick tasks (and any task started
+      // without an explicit description) carry a generic type-string as their
+      // description and never produce a USER_REQUEST.md to fall back to. Take the
+      // user's initiating prompt, collapse whitespace, and cap at ~700 chars so
+      // the state file never holds an unbounded prompt. Only the genuine first
+      // user prompt qualifies (not a [PI-PI] injection).
+      const GENERIC_DESCRIPTIONS = ["implement", "debug", "brainstorm", "review", "quick"];
+      if (GENERIC_DESCRIPTIONS.includes(orchestrator.active.state.description) && event.prompt) {
+        const captured = event.prompt.replace(/\s+/g, " ").trim().slice(0, 700);
+        if (captured) {
+          orchestrator.active.state.description = captured;
+          orchestrator.active.description = captured;
+          saveTask(orchestrator.active.dir, orchestrator.active.state);
+          orchestrator.pi.setSessionName?.(captured.slice(0, 50));
+        }
+      }
     }
     orchestrator.updateStatus(ctx);
 

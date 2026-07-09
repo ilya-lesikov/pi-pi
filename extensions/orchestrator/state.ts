@@ -310,28 +310,55 @@ export function taskName(taskDir: string): string {
   }
 }
 
-// Same as taskName but reuses an already-loaded TaskState (avoids re-reading
-// state.json per resume-menu entry). The only per-entry disk read is the
-// USER_REQUEST.md fallback, which is unavoidable for generic descriptions.
-export function taskNameFromState(taskDir: string, state: TaskState): string {
+// First non-heading, non-empty content line of a markdown file, or null.
+function firstMarkdownContentLine(path: string): string | null {
+  if (!existsSync(path)) return null;
+  const content = readFileSync(path, "utf-8");
+  const lines = content.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+  return lines.find((l) => !l.startsWith("#")) ?? null;
+}
+
+// The full, untrimmed task name (used for the Resume right-pane description).
+// Resolves a real intent for generic-description tasks via a fallback chain:
+// USER_REQUEST.md → RESEARCH.md → first artifact → dir slug.
+export function taskFullName(taskDir: string, state: TaskState): string {
   let desc = state.description ?? "";
 
   if (["implement", "debug", "brainstorm", "review", "quick"].includes(desc)) {
-    const urPath = join(taskDir, "USER_REQUEST.md");
-    if (existsSync(urPath)) {
-      const content = readFileSync(urPath, "utf-8");
-      const lines = content.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
-      const firstContent = lines.find((l) => !l.startsWith("#"));
-      if (firstContent) desc = firstContent;
-    }
+    const fallback =
+      firstMarkdownContentLine(join(taskDir, "USER_REQUEST.md")) ??
+      firstMarkdownContentLine(join(taskDir, "RESEARCH.md")) ??
+      firstArtifactTitle(taskDir);
+    if (fallback) desc = fallback;
   }
 
-  if (desc) {
-    desc = desc.replace(/\s+/g, " ").trim();
-    if (desc.length > 60) desc = desc.slice(0, 57) + "...";
-    return desc;
+  desc = desc.replace(/\s+/g, " ").trim();
+  return desc || dirSlugName(taskDir);
+}
+
+function firstArtifactTitle(taskDir: string): string | null {
+  const artifactsDir = join(taskDir, "artifacts");
+  if (!existsSync(artifactsDir)) return null;
+  const files = readdirSync(artifactsDir).filter((f) => f.endsWith(".md")).sort();
+  for (const file of files) {
+    const content = readFileSync(join(artifactsDir, file), "utf-8");
+    const lines = content.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+    const heading = lines.find((l) => l.startsWith("# "));
+    if (heading) return heading.replace(/^#\s+/, "");
+    const firstContent = lines.find((l) => !l.startsWith("#"));
+    if (firstContent) return firstContent;
   }
-  return dirSlugName(taskDir);
+  return null;
+}
+
+// Same as taskName but reuses an already-loaded TaskState (avoids re-reading
+// state.json per resume-menu entry). Returns a TITLE trimmed to fit one line.
+// The cap is conservative (fits within ~80 cols after the `→ N. ` selection
+// prefix and a ` — <age>` suffix are added) so a Resume item never wraps.
+export function taskNameFromState(taskDir: string, state: TaskState): string {
+  const desc = taskFullName(taskDir, state);
+  if (desc.length > 60) return desc.slice(0, 57) + "...";
+  return desc;
 }
 
 function dirSlugName(taskDir: string): string {

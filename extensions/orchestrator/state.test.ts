@@ -264,6 +264,21 @@ describe("taskName", () => {
 
     expect(taskName(taskDir)).toBe("my fallback name");
   });
+
+  it("falls back to RESEARCH.md when description is generic and no USER_REQUEST.md", () => {
+    const cwd = makeCwd();
+    const taskDir = createTask(cwd, "review", "review");
+    writeFileSync(join(taskDir, "RESEARCH.md"), "## Affected Code\nReview the payment refactor\n", "utf-8");
+    expect(taskName(taskDir)).toBe("Review the payment refactor");
+  });
+
+  it("prefers USER_REQUEST.md over RESEARCH.md for a generic description", () => {
+    const cwd = makeCwd();
+    const taskDir = createTask(cwd, "brainstorm", "brainstorm");
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), "# User Request\nAdd dark mode\n", "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), "## Affected Code\nsomething else\n", "utf-8");
+    expect(taskName(taskDir)).toBe("Add dark mode");
+  });
 });
 
 describe("taskAge", () => {

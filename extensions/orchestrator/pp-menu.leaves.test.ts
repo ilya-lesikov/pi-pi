@@ -453,7 +453,7 @@ describe("Repos settings", () => {
   it("shows the empty-repos notice when none are registered", async () => {
     const orchestrator = makeOrchestrator(cwd);
     orchestrator.lastCtx = makeCtx();
-    askQueue.push("Info", "Repos", "Back", "Back", "Back");
+    askQueue.push("Settings", "Info", "Repos", "Back", "Back", "Back", "Back to prompt");
     await navigate(orchestrator, orchestrator.lastCtx);
     expect(askQuestions.some((q) => q.includes("No repos registered yet"))).toBe(true);
   });
@@ -464,7 +464,7 @@ describe("Repos settings", () => {
     orchestrator.active.state.repos = [{ path: cwd, isRoot: true, baseBranch: "origin/main" }];
     const ctx = makeCtx(undefined, async () => "origin/develop");
     orchestrator.lastCtx = ctx;
-    askQueue.push("Info", "Repos", cwd, "Change base branch", "Back", "Back", "Back");
+    askQueue.push("Settings", "Info", "Repos", cwd, "Change base branch", "Back", "Back", "Back", "Back to prompt");
     await navigate(orchestrator, ctx);
     expect(orchestrator.active.state.repos[0].baseBranch).toBe("origin/develop");
     expect(orchestrator.registerAgents).toHaveBeenCalled();
@@ -582,7 +582,7 @@ describe("Info menu leaf actions", () => {
     const doctor = (await import("./doctor.js")).runDoctor as any;
     const notes: string[] = [];
     orchestrator.lastCtx = makeCtx((t) => notes.push(t));
-    askQueue.push("Info", "Doctor", "Task status", "Back", "Back");
+    askQueue.push("Settings", "Info", "Doctor", "Task status", "Back", "Back", "Back to prompt");
     await navigate(orchestrator, orchestrator.lastCtx);
     expect(doctor).toHaveBeenCalled();
     expect(notes.some((n) => n.startsWith("Type: implement"))).toBe(true);

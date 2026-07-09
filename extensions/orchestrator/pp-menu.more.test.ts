@@ -385,7 +385,7 @@ describe("showActiveTaskMenu phase branches", () => {
   it("autonomous mode renders the compact menu with Complete/Pause", async () => {
     const orchestrator = makeMenuOrchestrator("implement");
     orchestrator.active.state.mode = "autonomous";
-    askQueue.push("Back");
+    askQueue.push("Back to prompt");
     const result = await showActiveTaskMenu(orchestrator, makeMenuCtx(), "/pp", "command");
     expect(result).toBe("");
     expect(askQuestions).toHaveLength(1);
@@ -407,9 +407,9 @@ describe("showActiveTaskMenu phase branches", () => {
     expect(askQuestions).toContain("Settings");
   });
 
-  it("Info navigates into the info submenu then back", async () => {
+  it("Info navigates into Settings then the info submenu then back", async () => {
     const orchestrator = makeMenuOrchestrator("implement");
-    askQueue.push("Info", "Back", "Back");
+    askQueue.push("Settings", "Info", "Back", "Back", "Back to prompt");
     const result = await showActiveTaskMenu(orchestrator, makeMenuCtx(), "/pp", "command");
     expect(result).toBe("");
     expect(askQuestions).toContain("Info");
@@ -459,16 +459,16 @@ describe("showActiveTaskMenu quick task", () => {
   it("delegates to the quick-task menu and exits on Back", async () => {
     const orchestrator = makeMenuOrchestrator("quick", "quick");
     orchestrator.active.state.phase = "quick";
-    askQueue.push("Back");
+    askQueue.push("Back to prompt");
     const result = await showActiveTaskMenu(orchestrator, makeMenuCtx(), "/pp", "command");
     expect(result).toBe("");
     expect(askQuestions[0]).toContain("Task: quick");
   });
 
-  it("quick-task Info submenu then Back returns to the quick menu", async () => {
+  it("quick-task Info submenu (via Settings) then Back returns to the quick menu", async () => {
     const orchestrator = makeMenuOrchestrator("quick", "quick");
     orchestrator.active.state.phase = "quick";
-    askQueue.push("Info", "Back", "Back");
+    askQueue.push("Settings", "Info", "Back", "Back", "Back to prompt");
     const result = await showActiveTaskMenu(orchestrator, makeMenuCtx(), "/pp", "command");
     expect(result).toBe("");
     expect(askQuestions.filter((q) => q === "Info")).toHaveLength(1);
@@ -499,10 +499,10 @@ describe("showPpMenu", () => {
     expect(result).toContain("user-cancelled");
   });
 
-  it("no-active menu navigates Info then Back", async () => {
+  it("no-active menu navigates Settings then Info then Back", async () => {
     const orchestrator = makeMenuOrchestrator("implement");
     orchestrator.active = null;
-    askQueue.push("Info", "Back", "Back");
+    askQueue.push("Settings", "Info", "Back", "Back", "Back to prompt");
     const result = await showPpMenu(orchestrator, makeMenuCtx(), "command");
     expect(result).toBeUndefined();
     expect(askQuestions).toContain("Info");

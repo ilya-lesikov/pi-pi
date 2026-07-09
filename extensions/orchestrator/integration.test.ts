@@ -1678,7 +1678,7 @@ describe("task modes and quick task", () => {
     const ctx = makeCtx();
 
     await orchestrator.startTask(ctx as any, "quick", "quick");
-    menu.expect({ question: m.taskMenu("quick", "quick"), options: { include: ["Complete", "Pause"], exclude: ["Next", "Review"] }, choose: "Back" });
+    menu.expect({ question: m.taskMenu("quick", "quick"), options: { include: ["Complete", "Pause"], exclude: ["Next", "Review"] }, choose: "Back to prompt" });
     const pp = getCommand(pi, "pp");
     await pp(undefined, ctx);
   });
@@ -1796,7 +1796,7 @@ describe("task modes and quick task", () => {
     expect(orchestrator.transitionController.isRunning()).toBe(true);
 
     // Explicit "Back" navigation (not an ESC): the reminder must be preserved.
-    menu.expect({ question: m.anyTaskMenu, options: { include: ["Back"] }, choose: "Back" });
+    menu.expect({ question: m.anyTaskMenu, options: { include: ["Back to prompt"] }, choose: "Back to prompt" });
 
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     const result = await ppPhaseComplete.execute("back-1", { summary: "done" }, undefined, undefined, ctx);
@@ -2130,7 +2130,7 @@ describe("task modes and quick task", () => {
       .expect({ question: "Implement", options: { include: ["Resume", "Back"] }, choose: "Resume" })
       .expect({ question: "Implement", options: { include: ["Back"] }, choose: "Back" })
       .expect({ question: "Task", options: { include: ["Back"] }, choose: "Back" })
-      .expect({ question: "/pp", options: { include: ["Back"] }, choose: "Back" });
+      .expect({ question: "/pp", options: { include: ["Back to prompt"] }, choose: "Back to prompt" });
     const pp = getCommand(pi, "pp");
     await pp(undefined, ctx);
 
@@ -2349,6 +2349,29 @@ describe("task modes and quick task", () => {
     const state = loadTask(taskDir);
     expect(state.plannerFailureAutoRetried).toBe(false);
     expect(state.reviewerFailureAutoRetried).toBe(false);
+  });
+
+  it("captures the initiating prompt into a generic-description task name (#7)", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx({ cwd });
+
+    await orchestrator.startTask({ ...ctx, cwd } as any, "review", "review", undefined, undefined, "guided");
+    const beforeStart = pi._handlers.get("before_agent_start")!;
+    await beforeStart({ systemPrompt: "base", prompt: "  Review the   payment refactor PR  " }, ctx);
+    expect(orchestrator.active!.state.description).toBe("Review the payment refactor PR");
+    expect(orchestrator.active!.description).toBe("Review the payment refactor PR");
+  });
+
+  it("does not overwrite a non-generic description or capture a [PI-PI] injection", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx({ cwd });
+
+    await orchestrator.startTask({ ...ctx, cwd } as any, "review", "review", undefined, undefined, "guided");
+    const beforeStart = pi._handlers.get("before_agent_start")!;
+    await beforeStart({ systemPrompt: "base", prompt: "[PI-PI] Continue working on the current phase" }, ctx);
+    expect(orchestrator.active!.state.description).toBe("review");
   });
 
   it("blocks ask_user in autonomous mode after first phase", async () => {
@@ -4088,20 +4111,21 @@ describe("menu contracts", () => {
 
     menu
       .expect({ question: "/pp", options: { include: ["Settings"] }, choose: "Settings" })
-      .expect({ question: "Settings", options: { exact: ["General", "Agents", "Commands", "Performance", "LSP", "Back"] }, choose: "Back" })
-      .expect({ question: "/pp", options: { include: ["Back"] }, choose: "Back" });
+      .expect({ question: "Settings", options: { exact: ["Info", "General", "Agents", "Commands", "Performance", "LSP", "Back"] }, choose: "Back" })
+      .expect({ question: "/pp", options: { include: ["Back to prompt"] }, choose: "Back to prompt" });
 
     const pp = getCommand(pi, "pp");
     await pp(undefined, ctx);
   });
 
-  it("info menu shows Doctor and hides LSP", async () => {
+  it("info menu (under Settings) shows Doctor and hides LSP", async () => {
     const cwd = makeTempDir();
     const { pi } = await setupOrchestrator(cwd);
     const ctx = makeCtx();
 
     menu
-      .expect({ question: "/pp", options: { include: ["Info"] }, choose: "Info" })
+      .expect({ question: "/pp", options: { include: ["Settings"] }, choose: "Settings" })
+      .expect({ question: "Settings", options: { include: ["Info"] }, choose: "Info" })
       .expect({
         question: "Info",
         options: {
@@ -4110,7 +4134,8 @@ describe("menu contracts", () => {
         },
         choose: "Back",
       })
-      .expect({ question: "/pp", options: { include: ["Back"] }, choose: "Back" });
+      .expect({ question: "Settings", options: { include: ["Back"] }, choose: "Back" })
+      .expect({ question: "/pp", options: { include: ["Back to prompt"] }, choose: "Back to prompt" });
 
     const pp = getCommand(pi, "pp");
     await pp(undefined, ctx);
@@ -4123,10 +4148,12 @@ describe("menu contracts", () => {
     const runDoctorSpy = vi.mocked(doctorModule.runDoctor);
 
     menu
-      .expect({ question: "/pp", options: { include: ["Info"] }, choose: "Info" })
+      .expect({ question: "/pp", options: { include: ["Settings"] }, choose: "Settings" })
+      .expect({ question: "Settings", options: { include: ["Info"] }, choose: "Info" })
       .expect({ question: "Info", options: { include: ["Doctor", "Back"] }, choose: "Doctor" })
       .expect({ question: "Info", options: { include: ["Back"] }, choose: "Back" })
-      .expect({ question: "/pp", options: { include: ["Back"] }, choose: "Back" });
+      .expect({ question: "Settings", options: { include: ["Back"] }, choose: "Back" })
+      .expect({ question: "/pp", options: { include: ["Back to prompt"] }, choose: "Back to prompt" });
 
     const pp = getCommand(pi, "pp");
     await pp(undefined, ctx);
@@ -4148,7 +4175,7 @@ describe("menu contracts", () => {
       .expect({ question: "LSP", options: { exact: ["Restart all servers", "Back"] }, choose: "Restart all servers" })
       .expect({ question: "LSP", options: { include: ["Back"] }, choose: "Back" })
       .expect({ question: "Settings", options: { include: ["Back"] }, choose: "Back" })
-      .expect({ question: "/pp", options: { include: ["Back"] }, choose: "Back" });
+      .expect({ question: "/pp", options: { include: ["Back to prompt"] }, choose: "Back to prompt" });
 
     const pp = getCommand(pi, "pp");
     await pp(undefined, ctx);
@@ -4168,7 +4195,7 @@ describe("menu contracts", () => {
       .expect({ question: "LSP", options: { exact: ["Restart all servers", "Back"] }, choose: "Restart all servers" })
       .expect({ question: "LSP", options: { include: ["Back"] }, choose: "Back" })
       .expect({ question: "Settings", options: { include: ["Back"] }, choose: "Back" })
-      .expect({ question: "/pp", options: { include: ["Back"] }, choose: "Back" });
+      .expect({ question: "/pp", options: { include: ["Back to prompt"] }, choose: "Back to prompt" });
 
     const pp = getCommand(pi, "pp");
     await pp(undefined, ctx);
@@ -4186,7 +4213,7 @@ describe("menu contracts", () => {
       .expect({ question: "Settings", options: { include: ["Agents", "Back"] }, choose: "Agents" })
       .expect({ question: "Agents", options: { exact: ["Orchestrators", "Subagents", "Back"] }, choose: "Back" })
       .expect({ question: "Settings", options: { include: ["Back"] }, choose: "Back" })
-      .expect({ question: "/pp", options: { include: ["Back"] }, choose: "Back" });
+      .expect({ question: "/pp", options: { include: ["Back to prompt"] }, choose: "Back to prompt" });
 
     const pp = getCommand(pi, "pp");
     await pp(undefined, ctx);
@@ -4202,9 +4229,9 @@ describe("menu contracts", () => {
     menu.expect({
       question: m.taskMenu("implement", "brainstorm"),
       options: {
-        exact: ["Next", "Review", "Subagents", "Info", "Settings", "Back"],
+        exact: ["Next", "Review", "Subagents", "Settings", "Back to prompt"],
       },
-      choose: "Back",
+      choose: "Back to prompt",
     });
 
     const pp = getCommand(pi, "pp");
@@ -4224,9 +4251,9 @@ describe("menu contracts", () => {
     menu.expect({
       question: m.taskMenu("implement", "plan"),
       options: {
-        exact: ["Next", "Subagents", "Info", "Settings", "Back"],
+        exact: ["Next", "Subagents", "Settings", "Back to prompt"],
       },
-      choose: "Back",
+      choose: "Back to prompt",
     });
 
     const pp = getCommand(pi, "pp");
@@ -4245,9 +4272,9 @@ describe("menu contracts", () => {
     menu.expect({
       question: m.taskMenu("implement", "brainstorm"),
       options: {
-        exact: ["Next", "Review", "Subagents", "Info", "Settings", "Back"],
+        exact: ["Next", "Review", "Subagents", "Settings", "Back to prompt"],
       },
-      choose: "Back",
+      choose: "Back to prompt",
     });
 
     const pp = getCommand(pi, "pp");
@@ -4264,9 +4291,9 @@ describe("menu contracts", () => {
     menu.expect({
       question: m.taskMenu("debug", "debug"),
       options: {
-        exact: ["Next", "Review", "Subagents", "Info", "Settings", "Back"],
+        exact: ["Next", "Review", "Subagents", "Settings", "Back to prompt"],
       },
-      choose: "Back",
+      choose: "Back to prompt",
     });
 
     const pp = getCommand(pi, "pp");
@@ -4283,9 +4310,9 @@ describe("menu contracts", () => {
     menu.expect({
       question: m.taskMenu("review", "review"),
       options: {
-        exact: ["Next", "Review", "Subagents", "Info", "Settings", "Back"],
+        exact: ["Next", "Review", "Subagents", "Settings", "Back to prompt"],
       },
-      choose: "Back",
+      choose: "Back to prompt",
     });
 
     const pp = getCommand(pi, "pp");
@@ -4384,9 +4411,9 @@ describe("menu contracts", () => {
     menu.expect({
       question: m.taskMenu("quick", "quick"),
       options: {
-        exact: ["Complete", "Pause", "Subagents", "Info", "Settings", "Back"],
+        exact: ["Complete", "Pause", "Subagents", "Settings", "Back to prompt"],
       },
-      choose: "Back",
+      choose: "Back to prompt",
     });
 
     const pp = getCommand(pi, "pp");
@@ -4402,7 +4429,7 @@ describe("menu contracts", () => {
     menu
       .expect({ question: m.taskMenu("implement", "brainstorm"), options: { include: ["Next"] }, choose: "Next" })
       .expect({ question: "Next", options: { exact: ["Continue to plan & implement", "Complete", "Pause", "Back"] }, choose: "Back" })
-      .expect({ question: m.taskMenu("implement", "brainstorm"), options: { include: ["Back"] }, choose: "Back" });
+      .expect({ question: m.taskMenu("implement", "brainstorm"), options: { include: ["Back to prompt"] }, choose: "Back to prompt" });
 
     const pp = getCommand(pi, "pp");
     await pp(undefined, ctx);
@@ -4414,7 +4441,7 @@ describe("menu contracts", () => {
     menu
       .expect({ question: m.taskMenu("implement", "implement"), options: { include: ["Next"] }, choose: "Next" })
       .expect({ question: "Next", options: { exact: ["Complete", "Pause", "Back"] }, choose: "Back" })
-      .expect({ question: m.taskMenu("implement", "implement"), options: { include: ["Back"] }, choose: "Back" });
+      .expect({ question: m.taskMenu("implement", "implement"), options: { include: ["Back to prompt"] }, choose: "Back to prompt" });
 
     await pp(undefined, ctx);
   });
@@ -4428,8 +4455,8 @@ describe("menu contracts", () => {
 
     menu
       .expect({ question: m.taskMenu("implement", "brainstorm"), options: { include: ["Review"] }, choose: "Review" })
-      .expect({ question: "Review", options: { exact: [m.autoReview, "Review on my own", "Back"] }, choose: "Back" })
-      .expect({ question: m.taskMenu("implement", "brainstorm"), options: { include: ["Back"] }, choose: "Back" });
+      .expect({ question: "Review", options: { exact: [m.autoReview, "Review in Plannotator", "Review on my own", "Back"] }, choose: "Back" })
+      .expect({ question: m.taskMenu("implement", "brainstorm"), options: { include: ["Back to prompt"] }, choose: "Back to prompt" });
 
     const pp = getCommand(pi, "pp");
     await pp(undefined, ctx);
@@ -4447,7 +4474,7 @@ describe("menu contracts", () => {
       .expect({ question: "Mode", options: { exact: ["Guided", "Autonomous", "Back"] }, choose: "Back" })
       .expect({ question: "Implement", options: { include: ["Back"] }, choose: "Back" })
       .expect({ question: "Task", options: { include: ["Back"] }, choose: "Back" })
-      .expect({ question: "/pp", options: { include: ["Back"] }, choose: "Back" });
+      .expect({ question: "/pp", options: { include: ["Back to prompt"] }, choose: "Back to prompt" });
 
     const pp = getCommand(pi, "pp");
     await pp(undefined, ctx);
