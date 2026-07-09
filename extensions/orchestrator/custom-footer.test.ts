@@ -33,7 +33,7 @@ describe("createCustomFooter", () => {
   it("line 1 shows task/phase/mode when a task is active", () => {
     setFooterContext(makeCtx());
     setFooterOrchestrator({
-      active: { type: "implement", state: { phase: "plan", mode: "autonomous" } },
+      active: { type: "implement", dir: "/tmp/task", state: { phase: "plan", mode: "autonomous", description: "build the widget" } },
     } as any);
     const [line1] = render();
     expect(line1).toContain("task: implement");
@@ -41,10 +41,20 @@ describe("createCustomFooter", () => {
     expect(line1).toContain("mode: autonomous");
   });
 
+  it("renders a dedicated task-name line as line 2 when a task is active", () => {
+    setFooterContext(makeCtx());
+    setFooterOrchestrator({
+      active: { type: "implement", dir: "/tmp/task", state: { phase: "plan", mode: "autonomous", description: "build the widget" } },
+    } as any);
+    const lines = render();
+    expect(lines).toHaveLength(3);
+    expect(lines[1]).toContain("build the widget");
+  });
+
   it("line 1 shows autonomous mode in a read-only phase for an autonomous task", () => {
     setFooterContext(makeCtx());
     setFooterOrchestrator({
-      active: { type: "implement", state: { phase: "brainstorm", mode: "autonomous" } },
+      active: { type: "implement", dir: "/tmp/task", state: { phase: "brainstorm", mode: "autonomous", description: "build the widget" } },
     } as any);
     const [line1] = render();
     expect(line1).toContain("phase: brainstorm");
@@ -54,7 +64,7 @@ describe("createCustomFooter", () => {
   it("line 1 shows guided mode for a guided task", () => {
     setFooterContext(makeCtx());
     setFooterOrchestrator({
-      active: { type: "implement", state: { phase: "implement", mode: "guided" } },
+      active: { type: "implement", dir: "/tmp/task", state: { phase: "implement", mode: "guided", description: "build the widget" } },
     } as any);
     const [line1] = render();
     expect(line1).toContain("mode: guided");
@@ -63,7 +73,7 @@ describe("createCustomFooter", () => {
   it("line 1 omits the mode segment for a quick task", () => {
     setFooterContext(makeCtx());
     setFooterOrchestrator({
-      active: { type: "quick", state: { phase: "quick", mode: "autonomous" } },
+      active: { type: "quick", dir: "/tmp/task", state: { phase: "quick", mode: "autonomous", description: "build the widget" } },
     } as any);
     const [line1] = render();
     expect(line1).toContain("task: quick");

@@ -3,7 +3,7 @@ import type { ExtensionContext, ReadonlyFooterDataProvider, Theme } from "@earen
 import { truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 import type { UsageTracker } from "./usage-tracker.js";
 import type { Orchestrator } from "./orchestrator.js";
-import { formatModeIndicator } from "./state.js";
+import { formatModeIndicator, taskNameFromState } from "./state.js";
 
 let footerCtx: ExtensionContext | undefined;
 let footerTracker: UsageTracker | undefined;
@@ -137,12 +137,21 @@ function renderPathLine(width: number, theme: Theme, footerData: ReadonlyFooterD
   return truncateToWidth(theme.fg("dim", line), width, theme.fg("dim", "..."));
 }
 
+function renderTaskNameLine(width: number, theme: Theme): string | null {
+  const task = footerOrchestrator?.active;
+  if (!task || task.state.phase === "done") return null;
+  const name = taskNameFromState(task.dir, task.state);
+  if (!name) return null;
+  return truncateToWidth(theme.fg("dim", name), width, theme.fg("dim", "..."));
+}
+
 export function createCustomFooter(_tui: TUI, theme: Theme, footerData: ReadonlyFooterDataProvider): Component & { dispose?(): void } {
   return {
     render(width: number): string[] {
       const line1 = renderPathLine(width, theme, footerData);
+      const taskNameLine = renderTaskNameLine(width, theme);
       const line2 = renderStatsLine(width, theme);
-      return [line1, line2];
+      return taskNameLine === null ? [line1, line2] : [line1, taskNameLine, line2];
     },
     invalidate(): void {},
     dispose(): void {},
