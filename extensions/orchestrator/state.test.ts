@@ -153,6 +153,23 @@ describe("listTasks", () => {
     expect(brainstormOnly[0].type).toBe("brainstorm");
   });
 
+  it("includes done tasks when includeDone is set", () => {
+    const cwd = makeCwd();
+    const active = createTask(cwd, "implement", "Active feature");
+    const doneTask = createTask(cwd, "implement", "Finished feature");
+    const doneState = loadTask(doneTask);
+    doneState.phase = "done";
+    saveTask(doneTask, doneState);
+
+    const activeOnly = listTasks(cwd, { type: "implement" }).map((t) => t.dir);
+    expect(activeOnly).toContain(active);
+    expect(activeOnly).not.toContain(doneTask);
+
+    const withDone = listTasks(cwd, { type: "implement", includeDone: true }).map((t) => t.dir);
+    expect(withDone).toContain(active);
+    expect(withDone).toContain(doneTask);
+  });
+
   it("skips corrupt task entries", () => {
     const cwd = makeCwd();
     createTask(cwd, "implement", "Healthy task");

@@ -66,6 +66,10 @@ export interface TaskState {
   // set of repos to review; index is the next repo. Persisted so the loop resumes
   // on the next /pp after the agent fixes one repo's feedback. Undefined = no loop.
   plannotatorCursor?: { repoPaths: string[]; index: number };
+  // The phase the task was in when it was marked done. Recorded so the Resume
+  // "reopen a done task" flow (#2) can restore the actual last working phase
+  // (done itself carries no phase history). Absent on legacy done tasks.
+  completedFrom?: Phase;
 }
 
 export interface TaskInfo {
@@ -174,11 +178,18 @@ export function saveTask(taskDir: string, state: TaskState): void {
   writeFileSync(taskStatePath(taskDir), JSON.stringify(state, null, 2) + "\n", "utf-8");
 }
 
-export function listTasks(cwd: string, type?: TaskType): TaskInfo[] {
+export interface ListTasksOptions {
+  type?: TaskType;
+  includeDone?: boolean;
+}
+
+export function listTasks(cwd: string, typeOrOptions?: TaskType | ListTasksOptions): TaskInfo[] {
+  const options: ListTasksOptions =
+    typeof typeOrOptions === "string" ? { type: typeOrOptions } : typeOrOptions ?? {};
   const base = stateDir(cwd);
   if (!existsSync(base)) return [];
 
-  const types: TaskType[] = type ? [type] : ["implement", "debug", "brainstorm", "review", "quick"];
+  const types: TaskType[] = options.type ? [options.type] : ["implement", "debug", "brainstorm", "review", "quick"];
   const results: TaskInfo[] = [];
 
   for (const t of types) {
@@ -193,7 +204,7 @@ export function listTasks(cwd: string, type?: TaskType): TaskInfo[] {
 
       try {
         const state = loadTask(dir);
-        if (state.phase !== "done") {
+        if (state.phase !== "done" || options.includeDone) {
           results.push({ dir, state, type: t });
         }
       } catch {

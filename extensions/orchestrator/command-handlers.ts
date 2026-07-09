@@ -101,6 +101,9 @@ export async function transitionToNextPhase(
     orchestrator.active.state.step = "llm_work";
   } else if (next === "done") {
     orchestrator.active.state.step = null;
+    // Record the phase we finished FROM so a later Resume can reopen the task at
+    // its real last working phase (done carries no phase history of its own).
+    orchestrator.active.state.completedFrom = currentPhase;
   }
   saveTask(orchestrator.active.dir, orchestrator.active.state);
 

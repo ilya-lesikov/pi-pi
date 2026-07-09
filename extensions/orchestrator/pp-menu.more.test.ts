@@ -308,6 +308,35 @@ describe("resumeTask", () => {
     expect(task.state.repos.some((r: any) => r.isRoot)).toBe(true);
     await orchestrator.active?.release?.();
   });
+
+  it("reopens a done task at its completedFrom phase with a valid step", async () => {
+    const state = baseState({ phase: "done", step: null, completedFrom: "plan" });
+    const dir = makeTaskDir({ type: "implement", ...state });
+    const orchestrator = makeOrchestrator(cwd);
+    stubOrchestrator(orchestrator);
+    const ctx = makeCtx();
+    const task = { dir, type: "implement" as const, state: state as any };
+    const result = await resumeTask(orchestrator, ctx, task);
+    expect(result.ok).toBe(true);
+    expect(orchestrator.active?.state.phase).toBe("plan");
+    expect(orchestrator.active?.state.step).toBe("llm_work");
+    expect(orchestrator.active?.state.completedFrom).toBeUndefined();
+    await orchestrator.active?.release?.();
+  });
+
+  it("reopens a legacy done task (no completedFrom) at the terminal predecessor", async () => {
+    const state = baseState({ phase: "done", step: null });
+    const dir = makeTaskDir({ type: "implement", ...state });
+    const orchestrator = makeOrchestrator(cwd);
+    stubOrchestrator(orchestrator);
+    const ctx = makeCtx();
+    const task = { dir, type: "implement" as const, state: state as any };
+    const result = await resumeTask(orchestrator, ctx, task);
+    expect(result.ok).toBe(true);
+    expect(orchestrator.active?.state.phase).toBe("implement");
+    expect(orchestrator.active?.state.step).toBe("llm_work");
+    await orchestrator.active?.release?.();
+  });
 });
 
 function makeMenuCtx(notify?: (t: string) => void) {

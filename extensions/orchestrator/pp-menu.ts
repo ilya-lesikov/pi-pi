@@ -53,6 +53,8 @@ import {
   type TaskMode,
   type TaskInfo,
   type TaskType,
+  type TaskState,
+  type Phase,
 } from "./state.js";
 import {
   clearFlantGeneratedConfig,
@@ -404,6 +406,9 @@ async function finishTask(orchestrator: Orchestrator, ctx: any): Promise<string>
 
   orchestrator.lastCtx = ctx;
 
+  // Record the phase we finished FROM so a later Resume can reopen the task at
+  // its real last working phase (done carries no phase history of its own).
+  orchestrator.active.state.completedFrom = orchestrator.active.state.phase;
   orchestrator.active.state.phase = "done";
   orchestrator.active.state.reviewCycle = null;
   saveTask(orchestrator.active.dir, orchestrator.active.state);
@@ -484,6 +489,18 @@ export async function pickPreset(
   return byTitle.get(choice) ?? null;
 }
 
+// The phase to restore when reopening a done task (#2). Prefer the recorded
+// completedFrom; for legacy done tasks that lack it, fall back to the phase whose
+// transition target is "done" (approximate — assumes the task ran to its terminal
+// phase, which is wrong only for tasks completed early).
+function reopenPhaseForDoneTask(type: TaskType, state: TaskState): Phase {
+  if (state.completedFrom) return state.completedFrom;
+  for (const phase of ["implement", "plan", "review", "debug", "brainstorm", "quick"] as Phase[]) {
+    if (nextPhase(type, phase) === "done") return phase;
+  }
+  return "implement" as Phase;
+}
+
 export async function resumeTask(
   orchestrator: Orchestrator,
   ctx: any,
@@ -513,6 +530,19 @@ export async function resumeTask(
 
   orchestrator.resetTaskScopedState();
   orchestrator.activeTaskToken++;
+
+  // Reopen a done task (#2): now that the lock is held, reload under the lock and
+  // restore the phase the task was completed FROM so it re-enters at a sensible
+  // working phase (done leaves step=null). Lock-first, then mutate, then save.
+  if (task.state.phase === "done") {
+    task.state = loadTask(task.dir);
+    if (task.state.phase === "done") {
+      task.state.phase = reopenPhaseForDoneTask(task.type, task.state);
+      task.state.step = "llm_work";
+      task.state.completedFrom = undefined;
+      saveTask(task.dir, task.state);
+    }
+  }
 
   const normalizedRoot = normalizeRepoPath(orchestrator.cwd);
   if (!task.state.repos || task.state.repos.length === 0) {
@@ -2978,7 +3008,8 @@ async function pickModeForTaskStart(
 // uniqueness across the menu (see buildResumeOptions) so the option->task
 // mapping stays stable.
 function resumeOptionTitle(t: TaskInfo): string {
-  return `${taskNameFromState(t.dir, t.state)} — ${taskAge(t.state)}`;
+  const marker = t.state.phase === "done" ? "✓ done · " : "";
+  return `${marker}${taskNameFromState(t.dir, t.state)} — ${taskAge(t.state)}`;
 }
 
 // Description: rich per-entry detail sourced entirely from the already-loaded
@@ -3029,24 +3060,114 @@ function buildResumeOptions(tasks: TaskInfo[], cwd: string): { options: OptionIn
   return { options, byTitle };
 }
 
+type StatusFilter = "Active" | "Active + Done" | "Done only" | "All";
+interface ResumeFilters {
+  status: StatusFilter;
+  type: "All" | TaskType;
+  mode: "All" | TaskMode;
+  repo: string;
+}
+
+const STATUS_CYCLE: StatusFilter[] = ["Active", "Active + Done", "Done only", "All"];
+const TYPE_CYCLE: Array<"All" | TaskType> = ["All", "implement", "debug", "brainstorm", "review", "quick"];
+const MODE_CYCLE: Array<"All" | TaskMode> = ["All", "guided", "autonomous"];
+
+function defaultResumeFilters(): ResumeFilters {
+  return { status: "Active", type: "All", mode: "All", repo: "All" };
+}
+
+function filtersSummary(f: ResumeFilters): string {
+  return `Status: ${f.status} · Type: ${f.type} · Mode: ${f.mode} · Repo: ${f.repo}`;
+}
+
+function applyResumeFilters(tasks: TaskInfo[], f: ResumeFilters): TaskInfo[] {
+  return tasks.filter((t) => {
+    const isDone = t.state.phase === "done";
+    if (f.status === "Active" && isDone) return false;
+    if (f.status === "Done only" && !isDone) return false;
+    if (f.type !== "All" && t.type !== f.type) return false;
+    if (f.mode !== "All" && (t.state.effectiveMode ?? t.state.mode) !== f.mode) return false;
+    if (f.repo !== "All") {
+      const rootRepo = t.state.repos?.find((r) => r.isRoot) ?? t.state.repos?.[0];
+      if (!rootRepo || basename(rootRepo.path) !== f.repo) return false;
+    }
+    return true;
+  });
+}
+
+function cycle<T>(values: readonly T[], current: T): T {
+  const idx = values.indexOf(current);
+  return values[(idx + 1) % values.length]!;
+}
+
+async function showResumeFilters(
+  orchestrator: Orchestrator,
+  ctx: any,
+  filters: ResumeFilters,
+  lockToType: TaskType | undefined,
+): Promise<void> {
+  const repoNames = Array.from(
+    new Set(
+      listTasks(orchestrator.cwd, { type: lockToType, includeDone: true })
+        .map((t) => {
+          const rootRepo = t.state.repos?.find((r) => r.isRoot) ?? t.state.repos?.[0];
+          return rootRepo ? basename(rootRepo.path) : null;
+        })
+        .filter((n): n is string => !!n),
+    ),
+  );
+  const repoCycle = ["All", ...repoNames];
+  while (true) {
+    const options: OptionInput[] = [
+      opt(`Status: ${filters.status}`, "Cycle: Active / Active + Done / Done only / All"),
+    ];
+    if (!lockToType) options.push(opt(`Type: ${filters.type}`, "Cycle task type"));
+    options.push(opt(`Mode: ${filters.mode}`, "Cycle: All / guided / autonomous"));
+    options.push(opt(`Repo: ${filters.repo}`, "Cycle registered repo"));
+    options.push(opt("Clear filters", "Reset to defaults"));
+    options.push(opt("Back", "Return to the Resume list"));
+
+    const choice = await selectOption(ctx, "Filters", options);
+    if (!choice || choice === "Back") return;
+    if (choice.startsWith("Status:")) filters.status = cycle(STATUS_CYCLE, filters.status);
+    else if (choice.startsWith("Type:")) filters.type = cycle(TYPE_CYCLE, filters.type);
+    else if (choice.startsWith("Mode:")) filters.mode = cycle(MODE_CYCLE, filters.mode);
+    else if (choice.startsWith("Repo:")) filters.repo = cycle(repoCycle, filters.repo);
+    else if (choice === "Clear filters") {
+      const cleared = defaultResumeFilters();
+      filters.status = cleared.status;
+      filters.type = cleared.type;
+      filters.mode = cleared.mode;
+      filters.repo = cleared.repo;
+    }
+  }
+}
+
 async function showResumeMenu(
   orchestrator: Orchestrator,
   ctx: any,
   type: TaskType | undefined,
   emptyMessage: string,
 ): Promise<typeof BACK | "started"> {
+  const filters = defaultResumeFilters();
   while (true) {
-    const tasks = listTasks(orchestrator.cwd, type);
-    if (tasks.length === 0) {
+    const all = listTasks(orchestrator.cwd, { type, includeDone: true });
+    if (all.length === 0) {
       ctx.ui.notify(emptyMessage, "info");
       return BACK;
     }
+    const tasks = applyResumeFilters(all, filters);
 
     const { options, byTitle } = buildResumeOptions(tasks, orchestrator.cwd);
+    options.unshift({ title: "⚙  Filters", description: filtersSummary(filters) });
     options.push({ title: "Back", description: "Return to the previous menu" });
 
     const choice = await selectOption(ctx, "Resume", options);
     if (!choice || choice === "Back") return BACK;
+    if (choice === "⚙  Filters") {
+      await showResumeFilters(orchestrator, ctx, filters, type);
+      continue;
+    }
 
     const task = byTitle.get(choice);
     if (!task) continue;
