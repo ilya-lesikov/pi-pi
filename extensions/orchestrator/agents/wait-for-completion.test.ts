@@ -76,15 +76,77 @@ describe("waitForCompletion", () => {
     await expect(waitForCompletion(pi as any, "a1")).rejects.toThrow("crashed");
   });
 
-  it("rejects with 'not found' only when no record and no event", async () => {
+  it("rejects with 'not found' only after the grace window when no record and no event", async () => {
     vi.useFakeTimers();
     setManagerRecords(new Map());
     const pi = makePi();
 
     const p = waitForCompletion(pi as any, "ghost");
+    let settled = false;
+    p.then(() => (settled = true), () => (settled = true));
+
+    // Still within the grace window — must not reject yet.
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(settled).toBe(false);
+
     const assertion = expect(p).rejects.toThrow("agent ghost not found in manager");
-    await vi.runOnlyPendingTimersAsync();
+    await vi.advanceTimersByTimeAsync(30000);
     await assertion;
+  });
+
+  it("does not reject when the record is transiently missing then reappears and completes", async () => {
+    vi.useFakeTimers();
+    const records = new Map<string, any>();
+    setManagerRecords(records);
+    const pi = makePi();
+
+    const p = waitForCompletion(pi as any, "a1");
+    let settled = false;
+    p.then(() => (settled = true), () => (settled = true));
+
+    // Record briefly absent (manager churn) — must stay pending.
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(settled).toBe(false);
+
+    // Record reappears (owning manager) and reaches a terminal state.
+    records.set("a1", { status: "completed", result: "ok" });
+    await vi.advanceTimersByTimeAsync(30000);
+    await expect(p).resolves.toEqual({ result: "ok", status: "completed" });
+  });
+
+  it("rejects after the grace window when a seen record vanishes with no event", async () => {
+    // Regression: manager torn down (session_shutdown deletes the global
+    // handle) or abortAll() clears the record without emitting a terminal
+    // event. A waiter that already saw the record must not hang forever.
+    vi.useFakeTimers();
+    const records = new Map<string, any>([["a1", { status: "running" }]]);
+    setManagerRecords(records);
+    const pi = makePi();
+
+    const p = waitForCompletion(pi as any, "a1");
+    let settled = false;
+    p.then(() => (settled = true), () => (settled = true));
+
+    // Seen running, then the record disappears — within grace, stay pending.
+    await vi.advanceTimersByTimeAsync(15000);
+    records.delete("a1");
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(settled).toBe(false);
+
+    // Continuously missing past the grace window — now reject.
+    const assertion = expect(p).rejects.toThrow("agent a1 not found in manager");
+    await vi.advanceTimersByTimeAsync(60000);
+    await assertion;
+  });
+
+  it("resolves via the completion event even if the record is never present", async () => {
+    setManagerRecords(new Map());
+    const pi = makePi();
+
+    const p = waitForCompletion(pi as any, "a1");
+    pi.events.emit("subagents:completed", { id: "a1", result: "done", status: "completed" });
+
+    await expect(p).resolves.toEqual({ result: "done", status: "completed" });
   });
 
   it("does not reject 'not found' while the agent is still running", async () => {
