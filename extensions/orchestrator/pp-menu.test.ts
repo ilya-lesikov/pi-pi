@@ -22,10 +22,14 @@ vi.mock("../../3p/pi-ask-user/index.js", () => ({
 }));
 
 // Scripts per-repo Plannotator outcomes for the #3a interleaved cursor tests.
-const plannotatorResults: Array<{ approved: boolean; feedback?: string }> = [];
+const plannotatorResults: Array<{ approved: boolean; feedback?: string; error?: string }> = [];
+const plannotatorOpenCwds: string[] = [];
 vi.mock("./plannotator.js", () => ({
   cancelPendingPlannotatorWait: () => {},
-  openPlannotator: vi.fn(async () => ({ opened: true, reviewId: "rev" })),
+  openPlannotator: vi.fn(async (_pi: any, _action: string, payload: any) => {
+    plannotatorOpenCwds.push(payload?.cwd);
+    return { opened: true, reviewId: "rev" };
+  }),
   waitForPlannotatorResult: vi.fn(async () => plannotatorResults.shift() ?? { approved: true }),
 }));
 
@@ -390,6 +394,55 @@ describe("showActiveTaskMenu Publish/Next Back navigation (#6)", () => {
     askQueue.push("Uncommitted changes", "Back");
     const second = await showActiveTaskMenu(orchestrator, ctx, "/pp", "tool");
     expect(second).toBe("");
+    expect(orchestrator.active.state.plannotatorCursor).toBeUndefined();
+  });
+
+  function makeCursorOrchestrator(): any {
+    const orchestrator = makeReviewOrchestrator();
+    orchestrator.active.type = "implement";
+    orchestrator.active.state.phase = "implement";
+    orchestrator.active.state.repos = [{ path: "/repo/a", isRoot: true }, { path: "/repo/b", isRoot: false }];
+    orchestrator.active.state.plannotatorCursor = { repoPaths: ["/repo/a", "/repo/b"], index: 0 };
+    orchestrator.pi = { exec: vi.fn(async () => ({ code: 0, stdout: "", stderr: "" })) };
+    orchestrator.config = getDefaultConfig();
+    return orchestrator;
+  }
+
+  it("Plannotator error + Retry leaves the cursor on the same repo (#3, error retention)", async () => {
+    const orchestrator = makeCursorOrchestrator();
+    plannotatorOpenCwds.length = 0;
+    // Repo a errors; user chooses Retry → cursor stays at index 0. Then a second
+    // attempt on repo a approves, advancing to b, which approves and clears.
+    plannotatorResults.push({ approved: false, error: "boom" });
+    plannotatorResults.push({ approved: true });
+    plannotatorResults.push({ approved: true });
+    askQueue.push("Uncommitted changes", "Retry", "Uncommitted changes", "Uncommitted changes", "Back");
+    const result = await showActiveTaskMenu(orchestrator, ctx, "/pp", "tool");
+    expect(result).toBe("");
+    // Retry re-opened repo a (opened twice) before advancing to b; none dropped.
+    expect(plannotatorOpenCwds).toEqual(["/repo/a", "/repo/a", "/repo/b"]);
+    // Both repos ultimately reviewed and the cursor cleared (none silently dropped).
+    expect(orchestrator.active.state.plannotatorCursor).toBeUndefined();
+  });
+
+  it("Plannotator error + Skip advances the cursor past the failed repo (#3)", async () => {
+    const orchestrator = makeCursorOrchestrator();
+    plannotatorOpenCwds.length = 0;
+    // Repo a errors; Skip advances to repo b, which approves and clears the cursor.
+    plannotatorResults.push({ approved: false, error: "boom" });
+    plannotatorResults.push({ approved: true });
+    askQueue.push("Uncommitted changes", "Skip this repo", "Uncommitted changes", "Back");
+    await showActiveTaskMenu(orchestrator, ctx, "/pp", "tool");
+    // Skip moved on to repo b (each repo opened exactly once — a not retried, b reached).
+    expect(plannotatorOpenCwds).toEqual(["/repo/a", "/repo/b"]);
+    expect(orchestrator.active.state.plannotatorCursor).toBeUndefined();
+  });
+
+  it("Plannotator error + Done stops and clears the cursor (#3)", async () => {
+    const orchestrator = makeCursorOrchestrator();
+    plannotatorResults.push({ approved: false, error: "boom" });
+    askQueue.push("Uncommitted changes", "Done (stop reviewing)");
+    await showActiveTaskMenu(orchestrator, ctx, "/pp", "tool");
     expect(orchestrator.active.state.plannotatorCursor).toBeUndefined();
   });
 

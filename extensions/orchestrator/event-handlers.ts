@@ -14,9 +14,7 @@ import {
   getPhaseArtifacts,
   getLatestSynthesizedPlan,
   getArtifactManifest,
-  loadBrainstormReviewOutputs,
-  loadCodeReviewOutputs,
-  loadPlanReviewOutputs,
+  loadPhaseReviewOutputs,
 } from "./context.js";
 import { PRINCIPLES_BLOCK, TOOLS_BLOCK, DELEGATION_BLOCK } from "./agents/tool-routing.js";
 import { constraintsBlock, phaseConstraint } from "./agents/constraints.js";
@@ -462,6 +460,23 @@ export function registerOrchestratorToolsForTest(orchestrator: Orchestrator): vo
   registerOrchestratorTools(orchestrator);
 }
 
+// The normal feature tools + agents, registered together so the session_start
+// path and the config-error recovery path (after a successful in-session
+// re-check) register the exact same set. session_start skips this when config
+// loading fails, so the recovery path MUST call it too — otherwise /pp would
+// expose task menus while pp_phase_complete and the other orchestration tools
+// stay unregistered. Registration is idempotent (re-running replaces handlers).
+export function registerFeatureToolsAndAgents(orchestrator: Orchestrator): void {
+  const pi = orchestrator.pi;
+  registerCommandHandlers(orchestrator);
+  registerCbmTools(pi, orchestrator.cwd);
+  registerExaTools(pi);
+  registerAstSearchTool(pi, orchestrator.cwd);
+  registerOrchestratorTools(orchestrator);
+  setExtensionOnlyMode(pi);
+  orchestrator.registerAgents();
+}
+
 function registerOrchestratorTools(orchestrator: Orchestrator): void {
   registerRepoTool(orchestrator);
   registerCheckoutPrHeadTool(orchestrator);
@@ -765,12 +780,6 @@ function registerRepoTool(orchestrator: Orchestrator): void {
       };
     },
   });
-}
-
-function loadPhaseReviewOutputs(taskDir: string, phase: string, pass: number): { name: string; content: string }[] {
-  if (phase === "brainstorm") return loadBrainstormReviewOutputs(taskDir, pass);
-  if (phase === "plan") return loadPlanReviewOutputs(taskDir, pass);
-  return loadCodeReviewOutputs(taskDir, pass);
 }
 
 function registerCommitTool(orchestrator: Orchestrator): void {
@@ -1943,13 +1952,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       finalizeTracer();
     }
 
-    registerCommandHandlers(orchestrator);
-    registerCbmTools(pi, orchestrator.cwd);
-    registerExaTools(pi);
-    registerAstSearchTool(pi, orchestrator.cwd);
-    registerOrchestratorTools(orchestrator);
-    setExtensionOnlyMode(pi);
-    orchestrator.registerAgents();
+    registerFeatureToolsAndAgents(orchestrator);
 
     const status = getActiveTaskStatus(orchestrator.cwd, orchestrator.config.performance.internals.taskLockStale);
     if (status.kind === "single") {

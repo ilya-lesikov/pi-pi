@@ -22,6 +22,7 @@ import {
   loadBrainstormReviewOutputs,
   loadCodeReviewOutputs,
   loadPlanReviewOutputs,
+  loadPhaseReviewOutputs,
 } from "./context.js";
 
 const tempDirs: string[] = [];
@@ -527,5 +528,33 @@ describe("context regressions", () => {
     expect(loadPlanReviewOutputs(taskDir, 2).map((r) => r.name)).toEqual([
       "002_beta_round-2.md",
     ]);
+  });
+
+  it("loadPhaseReviewOutputs reads brainstorm-reviews for both brainstorm and debug", () => {
+    const taskDir = makeTempDir();
+    const brainstormReviewsDir = join(taskDir, "brainstorm-reviews");
+    mkdirSync(brainstormReviewsDir, { recursive: true });
+    writeFileSync(join(brainstormReviewsDir, "001_alpha_round-1.md"), "artifact review", "utf-8");
+
+    // Debug must resolve to the brainstorm-reviews dir (regression: it previously
+    // fell through to the empty code-reviews dir, discarding reviewer outputs).
+    expect(loadPhaseReviewOutputs(taskDir, "debug", 1).map((r) => r.name)).toEqual([
+      "001_alpha_round-1.md",
+    ]);
+    expect(loadPhaseReviewOutputs(taskDir, "brainstorm", 1).map((r) => r.name)).toEqual([
+      "001_alpha_round-1.md",
+    ]);
+  });
+
+  it("loadPhaseReviewOutputs routes plan and implement/review to their own dirs", () => {
+    const taskDir = makeTempDir();
+    mkdirSync(join(taskDir, "plan-reviews"), { recursive: true });
+    mkdirSync(join(taskDir, "code-reviews"), { recursive: true });
+    writeFileSync(join(taskDir, "plan-reviews", "001_a_round-1.md"), "plan", "utf-8");
+    writeFileSync(join(taskDir, "code-reviews", "002_a_round-1.md"), "code", "utf-8");
+
+    expect(loadPhaseReviewOutputs(taskDir, "plan", 1).map((r) => r.name)).toEqual(["001_a_round-1.md"]);
+    expect(loadPhaseReviewOutputs(taskDir, "implement", 1).map((r) => r.name)).toEqual(["002_a_round-1.md"]);
+    expect(loadPhaseReviewOutputs(taskDir, "review", 1).map((r) => r.name)).toEqual(["002_a_round-1.md"]);
   });
 });

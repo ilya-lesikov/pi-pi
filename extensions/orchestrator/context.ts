@@ -5,6 +5,7 @@ import type { RepoInfo } from "./repo-utils.js";
 import type { Phase } from "./state.js";
 import { getLogger } from "./log.js";
 import { isReviewFileForRound } from "./review-files.js";
+import { reviewPresetGroupForPhase } from "./config.js";
 
 type AgentType = "main" | "explore" | "librarian" | "planner" | "planReviewer" | "task" | "codeReviewer" | "brainstormReviewer" | "advisor" | "deep-debugger" | "reviewer";
 type AgentGroup = "all" | "subagents";
@@ -384,4 +385,15 @@ export function loadPlanReviewOutputs(taskDir: string, pass: number): { name: st
     .filter((f) => isReviewFileForRound(f, pass))
     .sort()
     .map((name) => ({ name, content: readFileSync(join(dir, name), "utf-8") }));
+}
+
+// Single source for phase→review-output loading, mirroring reviewPresetGroupForPhase
+// (brainstorm/debug → brainstorm-reviews, plan → plan-reviews, else code-reviews).
+// Imported by both the /pp menu and the review-cycle completion path so the two
+// cannot drift.
+export function loadPhaseReviewOutputs(taskDir: string, phase: string, pass: number): { name: string; content: string }[] {
+  const group = reviewPresetGroupForPhase(phase);
+  if (group === "brainstormReviewers") return loadBrainstormReviewOutputs(taskDir, pass);
+  if (group === "planReviewers") return loadPlanReviewOutputs(taskDir, pass);
+  return loadCodeReviewOutputs(taskDir, pass);
 }

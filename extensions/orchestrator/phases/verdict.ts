@@ -2,6 +2,7 @@ import { readFileSync, existsSync, readdirSync } from "fs";
 import { join } from "path";
 import type { Phase } from "../state.js";
 import { isReviewFileForRound } from "../review-files.js";
+import { reviewPresetGroupForPhase } from "../config.js";
 
 export type ReviewVerdict = "approve" | "changes" | "unknown";
 
@@ -51,8 +52,9 @@ export function hasActionableFindings(reviewContent: string): boolean {
 }
 
 function reviewsDirForPhase(taskDir: string, phase: Phase): string {
-  if (phase === "brainstorm") return join(taskDir, "brainstorm-reviews");
-  if (phase === "plan") return join(taskDir, "plan-reviews");
+  const group = reviewPresetGroupForPhase(phase);
+  if (group === "brainstormReviewers") return join(taskDir, "brainstorm-reviews");
+  if (group === "planReviewers") return join(taskDir, "plan-reviews");
   return join(taskDir, "code-reviews");
 }
 

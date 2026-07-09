@@ -22,12 +22,10 @@ import {
   type VariantConfig,
 } from "./config.js";
 import {
-  loadBrainstormReviewOutputs,
-  loadCodeReviewOutputs,
-  loadPlanReviewOutputs,
+  loadPhaseReviewOutputs,
   hasFinalPassAnchors,
 } from "./context.js";
-import { detectDefaultBranch, enterReviewCycle, finalizeReviewCycle, isReviewCycleLive } from "./event-handlers.js";
+import { detectDefaultBranch, enterReviewCycle, finalizeReviewCycle, isReviewCycleLive, registerFeatureToolsAndAgents } from "./event-handlers.js";
 import { Orchestrator } from "./orchestrator.js";
 import { cancelPendingPlannotatorWait, openPlannotator, waitForPlannotatorResult } from "./plannotator.js";
 import { advanceBanner } from "./messages.js";
@@ -440,13 +438,6 @@ async function finishTask(orchestrator: Orchestrator, ctx: any): Promise<string>
   return `Task "${name}" completed.`;
 }
 
-function loadPhaseReviewOutputs(taskDir: string, phase: string, pass: number): { name: string; content: string }[] {
-  const group = reviewPresetGroupForPhase(phase);
-  if (group === "brainstormReviewers") return loadBrainstormReviewOutputs(taskDir, pass);
-  if (group === "planReviewers") return loadPlanReviewOutputs(taskDir, pass);
-  return loadCodeReviewOutputs(taskDir, pass);
-}
-
 function getDefaultReviewPresetName(config: PiPiConfig, phase: string): string {
   return config.agents.subagents.presetGroups[reviewPresetGroupForPhase(phase)].default;
 }
@@ -664,11 +655,7 @@ export async function resumeTask(
         "warning",
       );
     }
-    const reviewers = phase === "brainstorm"
-      ? resolvePreset(orchestrator.config, "brainstormReviewers", presetName)
-      : phase === "plan"
-      ? resolvePreset(orchestrator.config, "planReviewers", presetName)
-      : resolvePreset(orchestrator.config, "codeReviewers", presetName);
+    const reviewers = resolvePreset(orchestrator.config, group, presetName);
     const reviewerCount = Object.values(reviewers).filter((v) => isEnabled(v)).length;
 
     if (cycle.kind === "auto" && (cycle.step === "spawn_reviewers" || cycle.step === "await_reviewers")) {
@@ -3460,6 +3447,10 @@ async function showConfigErrorMenu(orchestrator: Orchestrator, ctx: any): Promis
       try {
         orchestrator.config = loadConfig(orchestrator.cwd);
         orchestrator.configError = null;
+        // session_start skipped feature/tool/agent registration when config
+        // loading failed; register them now that the config is valid so the
+        // orchestration tools exist, not just the menu.
+        registerFeatureToolsAndAgents(orchestrator);
         ctx.ui.notify("Config loaded successfully. Run /pp again to continue.", "info");
         return undefined;
       } catch (err: any) {
