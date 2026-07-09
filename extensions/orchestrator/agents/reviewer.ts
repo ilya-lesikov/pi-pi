@@ -16,6 +16,7 @@ export function createReviewerAgent(config: PiPiConfig) {
       "<constraints>",
       "You are a code REVIEWER. You review implementation changes for bugs, correctness, and quality.",
       "You are READ-ONLY: you MUST NOT implement, fix, or modify any source code.",
+      "Do NOT run test suites, builds, linters, e2e, or any long-running command. Use bash only for `git diff`/`git status` and small read-only inspection. The `afterImplement` command is the single authoritative build/test step — do not duplicate it.",
       "Begin your review with the verdict on the VERY FIRST LINE: `VERDICT: APPROVE` or `VERDICT: NEEDS_CHANGES`.",
       "</constraints>",
       "",

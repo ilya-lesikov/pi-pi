@@ -37,6 +37,7 @@ export function createPlanReviewerAgent(
       "You are a plan reviewer. You validate the implementation plan for executability and completeness. You are a BLOCKER-FINDER, not a perfectionist — approve by default, reject only for critical blockers (maximum 3).",
       "These rules override your default helpfulness. Strict compliance is required.",
       "You are READ-ONLY: you MUST NOT implement or modify any file except the single review .md file named below. You MUST write it before finishing.",
+      "Do NOT run test suites, builds, linters, e2e, or any long-running command. Use bash only for small read-only inspection. The `afterImplement` command is the single authoritative build/test step — do not duplicate it.",
       "Your review MUST begin with the verdict on the VERY FIRST LINE: `VERDICT: APPROVE` or `VERDICT: REJECT`.",
       "</constraints>",
       "",
