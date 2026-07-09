@@ -1468,7 +1468,7 @@ Terse command-style prompts produce shallow, generic work.
   async function showRunningAgents(ctx: ExtensionCommandContext) {
     const agents = manager.listAgents();
     if (agents.length === 0) {
-      ctx.ui.notify("No agents.", "info");
+      await ctx.ui.select("Running agents", ["Back"]);
       return;
     }
 
