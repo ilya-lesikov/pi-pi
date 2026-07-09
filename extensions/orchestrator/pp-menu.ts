@@ -3438,6 +3438,43 @@ async function showTaskMenu(orchestrator: Orchestrator, ctx: any): Promise<typeo
   }
 }
 
+// Minimal read-only path shown when loadConfig threw on session_start. It must NOT
+// register or trigger normal task execution against the invalid config — it only
+// helps the user locate and fix the broken config, then re-check it.
+async function showConfigErrorMenu(orchestrator: Orchestrator, ctx: any): Promise<string | undefined> {
+  const projectConfigPath = join(orchestrator.cwd, ".pp", "config.json");
+  while (true) {
+    const choice = await selectOption(
+      ctx,
+      `/pp — config error\n\n${orchestrator.configError}\n\nProject config: ${projectConfigPath}\nGlobal config: ${GLOBAL_CONFIG_PATH}`,
+      [
+        { title: "Re-check config", description: "Reload config after fixing it" },
+        { title: "Doctor", description: "Run diagnostic checks" },
+        { title: "Back", description: "Close this menu" },
+      ],
+    );
+    if (!choice || choice === "Back") return undefined;
+
+    if (choice === "Re-check config") {
+      try {
+        orchestrator.config = loadConfig(orchestrator.cwd);
+        orchestrator.configError = null;
+        ctx.ui.notify("Config loaded successfully. Run /pp again to continue.", "info");
+        return undefined;
+      } catch (err: any) {
+        orchestrator.configError = err.message;
+        ctx.ui.notify(`Config error: ${err.message}`, "error");
+        continue;
+      }
+    }
+
+    if (choice === "Doctor") {
+      await runDoctor(orchestrator, ctx);
+      continue;
+    }
+  }
+}
+
 async function showNoActiveMenu(orchestrator: Orchestrator, ctx: any): Promise<string | undefined> {
   while (true) {
     const choice = await selectOption(ctx, "/pp", [
@@ -3845,6 +3882,9 @@ export async function showActiveTaskMenu(
 }
 
 export async function showPpMenu(orchestrator: Orchestrator, ctx: any, mode: MenuMode = "command"): Promise<string | undefined> {
+  if (orchestrator.configError) {
+    return showConfigErrorMenu(orchestrator, ctx);
+  }
   if (!orchestrator.active) {
     return showNoActiveMenu(orchestrator, ctx);
   }

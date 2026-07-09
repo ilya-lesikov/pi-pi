@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "fs";
 import { resolve, basename, join, relative, dirname, isAbsolute, sep } from "path";
 import { validateUserRequest, validateResearch, validateArtifact } from "./validate-artifacts.js";
 import { Type } from "@sinclair/typebox";
-import { loadConfig, resolvePreset, reviewPresetGroupForPhase } from "./config.js";
+import { loadConfig, resolvePreset, reviewPresetGroupForPhase, getDefaultConfig, normalizeConfigDurations } from "./config.js";
 import { runAfterEdit, autoCommit, loadRepoAfterEditCommands } from "./commands.js";
 import { taskName, getActiveTask, getEffectiveMode, getEffectivePhaseMode, saveTask, type Phase, type TaskMode } from "./state.js";
 import { getLogger, initSessionLogger, addTaskDestination, setLogLevel, flushLogs } from "./log.js";
@@ -1919,8 +1919,16 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
 
     try {
       orchestrator.config = loadConfig(orchestrator.cwd);
+      orchestrator.configError = null;
     } catch (err: any) {
       getLogger().error({ s: "config", err: err.message }, "failed to load config on session start");
+      // Surface the failure and keep a MINIMAL read-only /pp path alive instead of
+      // silently killing the extension. The fallback config is for rendering only
+      // (normalized defaults) — it does NOT reflect the user's invalid config, and
+      // normal feature/tool/agent paths are intentionally NOT registered below.
+      orchestrator.configError = err.message;
+      orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+      ctx.ui.notify(`Config error: ${err.message}`, "error");
       return;
     }
 

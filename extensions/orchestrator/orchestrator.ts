@@ -57,6 +57,10 @@ export interface ActiveTask {
 export class Orchestrator {
   active: ActiveTask | null = null;
   config!: NormalizedPiPiConfig;
+  // Non-null when loadConfig threw on session_start. While set, only a minimal
+  // read-only /pp path is available and `config` holds a rendering-only default
+  // fallback (NOT the user's config, which is invalid).
+  configError: string | null = null;
   cwd = "";
   spawnedAgentIds = new Set<string>();
   agentDescriptions = new Map<string, string>();
