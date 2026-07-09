@@ -191,12 +191,24 @@ export async function spawnPlanReviewers(
 ): Promise<{ spawned: number; files: string[]; agentIds: string[]; failedVariants: string[] }> {
   const urPath = join(taskDir, "USER_REQUEST.md");
   const resPath = join(taskDir, "RESEARCH.md");
-  if (!existsSync(urPath) || !existsSync(resPath)) return { spawned: 0, files: [], agentIds: [], failedVariants: [] };
+  if (!existsSync(urPath) || !existsSync(resPath)) {
+    send(
+      { customType: "pp-plan-reviews-error", content: "Cannot start plan review: USER_REQUEST.md or RESEARCH.md is missing.", display: true },
+      "context",
+    );
+    return { spawned: 0, files: [], agentIds: [], failedVariants: [] };
+  }
 
   const userRequest = readFileSync(urPath, "utf-8");
   const research = readFileSync(resPath, "utf-8");
   const synthesizedPlan = getLatestSynthesizedPlan(taskDir);
-  if (!synthesizedPlan) return { spawned: 0, files: [], agentIds: [], failedVariants: [] };
+  if (!synthesizedPlan) {
+    send(
+      { customType: "pp-plan-reviews-error", content: "Cannot start plan review: no synthesized plan found.", display: true },
+      "context",
+    );
+    return { spawned: 0, files: [], agentIds: [], failedVariants: [] };
+  }
 
   const planReviewsDir = join(taskDir, "plan-reviews");
   if (!existsSync(planReviewsDir)) {

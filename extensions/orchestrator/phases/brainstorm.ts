@@ -171,7 +171,13 @@ export async function spawnBrainstormReviewers(
 ): Promise<{ spawned: number; files: string[]; agentIds: string[]; failedVariants: string[] }> {
   const urPath = join(taskDir, "USER_REQUEST.md");
   const resPath = join(taskDir, "RESEARCH.md");
-  if (!existsSync(urPath) || !existsSync(resPath)) return { spawned: 0, files: [], agentIds: [], failedVariants: [] };
+  if (!existsSync(urPath) || !existsSync(resPath)) {
+    send(
+      { customType: "pp-brainstorm-reviews-error", content: "Cannot start artifact review: USER_REQUEST.md or RESEARCH.md is missing.", display: true },
+      "context",
+    );
+    return { spawned: 0, files: [], agentIds: [], failedVariants: [] };
+  }
 
   const userRequest = readFileSync(urPath, "utf-8");
   const research = readFileSync(resPath, "utf-8");
