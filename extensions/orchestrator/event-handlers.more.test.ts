@@ -398,7 +398,7 @@ describe("registered handler branches", () => {
   it("tracks a created subagent and decrements the pending count", () => {
     orchestrator.active = makeActiveTask();
     orchestrator.pendingSubagentSpawns = 2;
-    getEventHandler("subagents:created")({ id: "agent-1", description: "planner opus" });
+    getEventHandler("subagents:created")({ id: "agent-1", description: "planner opus" }, {});
     expect(orchestrator.spawnedAgentIds.has("agent-1")).toBe(true);
     expect(orchestrator.pendingSubagentSpawns).toBe(1);
     expect(orchestrator.agentDescriptions.get("agent-1")).toBe("planner opus");
@@ -408,7 +408,7 @@ describe("registered handler branches", () => {
     orchestrator.active = makeActiveTask();
     orchestrator.spawnedAgentIds.add("agent-1");
     orchestrator.agentDescriptions.set("agent-1", "reviewer gpt");
-    getEventHandler("subagents:completed")({ id: "agent-1", description: "reviewer gpt", durationMs: 1500 });
+    getEventHandler("subagents:completed")({ id: "agent-1", description: "reviewer gpt", durationMs: 1500 }, {});
     expect(orchestrator.spawnedAgentIds.has("agent-1")).toBe(false);
     const customCall = (pi.sendMessage as any).mock.calls.find((c: any[]) => c[0]?.customType === "pp-subagent-result");
     expect(customCall).toBeDefined();
@@ -419,7 +419,7 @@ describe("registered handler branches", () => {
     orchestrator.active = makeActiveTask();
     orchestrator.spawnedAgentIds.add("agent-1");
     orchestrator.agentDescriptions.set("agent-1", "planner");
-    getEventHandler("subagents:failed")({ id: "agent-1", status: "stopped" });
+    getEventHandler("subagents:failed")({ id: "agent-1", status: "stopped" }, {});
     expect(orchestrator.spawnedAgentIds.has("agent-1")).toBe(false);
     const errCall = (pi.sendMessage as any).mock.calls.find((c: any[]) => c[0]?.customType === "pp-subagent-error");
     expect(errCall).toBeUndefined();
@@ -431,7 +431,7 @@ describe("registered handler branches", () => {
     orchestrator.spawnedAgentIds.add("agent-2");
     orchestrator.agentDescriptions.set("agent-1", "planner opus");
     const abortSpy = vi.spyOn(orchestrator, "abortAllSubagents");
-    getEventHandler("subagents:failed")({ id: "agent-1", status: "error", toolUses: 0, error: "500 boom" });
+    getEventHandler("subagents:failed")({ id: "agent-1", status: "error", toolUses: 0, error: "500 boom" }, {});
     expect(abortSpy).toHaveBeenCalled();
     const errCall = (pi.sendMessage as any).mock.calls.find((c: any[]) => c[0]?.customType === "pp-subagent-error");
     expect(errCall[0].content).toContain("model/API error");

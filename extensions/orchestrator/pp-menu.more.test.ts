@@ -14,6 +14,8 @@ import {
 } from "./pp-menu.js";
 import * as configModule from "./config.js";
 
+type ResetOption = { title: string; description?: string };
+
 const askQueue: string[] = [];
 const askQuestions: string[] = [];
 vi.mock("../../3p/pi-ask-user/index.js", () => ({
@@ -122,7 +124,7 @@ describe("buildResetOptions", () => {
       return {};
     });
     const orchestrator = makeOrchestrator(cwd);
-    const options = buildResetOptions(orchestrator, ["general", "autoCommit"]);
+    const options = buildResetOptions(orchestrator, ["general", "autoCommit"]) as ResetOption[];
     expect(options).toHaveLength(1);
     expect(options[0]!.title).toBe("Reset project setting");
     expect(options[0]!.description).toBe("false");
@@ -135,7 +137,7 @@ describe("buildResetOptions", () => {
       return {};
     });
     const orchestrator = makeOrchestrator(cwd);
-    const options = buildResetOptions(orchestrator, ["general", "logLevel"]);
+    const options = buildResetOptions(orchestrator, ["general", "logLevel"]) as ResetOption[];
     expect(options.map((o) => o.title)).toEqual(["Reset global setting", "Reset project setting"]);
     expect(options[0]!.description).toBe('"debug"');
     expect(options[1]!.description).toBe('"warn"');

@@ -89,7 +89,8 @@ afterEach(async () => {
 
 describe('extension/session layer', () => {
   // FORK: local zero-config rewrite removed config scaffolding; session_start no longer writes a
-  // starter config or emits 'created starter config'. Covered in index.local.test.ts.
+  // starter config or emits 'created starter config'. scaffoldGlobalConfig()->false is covered in
+  // config.local.test.ts; the no-scaffold-notification entrypoint behavior in index.local.test.ts.
   test.skip('session_start scaffolds starter global config when none exists', async () => {
     const home = await makeTempDir('pi-lsp-home-');
     process.env.HOME = home;
