@@ -24,11 +24,18 @@ vi.mock("../../3p/pi-ask-user/index.js", () => ({
 // Scripts per-repo Plannotator outcomes for the #3a interleaved cursor tests.
 const plannotatorResults: Array<{ approved: boolean; feedback?: string; error?: string }> = [];
 const plannotatorOpenCwds: string[] = [];
+const annotateReviewResults: Array<{ feedback: string; approved?: boolean; exit?: boolean } | null> = [];
+const annotateReviewPayloads: any[] = [];
 vi.mock("./plannotator.js", () => ({
   cancelPendingPlannotatorWait: () => {},
   openPlannotator: vi.fn(async (_pi: any, _action: string, payload: any) => {
     plannotatorOpenCwds.push(payload?.cwd);
     return { opened: true, reviewId: "rev" };
+  }),
+  openAnnotateReview: vi.fn(async (_pi: any, payload: any) => {
+    annotateReviewPayloads.push(payload);
+    const result = annotateReviewResults.shift() ?? { feedback: "", approved: true };
+    return { opened: true, result };
   }),
   waitForPlannotatorResult: vi.fn(async () => plannotatorResults.shift() ?? { approved: true }),
 }));
@@ -462,5 +469,52 @@ describe("showActiveTaskMenu Publish/Next Back navigation (#6)", () => {
     // re-rendered rather than /pp exiting.
     expect(orchestrator.active.state.reviewCycle).toEqual({ kind: "auto", step: "await_reviewers", pass: 1 });
     expect(askQuestions.filter((q) => q.startsWith("/pp")).length).toBe(2);
+  });
+});
+
+describe("brainstorm/debug Review in Plannotator (annotate-folder) (#4)", () => {
+  let taskDir: string;
+
+  afterEach(() => {
+    askQueue.length = 0;
+    askQuestions.length = 0;
+    annotateReviewResults.length = 0;
+    annotateReviewPayloads.length = 0;
+    if (taskDir) rmSync(taskDir, { recursive: true, force: true });
+  });
+
+  function makeBrainstormOrchestrator(): any {
+    taskDir = mkdtempSync(join(tmpdir(), "pp-annotate-"));
+    return {
+      active: { type: "brainstorm", dir: taskDir, state: { phase: "brainstorm", step: "llm_work", mode: "guided" } },
+      transitionController: { isRunning: () => false, abortMainAgent: () => {} },
+      pi: {},
+      cancelPendingRetry: () => {},
+      abortAllSubagents: () => {},
+    };
+  }
+
+  const ctx = { ui: { notify: () => {} }, waitForIdle: async () => {}, abort: () => {} };
+
+  it("opens an annotate-folder review over the task dir and injects feedback", async () => {
+    const orchestrator = makeBrainstormOrchestrator();
+    annotateReviewResults.push({ feedback: "tighten the scope section" });
+    askQueue.push("Review", "Review in Plannotator");
+    const result = await showActiveTaskMenu(orchestrator, ctx, "/pp", "tool");
+    expect(result).toContain("tighten the scope section");
+    expect(annotateReviewPayloads[0]).toMatchObject({
+      filePath: taskDir,
+      folderPath: taskDir,
+      mode: "annotate-folder",
+      gate: true,
+    });
+  });
+
+  it("stays in the menu when the review is approved", async () => {
+    const orchestrator = makeBrainstormOrchestrator();
+    annotateReviewResults.push({ feedback: "", approved: true });
+    askQueue.push("Review", "Review in Plannotator", "Back", "Back to prompt");
+    const result = await showActiveTaskMenu(orchestrator, ctx, "/pp", "tool");
+    expect(result).toBe("");
   });
 });

@@ -27,7 +27,7 @@ import {
 } from "./context.js";
 import { detectDefaultBranch, enterReviewCycle, finalizeReviewCycle, isReviewCycleLive, registerFeatureToolsAndAgents } from "./event-handlers.js";
 import { Orchestrator } from "./orchestrator.js";
-import { cancelPendingPlannotatorWait, openPlannotator, waitForPlannotatorResult } from "./plannotator.js";
+import { cancelPendingPlannotatorWait, openPlannotator, openAnnotateReview, waitForPlannotatorResult } from "./plannotator.js";
 import { advanceBanner } from "./messages.js";
 import { findUnresolvedOpenQuestions } from "./validate-artifacts.js";
 import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
@@ -3792,8 +3792,11 @@ export async function showActiveTaskMenu(
       const reviewOptions: OptionInput[] = [
         opt(autoLabel, `Run configured reviewers over ${reviewTarget}`),
       ];
+      const hasArtifactPlannotator = phase === "brainstorm" || phase === "debug";
       if (hasPlannotator) {
         reviewOptions.push(opt("Review in Plannotator", phase === "plan" ? "Open plan review in browser" : "Open code diff review in browser"));
+      } else if (hasArtifactPlannotator) {
+        reviewOptions.push(opt("Review in Plannotator", "Open USER_REQUEST.md, RESEARCH.md, and artifacts/*.md for review in browser"));
       }
       reviewOptions.push(opt("Review on my own", phase === "implement"
         ? "Mark spots in the changed files with AI_REVIEW: comments; the agent then addresses each and removes the marker"
@@ -3806,6 +3809,35 @@ export async function showActiveTaskMenu(
       if (!reviewChoice || reviewChoice === "Back") break;
 
       if (reviewChoice === "Review in Plannotator") {
+        if (hasArtifactPlannotator) {
+          // brainstorm/debug have no diff or plan file: review the whole artifact
+          // set in one annotate-folder pass over the task dir (walks USER_REQUEST.md +
+          // RESEARCH.md + artifacts/*.md recursively). The result comes back on the
+          // synchronous annotate respond callback, NOT via waitForPlannotatorResult.
+          const { opened, result } = await openAnnotateReview(orchestrator.pi, {
+            filePath: task.dir,
+            folderPath: task.dir,
+            mode: "annotate-folder",
+            gate: true,
+          });
+          if (!opened || !result) {
+            ctx.ui.notify("Could not open Plannotator for review.", "error");
+            continue;
+          }
+          if (result.approved) {
+            ctx.ui.notify("Plannotator review approved. Choose next action.", "info");
+            continue;
+          }
+          const feedback = result.feedback?.trim();
+          if (feedback) {
+            return advanceBanner(
+              "[PI-PI] The user reviewed this phase's artifacts in Plannotator and left the following feedback. " +
+              "Address each point, updating USER_REQUEST.md, RESEARCH.md, and artifacts/*.md as needed:\n\n" +
+              feedback,
+            );
+          }
+          continue;
+        }
         if (phase === "plan") {
           finalizeReviewCycle(task);
           const text = await enterReviewCycle(orchestrator, ctx, "plannotator");
