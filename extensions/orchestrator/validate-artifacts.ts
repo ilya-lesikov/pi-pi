@@ -5,7 +5,7 @@ const USER_REQUEST_ALLOWED_SECTIONS = ["Problem", "Constraints"] as const;
 const RESEARCH_REQUIRED_SECTIONS = ["Affected Code", "Architecture Context", "Constraints & Edge Cases"] as const;
 const RESEARCH_ALLOWED_SECTIONS = ["Affected Code", "Architecture Context", "Constraints & Edge Cases", "Open Questions"] as const;
 const PLAN_REQUIRED_SECTIONS = ["Scope", "Checklist"] as const;
-const PLAN_ALLOWED_SECTIONS = ["Scope", "Checklist", "Pattern constraints", "Blockers"] as const;
+export const PLAN_ALLOWED_SECTIONS = ["Scope", "Checklist", "Pattern constraints", "Blockers"] as const;
 const PLACEHOLDER_PATTERNS = /^(?:[-*.…—]|tbd|todo|n\/a|na|none|\.{2,})$/i;
 
 function splitLines(content: string): string[] {

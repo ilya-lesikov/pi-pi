@@ -496,6 +496,23 @@ describe("context regressions", () => {
     ]);
   });
 
+  it("does not let round-1 select round-10 outputs and excludes final-pass files", () => {
+    const taskDir = makeTempDir();
+    const codeReviewsDir = join(taskDir, "code-reviews");
+    mkdirSync(codeReviewsDir, { recursive: true });
+
+    writeFileSync(join(codeReviewsDir, "001_alpha_round-1.md"), "pass1", "utf-8");
+    writeFileSync(join(codeReviewsDir, "010_alpha_round-10.md"), "pass10", "utf-8");
+    writeFileSync(join(codeReviewsDir, "011_final_pass-1.md"), "synth", "utf-8");
+
+    expect(loadCodeReviewOutputs(taskDir, 1).map((r) => r.name)).toEqual([
+      "001_alpha_round-1.md",
+    ]);
+    expect(loadCodeReviewOutputs(taskDir, 10).map((r) => r.name)).toEqual([
+      "010_alpha_round-10.md",
+    ]);
+  });
+
   it("filters plan review outputs by pass", () => {
     const taskDir = makeTempDir();
     const planReviewsDir = join(taskDir, "plan-reviews");

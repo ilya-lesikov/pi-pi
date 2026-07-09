@@ -30,7 +30,7 @@ const RESEARCH_TEMPLATE = [
   "<Unresolved items needing user input. Omit section if none.>",
 ].join("\n");
 
-const PLAN_TEMPLATE = [
+export const PLAN_TEMPLATE = [
   "# Plan",
   "",
   "## Scope",

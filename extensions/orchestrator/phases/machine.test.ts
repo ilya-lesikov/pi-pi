@@ -2,7 +2,8 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
-import { canTransition, nextPhase, phasePipeline, validateExitCriteria } from "./machine.js";
+import { canTransition, nextPhase, phasePipeline, validateExitCriteria, PLAN_TEMPLATE } from "./machine.js";
+import { PLAN_ALLOWED_SECTIONS } from "../validate-artifacts.js";
 
 const tempDirs: string[] = [];
 
@@ -344,5 +345,20 @@ Fix bug.
   it("always passes quick phase validation", () => {
     const dir = makeTempDir();
     expect(validateExitCriteria(dir, "quick", "quick")).toEqual({ ok: true });
+  });
+});
+
+describe("PLAN_TEMPLATE / validator alignment", () => {
+  it("only uses section headings the plan validator allows", () => {
+    const headings = PLAN_TEMPLATE.split("\n")
+      .filter((l) => l.startsWith("## "))
+      .map((l) => l.slice(3).trim());
+    for (const h of headings) {
+      expect(PLAN_ALLOWED_SECTIONS).toContain(h);
+    }
+  });
+
+  it("includes the optional Pattern constraints section", () => {
+    expect(PLAN_TEMPLATE).toContain("## Pattern constraints");
   });
 });

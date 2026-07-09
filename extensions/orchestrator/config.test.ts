@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import { tmpdir } from "os";
-import { deepMerge, getDefaultConfig, loadConfig, readRawConfig, removeConfigValue, resolvePreset, validateConfig, writeConfigValue } from "./config.js";
+import { deepMerge, getDefaultConfig, loadConfig, readRawConfig, removeConfigValue, resolvePreset, reviewPresetGroupForPhase, validateConfig, writeConfigValue } from "./config.js";
 
 const tempDirs: string[] = [];
 
@@ -478,5 +478,22 @@ describe("config write helpers", () => {
     const raw = JSON.parse(readFileSync(filePath, "utf-8"));
     expect(raw).toEqual({});
     expect(existsSync(filePath)).toBe(true);
+  });
+});
+
+describe("reviewPresetGroupForPhase", () => {
+  it("routes brainstorm and debug to brainstormReviewers", () => {
+    expect(reviewPresetGroupForPhase("brainstorm")).toBe("brainstormReviewers");
+    expect(reviewPresetGroupForPhase("debug")).toBe("brainstormReviewers");
+  });
+
+  it("routes plan to planReviewers", () => {
+    expect(reviewPresetGroupForPhase("plan")).toBe("planReviewers");
+  });
+
+  it("routes implement, review, and unknown phases to codeReviewers", () => {
+    expect(reviewPresetGroupForPhase("implement")).toBe("codeReviewers");
+    expect(reviewPresetGroupForPhase("review")).toBe("codeReviewers");
+    expect(reviewPresetGroupForPhase("")).toBe("codeReviewers");
   });
 });

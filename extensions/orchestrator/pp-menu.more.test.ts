@@ -478,4 +478,18 @@ describe("showPpMenu", () => {
     expect(result).toBeUndefined();
     expect(askQuestions).toContain("Info");
   });
+
+  it("shows a read-only config-error menu when configError is set", async () => {
+    const orchestrator = makeMenuOrchestrator("implement");
+    orchestrator.active = null;
+    orchestrator.configError = "bad duration at performance.x";
+    askQueue.push("Back");
+    const result = await showPpMenu(orchestrator, makeMenuCtx(), "command");
+    expect(result).toBeUndefined();
+    // The error and config context are surfaced in the menu title; normal
+    // task-execution entries (Task) are NOT offered.
+    expect(askQuestions[0]).toContain("config error");
+    expect(askQuestions[0]).toContain("bad duration at performance.x");
+    expect(askQuestions[0]).not.toContain("Task");
+  });
 });

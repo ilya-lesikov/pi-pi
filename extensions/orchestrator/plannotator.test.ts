@@ -82,4 +82,21 @@ describe("openPlannotator", () => {
     expect(result).toEqual({ opened: true, reviewId: "rev-9", outcome: "opened" });
     expect(clearSpy).toHaveBeenCalled();
   });
+
+  it("reports the not-handled outcome when no handler claims the request", async () => {
+    const events = makeEvents();
+    events.on("plannotator:request", (req: any) => {
+      req.respond({ status: "not-handled" });
+    });
+    const result = await openPlannotator({ events } as any, "open", {});
+    expect(result).toEqual({ opened: false, reviewId: null, outcome: "not-handled" });
+  });
+
+  it("reports the timeout outcome when nothing responds within 30s", async () => {
+    vi.useFakeTimers();
+    const events = makeEvents();
+    const p = openPlannotator({ events } as any, "open", {});
+    await vi.advanceTimersByTimeAsync(30000 + 1);
+    await expect(p).resolves.toEqual({ opened: false, reviewId: null, outcome: "timeout" });
+  });
 });

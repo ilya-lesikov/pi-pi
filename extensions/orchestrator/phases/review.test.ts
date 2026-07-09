@@ -23,6 +23,16 @@ describe("reviewSystemPrompt apply_feedback wording", () => {
     expect(auto).not.toContain("pp_phase_complete");
   });
 
+  it("debug uses the artifact-review branch: DEBUG header, brainstorm-reviews dir, no code-review tail", () => {
+    const prompt = reviewSystemPrompt("/tmp/task", 1, "debug", "guided");
+    expect(prompt).toContain("DEBUG REVIEW CYCLE");
+    expect(prompt).toContain("Debug reviewer outputs are ready.");
+    expect(prompt).toContain("/tmp/task/brainstorm-reviews/");
+    expect(prompt).not.toContain("code-reviews");
+    expect(prompt).not.toContain("Create a fix plan");
+    expect(prompt).not.toContain("pp_phase_complete");
+  });
+
   it("brainstorm apply-feedback prompt permits artifact updates and steers to the compact tools", () => {
     const prompt = reviewSystemPrompt("/tmp/task", 1, "brainstorm", "autonomous");
     expect(prompt).toContain("artifacts/");

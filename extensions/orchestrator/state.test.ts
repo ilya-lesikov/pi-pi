@@ -1,12 +1,13 @@
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
-import { join, resolve } from "path";
+import { join, resolve, relative } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import lockfile from "proper-lockfile";
 import {
   createTask,
   formatModeIndicator,
   getActiveTask,
+  getActiveTaskStatus,
   getEffectiveMode,
   getFirstPhase,
   listTasks,
@@ -219,6 +220,17 @@ describe("validateFromPath", () => {
       reason: "No state.json found at . — not a valid task directory",
     });
   });
+
+  it("accepts the stateDir-relative form the From fork derives from an absolute dir", () => {
+    // startTask receives an absolute fromTaskDir and feeds validateFromPath the
+    // stateDir-relative form (the same shape stored in state.from). This mirrors
+    // that conversion and confirms the guard accepts it and returns the absolute dir.
+    const cwd = makeCwd();
+    const absoluteTaskDir = createTask(cwd, "brainstorm", "Source");
+    const rel = relative(join(cwd, ".pp", "state"), absoluteTaskDir);
+
+    expect(validateFromPath(cwd, rel)).toEqual({ ok: true, dir: absoluteTaskDir });
+  });
 });
 
 describe("taskName", () => {
@@ -368,6 +380,34 @@ describe("getActiveTask", () => {
     getActiveTask(cwd, 1234);
 
     expect(checkSpy).toHaveBeenCalledWith(join(taskDir, "state.json"), expect.objectContaining({ stale: 1234 }));
+  });
+});
+
+describe("getActiveTaskStatus", () => {
+  it("reports none when no tasks exist", () => {
+    const cwd = makeCwd();
+    expect(getActiveTaskStatus(cwd).kind).toBe("none");
+  });
+
+  it("reports single for exactly one unlocked task", () => {
+    const cwd = makeCwd();
+    const taskDir = createTask(cwd, "implement", "Only one");
+    vi.spyOn(lockfile, "checkSync").mockReturnValue(false);
+
+    const status = getActiveTaskStatus(cwd);
+    expect(status.kind).toBe("single");
+    if (status.kind === "single") expect(status.task.dir).toBe(taskDir);
+  });
+
+  it("reports ambiguous with all tasks when multiple are unlocked", () => {
+    const cwd = makeCwd();
+    createTask(cwd, "implement", "First");
+    createTask(cwd, "debug", "Second");
+    vi.spyOn(lockfile, "checkSync").mockReturnValue(false);
+
+    const status = getActiveTaskStatus(cwd);
+    expect(status.kind).toBe("ambiguous");
+    if (status.kind === "ambiguous") expect(status.tasks).toHaveLength(2);
   });
 });
 
