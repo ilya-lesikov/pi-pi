@@ -2476,7 +2476,11 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       const maxDelayMs = 60_000;
       if (orchestrator.errorRetryCount <= maxRetries) {
         const delay = Math.min(2000 * Math.pow(2, orchestrator.errorRetryCount - 1), maxDelayMs);
-        ctx.ui.notify(`API error (attempt ${orchestrator.errorRetryCount}/${maxRetries}): ${errorMsg}. Retrying in ${delay / 1000}s...`, "warning");
+        // The first transient error is expected noise (the SDK just exhausted its
+        // own budget); surface it quietly as info and escalate to a warning only
+        // once it recurs, so a single flaky response doesn't alarm the user.
+        const severity = orchestrator.errorRetryCount === 1 ? "info" : "warning";
+        ctx.ui.notify(`API error (pi-pi retry ${orchestrator.errorRetryCount}/${maxRetries}): ${errorMsg}. Retrying in ${delay / 1000}s...`, severity);
         const taskToken = orchestrator.activeTaskToken;
         if (orchestrator.pendingRetryTimer) clearTimeout(orchestrator.pendingRetryTimer);
         // Arm a direct ESC interrupt for this retry window — no SDK/interactive
@@ -2494,7 +2498,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
           // pendingRetryTimer so ESC/abort still cancels) and disarms the ESC hook
           // once delivered.
           orchestrator.sendUserMessageWhenIdle(
-            `[PI-PI] Previous request failed due to an API error. Continue working on the current phase (${phase}).`,
+            `[PI-PI] Transient API error; retrying the current phase (${phase}) from the last completed step.`,
             taskToken,
           );
         }, delay);

@@ -3478,10 +3478,10 @@ describe("error retry", () => {
     await turnEnd({ message: { stopReason: "error", errorMessage: "invalid tool arguments", content: [] } }, ctx);
 
     expect(orchestrator.errorRetryCount).toBe(1);
-    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Retrying in 2s"), "warning");
+    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Retrying in 2s"), "info");
 
     await vi.advanceTimersByTimeAsync(2000);
-    expect(pi.sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("Previous request failed"), { deliverAs: "followUp" });
+    expect(pi.sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("Transient API error"), { deliverAs: "followUp" });
     vi.useRealTimers();
   });
 
@@ -3500,10 +3500,10 @@ describe("error retry", () => {
     await turnEnd({ message: { stopReason: "error", errorMessage: "Anthropic stream ended before message_stop", content: [] } }, ctx);
 
     expect(orchestrator.errorRetryCount).toBe(1);
-    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Retrying in 2s"), "warning");
+    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Retrying in 2s"), "info");
 
     await vi.advanceTimersByTimeAsync(2000);
-    expect(pi.sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("Previous request failed"), { deliverAs: "followUp" });
+    expect(pi.sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("Transient API error"), { deliverAs: "followUp" });
     vi.useRealTimers();
   });
 
