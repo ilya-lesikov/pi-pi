@@ -283,7 +283,10 @@ export async function enterReviewCycle(
         const diagnosis = outcome === "timeout"
           ? "Plannotator did not respond within 30s (is the browser extension running?)."
           : "Plannotator is not available (no handler responded — is the browser extension installed?).";
-        return `${diagnosis} Choose another option to retry or pick a different review method.`;
+        // End with the exact "Choose another option." sentinel that
+        // handleReviewResult (pp-menu.ts) matches so the inline Review menu loops
+        // back for retry/another method instead of exiting with this text.
+        return `${diagnosis} Retry or pick a different review method — Choose another option.`;
       }
 
       let result: { approved: boolean; feedback?: string };

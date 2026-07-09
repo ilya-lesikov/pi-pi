@@ -3212,8 +3212,10 @@ async function openCodeReviewInPlannotator(
 // NEEDS_CHANGES, persist the cursor advanced past this repo and return a work
 // instruction (mirrors the plan path: answer questions + apply changes) so the
 // agent fixes THIS repo before the next opens; the next /pp resumes the loop. On
-// approved/error/skip, advance and continue in-loop. When the cursor is exhausted
-// or the user stops, clear the cursor and return null (fall back to the menu).
+// approved, advance and continue in-loop. On error the repo is left UNREVIEWED:
+// the cursor stays put and the user chooses Retry / Skip / Done. When the cursor
+// is exhausted or the user stops, clear the cursor and return null (fall back to
+// the menu).
 async function runPlannotatorCursor(orchestrator: Orchestrator, ctx: any): Promise<string | null> {
   const task = orchestrator.active;
   if (!task) return null;
