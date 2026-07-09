@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "fs";
 import { resolve, basename, join, relative, dirname, isAbsolute, sep } from "path";
 import { validateUserRequest, validateResearch, validateArtifact } from "./validate-artifacts.js";
 import { Type } from "@sinclair/typebox";
-import { loadConfig, resolvePreset } from "./config.js";
+import { loadConfig, resolvePreset, reviewPresetGroupForPhase } from "./config.js";
 import { runAfterEdit, autoCommit, loadRepoAfterEditCommands } from "./commands.js";
 import { taskName, getActiveTask, getEffectiveMode, getEffectivePhaseMode, saveTask, type Phase, type TaskMode } from "./state.js";
 import { getLogger, initSessionLogger, addTaskDestination, setLogLevel, flushLogs } from "./log.js";
@@ -143,18 +143,12 @@ function resolveReviewers(
   phase: string,
   presetName?: string,
 ): Record<string, any> {
-  const group = phase === "brainstorm"
-    ? "brainstormReviewers"
-    : phase === "plan"
-    ? "planReviewers"
-    : "codeReviewers";
+  const group = reviewPresetGroupForPhase(phase);
   return resolvePreset(orchestrator.config, group, presetName);
 }
 
 function getDefaultReviewPresetName(orchestrator: Orchestrator, phase: string): string {
-  if (phase === "brainstorm") return orchestrator.config.agents.subagents.presetGroups.brainstormReviewers.default;
-  if (phase === "plan") return orchestrator.config.agents.subagents.presetGroups.planReviewers.default;
-  return orchestrator.config.agents.subagents.presetGroups.codeReviewers.default;
+  return orchestrator.config.agents.subagents.presetGroups[reviewPresetGroupForPhase(phase)].default;
 }
 
 function normalizeStoredPlannerPresetName(orchestrator: Orchestrator): string {
@@ -179,11 +173,7 @@ function normalizeStoredPlannerPresetName(orchestrator: Orchestrator): string {
 }
 
 function normalizeStoredReviewPresetName(orchestrator: Orchestrator, phase: string): string {
-  const group = phase === "brainstorm"
-    ? "brainstormReviewers"
-    : phase === "plan"
-    ? "planReviewers"
-    : "codeReviewers";
+  const group = reviewPresetGroupForPhase(phase);
   const requestedName = orchestrator.active?.state.activeReviewPreset ?? getDefaultReviewPresetName(orchestrator, phase);
   const reviewPresets = orchestrator.config.agents.subagents.presetGroups[group].presets ?? {};
   const exists = Object.prototype.hasOwnProperty.call(reviewPresets, requestedName);

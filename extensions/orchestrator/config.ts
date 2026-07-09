@@ -90,6 +90,12 @@ export interface NormalizedPiPiConfig extends PiPiConfig {
 
 export type PresetGroup = PresetGroupKey;
 export type VariantConfig = PresetAgentConfig;
+
+export function reviewPresetGroupForPhase(phase: string): PresetGroupKey {
+  if (phase === "brainstorm" || phase === "debug") return "brainstormReviewers";
+  if (phase === "plan") return "planReviewers";
+  return "codeReviewers";
+}
 export type TimeoutConfig = NormalizedPiPiConfig["performance"]["internals"];
 
 export const PRESET_GROUPS = ["planners", "codeReviewers", "planReviewers", "brainstormReviewers"] as const;

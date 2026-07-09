@@ -14,6 +14,7 @@ import {
   readRawConfig,
   removeConfigValue,
   resolvePreset,
+  reviewPresetGroupForPhase,
   writeConfigValue,
   type PiPiConfig,
   type PresetGroup,
@@ -439,15 +440,14 @@ async function finishTask(orchestrator: Orchestrator, ctx: any): Promise<string>
 }
 
 function loadPhaseReviewOutputs(taskDir: string, phase: string, pass: number): { name: string; content: string }[] {
-  if (phase === "brainstorm") return loadBrainstormReviewOutputs(taskDir, pass);
-  if (phase === "plan") return loadPlanReviewOutputs(taskDir, pass);
+  const group = reviewPresetGroupForPhase(phase);
+  if (group === "brainstormReviewers") return loadBrainstormReviewOutputs(taskDir, pass);
+  if (group === "planReviewers") return loadPlanReviewOutputs(taskDir, pass);
   return loadCodeReviewOutputs(taskDir, pass);
 }
 
 function getDefaultReviewPresetName(config: PiPiConfig, phase: string): string {
-  if (phase === "brainstorm") return config.agents.subagents.presetGroups.brainstormReviewers.default;
-  if (phase === "plan") return config.agents.subagents.presetGroups.planReviewers.default;
-  return config.agents.subagents.presetGroups.codeReviewers.default;
+  return config.agents.subagents.presetGroups[reviewPresetGroupForPhase(phase)].default;
 }
 
 function isPresetEnabled(preset: { enabled?: boolean } | undefined): boolean {
@@ -455,9 +455,7 @@ function isPresetEnabled(preset: { enabled?: boolean } | undefined): boolean {
 }
 
 function getReviewPresetGroup(phase: string): PresetGroup {
-  if (phase === "brainstorm") return "brainstormReviewers";
-  if (phase === "plan") return "planReviewers";
-  return "codeReviewers";
+  return reviewPresetGroupForPhase(phase);
 }
 
 export async function pickPreset(
