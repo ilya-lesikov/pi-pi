@@ -1,6 +1,7 @@
 import { readFileSync, existsSync, readdirSync } from "fs";
 import { join } from "path";
 import type { Phase } from "../state.js";
+import { isReviewFileForRound } from "../review-files.js";
 
 export type ReviewVerdict = "approve" | "changes" | "unknown";
 
@@ -64,9 +65,7 @@ export function reviewPassUnanimousApprove(
   if (expectedReviewerCount <= 0) return false;
   const dir = reviewsDirForPhase(taskDir, phase);
   if (!existsSync(dir)) return false;
-  const files = readdirSync(dir).filter(
-    (f) => f.includes(`round-${round}`) && !f.includes("final") && f.endsWith(".md"),
-  );
+  const files = readdirSync(dir).filter((f) => isReviewFileForRound(f, round));
   if (files.length < expectedReviewerCount) return false;
   for (const f of files) {
     let content: string;

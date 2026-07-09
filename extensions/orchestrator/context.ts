@@ -4,6 +4,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { RepoInfo } from "./repo-utils.js";
 import type { Phase } from "./state.js";
 import { getLogger } from "./log.js";
+import { isReviewFileForRound } from "./review-files.js";
 
 type AgentType = "main" | "explore" | "librarian" | "planner" | "planReviewer" | "task" | "codeReviewer" | "brainstormReviewer" | "advisor" | "deep-debugger" | "reviewer";
 type AgentGroup = "all" | "subagents";
@@ -362,7 +363,7 @@ export function loadBrainstormReviewOutputs(taskDir: string, pass: number): { na
   const dir = join(taskDir, "brainstorm-reviews");
   if (!existsSync(dir)) return [];
   return readdirSync(dir)
-    .filter((f) => f.includes(`round-${pass}`) && f.endsWith(".md"))
+    .filter((f) => isReviewFileForRound(f, pass))
     .sort()
     .map((name) => ({ name, content: readFileSync(join(dir, name), "utf-8") }));
 }
@@ -371,7 +372,7 @@ export function loadCodeReviewOutputs(taskDir: string, pass: number): { name: st
   const dir = join(taskDir, "code-reviews");
   if (!existsSync(dir)) return [];
   return readdirSync(dir)
-    .filter((f) => f.includes(`round-${pass}`) && f.endsWith(".md"))
+    .filter((f) => isReviewFileForRound(f, pass))
     .sort()
     .map((name) => ({ name, content: readFileSync(join(dir, name), "utf-8") }));
 }
@@ -380,7 +381,7 @@ export function loadPlanReviewOutputs(taskDir: string, pass: number): { name: st
   const dir = join(taskDir, "plan-reviews");
   if (!existsSync(dir)) return [];
   return readdirSync(dir)
-    .filter((f) => f.includes(`round-${pass}`) && f.endsWith(".md"))
+    .filter((f) => isReviewFileForRound(f, pass))
     .sort()
     .map((name) => ({ name, content: readFileSync(join(dir, name), "utf-8") }));
 }

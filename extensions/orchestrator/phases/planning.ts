@@ -8,6 +8,7 @@ import { createPlanReviewerAgent } from "../agents/plan-reviewer.js";
 import { getContextDirs, getLatestSynthesizedPlan, getArtifactManifest } from "../context.js";
 import type { RepoInfo } from "../repo-utils.js";
 import { validatePlan } from "../validate-artifacts.js";
+import { isReviewFileForRound } from "../review-files.js";
 import type { TaskMode } from "../state.js";
 import type { PhaseSend } from "../transition-controller.js";
 
@@ -258,7 +259,7 @@ export async function spawnPlanReviewers(
   await Promise.allSettled(results);
 
   const actualReviewFiles = existsSync(planReviewsDir)
-    ? readdirSync(planReviewsDir).filter((f) => f.startsWith(`${timestamp}`) && f.includes(`round-${pass}`) && f.endsWith(".md"))
+    ? readdirSync(planReviewsDir).filter((f) => f.startsWith(`${timestamp}`) && isReviewFileForRound(f, pass))
     : [];
 
   if (actualReviewFiles.length > 0) {

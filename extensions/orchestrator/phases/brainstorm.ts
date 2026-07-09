@@ -7,6 +7,7 @@ import { createBrainstormReviewerAgent } from "../agents/brainstorm-reviewer.js"
 import { getContextDirs, getArtifactManifest } from "../context.js";
 import type { RepoInfo } from "../repo-utils.js";
 import type { TaskType } from "../state.js";
+import { isReviewFileForRound } from "../review-files.js";
 import type { PhaseSend } from "../transition-controller.js";
 
 function isEnabled(value: { enabled?: boolean } | undefined): boolean {
@@ -243,7 +244,7 @@ export async function spawnBrainstormReviewers(
   await Promise.allSettled(results);
 
   const reviewOutputFiles = existsSync(reviewsDir)
-    ? readdirSync(reviewsDir).filter((f) => f.includes(`round-${round}`) && f.endsWith(".md"))
+    ? readdirSync(reviewsDir).filter((f) => isReviewFileForRound(f, round))
     : [];
 
   if (reviewOutputFiles.length > 0) {

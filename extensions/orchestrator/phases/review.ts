@@ -7,6 +7,7 @@ import { createCodeReviewerAgent } from "../agents/code-reviewer.js";
 import { getContextDirs, getLatestSynthesizedPlan, getArtifactManifest } from "../context.js";
 import type { RepoInfo } from "../repo-utils.js";
 import type { PhaseSend } from "../transition-controller.js";
+import { isReviewFileForRound } from "../review-files.js";
 
 function isEnabled(value: { enabled?: boolean } | undefined): boolean {
   return value?.enabled !== false;
@@ -237,7 +238,7 @@ export async function spawnCodeReviewers(
   await Promise.allSettled(results);
 
   const reviewFiles = existsSync(reviewsDir)
-    ? readdirSync(reviewsDir).filter((f) => f.includes(`round-${round}`) && !f.includes("final"))
+    ? readdirSync(reviewsDir).filter((f) => isReviewFileForRound(f, round))
     : [];
 
   if (reviewFiles.length > 0) {
