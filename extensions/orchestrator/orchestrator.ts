@@ -7,6 +7,7 @@ import {
   loadTask,
   saveTask,
   lockTask,
+  validateFromPath,
   getEffectivePhaseMode,
   type TaskType,
   type TaskMode,
@@ -478,13 +479,28 @@ export class Orchestrator {
     setLogLevel(this.config.general.logLevel);
     ensureGitignore(this.cwd);
 
+    // Validate the fork source BEFORE creating the new task so an invalid or
+    // escaping path cannot leave a half-created task behind. validateFromPath
+    // resolves against .pp/state/, so feed it the stateDir-relative form (the
+    // same shape stored in state.from) rather than the absolute dir.
+    let validatedFromDir: string | undefined;
+    if (fromTaskDir) {
+      const fromRel = relative(join(this.cwd, ".pp", "state"), fromTaskDir);
+      const validation = validateFromPath(this.cwd, fromRel);
+      if (!validation.ok) {
+        ctx.ui.notify(validation.reason, "error");
+        return;
+      }
+      validatedFromDir = validation.dir;
+    }
+
     const dir = createTask(this.cwd, type, description, mode);
     const state = loadTask(dir);
 
-    if (fromTaskDir) {
-      const srcUr = join(fromTaskDir, "USER_REQUEST.md");
-      const srcRes = join(fromTaskDir, "RESEARCH.md");
-      const srcArtifacts = join(fromTaskDir, "artifacts");
+    if (validatedFromDir) {
+      const srcUr = join(validatedFromDir, "USER_REQUEST.md");
+      const srcRes = join(validatedFromDir, "RESEARCH.md");
+      const srcArtifacts = join(validatedFromDir, "artifacts");
       if (existsSync(srcUr)) {
         const originalUr = readFileSync(srcUr, "utf-8");
         const implNote =
@@ -505,7 +521,7 @@ export class Orchestrator {
           copyFileSync(join(srcArtifacts, f), join(destArtifacts, f));
         }
       }
-      state.from = relative(join(this.cwd, ".pp", "state"), fromTaskDir);
+      state.from = relative(join(this.cwd, ".pp", "state"), validatedFromDir);
       if (skipBrainstorm && type === "implement") {
         state.phase = "plan";
         state.initialPhase = "plan";
