@@ -29,7 +29,10 @@ afterEach(async () => {
 });
 
 describe('config loader', () => {
-  test('returns no servers when no config files exist', async () => {
+  // FORK: local zero-config rewrite auto-detects built-in servers via `which`; it no longer
+  // reads config files, so `servers` is environment-dependent rather than always []. Current
+  // behavior is covered in config.local.test.ts.
+  test.skip('returns no servers when no config files exist', async () => {
     const home = await makeTempDir('pi-lsp-home-');
     const cwd = await makeTempDir('pi-lsp-cwd-');
     process.env.HOME = home;
@@ -40,7 +43,9 @@ describe('config loader', () => {
     expect(config.errors).toEqual([]);
   });
 
-  test('scaffolds starter global config only when neither config exists', async () => {
+  // FORK: local rewrite removed config scaffolding; scaffoldGlobalConfig() is now a no-op
+  // returning false and writes nothing. Covered in config.local.test.ts.
+  test.skip('scaffolds starter global config only when neither config exists', async () => {
     const home = await makeTempDir('pi-lsp-home-');
     const cwd = await makeTempDir('pi-lsp-cwd-');
     process.env.HOME = home;
@@ -56,7 +61,8 @@ describe('config loader', () => {
     expect(again).toBe(false);
   });
 
-  test('scaffolded starter config does not enable typescript (or any) server by default', async () => {
+  // FORK: no scaffolding in the local zero-config rewrite, so there is no starter file to inspect.
+  test.skip('scaffolded starter config does not enable typescript (or any) server by default', async () => {
     const home = await makeTempDir('pi-lsp-home-');
     const cwd = await makeTempDir('pi-lsp-cwd-');
     process.env.HOME = home;
@@ -75,7 +81,9 @@ describe('config loader', () => {
     expect(config.servers).toEqual([]);
   });
 
-  test('disabled servers are excluded even when their command exists', async () => {
+  // FORK: local rewrite ignores project/global config files entirely (zero-config); there is no
+  // `disabled` flag. Built-in detection is covered in config.local.test.ts.
+  test.skip('disabled servers are excluded even when their command exists', async () => {
     const home = await makeTempDir('pi-lsp-home-');
     const cwd = await makeTempDir('pi-lsp-cwd-');
     process.env.HOME = home;
@@ -102,7 +110,8 @@ describe('config loader', () => {
     expect(created).toBe(false);
   });
 
-  test('merges global and project config with project override + env merge', async () => {
+  // FORK: local rewrite dropped global+project config merging entirely (zero-config auto-detect).
+  test.skip('merges global and project config with project override + env merge', async () => {
     const home = await makeTempDir('pi-lsp-home-');
     const cwd = await makeTempDir('pi-lsp-cwd-');
     process.env.HOME = home;
@@ -142,7 +151,8 @@ describe('config loader', () => {
     expect(rust?.initializationOptions).toEqual({ cargo: { allFeatures: true } });
   });
 
-  test('lsp false disables everything', async () => {
+  // FORK: local rewrite has no `lsp: false` global-disable switch; globalDisabled is always false.
+  test.skip('lsp false disables everything', async () => {
     const home = await makeTempDir('pi-lsp-home-');
     const cwd = await makeTempDir('pi-lsp-cwd-');
     process.env.HOME = home;

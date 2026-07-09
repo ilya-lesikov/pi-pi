@@ -88,7 +88,9 @@ afterEach(async () => {
 });
 
 describe('extension/session layer', () => {
-  test('session_start scaffolds starter global config when none exists', async () => {
+  // FORK: local zero-config rewrite removed config scaffolding; session_start no longer writes a
+  // starter config or emits 'created starter config'. Covered in index.local.test.ts.
+  test.skip('session_start scaffolds starter global config when none exists', async () => {
     const home = await makeTempDir('pi-lsp-home-');
     process.env.HOME = home;
 
@@ -113,7 +115,11 @@ describe('extension/session layer', () => {
     expect(ui.notifications.some((n) => n.includes('created starter config'))).toBe(true);
   });
 
-  test('full entrypoint shows lazy/running status, routes tool calls, and restarts', async () => {
+  // FORK: local zero-config rewrite ignores project .pi/lsp.json and auto-detects installed
+  // servers via `which`, so the injected 'mock' server is never used and status reflects the
+  // real environment instead of 'LSP: mock'. The local entrypoint behavior (auto-detect status,
+  // tool routing, restart) is covered in index.local.test.ts.
+  test.skip('full entrypoint shows lazy/running status, routes tool calls, and restarts', async () => {
     const home = await makeTempDir('pi-lsp-home-');
     const cwd = await makeTempDir('pi-lsp-workspace-');
     process.env.HOME = home;

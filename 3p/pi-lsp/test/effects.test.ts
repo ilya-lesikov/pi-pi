@@ -1,10 +1,21 @@
 import { describe, expect, test } from 'bun:test';
 import { Effect, Layer } from 'effect';
 
-import { loadConfigEffect, scaffoldGlobalConfigEffect } from '../extensions/lsp/config';
+// FORK: the local zero-config rewrite removed the Effect-based config pipeline
+// (loadConfigEffect / scaffoldGlobalConfigEffect no longer exist in config.ts) and the
+// effects/{command,filesystem} services it depended on are now orphaned. This entire upstream
+// suite tests removed behavior, so it is skipped wholesale. The surviving zero-config API is
+// covered in config.local.test.ts.
 import { CommandResolver, type CommandAvailability } from '../extensions/lsp/effects/command';
 import { FileSystem, type FileSystemService } from '../extensions/lsp/effects/filesystem';
 import { ConfigReadError } from '../extensions/lsp/errors';
+
+const loadConfigEffect: any = () => {
+  throw new Error('FORK: loadConfigEffect removed by local zero-config rewrite');
+};
+const scaffoldGlobalConfigEffect: any = () => {
+  throw new Error('FORK: scaffoldGlobalConfigEffect removed by local zero-config rewrite');
+};
 
 /** Build an in-memory FileSystem service over a path→content map. */
 function fakeFs(files: Record<string, string>, writes?: Record<string, string>): FileSystemService {
@@ -26,7 +37,7 @@ function fakeResolver(availability: CommandAvailability) {
   return Layer.succeed(CommandResolver, { resolve: () => Effect.succeed(availability) });
 }
 
-describe('effect services', () => {
+describe.skip('effect services', () => {
   test('loadConfigEffect resolves servers via injected services (no disk, no shell)', async () => {
     const home = process.env.HOME ?? '';
     const globalPath = `${home}/.pi/agent/extensions/lsp/config.json`;
