@@ -1,16 +1,18 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { Orchestrator } from "./orchestrator.js";
 
+export type PlannotatorOpenOutcome = "opened" | "timeout" | "not-handled";
+
 export function openPlannotator(
   pi: ExtensionAPI,
   action: string,
   payload: Record<string, unknown>,
-): Promise<{ opened: boolean; reviewId: string | null }> {
+): Promise<{ opened: boolean; reviewId: string | null; outcome: PlannotatorOpenOutcome }> {
   const requestId = crypto.randomUUID();
   return new Promise((resolve) => {
     let handled = false;
     const timer = setTimeout(() => {
-      if (!handled) resolve({ opened: false, reviewId: null });
+      if (!handled) resolve({ opened: false, reviewId: null, outcome: "timeout" });
     }, 30000);
     pi.events.emit("plannotator:request", {
       requestId,
@@ -20,7 +22,8 @@ export function openPlannotator(
         handled = true;
         clearTimeout(timer);
         const reviewId = response?.result?.reviewId ?? null;
-        resolve({ opened: response.status === "handled", reviewId });
+        const opened = response.status === "handled";
+        resolve({ opened, reviewId, outcome: opened ? "opened" : "not-handled" });
       },
     });
   });

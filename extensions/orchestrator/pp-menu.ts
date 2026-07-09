@@ -3194,9 +3194,14 @@ async function openCodeReviewInPlannotator(
   if (payload.diffType) requestPayload.diffType = payload.diffType;
   if (payload.defaultBranch) requestPayload.defaultBranch = payload.defaultBranch;
 
-  const { opened, reviewId } = await openPlannotator(orchestrator.pi, "code-review", requestPayload);
+  const { opened, reviewId, outcome } = await openPlannotator(orchestrator.pi, "code-review", requestPayload);
   if (!opened) {
-    return { status: "error", error: "Plannotator is not available." };
+    return {
+      status: "error",
+      error: outcome === "timeout"
+        ? "Plannotator did not respond within 30s (is the browser extension running?)."
+        : "Plannotator is not available (no handler responded — is the browser extension installed?).",
+    };
   }
 
   let result: { approved: boolean; feedback?: string; error?: string };

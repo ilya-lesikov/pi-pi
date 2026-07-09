@@ -278,11 +278,14 @@ export async function enterReviewCycle(
       }
       const payload = { planContent, planFilePath: join(orchestrator.active.dir, "plans") };
 
-      const { opened, reviewId } = await openPlannotator(pi, "plan-review", payload);
+      const { opened, reviewId, outcome } = await openPlannotator(pi, "plan-review", payload);
       if (!opened) {
         orchestrator.active.state.reviewCycle = null;
         saveTask(orchestrator.active.dir, orchestrator.active.state);
-        return "Plannotator is not available. Choose another option.";
+        const diagnosis = outcome === "timeout"
+          ? "Plannotator did not respond within 30s (is the browser extension running?)."
+          : "Plannotator is not available (no handler responded — is the browser extension installed?).";
+        return `${diagnosis} Choose another option to retry or pick a different review method.`;
       }
 
       let result: { approved: boolean; feedback?: string };
