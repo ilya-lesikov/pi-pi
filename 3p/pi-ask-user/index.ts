@@ -1712,6 +1712,11 @@ export default function(pi: ExtensionAPI) {
             });
          }
 
+         pi.events.emit("ask:opened", {
+            question,
+            context: normalizedContext,
+            options,
+         });
          let result: AskResponse | AskCancel | null;
          try {
             result = await askUser(ctx, {
@@ -1730,6 +1735,12 @@ export default function(pi: ExtensionAPI) {
          } catch (error) {
             const message =
                error instanceof Error ? `${error.message}\n${error.stack ?? ""}` : String(error);
+            pi.events.emit("ask:cancelled", {
+               question,
+               context: normalizedContext,
+               options,
+               reason: undefined,
+            });
             return {
                content: [{ type: "text" as const, text: `Ask tool failed: ${message}` }],
                isError: true,

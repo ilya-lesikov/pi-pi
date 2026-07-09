@@ -303,6 +303,46 @@ describe("ask_user ESC aborts the turn", () => {
     );
     expect(ctx.abort).not.toHaveBeenCalled();
   });
+
+  it("clears mainTurnInFlight and interactivePromptOpen on user cancel", async () => {
+    const handler = getHandler("tool_result");
+    orchestrator.mainTurnInFlight = true;
+    orchestrator.interactivePromptOpen = true;
+    await handler(
+      {
+        toolName: "ask_user",
+        input: {},
+        isError: false,
+        content: [{ type: "text", text: "User cancelled the question" }],
+        details: { cancelled: true, response: null, cancelReason: "user" },
+      },
+      { abort: vi.fn() },
+    );
+    expect(orchestrator.mainTurnInFlight).toBe(false);
+    expect(orchestrator.interactivePromptOpen).toBe(false);
+  });
+});
+
+describe("ask_user dialogue suppresses the stall watchdog", () => {
+  function getEventHandler(name: string): Handler {
+    const h = pi._eventHandlers.get(name);
+    if (!h) throw new Error(`No event handler for ${name}`);
+    return h;
+  }
+
+  it("sets interactivePromptOpen on ask:opened and clears it on ask:answered", () => {
+    getEventHandler("ask:opened")({}, {});
+    expect(orchestrator.interactivePromptOpen).toBe(true);
+    getEventHandler("ask:answered")({}, {});
+    expect(orchestrator.interactivePromptOpen).toBe(false);
+  });
+
+  it("clears interactivePromptOpen on ask:cancelled", () => {
+    getEventHandler("ask:opened")({}, {});
+    expect(orchestrator.interactivePromptOpen).toBe(true);
+    getEventHandler("ask:cancelled")({}, {});
+    expect(orchestrator.interactivePromptOpen).toBe(false);
+  });
 });
 
 describe("tool_call Agent routing and spawn-time context injection", () => {

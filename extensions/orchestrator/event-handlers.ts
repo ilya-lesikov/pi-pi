@@ -1298,6 +1298,21 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     }, 30000);
   }
 
+  // An agent-invoked ask_user dialogue must suppress the main-turn stall
+  // watchdog exactly like pi-pi's own selectOption does; otherwise a prompt the
+  // user leaves open (or cancels) can trip a false 600s "stalled" recovery. The
+  // flag is set while ANY ask_user UI is open and cleared on every terminal path
+  // (answer, cancel, tool error).
+  pi.events.on("ask:opened", () => {
+    orchestrator.interactivePromptOpen = true;
+  });
+  pi.events.on("ask:answered", () => {
+    orchestrator.interactivePromptOpen = false;
+  });
+  pi.events.on("ask:cancelled", () => {
+    orchestrator.interactivePromptOpen = false;
+  });
+
   pi.events.on("subagents:created", (data: any) => {
     if (!orchestrator.active || !data?.id) return;
     orchestrator.spawnedAgentIds.add(data.id);
@@ -2194,6 +2209,11 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       const cancelReason = (event.details as { cancelReason?: string } | undefined)?.cancelReason;
       if (cancelReason === "user") {
         getLogger().debug({ s: "hook", hook: "tool_result", tool: "ask_user" }, "user cancelled ask_user — aborting turn");
+        // abort() may not emit a normal turn_end, so the main-turn flags can
+        // stay set and the stall watchdog would "recover" 600s later. Clear them
+        // here so a user cancel ends the turn cleanly and immediately.
+        endMainTurn(orchestrator);
+        orchestrator.interactivePromptOpen = false;
         ctx.abort?.();
       }
     }
