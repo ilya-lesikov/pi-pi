@@ -39,6 +39,9 @@ const PLAN_TEMPLATE = [
   "## Checklist",
   "- [ ] <Outcome> — Done when: <observable condition>",
   "",
+  "## Pattern constraints",
+  "<Closest existing analog + conventions to mirror. Omit section if none.>",
+  "",
   "## Blockers",
   "<Unresolved issues. Omit section if none.>",
 ].join("\n");
