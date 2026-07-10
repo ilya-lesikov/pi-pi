@@ -872,11 +872,14 @@ async function showSubagentsMenu(ctx: any): Promise<void> {
   await api.showFleet(ctx);
 }
 
-function countFlantProviders(settings: FlantSettings): { anthropic: number; openai: number } {
+function countFlantProviders(settings: FlantSettings): { anthropic: number; openai: number; sub: number } {
   const models = settings.cachedFlantModels ?? [];
   const anthropic = models.filter((m) => m.startsWith("claude-")).length;
-  const sub = models.filter((m) => m.startsWith(SUB_MODEL_PREFIX)).length;
-  return { anthropic, openai: Math.max(0, models.length - anthropic - sub) };
+  const subConfirmed = models.filter((m) => m.startsWith(SUB_MODEL_PREFIX)).length;
+  // Model lists cached before the gateway exposed sub/ ids have none — the
+  // sub provider then registers all claude models (see registerFlantProviders).
+  const sub = subConfirmed > 0 ? subConfirmed : anthropic;
+  return { anthropic, openai: Math.max(0, models.length - anthropic - subConfirmed), sub };
 }
 
 function collectRoleAssignments(config: Partial<PiPiConfig> | null): string[] {
@@ -938,7 +941,7 @@ function flantStatusText(settings: FlantSettings): string {
     const hasGatewayKey = !!readGatewayApiKey();
     const subActive = hasOAuth && hasGatewayKey;
     lines.push(
-      `Personal subscription: on (${subActive ? `active — pp-flant-anthropic-sub, ${providers.anthropic} models` : "inactive"})`,
+      `Personal subscription: on (${subActive ? `active — pp-flant-anthropic-sub, ${providers.sub} models` : "inactive"})`,
     );
     lines.push(`Rate-limit switch-back check: every ${settings.switchBackIntervalMinutes} min`);
     if (!subActive) {
