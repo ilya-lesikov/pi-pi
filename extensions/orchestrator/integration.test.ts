@@ -44,6 +44,7 @@ vi.mock("./agents/registry.js", () => ({
   registerAgentDefinitions: vi.fn(),
   unregisterAgentDefinitions: vi.fn(),
   setExtensionOnlyMode: vi.fn(),
+  getAgentConfigSnapshot: vi.fn(() => undefined),
   spawnViaRpc: vi.fn(async (_pi: any, _type: string) => ({ id: `mock-${Math.random().toString(36).slice(2)}` })),
   waitForCompletion: vi.fn(async () => undefined),
 }));

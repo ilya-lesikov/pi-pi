@@ -10,6 +10,7 @@ import {
   setExtensionOnlyMode,
   spawnViaRpc,
   isSubagentsReady,
+  getAgentConfigSnapshot,
 } from "./registry.js";
 
 type Handler = (data?: any) => void;
@@ -113,6 +114,18 @@ describe("registerAgentDefinitions", () => {
       { type: "a", variant: null, frontmatter: fm({ prompt_mode: "append" }), prompt: "p" },
     ]);
     expect(pi.emitted[0].data.agents.get("a").promptMode).toBe("append");
+  });
+
+  it("records a model+thinking snapshot retrievable by agent name", () => {
+    const pi = makePi();
+    registerAgentDefinitions(pi as any, [
+      { type: "planner", variant: "opus", frontmatter: fm({ model: "anthropic/claude-opus-latest", thinking: "high" }), prompt: "p" },
+      { type: "code_reviewer", variant: "gpt", frontmatter: fm({ model: "openai/gpt-latest", thinking: "xhigh" }), prompt: "p" },
+    ]);
+
+    expect(getAgentConfigSnapshot("planner_opus")).toEqual({ model: "anthropic/claude-opus-latest", thinking: "high" });
+    expect(getAgentConfigSnapshot("code_reviewer_gpt")).toEqual({ model: "openai/gpt-latest", thinking: "xhigh" });
+    expect(getAgentConfigSnapshot("nonexistent")).toBeUndefined();
   });
 });
 

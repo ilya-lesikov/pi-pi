@@ -9,6 +9,7 @@ let waitStarted = false;
 vi.mock("../agents/registry.js", () => ({
   registerAgentDefinitions: vi.fn(),
   unregisterAgentDefinitions: vi.fn(),
+  getAgentConfigSnapshot: vi.fn(() => undefined),
   spawnViaRpc: vi.fn(async () => ({ id: `agent-${Math.random().toString(36).slice(2)}` })),
   waitForCompletion: vi.fn(
     () =>

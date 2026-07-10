@@ -26,7 +26,7 @@ import { registerCommandHandlers, runAfterImplementForActive } from "./command-h
 import { registerStateFileTools } from "./pp-state-tools.js";
 import { isAiCommentOnlyChange } from "./ai-comment-cleanup.js";
 import { handleMainRateLimit, handleSubagentRateLimit, isRateLimitError, isSdkRetryableError } from "./rate-limit-fallback.js";
-import { setExtensionOnlyMode, unregisterAgentDefinitions } from "./agents/registry.js";
+import { getAgentConfigSnapshot, setExtensionOnlyMode, unregisterAgentDefinitions } from "./agents/registry.js";
 import { resolveModel, getModelInfo, updateRegistryFromAvailableModels } from "./model-registry.js";
 import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
 import { spawnCodeReviewers } from "./phases/review.js";
@@ -1214,10 +1214,13 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (event === "first_turn" && lifecycle.firstTurnAt == null) lifecycle.firstTurnAt = now;
     orchestrator.agentLifecycle.set(data.id, lifecycle);
 
+    const agentType = data.type ?? lifecycle.type;
+    const agentConfig = typeof agentType === "string" ? getAgentConfigSnapshot(agentType) : undefined;
+
     getTracer()?.traceMain("subagent_lifecycle", {
       event,
       subagentId: data.id,
-      type: data.type ?? lifecycle.type,
+      type: agentType,
       description: data.description ?? lifecycle.description,
       parentToolCallId: data.toolCallId,
       phase: lifecycle.phase,
@@ -1228,6 +1231,8 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       durationMs: data.durationMs,
       toolUses: data.toolUses,
       modelId: data.modelId,
+      configModel: agentConfig?.model,
+      thinking: agentConfig?.thinking,
       status: data.status,
       error: data.error,
       result: data.result,

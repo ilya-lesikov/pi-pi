@@ -10,6 +10,24 @@ interface AgentFrontmatter {
   prompt_mode?: string;
 }
 
+export interface AgentConfigSnapshot {
+  /** Configured model spec, e.g. "anthropic/claude-opus-latest". */
+  model: string;
+  /** Configured reasoning effort / thinking level, e.g. "high", "xhigh". */
+  thinking: string;
+}
+
+// agent name (e.g. "planner_opus") -> its configured model + reasoning effort.
+// Populated at registration so lifecycle tracing can attribute durations to the
+// exact model/effort a subagent ran with (the runtime lifecycle event carries a
+// resolved modelId but never the configured effort). Keyed by the same name that
+// surfaces as `type` on subagent lifecycle events.
+const agentConfigByName = new Map<string, AgentConfigSnapshot>();
+
+export function getAgentConfigSnapshot(name: string): AgentConfigSnapshot | undefined {
+  return agentConfigByName.get(name);
+}
+
 export function registerAgentDefinitions(
   pi: ExtensionAPI,
   agents: Array<{ type: string; variant: string | null; frontmatter: AgentFrontmatter; prompt: string }>,
@@ -20,6 +38,8 @@ export function registerAgentDefinitions(
     const suffix = agent.variant ? `_${agent.variant}` : "";
     const name = `${agent.type}${suffix}`;
     const toolNames = agent.frontmatter.tools === "none" ? [] : agent.frontmatter.tools.split(",").map((t: string) => t.trim()).filter(Boolean);
+
+    agentConfigByName.set(name, { model: agent.frontmatter.model, thinking: agent.frontmatter.thinking });
 
     agentMap.set(name, {
       name,
