@@ -1739,7 +1739,6 @@ export default function(pi: ExtensionAPI) {
                question,
                context: normalizedContext,
                options,
-               reason: undefined,
             });
             return {
                content: [{ type: "text" as const, text: `Ask tool failed: ${message}` }],

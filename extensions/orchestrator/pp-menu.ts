@@ -3961,6 +3961,7 @@ export async function showActiveTaskMenu(
           }
           const feedback = result.feedback?.trim();
           if (feedback) {
+            setStep(orchestrator, "llm_work");
             return advanceBanner(
               "[PI-PI] The user reviewed this phase's artifacts in Plannotator and left the following feedback. " +
               "Address each point, updating USER_REQUEST.md, RESEARCH.md, and artifacts/*.md as needed:\n\n" +
