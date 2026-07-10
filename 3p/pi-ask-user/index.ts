@@ -96,7 +96,6 @@ interface AskParams {
    allowComment?: boolean;
    displayMode?: AskDisplayMode;
    overlayToggleKey?: string | null;
-   commentToggleKey?: string | null;
    timeout?: number;
 }
 
@@ -304,7 +303,7 @@ type ResolvedShortcut =
 
 interface ResolvedAskShortcuts {
    overlayToggle: ResolvedShortcut;
-   commentToggle: ResolvedShortcut;
+   commentSelect: ResolvedShortcut;
 }
 
 const DISABLED_SHORTCUT: ResolvedShortcut = {
@@ -367,9 +366,13 @@ const SINGLE_SELECT_SPLIT_PANE_LEFT_MIN_WIDTH = 32;
 const SINGLE_SELECT_SPLIT_PANE_RIGHT_MIN_WIDTH = 28;
 const SINGLE_SELECT_SPLIT_PANE_SEPARATOR = " │ ";
 const FREEFORM_SENTINEL = "\u270f\ufe0f Type custom response...";
-const COMMENT_TOGGLE_LABEL = "Add extra context after selection";
+
 const DEFAULT_OVERLAY_TOGGLE_KEY = "alt+o";
-const DEFAULT_COMMENT_TOGGLE_KEY = "ctrl+g";
+// Fixed "select this option AND add extra context" gesture. Plain Enter still
+// selects with no comment. ctrl+e is chosen over the old ctrl+g toggle; it does
+// not collide with select-mode navigation (which is arrows / ctrl+j/k / tab).
+const COMMENT_SELECT_KEY = "ctrl+e";
+const COMMENT_SELECT_LABEL = "add context";
 
 // Vim-style aliases for navigating option lists. ctrl+j/k are safe in the
 // searchable single-select because they don't collide with fuzzy-search input.
@@ -435,15 +438,14 @@ class MultiSelectList implements Component {
    private allowComment: boolean;
    private theme: Theme;
    private keybindings: KeybindingsManager;
-   private commentToggle: ResolvedShortcut;
+   private commentSelect: ResolvedShortcut;
    private selectedIndex = 0;
    private checked = new Set<number>();
-   private commentEnabled = false;
    private cachedWidth?: number;
    private cachedLines?: string[];
 
    public onCancel?: () => void;
-   public onSubmit?: (result: string[]) => void;
+   public onSubmit?: (result: string[], wantsComment: boolean) => void;
    public onEnterFreeform?: () => void;
 
    constructor(
@@ -452,18 +454,14 @@ class MultiSelectList implements Component {
       allowComment: boolean,
       theme: Theme,
       keybindings: KeybindingsManager,
-      commentToggle: ResolvedShortcut,
+      commentSelect: ResolvedShortcut,
    ) {
       this.options = options;
       this.allowFreeform = allowFreeform;
       this.allowComment = allowComment;
       this.theme = theme;
       this.keybindings = keybindings;
-      this.commentToggle = commentToggle;
-   }
-
-   public isCommentEnabled(): boolean {
-      return this.commentEnabled;
+      this.commentSelect = commentSelect;
    }
 
    invalidate(): void {
@@ -472,20 +470,11 @@ class MultiSelectList implements Component {
    }
 
    private getItemCount(): number {
-      return this.options.length + (this.allowComment ? 1 : 0) + (this.allowFreeform ? 1 : 0);
-   }
-
-   private getCommentToggleIndex(): number | null {
-      return this.allowComment ? this.options.length : null;
+      return this.options.length + (this.allowFreeform ? 1 : 0);
    }
 
    private getFreeformIndex(): number {
-      return this.options.length + (this.allowComment ? 1 : 0);
-   }
-
-   private isCommentToggleRow(index: number): boolean {
-      const toggleIndex = this.getCommentToggleIndex();
-      return toggleIndex !== null && index === toggleIndex;
+      return this.options.length;
    }
 
    private isFreeformRow(index: number): boolean {
@@ -498,10 +487,13 @@ class MultiSelectList implements Component {
       else this.checked.add(index);
    }
 
-   private toggleComment(): void {
-      if (!this.allowComment) return;
-      this.commentEnabled = !this.commentEnabled;
-      this.invalidate();
+   private currentSelection(): string[] {
+      const selectedTitles = Array.from(this.checked)
+         .sort((a, b) => a - b)
+         .map((i) => this.options[i]?.title)
+         .filter((t): t is string => !!t);
+      const fallback = this.options[this.selectedIndex]?.title;
+      return selectedTitles.length > 0 ? selectedTitles : fallback ? [fallback] : [];
    }
 
    handleInput(data: string): void {
@@ -516,8 +508,14 @@ class MultiSelectList implements Component {
          return;
       }
 
-      if (this.allowComment && !this.commentToggle.disabled && this.commentToggle.matches(data)) {
-         this.toggleComment();
+      if (
+         this.allowComment &&
+         !this.commentSelect.disabled &&
+         this.commentSelect.matches(data) &&
+         !this.isFreeformRow(this.selectedIndex)
+      ) {
+         const result = this.currentSelection();
+         if (result.length > 0) this.onSubmit?.(result, true);
          return;
       }
 
@@ -545,10 +543,6 @@ class MultiSelectList implements Component {
       }
 
       if (matchesKey(data, Key.space)) {
-         if (this.isCommentToggleRow(this.selectedIndex)) {
-            this.toggleComment();
-            return;
-         }
          if (this.isFreeformRow(this.selectedIndex)) {
             this.onEnterFreeform?.();
             return;
@@ -559,24 +553,13 @@ class MultiSelectList implements Component {
       }
 
       if (this.keybindings.matches(data, "tui.select.confirm")) {
-         if (this.isCommentToggleRow(this.selectedIndex)) {
-            this.toggleComment();
-            return;
-         }
          if (this.isFreeformRow(this.selectedIndex)) {
             this.onEnterFreeform?.();
             return;
          }
 
-         const selectedTitles = Array.from(this.checked)
-            .sort((a, b) => a - b)
-            .map((i) => this.options[i]?.title)
-            .filter((t): t is string => !!t);
-
-         const fallback = this.options[this.selectedIndex]?.title;
-         const result = selectedTitles.length > 0 ? selectedTitles : fallback ? [fallback] : [];
-
-         if (result.length > 0) this.onSubmit?.(result);
+         const result = this.currentSelection();
+         if (result.length > 0) this.onSubmit?.(result, false);
          else this.onCancel?.();
       }
    }
@@ -604,15 +587,6 @@ class MultiSelectList implements Component {
       for (let i = startIndex; i < endIndex; i++) {
          const isSelected = i === this.selectedIndex;
          const prefix = isSelected ? theme.fg("accent", "→") : " ";
-
-         if (this.isCommentToggleRow(i)) {
-            const checkbox = this.commentEnabled ? theme.fg("success", "[✓]") : theme.fg("dim", "[ ]");
-            const label = isSelected
-               ? theme.fg("accent", theme.bold(COMMENT_TOGGLE_LABEL))
-               : theme.fg("text", theme.bold(COMMENT_TOGGLE_LABEL));
-            lines.push(truncateToWidth(`${prefix}   ${checkbox} ${label}`, width, ""));
-            continue;
-         }
 
          if (this.isFreeformRow(i)) {
             const label = theme.fg("text", theme.bold("Type something."));
@@ -660,16 +634,15 @@ class WrappedSingleSelectList implements Component {
    private allowComment: boolean;
    private theme: Theme;
    private keybindings: KeybindingsManager;
-   private commentToggle: ResolvedShortcut;
+   private commentSelect: ResolvedShortcut;
    private selectedIndex = 0;
    private searchQuery = "";
-   private commentEnabled = false;
    private maxVisibleRows = 12;
    private cachedWidth?: number;
    private cachedLines?: string[];
 
    public onCancel?: () => void;
-   public onSubmit?: (result: string) => void;
+   public onSubmit?: (result: string, wantsComment: boolean) => void;
    public onEnterFreeform?: () => void;
 
    constructor(
@@ -678,18 +651,14 @@ class WrappedSingleSelectList implements Component {
       allowComment: boolean,
       theme: Theme,
       keybindings: KeybindingsManager,
-      commentToggle: ResolvedShortcut,
+      commentSelect: ResolvedShortcut,
    ) {
       this.options = options;
       this.allowFreeform = allowFreeform;
       this.allowComment = allowComment;
       this.theme = theme;
       this.keybindings = keybindings;
-      this.commentToggle = commentToggle;
-   }
-
-   public isCommentEnabled(): boolean {
-      return this.commentEnabled;
+      this.commentSelect = commentSelect;
    }
 
    setMaxVisibleRows(rows: number): void {
@@ -710,21 +679,11 @@ class WrappedSingleSelectList implements Component {
    }
 
    private getItemCount(filteredOptions: QuestionOption[]): number {
-      return filteredOptions.length + (this.allowComment ? 1 : 0) + (this.allowFreeform ? 1 : 0);
-   }
-
-   private isCommentToggleRow(index: number, filteredOptions: QuestionOption[]): boolean {
-      return this.allowComment && index === filteredOptions.length;
+      return filteredOptions.length + (this.allowFreeform ? 1 : 0);
    }
 
    private isFreeformRow(index: number, filteredOptions: QuestionOption[]): boolean {
-      return this.allowFreeform && index === filteredOptions.length + (this.allowComment ? 1 : 0);
-   }
-
-   private toggleComment(): void {
-      if (!this.allowComment) return;
-      this.commentEnabled = !this.commentEnabled;
-      this.invalidate();
+      return this.allowFreeform && index === filteredOptions.length;
    }
 
    private setSearchQuery(query: string): void {
@@ -822,8 +781,6 @@ class WrappedSingleSelectList implements Component {
          selectedIndex: this.selectedIndex,
          width,
          allowFreeform: this.allowFreeform,
-         allowComment: this.allowComment,
-         commentEnabled: this.commentEnabled,
          maxRows,
          hideDescriptions,
       });
@@ -840,11 +797,7 @@ class WrappedSingleSelectList implements Component {
 
       let md = "";
 
-      if (this.isCommentToggleRow(this.selectedIndex, filteredOptions)) {
-         md += "## Additional context\n\n";
-         md += `Currently: **${this.commentEnabled ? "Enabled" : "Disabled"}**\n\n`;
-         md += "Turn this on when the selected option needs extra explanation before the tool submits.\n";
-      } else if (this.isFreeformRow(this.selectedIndex, filteredOptions)) {
+      if (this.isFreeformRow(this.selectedIndex, filteredOptions)) {
          md += "## Custom response\n\n";
          md += "Open the editor to write **any** answer.\n\n";
          md += "*Use this when none of the listed options fit.*\n";
@@ -903,13 +856,20 @@ class WrappedSingleSelectList implements Component {
          return;
       }
 
-      if (this.allowComment && !this.commentToggle.disabled && this.commentToggle.matches(data)) {
-         this.toggleComment();
-         return;
-      }
-
       const filteredOptions = this.getFilteredOptions();
       const count = this.getItemCount(filteredOptions);
+
+      if (
+         this.allowComment &&
+         !this.commentSelect.disabled &&
+         this.commentSelect.matches(data) &&
+         count > 0 &&
+         !this.isFreeformRow(this.selectedIndex, filteredOptions)
+      ) {
+         const result = filteredOptions[this.selectedIndex]?.title;
+         if (result) this.onSubmit?.(result, true);
+         return;
+      }
 
       if (matchesSelectUp(data, this.keybindings) && count > 0) {
          this.selectedIndex = this.selectedIndex === 0 ? count - 1 : this.selectedIndex - 1;
@@ -933,23 +893,14 @@ class WrappedSingleSelectList implements Component {
          }
       }
 
-      if (matchesKey(data, Key.space) && count > 0 && this.isCommentToggleRow(this.selectedIndex, filteredOptions)) {
-         this.toggleComment();
-         return;
-      }
-
       if (this.keybindings.matches(data, "tui.select.confirm") && count > 0) {
-         if (this.isCommentToggleRow(this.selectedIndex, filteredOptions)) {
-            this.toggleComment();
-            return;
-         }
          if (this.isFreeformRow(this.selectedIndex, filteredOptions)) {
             this.onEnterFreeform?.();
             return;
          }
 
          const result = filteredOptions[this.selectedIndex]?.title;
-         if (result) this.onSubmit?.(result);
+         if (result) this.onSubmit?.(result, false);
          else this.onCancel?.();
          return;
       }
@@ -1169,8 +1120,8 @@ class AskComponent extends Container {
       const overlayHint = this.displayMode === "overlay" && !this.shortcuts.overlayToggle.disabled
          ? literalHint(theme, this.shortcuts.overlayToggle.spec, "hide")
          : null;
-      const commentHint = this.allowComment && !this.shortcuts.commentToggle.disabled
-         ? literalHint(theme, this.shortcuts.commentToggle.spec, "add text")
+      const commentHint = this.allowComment && !this.shortcuts.commentSelect.disabled
+         ? literalHint(theme, this.shortcuts.commentSelect.spec, COMMENT_SELECT_LABEL)
          : null;
       if (this.mode === "freeform" || this.mode === "comment") {
          const alternateCancelKeys = this.keybindings
@@ -1232,9 +1183,9 @@ class AskComponent extends Container {
          this.allowComment,
          this.theme,
          this.keybindings,
-         this.shortcuts.commentToggle,
+         this.shortcuts.commentSelect,
       );
-      list.onSubmit = (result) => this.handleSelectionSubmit([result], list.isCommentEnabled());
+      list.onSubmit = (result, wantsComment) => this.handleSelectionSubmit([result], wantsComment);
       list.onCancel = () => this.onDone(makeCancel("user"));
       list.onEnterFreeform = () => this.showFreeformMode();
 
@@ -1251,10 +1202,10 @@ class AskComponent extends Container {
          this.allowComment,
          this.theme,
          this.keybindings,
-         this.shortcuts.commentToggle,
+         this.shortcuts.commentSelect,
       );
       list.onCancel = () => this.onDone(makeCancel("user"));
-      list.onSubmit = (result) => this.handleSelectionSubmit(result, list.isCommentEnabled());
+      list.onSubmit = (result, wantsComment) => this.handleSelectionSubmit(result, wantsComment);
       list.onEnterFreeform = () => this.showFreeformMode();
 
       this.multiSelectList = list;
@@ -1487,7 +1438,6 @@ export async function askUser(
       overlay?: boolean;
       displayMode?: AskDisplayMode;
       overlayToggleKey?: string | null;
-      commentToggleKey?: string | null;
    },
 ): Promise<AskResponse | AskCancel | null> {
    const {
@@ -1502,7 +1452,6 @@ export async function askUser(
       overlay,
       displayMode,
       overlayToggleKey,
-      commentToggleKey,
    } = opts;
 
    const requestedMode = displayMode ?? (overlay === undefined ? undefined : overlay ? "overlay" : "inline");
@@ -1517,11 +1466,7 @@ export async function askUser(
          process.env.PI_ASK_USER_OVERLAY_TOGGLE_KEY,
          DEFAULT_OVERLAY_TOGGLE_KEY,
       ),
-      commentToggle: resolveShortcut(
-         commentToggleKey,
-         process.env.PI_ASK_USER_COMMENT_TOGGLE_KEY,
-         DEFAULT_COMMENT_TOGGLE_KEY,
-      ),
+      commentSelect: buildShortcut(COMMENT_SELECT_KEY),
    };
 
    const options = normalizeOptions(rawOptions);
@@ -1658,12 +1603,6 @@ export default function(pi: ExtensionAPI) {
                   "Shortcut for hiding/showing the overlay popup (overlay mode only), e.g. 'alt+o' or 'ctrl+shift+h'. Pass 'off' to disable. Default: PI_ASK_USER_OVERLAY_TOGGLE_KEY env var if set, otherwise 'alt+o'.",
             }),
          ),
-         commentToggleKey: Type.Optional(
-            Type.String({
-               description:
-                  "Shortcut for toggling the optional comment/extra-context row when allowComment is true, e.g. 'ctrl+g'. Pass 'off' to disable. Default: PI_ASK_USER_COMMENT_TOGGLE_KEY env var if set, otherwise 'ctrl+g'.",
-            }),
-         ),
          timeout: Type.Optional(
             Type.Number({ description: "Auto-dismiss after N milliseconds. Returns null (cancelled) when expired." }),
          ),
@@ -1686,7 +1625,6 @@ export default function(pi: ExtensionAPI) {
             allowComment = true,
             displayMode,
             overlayToggleKey,
-            commentToggleKey,
             timeout,
          } = params as AskParams;
 
@@ -1728,7 +1666,6 @@ export default function(pi: ExtensionAPI) {
                allowComment,
                displayMode,
                overlayToggleKey,
-               commentToggleKey,
                timeout,
                signal,
             });

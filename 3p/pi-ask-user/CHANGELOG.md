@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Replaced the two-step `ctrl+g` "Add extra context after selection" toggle with a single fixed `ctrl+e` gesture that selects the highlighted option AND immediately opens the extra-context editor. Plain `enter` still selects with no comment. The toggle row is no longer rendered, and the `commentToggleKey` parameter / `PI_ASK_USER_COMMENT_TOGGLE_KEY` env var / `ctrl+g` default are removed. `allowComment: false` continues to suppress the gesture and editor entirely.
+
 ## [0.11.2](https://github.com/edlsh/pi-ask-user/releases/tag/v0.11.2) - 2026-06-03
 
 ### Changed

@@ -13,8 +13,6 @@ export interface RenderSingleSelectRowsParams {
 	selectedIndex: number;
 	width: number;
 	allowFreeform: boolean;
-	allowComment?: boolean;
-	commentEnabled?: boolean;
 	maxRows?: number;
 	hideDescriptions?: boolean;
 }
@@ -74,25 +72,18 @@ interface ItemBlock {
 
 type ListItem =
 	| { type: "option"; option: QuestionOption }
-	| { type: "comment-toggle"; option: QuestionOption }
 	| { type: "freeform"; option: QuestionOption };
 
 function buildItemBlocks(
 	options: QuestionOption[],
 	width: number,
 	allowFreeform: boolean,
-	allowComment: boolean,
-	commentEnabled: boolean,
 	selectedIndex: number,
 	hideDescriptions = false,
 ): ItemBlock[] {
 	const normalizedWidth = Math.max(12, width);
 	const freeformLabel = "Type something. — Enter a custom response";
-	const commentToggleLabel = `${commentEnabled ? "[✓]" : "[ ]"} Add extra context after selection`;
 	const allItems: ListItem[] = options.map((option) => ({ type: "option", option }));
-	if (allowComment) {
-		allItems.push({ type: "comment-toggle", option: { title: commentToggleLabel } });
-	}
 	if (allowFreeform) {
 		allItems.push({ type: "freeform", option: { title: freeformLabel } });
 	}
@@ -101,7 +92,7 @@ function buildItemBlocks(
 		const pointer = itemIndex === selectedIndex ? "→" : " ";
 		const lines: string[] = [];
 
-		if (item.type === "comment-toggle" || item.type === "freeform") {
+		if (item.type === "freeform") {
 			const prefix = `${pointer}   `;
 			const wrapped = wrapText(item.option.title, Math.max(8, normalizedWidth - prefix.length));
 			wrapped.forEach((line, lineIndex) => {
@@ -146,13 +137,11 @@ export function renderSingleSelectRows({
 	selectedIndex,
 	width,
 	allowFreeform,
-	allowComment = false,
-	commentEnabled = false,
 	maxRows,
 	hideDescriptions,
 }: RenderSingleSelectRowsParams): AnnotatedRow[] {
-	const itemCount = options.length + (allowComment ? 1 : 0) + (allowFreeform ? 1 : 0);
-	const blocks = buildItemBlocks(options, width, allowFreeform, allowComment, commentEnabled, selectedIndex, hideDescriptions);
+	const itemCount = options.length + (allowFreeform ? 1 : 0);
+	const blocks = buildItemBlocks(options, width, allowFreeform, selectedIndex, hideDescriptions);
 	const allRows = flatten(blocks, selectedIndex);
 
 	if (!Number.isFinite(maxRows) || !maxRows || maxRows <= 0 || allRows.length <= maxRows) {

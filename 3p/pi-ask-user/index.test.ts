@@ -1478,10 +1478,9 @@ describe("ask_user", () => {
       expect(result.details.cancelled).toBe(false);
    });
 
-   test("toggles extra context with the ctrl+g key and shows it in help text", async () => {
+   test("shows the ctrl+e add-context hint and never renders the old toggle row", async () => {
       const tool = await setupTool();
-      let renderedBefore = "";
-      let renderedAfter = "";
+      let rendered = "";
       let helpText = "";
 
       const result = await tool.execute(
@@ -1504,10 +1503,8 @@ describe("ask_user", () => {
                      () => { },
                   );
 
-                  renderedBefore = ((component as any).singleSelectList as any).render(80).join("\n");
+                  rendered = ((component as any).singleSelectList as any).render(80).join("\n");
                   helpText = (component as any).helpText.render().join("\n");
-                  component.handleInput("ctrl+g");
-                  renderedAfter = ((component as any).singleSelectList as any).render(80).join("\n");
                   return null;
                },
             },
@@ -1515,100 +1512,9 @@ describe("ask_user", () => {
       );
 
       expect(result.isError).not.toBe(true);
-      expect(renderedBefore).toContain("[ ] Add extra context after selection");
-      expect(renderedAfter).toContain("[✓] Add extra context after selection");
-      expect(helpText).toContain("ctrl+g add text");
-   });
-
-   test("uses custom commentToggleKey for comment toggling and help text", async () => {
-      const tool = await setupTool();
-      let renderedBefore = "";
-      let renderedAfterIgnored = "";
-      let renderedAfterCustom = "";
-      let helpText = "";
-
-      const result = await tool.execute(
-         "tool-call-id",
-         {
-            question: "Which option should we use?",
-            options: ["Alpha", "Beta"],
-            allowComment: true,
-            commentToggleKey: "alt+c",
-         },
-         undefined,
-         undefined,
-         {
-            hasUI: true,
-            ui: {
-               custom: async (factory: any) => {
-                  const component = factory(
-                     { requestRender() { }, terminal: { rows: 24 } },
-                     createTheme(),
-                     createKeybindings(),
-                     () => { },
-                  );
-
-                  renderedBefore = ((component as any).singleSelectList as any).render(80).join("\n");
-                  helpText = (component as any).helpText.render().join("\n");
-                  // Default ctrl+g should no longer toggle.
-                  component.handleInput("ctrl+g");
-                  renderedAfterIgnored = ((component as any).singleSelectList as any).render(80).join("\n");
-                  // Configured alt+c should toggle.
-                  component.handleInput("alt+c");
-                  renderedAfterCustom = ((component as any).singleSelectList as any).render(80).join("\n");
-                  return null;
-               },
-            },
-         },
-      );
-
-      expect(result.isError).not.toBe(true);
-      expect(renderedBefore).toContain("[ ] Add extra context after selection");
-      expect(renderedAfterIgnored).toContain("[ ] Add extra context after selection");
-      expect(renderedAfterCustom).toContain("[✓] Add extra context after selection");
-      expect(helpText).toContain("alt+c add text");
-      expect(helpText).not.toContain("ctrl+g add text");
-   });
-
-   test("commentToggleKey 'off' hides the toggle hint and ignores ctrl+g", async () => {
-      const tool = await setupTool();
-      let renderedBefore = "";
-      let renderedAfter = "";
-      let helpText = "";
-
-      await tool.execute(
-         "tool-call-id",
-         {
-            question: "Q",
-            options: ["Alpha", "Beta"],
-            allowComment: true,
-            commentToggleKey: "off",
-         },
-         undefined,
-         undefined,
-         {
-            hasUI: true,
-            ui: {
-               custom: async (factory: any) => {
-                  const component = factory(
-                     { requestRender() { }, terminal: { rows: 24 } },
-                     createTheme(),
-                     createKeybindings(),
-                     () => { },
-                  );
-                  renderedBefore = ((component as any).singleSelectList as any).render(80).join("\n");
-                  helpText = (component as any).helpText.render().join("\n");
-                  component.handleInput("ctrl+g");
-                  renderedAfter = ((component as any).singleSelectList as any).render(80).join("\n");
-                  return null;
-               },
-            },
-         },
-      );
-
-      expect(renderedBefore).toContain("[ ] Add extra context after selection");
-      expect(renderedAfter).toContain("[ ] Add extra context after selection");
-      expect(helpText).not.toContain("toggle context");
+      expect(rendered).not.toContain("Add extra context after selection");
+      expect(helpText).toContain("ctrl+e add context");
+      expect(helpText).not.toContain("ctrl+g");
    });
 
 
@@ -1638,8 +1544,8 @@ describe("ask_user", () => {
                      },
                   );
 
-                  component.handleInput("ctrl+g");
-                  component.handleInput("enter");
+                  // ctrl+e selects the highlighted option AND opens the comment editor.
+                  component.handleInput("ctrl+e");
                   expect(resolved).toBeUndefined();
                   editorText = "Needs audit logging before rollout.";
                   component.handleInput("enter");
@@ -1689,8 +1595,7 @@ describe("ask_user", () => {
                   component.handleInput("down");
                   component.handleInput("down");
                   component.handleInput("space");
-                  component.handleInput("ctrl+g");
-                  component.handleInput("enter");
+                  component.handleInput("ctrl+e");
                   expect(resolved).toBeUndefined();
                   editorText = "Roll out both behind the same flag.";
                   component.handleInput("enter");
@@ -1739,9 +1644,8 @@ describe("ask_user", () => {
 
                   renderedBefore = ((component as any).singleSelectList as any).render(80).join("\n");
                   helpText = (component as any).helpText.render().join("\n");
-                  // Comment mode is reachable: toggle, confirm, append text.
-                  component.handleInput("ctrl+g");
-                  component.handleInput("enter");
+                  // Comment mode is reachable: ctrl+e selects + opens editor, append text.
+                  component.handleInput("ctrl+e");
                   expect(resolved).toBeUndefined();
                   editorText = "appended note";
                   component.handleInput("enter");
@@ -1752,8 +1656,8 @@ describe("ask_user", () => {
       );
 
       expect(result.isError).not.toBe(true);
-      expect(renderedBefore).toContain("Add extra context after selection");
-      expect(helpText).toContain("add text");
+      expect(renderedBefore).not.toContain("Add extra context after selection");
+      expect(helpText).toContain("ctrl+e add context");
       expect(result.details.response).toEqual({
          kind: "selection",
          selections: ["Alpha"],
@@ -1832,8 +1736,7 @@ describe("ask_user", () => {
 
                   // Enter comment editor, then press ESC — should go back to
                   // select mode (NOT cancel the turn).
-                  component.handleInput("ctrl+g");
-                  component.handleInput("enter");
+                  component.handleInput("ctrl+e");
                   component.handleInput("escape");
                   modeAfterEsc = (component as any).mode;
                   resolvedAfterEsc = resolved;
@@ -1920,8 +1823,8 @@ describe("ask_user", () => {
                   );
 
                   renderedBefore = ((component as any).singleSelectList as any).render(80).join("\n");
-                  // ctrl+g must be ignored; enter selects immediately.
-                  component.handleInput("ctrl+g");
+                  // ctrl+e must be ignored when allowComment is false; enter selects immediately.
+                  component.handleInput("ctrl+e");
                   component.handleInput("enter");
                   return resolved ?? null;
                },
