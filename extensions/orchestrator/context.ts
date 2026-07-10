@@ -7,7 +7,7 @@ import { getLogger } from "./log.js";
 import { isReviewFileForRound } from "./review-files.js";
 import { reviewPresetGroupForPhase } from "./config.js";
 
-type AgentType = "main" | "explore" | "librarian" | "planner" | "planReviewer" | "task" | "codeReviewer" | "brainstormReviewer" | "advisor" | "deep-debugger" | "reviewer";
+type AgentType = "main" | "explore" | "librarian" | "planner" | "planReviewer" | "task" | "codeReviewer" | "brainstormReviewer" | "advisor" | "advisor2" | "advisor3" | "deep-debugger" | "reviewer";
 type AgentGroup = "all" | "subagents";
 type InjectMode = "system" | "context";
 type PhaseFilter = "brainstorm" | "debug" | "plan" | "implement" | "review";
@@ -32,7 +32,7 @@ interface Frontmatter {
 }
 
 const VALID_INJECT_MODES: readonly string[] = ["system", "context"];
-const VALID_AGENTS: readonly string[] = ["main", "explore", "librarian", "planner", "planReviewer", "task", "codeReviewer", "brainstormReviewer", "advisor", "deep-debugger", "reviewer"];
+const VALID_AGENTS: readonly string[] = ["main", "explore", "librarian", "planner", "planReviewer", "task", "codeReviewer", "brainstormReviewer", "advisor", "advisor2", "advisor3", "deep-debugger", "reviewer"];
 const VALID_AGENT_GROUPS: readonly string[] = ["all", "subagents"];
 const VALID_PHASES: readonly string[] = ["brainstorm", "debug", "plan", "implement", "review"];
 const VALID_VENDORS: readonly string[] = ["anthropic", "openai", "google", "unknown"];

@@ -1,14 +1,17 @@
-import type { PiPiConfig } from "../config.js";
+import type { PiPiConfig, SimpleSubagentRole } from "../config.js";
 import { resolveModel } from "../model-registry.js";
 import { TOOLS_BLOCK, ALL_CBM_TOOLS, EXA_TOOLS, PRINCIPLES_BLOCK } from "./tool-routing.js";
 
-export function createAdvisorAgent(config: PiPiConfig) {
+type AdvisorRole = Extract<SimpleSubagentRole, "advisor" | "advisor2" | "advisor3">;
+
+export function createAdvisorAgent(config: PiPiConfig, role: AdvisorRole = "advisor") {
+  const roleConfig = config.agents.subagents.simple[role];
   return {
     frontmatter: {
       description: "Deep-reasoning advisor for design decisions and 'why is this broken' analysis (pi-pi)",
       tools: `read, bash, grep, find, ls, lsp, ast_search, ${ALL_CBM_TOOLS}, ${EXA_TOOLS}`,
-      model: resolveModel(config.agents.subagents.simple.advisor.model),
-      thinking: config.agents.subagents.simple.advisor.thinking,
+      model: resolveModel(roleConfig.model),
+      thinking: roleConfig.thinking,
       max_turns: 120,
       prompt_mode: "replace",
     },

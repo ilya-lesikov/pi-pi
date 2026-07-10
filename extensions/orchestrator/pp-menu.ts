@@ -915,6 +915,8 @@ function collectRoleAssignments(config: Partial<PiPiConfig> | null): string[] {
   add("agents.subagents.simple.librarian", config.agents?.subagents?.simple?.librarian?.model);
   add("agents.subagents.simple.task", config.agents?.subagents?.simple?.task?.model);
   add("agents.subagents.simple.advisor", config.agents?.subagents?.simple?.advisor?.model);
+  add("agents.subagents.simple.advisor2", config.agents?.subagents?.simple?.advisor2?.model);
+  add("agents.subagents.simple.advisor3", config.agents?.subagents?.simple?.advisor3?.model);
   add("agents.subagents.simple.deep-debugger", config.agents?.subagents?.simple?.["deep-debugger"]?.model);
   add("agents.subagents.simple.reviewer", config.agents?.subagents?.simple?.reviewer?.model);
   return out;
@@ -1340,7 +1342,9 @@ const SUBAGENT_ROLES: Array<{ role: AgentRole; label: string; description: strin
   { role: "explore", label: "Explore", description: "agents.subagents.simple.explore" },
   { role: "librarian", label: "Librarian", description: "agents.subagents.simple.librarian" },
   { role: "task", label: "Task", description: "agents.subagents.simple.task" },
-  { role: "advisor", label: "Advisor", description: "agents.subagents.simple.advisor" },
+  { role: "advisor", label: "Advisor (Opus)", description: "agents.subagents.simple.advisor" },
+  { role: "advisor2", label: "Advisor 2 (GPT)", description: "agents.subagents.simple.advisor2" },
+  { role: "advisor3", label: "Advisor 3 (Gemini)", description: "agents.subagents.simple.advisor3" },
   { role: "deep-debugger", label: "Deep debugger", description: "agents.subagents.simple.deep-debugger" },
   { role: "reviewer", label: "Reviewer", description: "agents.subagents.simple.reviewer" },
 ];

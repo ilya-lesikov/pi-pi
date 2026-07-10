@@ -415,6 +415,21 @@ describe("tool_call Agent routing and spawn-time context injection", () => {
     expect(prompt).not.toContain("the plan");
   });
 
+  it("allows advisor2 and advisor3 to spawn and routes them to their own models", async () => {
+    const dir = makeTaskDir();
+    orchestrator.active = activeWith(dir);
+    const handler = getHandler("tool_call");
+    for (const t of ["advisor2", "advisor3"]) {
+      const input: Record<string, unknown> = { subagent_type: t, prompt: "judge this" };
+      const result = await handler({ toolName: "Agent", input }, {});
+      expect(result).toBeUndefined();
+      expect(input.subagent_type).toBe(t);
+      expect(input.thinking).toBe("high");
+      const prompt = input.prompt as string;
+      expect(prompt).toContain("=== USER REQUEST ===");
+    }
+  });
+
   it("maps deep-debugger via bracket-notation config", async () => {
     const dir = makeTaskDir();
     orchestrator.active = activeWith(dir);

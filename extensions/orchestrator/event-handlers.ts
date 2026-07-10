@@ -2129,9 +2129,9 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (event.toolName === "Agent" && orchestrator.active) {
       const input = event.input as Record<string, unknown>;
       const requestedType = ((input.subagent_type as string) || "").toLowerCase();
-      const validTypes = ["explore", "librarian", "task", "advisor", "deep-debugger", "reviewer"];
+      const validTypes = ["explore", "librarian", "task", "advisor", "advisor2", "advisor3", "deep-debugger", "reviewer"];
       if (!requestedType) {
-        return { block: true, reason: "subagent_type is required. Valid types: explore (codebase research), librarian (external docs), task (implementation subtask), advisor (design/'why is this broken' judgment), deep-debugger (hard persistent failures), reviewer (code review — only when the user explicitly asks)." };
+        return { block: true, reason: "subagent_type is required. Valid types: explore (codebase research), librarian (external docs), task (implementation subtask), advisor/advisor2/advisor3 (design/'why is this broken' judgment — opus/gpt/gemini respectively), deep-debugger (hard persistent failures), reviewer (code review — only when the user explicitly asks)." };
       }
       if (!validTypes.includes(requestedType)) {
         return { block: true, reason: `Unknown subagent_type "${requestedType}". Valid types: ${validTypes.join(", ")}.` };
@@ -2146,7 +2146,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       // Spawn-time context injection: append USER_REQUEST + RESEARCH content and a
       // path-aware manifest of on-demand documents to the LLM-supplied spawn prompt.
       // explore/librarian intentionally get nothing (fast, scoped retrieval).
-      if (["task", "advisor", "deep-debugger", "reviewer"].includes(requestedType)) {
+      if (["task", "advisor", "advisor2", "advisor3", "deep-debugger", "reviewer"].includes(requestedType)) {
         const contextBlock = buildSpawnContextBlock(orchestrator.active.dir);
         if (contextBlock) {
           const existingPrompt = typeof input.prompt === "string" ? input.prompt : "";

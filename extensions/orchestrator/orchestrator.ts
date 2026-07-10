@@ -715,7 +715,9 @@ export class Orchestrator {
     const explore = createExploreAgent(this.config);
     const librarian = createLibrarianAgent(this.config);
     const taskAgent = createTaskAgent(this.config);
-    const advisor = createAdvisorAgent(this.config);
+    const advisor = createAdvisorAgent(this.config, "advisor");
+    const advisor2 = createAdvisorAgent(this.config, "advisor2");
+    const advisor3 = createAdvisorAgent(this.config, "advisor3");
     const deepDebugger = createDeepDebuggerAgent(this.config);
     const reviewer = createReviewerAgent(this.config);
     const phase = this.active?.state.phase;
@@ -759,6 +761,18 @@ export class Orchestrator {
         variant: null,
         ...advisor,
         prompt: appendContext("advisor", advisor.prompt, getModelInfo(resolveModel(this.config.agents.subagents.simple.advisor.model))),
+      },
+      {
+        type: "advisor2",
+        variant: null,
+        ...advisor2,
+        prompt: appendContext("advisor2", advisor2.prompt, getModelInfo(resolveModel(this.config.agents.subagents.simple.advisor2.model))),
+      },
+      {
+        type: "advisor3",
+        variant: null,
+        ...advisor3,
+        prompt: appendContext("advisor3", advisor3.prompt, getModelInfo(resolveModel(this.config.agents.subagents.simple.advisor3.model))),
       },
       {
         type: "deep-debugger",
