@@ -3040,11 +3040,11 @@ function resumeOptionDescription(t: TaskInfo, cwd: string): string {
 
   parts.push(`id ${taskShortId(t.dir)}`);
 
-  // Full (untrimmed) intent on its own line ABOVE the metadata, so the right pane
-  // shows the real task even when the title was trimmed to one line.
+  // Metadata line first, then a blank line, then the full (untrimmed) intent, so
+  // the right pane leads with phase/mode/id and still shows the real task below.
   const full = taskFullName(t.dir, s);
   const meta = parts.join(" · ");
-  return full && full !== meta ? `${full}\n${meta}` : meta;
+  return full && full !== meta ? `${meta}\n\n${full}` : meta;
 }
 
 // Build menu options with a stable option->task index. Titles are made unique
