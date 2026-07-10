@@ -198,12 +198,19 @@ describe("pp_edit_state_file", () => {
 
 describe("state-file tool rendering (hidden on success, visible on failure/hang)", () => {
   for (const name of ["pp_write_state_file", "pp_edit_state_file"]) {
-    it(`${name} owns its shell and renders nothing on the call`, () => {
+    it(`${name} owns its shell and renders nothing on a settled (non-partial) call`, () => {
       const { tools } = setup();
       const tool = tools.get(name)!;
       expect(tool.renderShell).toBe("self");
-      const callComp = tool.renderCall!({}, theme, {});
+      const callComp = tool.renderCall!({}, theme, { isPartial: false });
       expect(callComp.render(80)).toEqual([]);
+    });
+
+    it(`${name} renders a visible line for an in-flight (partial) call — hang visibility`, () => {
+      const { tools } = setup();
+      const tool = tools.get(name)!;
+      const callComp = tool.renderCall!({}, theme, { isPartial: true });
+      expect(callComp.render(80).length).toBe(1);
     });
 
     it(`${name} renders nothing on a successful result`, () => {

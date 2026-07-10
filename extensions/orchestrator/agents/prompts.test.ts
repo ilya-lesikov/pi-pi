@@ -37,7 +37,6 @@ describe("new free-form agent factories", () => {
   });
 
   it("advisor/advisor2/advisor3 resolve to their per-role configured models", () => {
-    expect(createAdvisorAgent(config, "advisor").frontmatter.model).toBe(createAdvisorAgent(config, "advisor").frontmatter.model);
     const a1 = createAdvisorAgent(config, "advisor");
     const a2 = createAdvisorAgent(config, "advisor2");
     const a3 = createAdvisorAgent(config, "advisor3");

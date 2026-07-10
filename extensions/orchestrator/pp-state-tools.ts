@@ -149,15 +149,18 @@ function validationError(label: string, errors: string[], hint: string): ToolRes
 }
 
 // Minimal-on-success rendering for the state-file tools. With renderShell:"self"
-// the tool owns its inner framing and returns an EMPTY Container on success — no
-// tool title, no args echo, no diff, no result text. NOTE: the host
-// ToolExecutionComponent still prepends one unconditional Spacer(1) and treats a
-// returned renderer as "content" (so its full hideComponent collapse path is not
-// taken), meaning a successful write leaves at most a single blank line rather
-// than truly zero rows. That is the intended fallback: it eliminates the
-// full-file/diff "state-file spam" while keeping a hang (isPartial) or failure
-// (isError) visible with an explicit line. Fully removing the residual blank
-// line would require an upstream host change (the Spacer is host-owned).
+// the tool owns its inner framing: renderCall shows a line only while the call is
+// in flight (isPartial) so a HANG is visible, and renders nothing once settled;
+// renderResult renders nothing on success and a visible line on failure/hang.
+// Net on success: no tool title, no args echo, no diff, no result text.
+// NOTE: the host ToolExecutionComponent still prepends one unconditional
+// Spacer(1) and treats any returned renderer as "content" (so its full
+// hideComponent collapse path is not taken), meaning a successful write leaves at
+// most a single blank line rather than truly zero rows. That is the intended
+// fallback: it eliminates the full-file/diff "state-file spam" while keeping a
+// hang (isPartial) or failure (isError) visible with an explicit line. Fully
+// removing the residual blank line would require an upstream host change (the
+// Spacer is host-owned).
 function emptyComponent(): Component {
   return new Container();
 }
@@ -168,7 +171,14 @@ function lineComponent(text: string): Component {
   return c;
 }
 
-function renderStateCall(_args: unknown, _theme: any, _context: any): Component {
+function renderStateCall(_args: unknown, theme: any, context: any): Component {
+  // The host re-runs BOTH renderCall and renderResult every cycle and stacks
+  // their output, so renderCall must stay empty once a result exists — otherwise
+  // a "Saving state…" line would persist onto a successful (silent) write. While
+  // the call is still in flight (isPartial, no final result yet) we DO show the
+  // line, so a genuine HANG before any result is visible. context.isPartial is
+  // true during execution and set false when the final result arrives.
+  if (context?.isPartial) return lineComponent(theme.fg("warning", "Saving state…"));
   return emptyComponent();
 }
 

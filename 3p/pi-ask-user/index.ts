@@ -369,8 +369,8 @@ const FREEFORM_SENTINEL = "\u270f\ufe0f Type custom response...";
 
 const DEFAULT_OVERLAY_TOGGLE_KEY = "alt+o";
 // Fixed "select this option AND add extra context" gesture. Plain Enter still
-// selects with no comment. ctrl+e is chosen over the old ctrl+g toggle; it does
-// not collide with select-mode navigation (which is arrows / ctrl+j/k / tab).
+// selects with no comment. ctrl+e does not collide with select-mode navigation
+// (which is arrows / ctrl+j/k / tab).
 const COMMENT_SELECT_KEY = "ctrl+e";
 const COMMENT_SELECT_LABEL = "add context";
 
