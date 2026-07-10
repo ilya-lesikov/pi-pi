@@ -175,6 +175,23 @@ describe("flant-infra", () => {
     }
   });
 
+  it("generateFlantConfig routes via sub/ only for gateway-confirmed models", async () => {
+    const dir = makeTempDir();
+    const mod = await loadFlantInfraModule(dir);
+
+    // opus-4-9 is the latest claude but has NO sub/ group; opus-4-8 does.
+    const config = mod.generateFlantConfig(
+      ["claude-opus-4-9", "claude-opus-4-8", "sub/claude-opus-4-8", "gpt-5-4"],
+      true,
+    ) as any;
+
+    // The chosen claude model (opus-4-9) is not sub-confirmed — it must stay
+    // on the company provider instead of pointing at an unregistered sub spec.
+    expect(config.agents.orchestrators.implement.model).toBe("pp-flant-anthropic/claude-opus-4-9");
+    const specs = collectModelSpecs(config);
+    expect(specs.some((s) => s.includes("sub/claude-opus-4-9"))).toBe(false);
+  });
+
   it("generateFlantConfig disables gemini by default in all parallel preset groups", async () => {
     const dir = makeTempDir();
     const mod = await loadFlantInfraModule(dir);

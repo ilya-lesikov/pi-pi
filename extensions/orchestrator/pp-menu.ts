@@ -58,6 +58,7 @@ import {
   type Phase,
 } from "./state.js";
 import {
+  SUB_MODEL_PREFIX,
   clearFlantGeneratedConfig,
   getFlantGeneratedConfig,
   loadFlantSettings,
@@ -874,7 +875,8 @@ async function showSubagentsMenu(ctx: any): Promise<void> {
 function countFlantProviders(settings: FlantSettings): { anthropic: number; openai: number } {
   const models = settings.cachedFlantModels ?? [];
   const anthropic = models.filter((m) => m.startsWith("claude-")).length;
-  return { anthropic, openai: Math.max(0, models.length - anthropic) };
+  const sub = models.filter((m) => m.startsWith(SUB_MODEL_PREFIX)).length;
+  return { anthropic, openai: Math.max(0, models.length - anthropic - sub) };
 }
 
 function collectRoleAssignments(config: Partial<PiPiConfig> | null): string[] {

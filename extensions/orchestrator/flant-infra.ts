@@ -695,19 +695,21 @@ function pickCheapestFastModel(models: string[]): string | null {
   return pickLatest(models.filter((m) => /^claude-haiku-/.test(m)));
 }
 
-function makeVariant(modelId: string | null, fallbackModelId: string, sub = false): { enabled: boolean; model: string; thinking: string } {
-  if (!modelId) return { enabled: false, model: modelSpec(fallbackModelId, sub), thinking: "high" };
-  return { enabled: true, model: modelSpec(modelId, sub), thinking: "high" };
+type SubPredicate = (modelId: string) => boolean;
+
+function makeVariant(modelId: string | null, fallbackModelId: string, sub: SubPredicate): { enabled: boolean; model: string; thinking: string } {
+  if (!modelId) return { enabled: false, model: modelSpec(fallbackModelId, sub(fallbackModelId)), thinking: "high" };
+  return { enabled: true, model: modelSpec(modelId, sub(modelId)), thinking: "high" };
 }
 
 function makeVariantWithThinking(
   modelId: string | null,
   fallbackModelId: string,
   thinking: string,
-  sub = false,
+  sub: SubPredicate,
 ): { enabled: boolean; model: string; thinking: string } {
-  if (!modelId) return { enabled: false, model: modelSpec(fallbackModelId, sub), thinking };
-  return { enabled: true, model: modelSpec(modelId, sub), thinking };
+  if (!modelId) return { enabled: false, model: modelSpec(fallbackModelId, sub(fallbackModelId)), thinking };
+  return { enabled: true, model: modelSpec(modelId, sub(modelId)), thinking };
 }
 
 function disabledByDefault(
@@ -726,7 +728,15 @@ function buildPresetGroup(
 export function generateFlantConfig(models: string[], subscriptionActive = false): Partial<PiPiConfig> {
   const uniqueModels = [...new Set(models)];
   if (uniqueModels.length === 0) return {};
-  const sub = subscriptionActive;
+  // Mirror the sub-eligibility gate in registerFlantProviders: route a claude
+  // model through the sub provider only when the gateway confirms its `sub/`
+  // group (or the list predates `sub/` ids entirely) — otherwise the generated
+  // spec would point at a model the sub provider never registers.
+  const subConfirmed = new Set(
+    uniqueModels.filter((m) => m.startsWith(SUB_MODEL_PREFIX)).map((m) => m.slice(SUB_MODEL_PREFIX.length)),
+  );
+  const sub = (modelId: string): boolean =>
+    subscriptionActive && (subConfirmed.size === 0 || subConfirmed.has(modelId));
 
   const latestOpus = pickLatest(uniqueModels.filter((m) => /^claude-opus-/.test(m)));
   const latestClaude = pickLatest(uniqueModels.filter((m) => /^claude-/.test(m)));
@@ -747,23 +757,23 @@ export function generateFlantConfig(models: string[], subscriptionActive = false
   return {
     agents: {
       orchestrators: {
-        implement: { model: modelSpec(implementModel, sub), thinking: "high" },
-        plan: { model: modelSpec(implementModel, sub), thinking: "high" },
-        debug: { model: modelSpec(debugModel, sub), thinking: "high" },
-        brainstorm: { model: modelSpec(brainstormModel, sub), thinking: "high" },
-        review: { model: modelSpec(implementModel, sub), thinking: "high" },
-        quick: { model: modelSpec(implementModel, sub), thinking: "high" },
+        implement: { model: modelSpec(implementModel, sub(implementModel)), thinking: "high" },
+        plan: { model: modelSpec(implementModel, sub(implementModel)), thinking: "high" },
+        debug: { model: modelSpec(debugModel, sub(debugModel)), thinking: "high" },
+        brainstorm: { model: modelSpec(brainstormModel, sub(brainstormModel)), thinking: "high" },
+        review: { model: modelSpec(implementModel, sub(implementModel)), thinking: "high" },
+        quick: { model: modelSpec(implementModel, sub(implementModel)), thinking: "high" },
       },
       subagents: {
         simple: {
-          explore: { model: modelSpec(fastModel, sub), thinking: "low" },
-          librarian: { model: modelSpec(fastModel, sub), thinking: "medium" },
-          task: { model: modelSpec(taskModel, sub), thinking: "medium" },
-          advisor: { model: modelSpec(latestOpus ?? fallback, sub), thinking: "high" },
-          advisor2: { model: modelSpec(latestGpt ?? fallback, sub), thinking: "high" },
-          advisor3: { model: modelSpec(latestGeminiPro ?? fallback, sub), thinking: "high" },
-          "deep-debugger": { model: modelSpec(latestGpt ?? fallback, sub), thinking: "high" },
-          reviewer: { model: modelSpec(latestGpt ?? fallback, sub), thinking: "high" },
+          explore: { model: modelSpec(fastModel, sub(fastModel)), thinking: "low" },
+          librarian: { model: modelSpec(fastModel, sub(fastModel)), thinking: "medium" },
+          task: { model: modelSpec(taskModel, sub(taskModel)), thinking: "medium" },
+          advisor: { model: modelSpec(latestOpus ?? fallback, sub(latestOpus ?? fallback)), thinking: "high" },
+          advisor2: { model: modelSpec(latestGpt ?? fallback, sub(latestGpt ?? fallback)), thinking: "high" },
+          advisor3: { model: modelSpec(latestGeminiPro ?? fallback, sub(latestGeminiPro ?? fallback)), thinking: "high" },
+          "deep-debugger": { model: modelSpec(latestGpt ?? fallback, sub(latestGpt ?? fallback)), thinking: "high" },
+          reviewer: { model: modelSpec(latestGpt ?? fallback, sub(latestGpt ?? fallback)), thinking: "high" },
         },
         presetGroups: {
           planners: buildPresetGroup({

@@ -32,6 +32,7 @@ vi.mock("./model-registry.js", () => ({
 }));
 
 vi.mock("./flant-infra.js", () => ({
+  SUB_MODEL_PREFIX: "sub/",
   loadFlantSettings: mocks.loadFlantSettings,
   readClaudeOAuthToken: mocks.readClaudeOAuthToken,
   readGatewayApiKey: mocks.readGatewayApiKey,

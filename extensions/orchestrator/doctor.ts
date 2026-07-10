@@ -12,7 +12,7 @@ import {
   PRESET_GROUPS,
 } from "./config.js";
 import { resolveModel, getAllAliases } from "./model-registry.js";
-import { loadFlantSettings, readClaudeOAuthToken, readGatewayApiKey, refreshClaudeOAuthToken } from "./flant-infra.js";
+import { SUB_MODEL_PREFIX, loadFlantSettings, readClaudeOAuthToken, readGatewayApiKey, refreshClaudeOAuthToken } from "./flant-infra.js";
 import type { Orchestrator } from "./orchestrator.js";
 
 type Severity = "pass" | "warning" | "failure";
@@ -535,6 +535,10 @@ export async function runDoctor(orchestrator: Orchestrator, ctx: any): Promise<v
       } else if (!gatewayKey) {
         addLine({ severity: "warning", text: "Personal subscription enabled, but no gateway key (LLM_API_KEY / FLANT_API_KEY)" });
       } else {
+        // The gateway defines `sub/` groups only for a subset of claude models;
+        // probe one it actually confirms instead of a hard-coded id.
+        const confirmedSub = (settings.cachedFlantModels ?? []).find((m) => m.startsWith(SUB_MODEL_PREFIX));
+        const probeModel = confirmedSub ?? `${SUB_MODEL_PREFIX}claude-haiku-4-5`;
         const started = Date.now();
         try {
           const response = await timedFetch("https://llm-api.flant.ru/v1/messages", {
@@ -549,7 +553,7 @@ export async function runDoctor(orchestrator: Orchestrator, ctx: any): Promise<v
               "x-litellm-api-key": `Bearer ${gatewayKey}`,
             },
             body: JSON.stringify({
-              model: "sub/claude-haiku-4-5",
+              model: probeModel,
               max_tokens: 4,
               messages: [{ role: "user", content: "ping" }],
             }),
