@@ -2374,6 +2374,18 @@ describe("task modes and quick task", () => {
     expect(orchestrator.active!.state.description).toBe("review");
   });
 
+  it("captures only the FIRST line of a multi-line initiating prompt (#7 privacy)", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx({ cwd });
+
+    await orchestrator.startTask({ ...ctx, cwd } as any, "review", "review", undefined, undefined, "guided");
+    const beforeStart = pi._handlers.get("before_agent_start")!;
+    await beforeStart({ systemPrompt: "base", prompt: "Review the auth refactor\nSECRET=hunter2\nmore body text" }, ctx);
+    expect(orchestrator.active!.state.description).toBe("Review the auth refactor");
+    expect(orchestrator.active!.state.description).not.toContain("SECRET");
+  });
+
   it("blocks ask_user in autonomous mode after first phase", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);

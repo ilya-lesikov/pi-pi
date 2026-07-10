@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cancelPendingPlannotatorWait,
   openPlannotator,
+  openAnnotateReview,
   waitForPlannotatorResult,
 } from "./plannotator.js";
 import type { Orchestrator } from "./orchestrator.js";
@@ -98,5 +99,24 @@ describe("openPlannotator", () => {
     const p = openPlannotator({ events } as any, "open", {});
     await vi.advanceTimersByTimeAsync(30000 + 1);
     await expect(p).resolves.toEqual({ opened: false, reviewId: null, outcome: "timeout" });
+  });
+});
+
+describe("openAnnotateReview", () => {
+  it("resolves with the synchronous annotate result", async () => {
+    const events = makeEvents();
+    events.on("plannotator:request", (req: any) => {
+      req.respond({ status: "handled", result: { feedback: "tighten scope" } });
+    });
+    const result = await openAnnotateReview({ events } as any, { folderPath: "/task" });
+    expect(result).toEqual({ opened: true, result: { feedback: "tighten scope" } });
+  });
+
+  it("does not hang forever when no handler responds (bounded timeout)", async () => {
+    vi.useFakeTimers();
+    const events = makeEvents();
+    const p = openAnnotateReview({ events } as any, { folderPath: "/task" }, 1000);
+    await vi.advanceTimersByTimeAsync(1001);
+    await expect(p).resolves.toEqual({ opened: false, result: null });
   });
 });

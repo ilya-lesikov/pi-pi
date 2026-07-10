@@ -411,6 +411,7 @@ async function finishTask(orchestrator: Orchestrator, ctx: any): Promise<string>
   // its real last working phase (done carries no phase history of its own).
   orchestrator.active.state.completedFrom = orchestrator.active.state.phase;
   orchestrator.active.state.phase = "done";
+  orchestrator.active.state.step = null;
   orchestrator.active.state.reviewCycle = null;
   saveTask(orchestrator.active.dir, orchestrator.active.state);
   unregisterAgentDefinitions(orchestrator.pi);

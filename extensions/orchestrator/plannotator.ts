@@ -35,31 +35,45 @@ export interface AnnotateReviewResult {
   approved?: boolean;
 }
 
+const PLANNOTATOR_RESULT_TIMEOUT_MS = 30 * 60 * 1000;
+
 // The `annotate` action is a SYNCHRONOUS request/response: its handler awaits the
 // full browser review and only calls respond() with the PlannotatorAnnotationResult
 // once the reviewer approves / submits feedback / closes. That can take minutes, so
-// unlike openPlannotator this helper does NOT wrap respond in a short timer — the
-// result arrives via the (late) respond callback, not a plannotator:review-result
-// event, so waitForPlannotatorResult must NOT be used here.
+// unlike openPlannotator this helper does NOT wrap respond in a short (30s) ack
+// timer — the result arrives via the (late) respond callback, not a
+// plannotator:review-result event, so waitForPlannotatorResult must NOT be used
+// here. A long review-length timeout still bounds the pathological case where
+// pi-plannotator is not installed/enabled (no listener ever calls respond), so the
+// /pp menu can't hang forever — it resolves as not-opened and the caller recovers.
 export function openAnnotateReview(
   pi: ExtensionAPI,
   payload: Record<string, unknown>,
+  timeoutMs: number = PLANNOTATOR_RESULT_TIMEOUT_MS,
 ): Promise<{ opened: boolean; result: AnnotateReviewResult | null }> {
   const requestId = crypto.randomUUID();
   return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        resolve({ opened: false, result: null });
+      }
+    }, timeoutMs);
     pi.events.emit("plannotator:request", {
       requestId,
       action: "annotate",
       payload,
       respond: (response: any) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
         const opened = response?.status === "handled";
         resolve({ opened, result: opened ? (response?.result ?? null) : null });
       },
     });
   });
 }
-
-const PLANNOTATOR_RESULT_TIMEOUT_MS = 30 * 60 * 1000;
 
 export function cancelPendingPlannotatorWait(orchestrator: Orchestrator): void {
   if (orchestrator.plannotatorTimer) {
