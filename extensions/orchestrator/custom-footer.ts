@@ -128,7 +128,9 @@ function renderPathLine(width: number, theme: Theme, footerData: ReadonlyFooterD
   if (task && task.state.phase !== "done") {
     line += ` • task: ${task.type} • phase: ${task.state.phase}`;
     const mode = formatModeIndicator(task.state, task.type);
-    if (mode) line += ` • mode: ${mode}`;
+    if (mode) line += ` • ${mode}`;
+    const name = taskNameFromState(task.dir, task.state);
+    if (name) line += ` • "${name}"`;
   } else {
     const sessionName = ctx?.sessionManager.getSessionName();
     if (sessionName) line += ` • ${sessionName}`;
@@ -137,21 +139,12 @@ function renderPathLine(width: number, theme: Theme, footerData: ReadonlyFooterD
   return truncateToWidth(theme.fg("dim", line), width, theme.fg("dim", "..."));
 }
 
-function renderTaskNameLine(width: number, theme: Theme): string | null {
-  const task = footerOrchestrator?.active;
-  if (!task || task.state.phase === "done") return null;
-  const name = taskNameFromState(task.dir, task.state);
-  if (!name) return null;
-  return truncateToWidth(theme.fg("dim", name), width, theme.fg("dim", "..."));
-}
-
 export function createCustomFooter(_tui: TUI, theme: Theme, footerData: ReadonlyFooterDataProvider): Component & { dispose?(): void } {
   return {
     render(width: number): string[] {
       const line1 = renderPathLine(width, theme, footerData);
-      const taskNameLine = renderTaskNameLine(width, theme);
       const line2 = renderStatsLine(width, theme);
-      return taskNameLine === null ? [line1, line2] : [line1, taskNameLine, line2];
+      return [line1, line2];
     },
     invalidate(): void {},
     dispose(): void {},

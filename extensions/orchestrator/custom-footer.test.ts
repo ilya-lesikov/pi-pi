@@ -30,7 +30,7 @@ describe("createCustomFooter", () => {
     expect(lines).toHaveLength(2);
   });
 
-  it("line 1 shows task/phase/mode when a task is active", () => {
+  it("line 1 combines task/phase/mode/name on one line when a task is active", () => {
     setFooterContext(makeCtx());
     setFooterOrchestrator({
       active: { type: "implement", dir: "/tmp/task", state: { phase: "plan", mode: "autonomous", description: "build the widget" } },
@@ -38,36 +38,40 @@ describe("createCustomFooter", () => {
     const [line1] = render();
     expect(line1).toContain("task: implement");
     expect(line1).toContain("phase: plan");
-    expect(line1).toContain("mode: autonomous");
+    expect(line1).toContain("autonomous");
+    expect(line1).not.toContain("mode:");
+    expect(line1).toContain('"build the widget"');
   });
 
-  it("renders a dedicated task-name line as line 2 when a task is active", () => {
+  it("renders exactly two lines even when a task is active (no separate name line)", () => {
     setFooterContext(makeCtx());
     setFooterOrchestrator({
       active: { type: "implement", dir: "/tmp/task", state: { phase: "plan", mode: "autonomous", description: "build the widget" } },
     } as any);
     const lines = render();
-    expect(lines).toHaveLength(3);
-    expect(lines[1]).toContain("build the widget");
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain('"build the widget"');
   });
 
-  it("line 1 shows autonomous mode in a read-only phase for an autonomous task", () => {
+  it("line 1 shows autonomous mode value (no label) in a read-only phase for an autonomous task", () => {
     setFooterContext(makeCtx());
     setFooterOrchestrator({
       active: { type: "implement", dir: "/tmp/task", state: { phase: "brainstorm", mode: "autonomous", description: "build the widget" } },
     } as any);
     const [line1] = render();
     expect(line1).toContain("phase: brainstorm");
-    expect(line1).toContain("mode: autonomous");
+    expect(line1).toContain("autonomous");
+    expect(line1).not.toContain("mode:");
   });
 
-  it("line 1 shows guided mode for a guided task", () => {
+  it("line 1 shows guided mode value (no label) for a guided task", () => {
     setFooterContext(makeCtx());
     setFooterOrchestrator({
       active: { type: "implement", dir: "/tmp/task", state: { phase: "implement", mode: "guided", description: "build the widget" } },
     } as any);
     const [line1] = render();
-    expect(line1).toContain("mode: guided");
+    expect(line1).toContain("guided");
+    expect(line1).not.toContain("mode:");
   });
 
   it("line 1 omits the mode segment for a quick task", () => {
