@@ -26,6 +26,16 @@ describe("findUnresolvedOpenQuestions", () => {
     const content = `## Open Questions\n- Q1 status line placement\n`;
     expect(findUnresolvedOpenQuestions(content)).toHaveLength(1);
   });
+
+  it("flags a statement-style bullet with no question mark", () => {
+    const content = `## Open Questions\n- Need user confirmation on deploy timing\n`;
+    expect(findUnresolvedOpenQuestions(content)).toHaveLength(1);
+  });
+
+  it("does not flag the resolved-artifact format (framing prose + DECIDED bullets)", () => {
+    const content = `## Open Questions\nAll resolved (see proposal):\n- Q2 (resume done): DECIDED — reopen the task.\n- Q4: ASSUMED all artifacts opened.\n`;
+    expect(findUnresolvedOpenQuestions(content)).toEqual([]);
+  });
 });
 
 describe("validateUserRequest", () => {
