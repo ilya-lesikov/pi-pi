@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "path";
 import { Type } from "@sinclair/typebox";
+import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import type { Orchestrator } from "./orchestrator.js";
 import { getLogger } from "./log.js";
 import {
@@ -147,6 +148,34 @@ function validationError(label: string, errors: string[], hint: string): ToolRes
   );
 }
 
+// Hidden-on-success rendering for the state-file tools. With renderShell:"self"
+// the tool owns its framing, so returning an EMPTY Container collapses to zero
+// rows (the host reserves no line for a component that renders nothing). Only a
+// still-running (isPartial) or failed (isError) call renders a visible line, so
+// routine bookkeeping stays silent while a hang or failure is never swallowed.
+function emptyComponent(): Component {
+  return new Container();
+}
+
+function lineComponent(text: string): Component {
+  const c = new Container();
+  c.addChild(new Text(text, 0, 0));
+  return c;
+}
+
+function renderStateCall(_args: unknown, _theme: any, _context: any): Component {
+  return emptyComponent();
+}
+
+function renderStateResult(result: ToolResult, options: { isPartial?: boolean }, theme: any, context: any): Component {
+  if (options?.isPartial) return lineComponent(theme.fg("warning", "Saving state…"));
+  if (result?.isError || context?.isError) {
+    const text = result?.content?.[0]?.type === "text" ? result.content[0].text.split("\n")[0] : "State write failed";
+    return lineComponent(theme.fg("error", text));
+  }
+  return emptyComponent();
+}
+
 // Dedicated compact-output tools for editing .pp state files. Unlike the generic
 // write/edit tools (which render the full file content / a unified diff into the
 // UI on every update — the "state-file spam"), these return only a one-line
@@ -160,6 +189,9 @@ export function registerStateFileTools(orchestrator: Orchestrator): void {
   pi.registerTool({
     name: "pp_write_state_file",
     label: "pi-pi",
+    renderShell: "self",
+    renderCall: renderStateCall,
+    renderResult: renderStateResult as any,
     description:
       "Create or overwrite a pi-pi state file (USER_REQUEST.md, RESEARCH.md, artifacts/*.md, " +
       "or plans/*_synthesized.md) under the active task directory. PREFER this over the generic " +
@@ -197,6 +229,9 @@ export function registerStateFileTools(orchestrator: Orchestrator): void {
   pi.registerTool({
     name: "pp_edit_state_file",
     label: "pi-pi",
+    renderShell: "self",
+    renderCall: renderStateCall,
+    renderResult: renderStateResult as any,
     description:
       "Edit a pi-pi state file in place by replacing an exact text span. PREFER this over the " +
       "generic edit tool for .pp state files (USER_REQUEST.md, RESEARCH.md, artifacts/*.md, " +

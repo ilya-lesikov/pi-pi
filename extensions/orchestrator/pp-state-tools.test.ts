@@ -24,7 +24,12 @@ afterEach(() => {
 interface RegisteredTool {
   name: string;
   execute: (id: string, params: any) => Promise<any>;
+  renderShell?: string;
+  renderCall?: (args: any, theme: any, context: any) => any;
+  renderResult?: (result: any, options: any, theme: any, context: any) => any;
 }
+
+const theme = { fg: (_c: string, t: string) => t } as any;
 
 function setup() {
   const cwd = makeTempCwd();
@@ -189,4 +194,39 @@ describe("pp_edit_state_file", () => {
     expect(textOf(res)).toContain("RESEARCH.md structure is invalid");
     expect(readFileSync(join(taskDir, "RESEARCH.md"), "utf-8")).toContain("## Affected Code");
   });
+});
+
+describe("state-file tool rendering (hidden on success, visible on failure/hang)", () => {
+  for (const name of ["pp_write_state_file", "pp_edit_state_file"]) {
+    it(`${name} owns its shell and renders nothing on the call`, () => {
+      const { tools } = setup();
+      const tool = tools.get(name)!;
+      expect(tool.renderShell).toBe("self");
+      const callComp = tool.renderCall!({}, theme, {});
+      expect(callComp.render(80)).toEqual([]);
+    });
+
+    it(`${name} renders nothing on a successful result`, () => {
+      const { tools } = setup();
+      const tool = tools.get(name)!;
+      const comp = tool.renderResult!({ content: [{ type: "text", text: "Created X" }] }, { isPartial: false }, theme, { isError: false });
+      expect(comp.render(80)).toEqual([]);
+    });
+
+    it(`${name} renders a visible line while partial (hang)`, () => {
+      const { tools } = setup();
+      const tool = tools.get(name)!;
+      const comp = tool.renderResult!({ content: [] }, { isPartial: true }, theme, { isError: false });
+      expect(comp.render(80).length).toBe(1);
+    });
+
+    it(`${name} renders a visible line on error`, () => {
+      const { tools } = setup();
+      const tool = tools.get(name)!;
+      const comp = tool.renderResult!({ content: [{ type: "text", text: "boom" }], isError: true }, { isPartial: false }, theme, { isError: true });
+      const rows = comp.render(80);
+      expect(rows.length).toBe(1);
+      expect(rows[0]).toContain("boom");
+    });
+  }
 });
