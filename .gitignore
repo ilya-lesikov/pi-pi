@@ -10,3 +10,4 @@ diff.patch
 
 # Generated coverage reports
 coverage/
+/fix*.js
