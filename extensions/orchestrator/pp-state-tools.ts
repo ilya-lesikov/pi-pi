@@ -148,11 +148,16 @@ function validationError(label: string, errors: string[], hint: string): ToolRes
   );
 }
 
-// Hidden-on-success rendering for the state-file tools. With renderShell:"self"
-// the tool owns its framing, so returning an EMPTY Container collapses to zero
-// rows (the host reserves no line for a component that renders nothing). Only a
-// still-running (isPartial) or failed (isError) call renders a visible line, so
-// routine bookkeeping stays silent while a hang or failure is never swallowed.
+// Minimal-on-success rendering for the state-file tools. With renderShell:"self"
+// the tool owns its inner framing and returns an EMPTY Container on success — no
+// tool title, no args echo, no diff, no result text. NOTE: the host
+// ToolExecutionComponent still prepends one unconditional Spacer(1) and treats a
+// returned renderer as "content" (so its full hideComponent collapse path is not
+// taken), meaning a successful write leaves at most a single blank line rather
+// than truly zero rows. That is the intended fallback: it eliminates the
+// full-file/diff "state-file spam" while keeping a hang (isPartial) or failure
+// (isError) visible with an explicit line. Fully removing the residual blank
+// line would require an upstream host change (the Spacer is host-owned).
 function emptyComponent(): Component {
   return new Container();
 }
