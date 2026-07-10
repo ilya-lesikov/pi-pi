@@ -110,6 +110,90 @@ describe("flant-infra", () => {
     }
   });
 
+  it("registers only gateway-confirmed sub/ models and keeps sub/ ids off the openai provider", async () => {
+    const dir = makeTempDir();
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "auth.json"),
+      JSON.stringify({ anthropic: { type: "oauth", access: "sk-ant-oat01-test-token", expires: Date.now() + 3_600_000 } }),
+      "utf-8",
+    );
+    const prevKey = process.env.LLM_API_KEY;
+    process.env.LLM_API_KEY = "sk-gateway-test";
+    try {
+      const mod = await loadFlantInfraModule(dir);
+      const registered = new Map<string, any>();
+      const pi = {
+        registerProvider: vi.fn((name: string, config: any) => registered.set(name, config)),
+        unregisterProvider: vi.fn((name: string) => registered.delete(name)),
+      } as any;
+
+      mod.registerFlantProviders(
+        pi,
+        ["claude-opus-4-8", "claude-fable-5", "sub/claude-opus-4-8", "gpt-5"],
+        {},
+        { subscription: true },
+      );
+
+      const sub = registered.get("pp-flant-anthropic-sub");
+      expect(sub.models.map((m: any) => m.id)).toEqual(["sub/claude-opus-4-8"]);
+      const anthropic = registered.get("pp-flant-anthropic");
+      expect(anthropic.models.map((m: any) => m.id).sort()).toEqual(["claude-fable-5", "claude-opus-4-8"]);
+      const openai = registered.get("pp-flant-openai");
+      expect(openai.models.map((m: any) => m.id)).toEqual(["gpt-5"]);
+    } finally {
+      if (prevKey === undefined) delete process.env.LLM_API_KEY;
+      else process.env.LLM_API_KEY = prevKey;
+    }
+  });
+
+  it("falls back to all claude models for the sub provider when the model list has no sub/ ids", async () => {
+    const dir = makeTempDir();
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "auth.json"),
+      JSON.stringify({ anthropic: { type: "oauth", access: "sk-ant-oat01-test-token", expires: Date.now() + 3_600_000 } }),
+      "utf-8",
+    );
+    const prevKey = process.env.LLM_API_KEY;
+    process.env.LLM_API_KEY = "sk-gateway-test";
+    try {
+      const mod = await loadFlantInfraModule(dir);
+      const registered = new Map<string, any>();
+      const pi = {
+        registerProvider: vi.fn((name: string, config: any) => registered.set(name, config)),
+        unregisterProvider: vi.fn((name: string) => registered.delete(name)),
+      } as any;
+
+      mod.registerFlantProviders(pi, ["claude-opus-4-8", "claude-haiku-4-5", "gpt-5"], {}, { subscription: true });
+
+      const sub = registered.get("pp-flant-anthropic-sub");
+      expect(sub.models.map((m: any) => m.id).sort()).toEqual(["sub/claude-haiku-4-5", "sub/claude-opus-4-8"]);
+    } finally {
+      if (prevKey === undefined) delete process.env.LLM_API_KEY;
+      else process.env.LLM_API_KEY = prevKey;
+    }
+  });
+
+  it("generateFlantConfig disables gemini by default in all parallel preset groups", async () => {
+    const dir = makeTempDir();
+    const mod = await loadFlantInfraModule(dir);
+
+    const config = mod.generateFlantConfig(
+      ["claude-opus-4-8", "gpt-5-4", "gemini-3-1-pro", "gemini-3-1-flash"],
+      false,
+    ) as any;
+
+    const groups = config.agents.subagents.presetGroups;
+    for (const group of ["planners", "planReviewers", "codeReviewers", "brainstormReviewers"]) {
+      for (const preset of Object.values(groups[group].presets) as any[]) {
+        expect(preset.agents.gemini.enabled).toBe(false);
+        expect(preset.agents.opus.enabled).toBe(true);
+        expect(preset.agents.gpt.enabled).toBe(true);
+      }
+    }
+  });
+
   it("skips the sub provider when subscription enabled but OAuth token missing", async () => {
     const dir = makeTempDir();
     const prevKey = process.env.LLM_API_KEY;

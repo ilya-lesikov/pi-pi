@@ -139,7 +139,7 @@ const DEFAULT_CONFIG: PiPiConfig = {
               agents: {
                 opus: { enabled: true, model: "anthropic/claude-opus-latest", thinking: "high" },
                 gpt: { enabled: true, model: "openai/gpt-latest", thinking: "high" },
-                gemini: { enabled: true, model: "google/gemini-pro-latest", thinking: "high" },
+                gemini: { enabled: false, model: "google/gemini-pro-latest", thinking: "high" },
               },
             },
           },
@@ -151,14 +151,14 @@ const DEFAULT_CONFIG: PiPiConfig = {
               agents: {
                 opus: { enabled: true, model: "anthropic/claude-opus-latest", thinking: "high" },
                 gpt: { enabled: true, model: "openai/gpt-latest", thinking: "high" },
-                gemini: { enabled: true, model: "google/gemini-pro-latest", thinking: "xhigh" },
+                gemini: { enabled: false, model: "google/gemini-pro-latest", thinking: "xhigh" },
               },
             },
             deep: {
               agents: {
                 opus: { enabled: true, model: "anthropic/claude-opus-latest", thinking: "xhigh" },
                 gpt: { enabled: true, model: "openai/gpt-latest", thinking: "xhigh" },
-                gemini: { enabled: true, model: "google/gemini-pro-latest", thinking: "xhigh" },
+                gemini: { enabled: false, model: "google/gemini-pro-latest", thinking: "xhigh" },
               },
             },
           },
@@ -170,14 +170,14 @@ const DEFAULT_CONFIG: PiPiConfig = {
               agents: {
                 opus: { enabled: true, model: "anthropic/claude-opus-latest", thinking: "high" },
                 gpt: { enabled: true, model: "openai/gpt-latest", thinking: "high" },
-                gemini: { enabled: true, model: "google/gemini-pro-latest", thinking: "xhigh" },
+                gemini: { enabled: false, model: "google/gemini-pro-latest", thinking: "xhigh" },
               },
             },
             deep: {
               agents: {
                 opus: { enabled: true, model: "anthropic/claude-opus-latest", thinking: "xhigh" },
                 gpt: { enabled: true, model: "openai/gpt-latest", thinking: "xhigh" },
-                gemini: { enabled: true, model: "google/gemini-pro-latest", thinking: "xhigh" },
+                gemini: { enabled: false, model: "google/gemini-pro-latest", thinking: "xhigh" },
               },
             },
           },
@@ -189,14 +189,14 @@ const DEFAULT_CONFIG: PiPiConfig = {
               agents: {
                 opus: { enabled: true, model: "anthropic/claude-opus-latest", thinking: "high" },
                 gpt: { enabled: true, model: "openai/gpt-latest", thinking: "high" },
-                gemini: { enabled: true, model: "google/gemini-pro-latest", thinking: "xhigh" },
+                gemini: { enabled: false, model: "google/gemini-pro-latest", thinking: "xhigh" },
               },
             },
             deep: {
               agents: {
                 opus: { enabled: true, model: "anthropic/claude-opus-latest", thinking: "xhigh" },
                 gpt: { enabled: true, model: "openai/gpt-latest", thinking: "xhigh" },
-                gemini: { enabled: true, model: "google/gemini-pro-latest", thinking: "xhigh" },
+                gemini: { enabled: false, model: "google/gemini-pro-latest", thinking: "xhigh" },
               },
             },
           },

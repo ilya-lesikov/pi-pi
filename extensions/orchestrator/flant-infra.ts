@@ -557,7 +557,10 @@ export function registerFlantProviders(
   const log = getLogger();
   const uniqueModels = [...new Set(models)];
   const anthropicModels = uniqueModels.filter((m) => m.startsWith("claude-"));
-  const openaiModels = uniqueModels.filter((m) => !m.startsWith("claude-"));
+  const subConfirmed = new Set(
+    uniqueModels.filter((m) => m.startsWith(SUB_MODEL_PREFIX)).map((m) => m.slice(SUB_MODEL_PREFIX.length)),
+  );
+  const openaiModels = uniqueModels.filter((m) => !m.startsWith("claude-") && !m.startsWith(SUB_MODEL_PREFIX));
 
   unregisterFlantProviders(pi);
 
@@ -583,10 +586,17 @@ export function registerFlantProviders(
   const subscription = options.subscription ?? loadFlantSettings().subscription;
   let subModels: string[] = [];
   if (subscription) {
+    // The gateway only defines `sub/` model groups for a subset of claude
+    // models (e.g. no sub/claude-fable-5) — registering unconfirmed ones
+    // yields "Invalid model name" 400s. Model lists cached before the gateway
+    // exposed `sub/…` ids have none; fall back to all claude models then.
+    const subEligible = subConfirmed.size > 0
+      ? anthropicModels.filter((m) => subConfirmed.has(m))
+      : anthropicModels;
     // Remember the models/metadata so refreshSubProvider can rebuild the
     // provider with a fresh OAuth token on each turn (see below).
-    subProviderContext = { anthropicModels, metadata };
-    subModels = registerSubProvider(pi, anthropicModels, metadata);
+    subProviderContext = { anthropicModels: subEligible, metadata };
+    subModels = registerSubProvider(pi, subEligible, metadata);
     availableSpecs.push(...subModels.map((id) => `${SUB_PROVIDER}/${id}`));
   } else {
     subProviderContext = null;
@@ -700,6 +710,12 @@ function makeVariantWithThinking(
   return { enabled: true, model: modelSpec(modelId, sub), thinking };
 }
 
+function disabledByDefault(
+  variant: { enabled: boolean; model: string; thinking: string },
+): { enabled: boolean; model: string; thinking: string } {
+  return { ...variant, enabled: false };
+}
+
 function buildPresetGroup(
   presets: Record<string, { enabled?: boolean; agents: Record<string, { enabled: boolean; model: string; thinking: string }> }>,
   defaultPreset = "regular",
@@ -755,7 +771,7 @@ export function generateFlantConfig(models: string[], subscriptionActive = false
               agents: {
                 opus: makeVariant(latestOpus, fallback, sub),
                 gpt: makeVariant(latestGpt, fallback, sub),
-                gemini: makeVariant(latestGeminiPro, fallback, sub),
+                gemini: disabledByDefault(makeVariant(latestGeminiPro, fallback, sub)),
               },
             },
           }),
@@ -764,14 +780,14 @@ export function generateFlantConfig(models: string[], subscriptionActive = false
               agents: {
                 opus: makeVariant(latestOpus, fallback, sub),
                 gpt: makeVariant(latestGpt, fallback, sub),
-                gemini: makeVariantWithThinking(latestGeminiPro, fallback, "xhigh", sub),
+                gemini: disabledByDefault(makeVariantWithThinking(latestGeminiPro, fallback, "xhigh", sub)),
               },
             },
             deep: {
               agents: {
                 opus: makeVariantWithThinking(latestOpus, fallback, "xhigh", sub),
                 gpt: makeVariantWithThinking(latestGpt, fallback, "xhigh", sub),
-                gemini: makeVariantWithThinking(latestGeminiPro, fallback, "xhigh", sub),
+                gemini: disabledByDefault(makeVariantWithThinking(latestGeminiPro, fallback, "xhigh", sub)),
               },
             },
           }),
@@ -780,14 +796,14 @@ export function generateFlantConfig(models: string[], subscriptionActive = false
               agents: {
                 opus: makeVariant(latestOpus, fallback, sub),
                 gpt: makeVariant(latestGpt, fallback, sub),
-                gemini: makeVariantWithThinking(latestGeminiPro, fallback, "xhigh", sub),
+                gemini: disabledByDefault(makeVariantWithThinking(latestGeminiPro, fallback, "xhigh", sub)),
               },
             },
             deep: {
               agents: {
                 opus: makeVariantWithThinking(latestOpus, fallback, "xhigh", sub),
                 gpt: makeVariantWithThinking(latestGpt, fallback, "xhigh", sub),
-                gemini: makeVariantWithThinking(latestGeminiPro, fallback, "xhigh", sub),
+                gemini: disabledByDefault(makeVariantWithThinking(latestGeminiPro, fallback, "xhigh", sub)),
               },
             },
           }),
@@ -796,14 +812,14 @@ export function generateFlantConfig(models: string[], subscriptionActive = false
               agents: {
                 opus: makeVariant(latestOpus, fallback, sub),
                 gpt: makeVariant(latestGpt, fallback, sub),
-                gemini: makeVariantWithThinking(latestGeminiPro, fallback, "xhigh", sub),
+                gemini: disabledByDefault(makeVariantWithThinking(latestGeminiPro, fallback, "xhigh", sub)),
               },
             },
             deep: {
               agents: {
                 opus: makeVariantWithThinking(latestOpus, fallback, "xhigh", sub),
                 gpt: makeVariantWithThinking(latestGpt, fallback, "xhigh", sub),
-                gemini: makeVariantWithThinking(latestGeminiPro, fallback, "xhigh", sub),
+                gemini: disabledByDefault(makeVariantWithThinking(latestGeminiPro, fallback, "xhigh", sub)),
               },
             },
           }),
