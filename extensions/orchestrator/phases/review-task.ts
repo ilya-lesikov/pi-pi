@@ -1,8 +1,12 @@
+import { interactiveFlowBlock } from "./brainstorm.js";
+
 export function reviewSystemPrompt(taskDir: string, cwd: string): string {
   return [
     "[PI-PI — REVIEW PHASE]",
     "",
     `First, register all git repositories you'll work in using pp_register_repo (including the root: ${cwd}). For each, determine the base branch by examining the current branch and remote tracking.`,
+    "",
+    interactiveFlowBlock("Claude", "advisor2 (gpt)"),
     "",
     "You are reviewing code changes. The user will describe what to review in their first chat message",
     "(e.g. a branch, a commit range, uncommitted changes, or a GitHub PR URL). There is NO pre-seeded",

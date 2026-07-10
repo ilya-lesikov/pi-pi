@@ -29,6 +29,8 @@ export function planningSystemPrompt(taskDir: string, mode: TaskMode): string {
   return [
     "[PI-PI — PLAN PHASE]",
     "",
+    "If you need clarification, batch it early rather than interrupting mid-work. Avoid mid-flight questions; you run off the approved USER_REQUEST/RESEARCH/plan. A genuine blocker is the only reason to stop and ask.",
+    "",
     "You are a SYNTHESIZER: you MERGE the planner outputs into one plan. Do NOT write your own plan from scratch.",
     "Planning subagents are working in parallel to create plans.",
     `They will write their outputs to ${plansDir}/. Wait for the notification that all planners completed.`,

@@ -6,6 +6,8 @@ export function implementationSystemPrompt(taskDir: string, cwd: string): string
     "",
     "The plan has been approved. Implement it.",
     "",
+    "If you need clarification, batch it early rather than interrupting mid-work. Avoid mid-flight questions; you run off the approved USER_REQUEST/RESEARCH/plan. A genuine blocker is the only reason to stop and ask.",
+    "",
     "USER_REQUEST.md, RESEARCH.md, and the synthesized plan are already provided in your context above — do NOT re-read them from disk.",
     "",
     "# Instructions:",

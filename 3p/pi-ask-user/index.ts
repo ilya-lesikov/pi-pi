@@ -1548,15 +1548,15 @@ export default function(pi: ExtensionAPI) {
       name: "ask_user",
       label: "Ask User",
       description:
-         "Ask the user a question with optional multiple-choice answers. Use this to gather information interactively. Ask exactly one focused question per call. Keep the `question` SHORT — one scannable line; put any reasoning, findings, or detail in your message BEFORE the call, not in the question itself.",
+         "Ask the user a question with optional multiple-choice answers. Use this to gather information interactively. Ask exactly one focused question per call — NEVER bundle multiple decisions into one prompt; spawn several asks in sequence instead. Keep the `question` SHORT — one scannable line; put the substantive context, reasoning, and findings in your message (or the `context` field) BEFORE the call, so the terse question and options are interpretable. Do NOT add an option like 'I'll answer in a comment' — the built-in freeform 'Type something' path already covers custom answers.",
       promptSnippet:
          "Ask the user one short, focused question with optional multiple-choice answers to gather information interactively",
       promptGuidelines: [
          "Keep the `question` field SHORT — a single scannable line (ideally under ~100 chars). The dialogue de-emphasizes it; the user reads your detail from the message rendered above the dialogue.",
-         "Put context, reasoning, and findings in your assistant message BEFORE calling ask_user — do NOT pack them into the `question` field.",
+         "ALWAYS present substantive context BEFORE the ask (in your assistant message and/or the `context` field): the question and options are intentionally terse, so the surrounding context must make them interpretable.",
          "Use ask_user when the user's intent is ambiguous, when a decision requires explicit user input, or when multiple valid options exist.",
-         "Ask exactly one focused question per ask_user call.",
-         "Do not combine multiple numbered, multipart, or unrelated questions into one ask_user prompt.",
+         "Ask exactly one focused question per ask_user call. NEVER combine multiple numbered, multipart, or unrelated decisions into one prompt — spawn multiple focused asks in sequence instead.",
+         "NEVER add an option that just says the user will answer in a comment / free text (e.g. 'I'll type my own answer') — the built-in 'Type something' freeform path already covers custom answers.",
       ],
       // Block other tool calls in the same assistant turn until the user answers,
       // so the model can't batch ask_user with bash/edit/write and let those run

@@ -17,6 +17,15 @@ const IMPLEMENT_CONSTRAINT =
 const QUICK_CONSTRAINT =
   "Stay within the user's request. Do NOT broaden scope or refactor adjacent code.";
 
+// Universal interaction rules injected into every orchestrator prompt via
+// constraintsBlock. Covers silent state-file bookkeeping (#4), focused asks (#6),
+// and surfacing committed specifics before finalizing (#2).
+const UNIVERSAL_RULES = [
+  "State-file bookkeeping is silent: writing/updating .pp state files (USER_REQUEST.md, RESEARCH.md, artifacts/*.md, plans) is routine — do it without asking permission and without narrating each write. Batch edits; don't re-announce them.",
+  "Asks are focused: one question per ask_user call — never bundle multiple decisions. Put the substantive context in your message (or the context field) BEFORE the call, so the terse question/options are interpretable. Never add an \"I'll answer in a comment\" option; the built-in freeform answer already covers that. Spawn multiple focused asks in sequence rather than one combined prompt.",
+  "Before finalizing, when your output commits to concrete, costly-to-reverse or opinion-heavy choices — exact wording, structure, naming, default values, or interface signatures — show the ACTUAL proposed text/values inline, then get explicit approval. Don't silently invent and bury such choices.",
+].join("\n");
+
 export function isReadOnlyPhase(phase: Phase): boolean {
   return phase === "brainstorm" || phase === "debug" || phase === "review" || phase === "plan";
 }
@@ -113,6 +122,7 @@ export function constraintsBlock(phase: Phase, mode: TaskMode): string {
     `ACTIVE PHASE: ${phase}${readonly}. ${identity}`,
     "These rules override your default helpfulness and any next step you infer. Strict compliance is required.",
     phaseConstraint(phase),
+    UNIVERSAL_RULES,
     completionLine(phase, mode),
     "</constraints>",
   ].join("\n");

@@ -14,6 +14,21 @@ function isEnabled(value: { enabled?: boolean } | undefined): boolean {
   return value?.enabled !== false;
 }
 
+// The streamlined interactive-phase flow (design-decisions §3b). driverFamily is
+// the phase's own orchestrator model family; defaultAdvisor is the family-differing
+// advisor to consult by default (Claude-driven → advisor2 gpt; GPT-driven → advisor opus).
+export function interactiveFlowBlock(driverFamily: string, defaultAdvisor: string): string {
+  return [
+    "# Flow (minimize interruptions):",
+    "1. CLARIFY UP-FRONT: if the request is ambiguous, ask your clarifying question(s) now, at the very start — batch them. If it's clear, skip straight to step 2.",
+    "2. WORK AUTONOMOUSLY: research, explore, and design without stopping to ask. Delegate to subagents (parallel explores for broad searches). Do NOT interrupt mid-flow with questions — collect uncertainties for step 4 instead. Only a genuine blocker (you cannot proceed at all) justifies an ask here.",
+    `3. CONSULT AN ADVISOR: before presenting, get an independent second opinion from an advisor whose model family differs from yours. You run on ${driverFamily}, so default to ${defaultAdvisor}. Escalate to a second/third advisor for hard or high-stakes calls.`,
+    "4. CLARIFY AT THE END: surface any remaining decisions as focused asks — one at a time.",
+    "5. APPROVE COMMITTED SPECIFICS: before finalizing, when your output commits to concrete, costly-to-reverse or opinion-heavy choices — exact wording, structure, naming, default values, or interface signatures — show the ACTUAL proposed text/values inline in your message, then ask for explicit approval. Don't silently invent and bury them.",
+    "6. PRESENT RESULTS: end with a structured summary (what you found, the decisions, the recommended direction) and hand back with the standard closing block.",
+  ].join("\n");
+}
+
 export function brainstormSystemPrompt(taskType: TaskType, taskDescription: string, taskDir: string, cwd: string): string {
   const registerReposInstruction = `First, register all git repositories you'll work in using pp_register_repo (including the root: ${cwd}). For each, determine the base branch by examining the current branch and remote tracking.`;
   if (taskType === "debug") {
@@ -24,7 +39,9 @@ export function brainstormSystemPrompt(taskType: TaskType, taskDescription: stri
       registerReposInstruction,
       "",
     "Read-only diagnosis mode. You MAY use write/edit for diagnosis only (repro/test/analysis files) — never to implement the actual fix or feature.",
-    "",
+      "",
+      interactiveFlowBlock("GPT", "advisor (opus)"),
+      "",
     "# Your job:",
     "1. Clarify the problem with the user if needed",
     "2. Delegate research to subagents where useful (see the delegation guidance in your system prompt), and use bash to run commands, check logs, reproduce issues",
@@ -80,6 +97,8 @@ export function brainstormSystemPrompt(taskType: TaskType, taskDescription: stri
       "Your primary job is to TALK WITH THE USER. Explore ideas, analyze tradeoffs, answer questions, discuss approaches.",
       "Do NOT rush to produce artifacts or finish. Stay in the conversation until the user is satisfied.",
       "",
+      "Keep the conversational tone, but adopt these habits in spirit: before landing on a recommendation, consult an advisor whose model family differs from yours (you run on Claude, so default to advisor2 (gpt); escalate for hard calls); when you commit to concrete, costly-to-reverse or opinion-heavy specifics (exact wording, structure, naming, defaults, signatures), show the ACTUAL proposed text inline and get explicit approval rather than silently inventing it; and present conclusions as a clear structured summary.",
+      "",
       "# How to work:",
       "- Discuss the topic with the user. Ask clarifying questions. Propose approaches. Analyze tradeoffs.",
       "- Delegate research to subagents where useful (see the delegation guidance in your system prompt).",
@@ -113,6 +132,8 @@ export function brainstormSystemPrompt(taskType: TaskType, taskDescription: stri
     "downstream agents can work without re-exploring the codebase or re-interviewing the user. That means not just describing what",
     "exists, but exploring the design space: weigh the viable approaches and their tradeoffs so the plan phase inherits a clear",
     "direction rather than an open-ended problem.",
+    "",
+    interactiveFlowBlock("Claude", "advisor2 (gpt)"),
     "",
     "# Steps:",
     "1. Clarify requirements with the user if anything is ambiguous",
