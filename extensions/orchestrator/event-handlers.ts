@@ -2054,6 +2054,8 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     setLogLevel(orchestrator.config.general.logLevel);
     log.info({ s: "config", logLevel: orchestrator.config.general.logLevel }, "config loaded");
 
+    orchestrator.applySubagentConcurrency();
+
     if (orchestrator.config.general.tracing) {
       const sessionId = ctx.sessionManager?.getSessionId?.() || `session-${Date.now()}`;
       initTracer(ppDir, sessionId);

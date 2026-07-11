@@ -1775,6 +1775,12 @@ function refreshSubagentDefinitions(orchestrator: Orchestrator, keyPath: string[
   orchestrator.registerAgents();
 }
 
+function applyConcurrencyIfChanged(orchestrator: Orchestrator, keyPath: string[]): void {
+  if (keyPath[0] === "agents" && keyPath[1] === "maxConcurrentSubagents") {
+    orchestrator.applySubagentConcurrency();
+  }
+}
+
 function applyConfigChange(orchestrator: Orchestrator, scope: Scope, keyPath: string[], value: any): void {
   const result = tryApplyConfigChange(orchestrator, scope, keyPath, value);
   if (!result.ok) {
@@ -1793,6 +1799,7 @@ function applyConfigChange(orchestrator: Orchestrator, scope: Scope, keyPath: st
     updateRegistryFromAvailableModels(modelIds);
   }
   refreshSubagentDefinitions(orchestrator, keyPath);
+  applyConcurrencyIfChanged(orchestrator, keyPath);
 }
 
 function clearConfigOverride(orchestrator: Orchestrator, scope: Scope, keyPath: string[]): void {
@@ -1802,6 +1809,7 @@ function clearConfigOverride(orchestrator: Orchestrator, scope: Scope, keyPath: 
     return;
   }
   refreshSubagentDefinitions(orchestrator, keyPath);
+  applyConcurrencyIfChanged(orchestrator, keyPath);
 }
 
 function thinkingLabel(value: string): string {

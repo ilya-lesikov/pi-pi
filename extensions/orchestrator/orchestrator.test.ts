@@ -444,6 +444,33 @@ describe("Orchestrator.checkForConflictingExtensions", () => {
   });
 });
 
+describe("Orchestrator.applySubagentConcurrency", () => {
+  const MANAGER_KEY = Symbol.for("pi-subagents:manager");
+
+  afterEach(() => {
+    delete (globalThis as any)[MANAGER_KEY];
+  });
+
+  it("applies the configured limit to the manager handle", () => {
+    const setMaxConcurrent = vi.fn();
+    (globalThis as any)[MANAGER_KEY] = { setMaxConcurrent };
+    const orchestrator = new Orchestrator(makePi());
+    orchestrator.config = getDefaultConfig() as any;
+    orchestrator.config.agents.maxConcurrentSubagents = 7;
+
+    orchestrator.applySubagentConcurrency();
+
+    expect(setMaxConcurrent).toHaveBeenCalledWith(7);
+  });
+
+  it("no-ops when the manager handle is absent", () => {
+    const orchestrator = new Orchestrator(makePi());
+    orchestrator.config = getDefaultConfig() as any;
+
+    expect(() => orchestrator.applySubagentConcurrency()).not.toThrow();
+  });
+});
+
 describe("Orchestrator.abortAllSubagents", () => {
   it("emits stop events for all spawned subagents and clears the set", () => {
     const emit = vi.fn();

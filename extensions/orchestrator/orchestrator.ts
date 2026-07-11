@@ -912,6 +912,17 @@ export class Orchestrator {
     }
     return [...seen.entries()].filter(([, count]) => count > 1).map(([name]) => name);
   }
+
+  applySubagentConcurrency(): void {
+    const mgr = (globalThis as any)[Symbol.for("pi-subagents:manager")];
+    const limit = this.config?.agents?.maxConcurrentSubagents;
+    if (typeof mgr?.setMaxConcurrent !== "function" || typeof limit !== "number") {
+      getLogger().debug({ s: "config", limit }, "subagents manager unavailable; skipped concurrency apply");
+      return;
+    }
+    mgr.setMaxConcurrent(limit);
+    getLogger().debug({ s: "config", limit }, "applied subagent concurrency limit");
+  }
 }
 
 export function ensureGitignore(cwd: string): void {
