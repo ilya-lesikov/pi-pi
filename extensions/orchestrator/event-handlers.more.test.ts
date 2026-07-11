@@ -415,6 +415,19 @@ describe("registered handler branches", () => {
     expect(customCall[0].content).toContain("reviewer gpt");
   });
 
+  it("suppresses the per-agent result message for phased-batch completions (item 6)", () => {
+    for (const step of ["await_planners", "await_reviewers"]) {
+      (pi.sendMessage as any).mockClear();
+      orchestrator.active = makeActiveTask();
+      orchestrator.active.state.step = step;
+      orchestrator.spawnedAgentIds.add("agent-p");
+      orchestrator.agentDescriptions.set("agent-p", "planner opus");
+      getEventHandler("subagents:completed")({ id: "agent-p", description: "planner opus", durationMs: 900 }, {});
+      const customCall = (pi.sendMessage as any).mock.calls.find((c: any[]) => c[0]?.customType === "pp-subagent-result");
+      expect(customCall).toBeUndefined();
+    }
+  });
+
   it("cleans up a stopped subagent without emitting an error", () => {
     orchestrator.active = makeActiveTask();
     orchestrator.spawnedAgentIds.add("agent-1");

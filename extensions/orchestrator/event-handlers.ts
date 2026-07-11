@@ -1838,19 +1838,28 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     orchestrator.agentSpawnTimes.delete(data.id);
     orchestrator.agentLifecycle.delete(data.id);
 
-    const desc = data.description || data.type || data.id;
-    const duration = data.durationMs ? `${(data.durationMs / 1000).toFixed(1)}s` : "";
-    const tokens = data.tokens?.total ? `${data.tokens.total} tok` : "";
-    const stats = [duration, tokens].filter(Boolean).join(", ");
+    // Phased-batch agents (planners/reviewers) get a SINGLE aggregated signal via
+    // checkPlannerCompletion/checkReviewCycleCompletion once the whole batch is
+    // done; the per-agent "X completed" line is redundant noise there (item 6).
+    // Free agents (advisor/explore/task/deep-debugger/ad-hoc) keep it as their
+    // only completion signal.
+    const step = orchestrator.active.state.step;
+    const isPhasedBatch = step === "await_planners" || step === "await_reviewers";
+    if (!isPhasedBatch) {
+      const desc = data.description || data.type || data.id;
+      const duration = data.durationMs ? `${(data.durationMs / 1000).toFixed(1)}s` : "";
+      const tokens = data.tokens?.total ? `${data.tokens.total} tok` : "";
+      const stats = [duration, tokens].filter(Boolean).join(", ");
 
-    orchestrator.transitionController.sendCustom(
-      {
-        customType: "pp-subagent-result",
-        content: `${desc} completed${stats ? ` (${stats})` : ""}. Use get_subagent_result to read the output.`,
-        display: false,
-      },
-      "context",
-    );
+      orchestrator.transitionController.sendCustom(
+        {
+          customType: "pp-subagent-result",
+          content: `${desc} completed${stats ? ` (${stats})` : ""}. Use get_subagent_result to read the output.`,
+          display: false,
+        },
+        "context",
+      );
+    }
 
     checkPlannerCompletion();
     checkReviewCycleCompletion();
