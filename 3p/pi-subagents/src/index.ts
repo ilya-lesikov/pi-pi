@@ -474,6 +474,13 @@ export default function (pi: ExtensionAPI) {
         widget.ensureTimer();
         widget.update();
       },
+      // Runtime control of the background-concurrency limit from outside this
+      // package (pi-pi orchestrator applies its configured
+      // agents.maxConcurrentSubagents here). setMaxConcurrent clamps >=1 and
+      // drains the queue, so raising it mid-session starts queued agents
+      // immediately. Local patch — restore after a subtree update drops it.
+      setMaxConcurrent: (n: number) => manager.setMaxConcurrent(n),
+      getMaxConcurrent: () => manager.getMaxConcurrent(),
     };
 
     (globalThis as any)[MENU_KEY] = {
