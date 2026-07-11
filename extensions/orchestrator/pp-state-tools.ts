@@ -3,6 +3,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "path";
 import { Type } from "@sinclair/typebox";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import type { Orchestrator } from "./orchestrator.js";
+import { saveTask } from "./state.js";
 import { getLogger } from "./log.js";
 import {
   validateArtifact,
@@ -197,6 +198,18 @@ function renderStateResult(result: ToolResult, options: { isPartial?: boolean },
 // summary and no details.diff, so the TUI shows nothing large. Structure is
 // validated inline (rejecting bad writes up front) instead of via an appended
 // <validation-error> round-trip on the generic tools.
+// These tools only ever write the reviewed artifact set (USER_REQUEST.md,
+// RESEARCH.md, artifacts/*.md, plans/*_synthesized.md), so a successful write
+// invalidates any prior clean review for the phase — otherwise "Auto review,
+// then continue" would skip re-review over content changed through the preferred
+// state-file tools (the generic edit/write hook does not see these writes).
+function invalidateCleanReview(orchestrator: Orchestrator): void {
+  const active = orchestrator.active;
+  if (!active?.state?.reviewApprovedClean) return;
+  active.state.reviewApprovedClean = false;
+  try { saveTask(active.dir, active.state); } catch { /* best-effort */ }
+}
+
 export function registerStateFileTools(orchestrator: Orchestrator): void {
   const pi = orchestrator.pi;
   const log = getLogger();
@@ -235,6 +248,7 @@ export function registerStateFileTools(orchestrator: Orchestrator): void {
         return err(`Failed to write ${resolved.label}: ${e?.message ?? String(e)}`);
       }
       const { added, removed } = lineDelta(before, content);
+      invalidateCleanReview(orchestrator);
       log.debug({ s: "tool", tool: "pp_write_state_file", path: resolved.label, added, removed }, "state file written");
       const verb = existed ? "Updated" : "Created";
       return ok(`${verb} ${resolved.label} (+${added}/-${removed} lines)`);
@@ -288,6 +302,7 @@ export function registerStateFileTools(orchestrator: Orchestrator): void {
         return err(`Failed to write ${resolved.label}: ${e?.message ?? String(e)}`);
       }
       const { added, removed } = lineDelta(before, after);
+      invalidateCleanReview(orchestrator);
       log.debug(
         { s: "tool", tool: "pp_edit_state_file", path: resolved.label, occurrences, replaceAll, added, removed },
         "state file edited",

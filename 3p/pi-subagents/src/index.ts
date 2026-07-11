@@ -272,7 +272,6 @@ export default function (pi: ExtensionAPI) {
   const reloadCustomAgents = () => {
     const userAgents = loadCustomAgents(process.cwd());
     registerAgents(userAgents);
-    // Refresh the advertised subagent_type list in place (see above).
     if (subagentTypeSchema) subagentTypeSchema.description = buildSubagentTypeDesc();
   };
 
@@ -744,6 +743,8 @@ Notes:
 
 Available agent types and the tools they have access to:
 ${buildTypeListText()}
+
+Additional agent types may be registered dynamically at runtime — see the subagent_type parameter for the authoritative, always-current list.
 
 Custom agents can be defined in .pi/agents/<name>.md (project) or ${getAgentDir()}/agents/<name>.md (global) — they are picked up automatically. Project-level agents override global ones. Creating a .md file with the same name as a default agent overrides it.
 

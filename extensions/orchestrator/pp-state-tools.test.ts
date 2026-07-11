@@ -237,3 +237,36 @@ describe("state-file tool rendering (hidden on success, visible on failure/hang)
     });
   }
 });
+
+describe("state-file writes invalidate a clean review (review pass 3)", () => {
+  function setupWithState() {
+    const cwd = makeTempCwd();
+    const taskDir = join(cwd, ".pp", "state", "brainstorm", "abc_brainstorm");
+    mkdirSync(join(taskDir, "artifacts"), { recursive: true });
+    const tools = new Map<string, RegisteredTool>();
+    const state: any = { reviewApprovedClean: true };
+    const orchestrator: any = {
+      cwd,
+      active: { dir: taskDir, state },
+      pi: { registerTool: (t: RegisteredTool) => tools.set(t.name, t) },
+    };
+    registerStateFileTools(orchestrator);
+    return { taskDir, tools, state };
+  }
+
+  it("pp_write_state_file clears reviewApprovedClean", async () => {
+    const { tools, state } = setupWithState();
+    const res = await tools.get("pp_write_state_file")!.execute("1", { path: "RESEARCH.md", content: VALID_RESEARCH });
+    expect(res.isError).toBeFalsy();
+    expect(state.reviewApprovedClean).toBe(false);
+  });
+
+  it("pp_edit_state_file clears reviewApprovedClean", async () => {
+    const { taskDir, tools, state } = setupWithState();
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+    state.reviewApprovedClean = true;
+    const res = await tools.get("pp_edit_state_file")!.execute("1", { path: "RESEARCH.md", oldText: "does a thing", newText: "does another thing" });
+    expect(res.isError).toBeFalsy();
+    expect(state.reviewApprovedClean).toBe(false);
+  });
+});
