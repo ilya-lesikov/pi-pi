@@ -192,23 +192,49 @@ describe("flant-infra", () => {
     expect(specs.some((s) => s.includes("sub/claude-opus-4-9"))).toBe(false);
   });
 
-  it("generateFlantConfig disables gemini by default in all parallel preset groups", async () => {
+  it("generateFlantConfig enables fable+gpt, disables opus+gemini by default in all parallel preset groups", async () => {
     const dir = makeTempDir();
     const mod = await loadFlantInfraModule(dir);
 
     const config = mod.generateFlantConfig(
-      ["claude-opus-4-8", "gpt-5-4", "gemini-3-1-pro", "gemini-3-1-flash"],
+      ["claude-fable-5", "claude-opus-4-8", "gpt-5-4", "gemini-3-1-pro", "gemini-3-1-flash"],
       false,
     ) as any;
 
     const groups = config.agents.subagents.presetGroups;
     for (const group of ["planners", "planReviewers", "codeReviewers", "brainstormReviewers"]) {
       for (const preset of Object.values(groups[group].presets) as any[]) {
+        expect(preset.agents.fable.enabled).toBe(true);
+        expect(preset.agents.opus.enabled).toBe(false);
         expect(preset.agents.gemini.enabled).toBe(false);
-        expect(preset.agents.opus.enabled).toBe(true);
         expect(preset.agents.gpt.enabled).toBe(true);
       }
     }
+  });
+
+  it("routes fable exactly like opus (flant + subscription specs) and points advisor at fable", async () => {
+    const dir = makeTempDir();
+    const mod = await loadFlantInfraModule(dir);
+
+    // Non-sub: both route through pp-flant-anthropic/claude-<family>-*.
+    const flant = mod.generateFlantConfig(["claude-fable-5", "claude-opus-4-8", "gpt-5-4"], false) as any;
+    const fFable = flant.agents.subagents.presetGroups.planners.presets.regular.agents.fable.model;
+    const fOpus = flant.agents.subagents.presetGroups.planners.presets.regular.agents.opus.model;
+    expect(fFable).toBe("pp-flant-anthropic/claude-fable-5");
+    expect(fOpus).toBe("pp-flant-anthropic/claude-opus-4-8");
+    expect(flant.agents.subagents.simple.advisor.model).toBe("pp-flant-anthropic/claude-fable-5");
+
+    // Subscription-confirmed (bare + sub/ variants present): both route through
+    // pp-flant-anthropic-sub/sub/claude-<family>-*.
+    const subCfg = mod.generateFlantConfig(
+      ["claude-fable-5", "claude-opus-4-8", "sub/claude-fable-5", "sub/claude-opus-4-8", "gpt-5-4"],
+      true,
+    ) as any;
+    const sFable = subCfg.agents.subagents.presetGroups.planners.presets.regular.agents.fable.model;
+    const sOpus = subCfg.agents.subagents.presetGroups.planners.presets.regular.agents.opus.model;
+    expect(sFable).toBe("pp-flant-anthropic-sub/sub/claude-fable-5");
+    expect(sOpus).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
+    expect(subCfg.agents.subagents.simple.advisor.model).toBe("pp-flant-anthropic-sub/sub/claude-fable-5");
   });
 
   it("skips the sub provider when subscription enabled but OAuth token missing", async () => {

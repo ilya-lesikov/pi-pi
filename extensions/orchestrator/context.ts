@@ -12,7 +12,7 @@ type AgentGroup = "all" | "subagents";
 type InjectMode = "system" | "context";
 type PhaseFilter = "brainstorm" | "debug" | "plan" | "implement" | "review";
 type VendorFilter = "anthropic" | "openai" | "google" | "unknown";
-type FamilyFilter = "opus" | "sonnet" | "haiku" | "gpt" | "gpt-mini" | "gemini-pro" | "gemini-flash" | "unknown";
+type FamilyFilter = "opus" | "fable" | "sonnet" | "haiku" | "gpt" | "gpt-mini" | "gemini-pro" | "gemini-flash" | "unknown";
 type TierFilter = "stupid" | "regular" | "smart" | "xsmart" | "unknown";
 type ModelInfo = { vendor: string; family: string; tier: string };
 
@@ -36,7 +36,7 @@ const VALID_AGENTS: readonly string[] = ["main", "explore", "librarian", "planne
 const VALID_AGENT_GROUPS: readonly string[] = ["all", "subagents"];
 const VALID_PHASES: readonly string[] = ["brainstorm", "debug", "plan", "implement", "review"];
 const VALID_VENDORS: readonly string[] = ["anthropic", "openai", "google", "unknown"];
-const VALID_FAMILIES: readonly string[] = ["opus", "sonnet", "haiku", "gpt", "gpt-mini", "gemini-pro", "gemini-flash", "unknown"];
+const VALID_FAMILIES: readonly string[] = ["opus", "fable", "sonnet", "haiku", "gpt", "gpt-mini", "gemini-pro", "gemini-flash", "unknown"];
 const VALID_TIERS: readonly string[] = ["stupid", "regular", "smart", "xsmart", "unknown"];
 
 function parseFrontmatter(raw: string): { frontmatter: Frontmatter; body: string } {

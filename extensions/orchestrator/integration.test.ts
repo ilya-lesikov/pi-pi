@@ -2379,16 +2379,27 @@ describe("task modes and quick task", () => {
     expect(orchestrator.active!.state.description).toBe("review");
   });
 
-  it("captures only the FIRST line of a multi-line initiating prompt (#7 privacy)", async () => {
+  it("collapses a multi-line initiating prompt into one line (#8), bounded by the 700-char cap", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);
     const ctx = makeCtx({ cwd });
 
     await orchestrator.startTask({ ...ctx, cwd } as any, "review", "review", undefined, undefined, "guided");
     const beforeStart = pi._handlers.get("before_agent_start")!;
-    await beforeStart({ systemPrompt: "base", prompt: "Review the auth refactor\nSECRET=hunter2\nmore body text" }, ctx);
-    expect(orchestrator.active!.state.description).toBe("Review the auth refactor");
-    expect(orchestrator.active!.state.description).not.toContain("SECRET");
+    await beforeStart({ systemPrompt: "base", prompt: "Review the auth refactor\nand the token store\nfor race conditions" }, ctx);
+    expect(orchestrator.active!.state.description).toBe("Review the auth refactor and the token store for race conditions");
+  });
+
+  it("caps the collapsed multi-line description at 700 chars (#8)", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx({ cwd });
+
+    await orchestrator.startTask({ ...ctx, cwd } as any, "review", "review", undefined, undefined, "guided");
+    const beforeStart = pi._handlers.get("before_agent_start")!;
+    const longPrompt = "line one\n" + "x".repeat(2000);
+    await beforeStart({ systemPrompt: "base", prompt: longPrompt }, ctx);
+    expect(orchestrator.active!.state.description.length).toBe(700);
   });
 
   it("blocks ask_user in autonomous mode after first phase", async () => {
@@ -4084,7 +4095,7 @@ describe("session lifecycle", () => {
     expect(toolNames).toContain("pp_register_repo");
   });
 
-  it("session_start detects paused tasks and notifies", async () => {
+  it("session_start does not notify about paused tasks (#1: all hints removed)", async () => {
     const cwd = makeTempDir();
     createTask(cwd, "implement", "Paused task");
     const pi = makePi();
@@ -4096,7 +4107,7 @@ describe("session lifecycle", () => {
     const sessionStart = pi._handlers.get("session_start")!;
     await sessionStart({}, ctx);
 
-    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Paused task"), "info");
+    expect(ctx.ui.notify).not.toHaveBeenCalledWith(expect.stringContaining("Paused task"), "info");
   });
 
   it("session_start loads config", async () => {

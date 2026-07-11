@@ -248,9 +248,10 @@ describe("model-registry", () => {
 
   it("getModelFamilies returns all family definitions", () => {
     const families = getModelFamilies();
-    expect(families).toHaveLength(10);
+    expect(families).toHaveLength(11);
     expect(families.map((f) => f.family).sort()).toEqual([
       "deepseek",
+      "fable",
       "gemini-flash",
       "gemini-pro",
       "gpt",

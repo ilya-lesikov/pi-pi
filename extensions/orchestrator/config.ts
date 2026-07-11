@@ -137,7 +137,8 @@ const DEFAULT_CONFIG: PiPiConfig = {
           presets: {
             regular: {
               agents: {
-                opus: { enabled: true, model: "anthropic/claude-opus-latest", thinking: "high" },
+                fable: { enabled: true, model: "anthropic/claude-fable-latest", thinking: "high" },
+                opus: { enabled: false, model: "anthropic/claude-opus-latest", thinking: "high" },
                 gpt: { enabled: true, model: "openai/gpt-latest", thinking: "high" },
                 gemini: { enabled: false, model: "google/gemini-pro-latest", thinking: "high" },
               },
@@ -149,14 +150,16 @@ const DEFAULT_CONFIG: PiPiConfig = {
           presets: {
             regular: {
               agents: {
-                opus: { enabled: true, model: "anthropic/claude-opus-latest", thinking: "high" },
+                fable: { enabled: true, model: "anthropic/claude-fable-latest", thinking: "high" },
+                opus: { enabled: false, model: "anthropic/claude-opus-latest", thinking: "high" },
                 gpt: { enabled: true, model: "openai/gpt-latest", thinking: "high" },
                 gemini: { enabled: false, model: "google/gemini-pro-latest", thinking: "xhigh" },
               },
             },
             deep: {
               agents: {
-                opus: { enabled: true, model: "anthropic/claude-opus-latest", thinking: "xhigh" },
+                fable: { enabled: true, model: "anthropic/claude-fable-latest", thinking: "xhigh" },
+                opus: { enabled: false, model: "anthropic/claude-opus-latest", thinking: "xhigh" },
                 gpt: { enabled: true, model: "openai/gpt-latest", thinking: "xhigh" },
                 gemini: { enabled: false, model: "google/gemini-pro-latest", thinking: "xhigh" },
               },
@@ -168,14 +171,16 @@ const DEFAULT_CONFIG: PiPiConfig = {
           presets: {
             regular: {
               agents: {
-                opus: { enabled: true, model: "anthropic/claude-opus-latest", thinking: "high" },
+                fable: { enabled: true, model: "anthropic/claude-fable-latest", thinking: "high" },
+                opus: { enabled: false, model: "anthropic/claude-opus-latest", thinking: "high" },
                 gpt: { enabled: true, model: "openai/gpt-latest", thinking: "high" },
                 gemini: { enabled: false, model: "google/gemini-pro-latest", thinking: "xhigh" },
               },
             },
             deep: {
               agents: {
-                opus: { enabled: true, model: "anthropic/claude-opus-latest", thinking: "xhigh" },
+                fable: { enabled: true, model: "anthropic/claude-fable-latest", thinking: "xhigh" },
+                opus: { enabled: false, model: "anthropic/claude-opus-latest", thinking: "xhigh" },
                 gpt: { enabled: true, model: "openai/gpt-latest", thinking: "xhigh" },
                 gemini: { enabled: false, model: "google/gemini-pro-latest", thinking: "xhigh" },
               },
@@ -187,14 +192,16 @@ const DEFAULT_CONFIG: PiPiConfig = {
           presets: {
             regular: {
               agents: {
-                opus: { enabled: true, model: "anthropic/claude-opus-latest", thinking: "high" },
+                fable: { enabled: true, model: "anthropic/claude-fable-latest", thinking: "high" },
+                opus: { enabled: false, model: "anthropic/claude-opus-latest", thinking: "high" },
                 gpt: { enabled: true, model: "openai/gpt-latest", thinking: "high" },
                 gemini: { enabled: false, model: "google/gemini-pro-latest", thinking: "xhigh" },
               },
             },
             deep: {
               agents: {
-                opus: { enabled: true, model: "anthropic/claude-opus-latest", thinking: "xhigh" },
+                fable: { enabled: true, model: "anthropic/claude-fable-latest", thinking: "xhigh" },
+                opus: { enabled: false, model: "anthropic/claude-opus-latest", thinking: "xhigh" },
                 gpt: { enabled: true, model: "openai/gpt-latest", thinking: "xhigh" },
                 gemini: { enabled: false, model: "google/gemini-pro-latest", thinking: "xhigh" },
               },

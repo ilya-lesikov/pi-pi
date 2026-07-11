@@ -1,7 +1,7 @@
 import { compareModelVersion } from "./model-version.js";
 
 export type Vendor = "anthropic" | "openai" | "google" | "deepseek" | "xai" | "qwen" | "unknown";
-export type Family = "opus" | "sonnet" | "haiku" | "gpt" | "gpt-mini" | "gemini-pro" | "gemini-flash" | "deepseek" | "grok" | "qwen" | "unknown";
+export type Family = "opus" | "fable" | "sonnet" | "haiku" | "gpt" | "gpt-mini" | "gemini-pro" | "gemini-flash" | "deepseek" | "grok" | "qwen" | "unknown";
 export type Tier = "stupid" | "regular" | "smart" | "xsmart" | "unknown";
 
 export interface ModelInfo {
@@ -13,7 +13,7 @@ export interface ModelInfo {
 
 type ProviderPrefix = "anthropic" | "openai" | "google" | "deepseek" | "x-ai" | "qwen" | "pp-flant-anthropic" | "pp-flant-anthropic-sub" | "pp-flant-openai";
 type KnownVendor = "anthropic" | "openai" | "google" | "deepseek" | "xai" | "qwen";
-type KnownFamily = "opus" | "sonnet" | "haiku" | "gpt" | "gpt-mini" | "gemini-pro" | "gemini-flash" | "deepseek" | "grok" | "qwen";
+type KnownFamily = "opus" | "fable" | "sonnet" | "haiku" | "gpt" | "gpt-mini" | "gemini-pro" | "gemini-flash" | "deepseek" | "grok" | "qwen";
 type KnownTier = "stupid" | "regular" | "smart" | "xsmart";
 
 export interface ModelFamilyDefinition {
@@ -44,6 +44,16 @@ export const MODEL_FAMILIES: ModelFamilyDefinition[] = [
     displayName: "Claude Opus",
     patterns: [/^(anthropic|pp-flant-anthropic)\/claude-opus-[a-z0-9.-]+$/, /^pp-flant-anthropic-sub\/sub\/claude-opus-[a-z0-9.-]+$/],
     aliasTemplate: "claude-opus-latest",
+    providers: ["anthropic", "pp-flant-anthropic", "pp-flant-anthropic-sub"],
+    nativeLatestProviders: ["anthropic"],
+  },
+  {
+    vendor: "anthropic",
+    family: "fable",
+    tier: "xsmart",
+    displayName: "Claude Fable",
+    patterns: [/^(anthropic|pp-flant-anthropic)\/claude-fable-[a-z0-9.-]+$/, /^pp-flant-anthropic-sub\/sub\/claude-fable-[a-z0-9.-]+$/],
+    aliasTemplate: "claude-fable-latest",
     providers: ["anthropic", "pp-flant-anthropic", "pp-flant-anthropic-sub"],
     nativeLatestProviders: ["anthropic"],
   },
