@@ -2045,10 +2045,10 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       // user prompt qualifies (not a [PI-PI] injection).
       const GENERIC_DESCRIPTIONS = ["implement", "debug", "brainstorm", "review", "quick"];
       if (GENERIC_DESCRIPTIONS.includes(orchestrator.active.state.description) && event.prompt) {
-        // First non-empty LINE only (not the whole multi-line prompt), so body
-        // content below the intent never gets archived into state.description.
-        const firstLine = event.prompt.split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0) ?? "";
-        const captured = firstLine.replace(/\s+/g, " ").trim().slice(0, 700);
+        // Collapse the whole multi-line prompt into one line (newlines → spaces)
+        // so a request whose intent spans several lines isn't cut off at line 1;
+        // the 700-char cap still bounds what lands in state.description.
+        const captured = event.prompt.replace(/\s+/g, " ").trim().slice(0, 700);
         if (captured) {
           orchestrator.active.state.description = captured;
           orchestrator.active.description = captured;

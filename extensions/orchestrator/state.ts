@@ -310,12 +310,17 @@ export function taskName(taskDir: string): string {
   }
 }
 
-// First non-heading, non-empty content line of a markdown file, or null.
-function firstMarkdownContentLine(path: string): string | null {
+// Non-heading, non-empty content of a markdown file, collapsed onto one line
+// (multiple content lines joined with a space), or null. Spanning multiple
+// lines lets a multi-line request survive the later truncate-with-ellipsis
+// instead of being cut off at the first content line. Bounded so a large file
+// (e.g. RESEARCH.md) never builds an unbounded string.
+function firstMarkdownContent(path: string): string | null {
   if (!existsSync(path)) return null;
   const content = readFileSync(path, "utf-8");
-  const lines = content.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
-  return lines.find((l) => !l.startsWith("#")) ?? null;
+  const lines = content.split("\n").map((l) => l.trim()).filter((l) => l.length > 0 && !l.startsWith("#"));
+  if (lines.length === 0) return null;
+  return lines.join(" ").slice(0, 700);
 }
 
 // The full, untrimmed task name (used for the Resume right-pane description).
@@ -326,8 +331,8 @@ export function taskFullName(taskDir: string, state: TaskState): string {
 
   if (["implement", "debug", "brainstorm", "review", "quick"].includes(desc)) {
     const fallback =
-      firstMarkdownContentLine(join(taskDir, "USER_REQUEST.md")) ??
-      firstMarkdownContentLine(join(taskDir, "RESEARCH.md")) ??
+      firstMarkdownContent(join(taskDir, "USER_REQUEST.md")) ??
+      firstMarkdownContent(join(taskDir, "RESEARCH.md")) ??
       firstArtifactTitle(taskDir);
     if (fallback) desc = fallback;
   }
