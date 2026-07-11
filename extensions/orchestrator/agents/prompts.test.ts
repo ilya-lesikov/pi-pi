@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { getDefaultConfig, resolvePreset } from "../config.js";
-import { DELEGATION_BLOCK } from "./tool-routing.js";
+import { delegationBlock, toolsBlock, parseToolNames } from "./tool-routing.js";
 import { createAdvisorAgent } from "./advisor.js";
 import { createDeepDebuggerAgent } from "./deep-debugger.js";
 import { createReviewerAgent } from "./reviewer.js";
@@ -12,41 +12,74 @@ import { createBrainstormReviewerAgent } from "./brainstorm-reviewer.js";
 
 const config = getDefaultConfig();
 
-describe("DELEGATION_BLOCK", () => {
-  it("covers all free-form agents with lowercase registry names", () => {
-    for (const name of ["explore", "librarian", "task", "advisor", "advisor2", "advisor3", "deep-debugger", "reviewer"]) {
-      expect(DELEGATION_BLOCK).toContain(name);
+describe("delegationBlock", () => {
+  const pools = {
+    advisors: [{ name: "advisor_x_high", model: "anthropic/claude-fable-latest", family: "fable", tier: "xsmart", thinking: "high" }],
+    reviewers: [{ name: "reviewer_y_high", model: "openai/gpt-latest", family: "gpt", tier: "smart", thinking: "high" }],
+    deepDebuggers: [{ name: "deep-debugger_z_high", model: "openai/gpt-latest", family: "gpt", tier: "smart", thinking: "high" }],
+  };
+
+  it("covers the free-form roles and the model-named pool rules", () => {
+    const block = delegationBlock("opus", pools);
+    for (const name of ["explore", "librarian", "task", "advisor", "deep-debugger", "reviewer"]) {
+      expect(block).toContain(name);
     }
+    expect(block).toContain("model-named");
+    expect(block).toContain("SAME PROVIDER");
+    expect(block).toContain("opus MAY call fable");
   });
 
   it("states the reviewer and deep-debugger gating explicitly", () => {
-    expect(DELEGATION_BLOCK).toContain("ONLY when the user explicitly asks");
-    expect(DELEGATION_BLOCK).toMatch(/deep-debugger diagnoses/i);
-    expect(DELEGATION_BLOCK).toContain("must NOT write the actual fix");
+    const block = delegationBlock("opus", pools);
+    expect(block).toContain("ONLY when the user explicitly asks");
+    expect(block).toMatch(/deep-debugger diagnoses/i);
+    expect(block).toContain("must NOT write the actual fix");
+  });
+
+  it("renders the configured pool roster with model metadata", () => {
+    const block = delegationBlock("opus", pools);
+    expect(block).toContain("advisor_x_high");
+    expect(block).toContain("anthropic/claude-fable-latest");
+    expect(block).toContain("tier xsmart");
+  });
+});
+
+describe("toolsBlock only advertises granted tools", () => {
+  it("omits pp_register_repo and lsp/cbm guidance for a minimal agent", () => {
+    const block = toolsBlock(parseToolNames("read, bash, grep, find, exa_search, exa_fetch"));
+    expect(block).not.toContain("pp_register_repo");
+    expect(block).not.toContain("lsp goToDefinition");
+    expect(block).not.toContain("cbm_search");
+    expect(block).toContain("exa_search");
+  });
+
+  it("includes pp_register_repo and the lsp/grep guidance for the main tool set", () => {
+    const block = toolsBlock(["read", "bash", "edit", "write", "grep", "find", "ls", "lsp", "cbm_search", "pp_register_repo"]);
+    expect(block).toContain("pp_register_repo");
+    expect(block).toContain("NEVER grep for definitions");
+    expect(block).toContain("cbm_search");
   });
 });
 
 describe("new free-form agent factories", () => {
   it("advisor is read-only (no write/edit) and reasons in Diagnosis/Options/Recommendation", () => {
-    const a = createAdvisorAgent(config);
+    const a = createAdvisorAgent({ model: "anthropic/claude-fable-latest", thinking: "high" });
     expect(a.frontmatter.tools).not.toContain("write");
     expect(a.frontmatter.tools).not.toContain("edit");
     expect(a.prompt).toContain("READ-ONLY");
     expect(a.prompt).toContain("Diagnosis");
     expect(a.prompt).toContain("Recommendation");
+    expect(a.prompt).toContain("<identity>");
   });
 
-  it("advisor/advisor2/advisor3 resolve to their per-role configured models", () => {
-    const a1 = createAdvisorAgent(config, "advisor");
-    const a2 = createAdvisorAgent(config, "advisor2");
-    const a3 = createAdvisorAgent(config, "advisor3");
-    expect(a1.frontmatter.model).toContain("opus");
-    expect(a2.frontmatter.model).toContain("gpt");
-    expect(a3.frontmatter.model).toContain("gemini");
+  it("advisor resolves the configured pool-entry model + thinking", () => {
+    const a = createAdvisorAgent({ model: "openai/gpt-latest", thinking: "xhigh" });
+    expect(a.frontmatter.model).toContain("gpt");
+    expect(a.frontmatter.thinking).toBe("xhigh");
   });
 
   it("deep-debugger has write/edit but restricts writes to diagnosis only", () => {
-    const d = createDeepDebuggerAgent(config);
+    const d = createDeepDebuggerAgent({ model: "openai/gpt-latest", thinking: "high" });
     expect(d.frontmatter.tools).toContain("write");
     expect(d.frontmatter.tools).toContain("edit");
     expect(d.prompt).toContain("DIAGNOSIS ONLY");
@@ -54,7 +87,7 @@ describe("new free-form agent factories", () => {
   });
 
   it("reviewer is read-only, retains bash for git diff, and is verdict-first", () => {
-    const r = createReviewerAgent(config);
+    const r = createReviewerAgent({ model: "openai/gpt-latest", thinking: "high" });
     expect(r.frontmatter.tools).toContain("bash");
     expect(r.frontmatter.tools).not.toContain("write");
     expect(r.frontmatter.tools).not.toContain("edit");

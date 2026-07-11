@@ -1,21 +1,23 @@
-import type { PiPiConfig, SimpleSubagentRole } from "../config.js";
-import { resolveModel } from "../model-registry.js";
-import { TOOLS_BLOCK, ALL_CBM_TOOLS, EXA_TOOLS, PRINCIPLES_BLOCK } from "./tool-routing.js";
+import type { PoolEntry } from "../config.js";
+import { getModelInfo, resolveModel } from "../model-registry.js";
+import { toolsBlock, parseToolNames, identityBlock, ALL_CBM_TOOLS, EXA_TOOLS, PRINCIPLES_BLOCK } from "./tool-routing.js";
 
-type AdvisorRole = Extract<SimpleSubagentRole, "advisor" | "advisor2" | "advisor3">;
-
-export function createAdvisorAgent(config: PiPiConfig, role: AdvisorRole = "advisor") {
-  const roleConfig = config.agents.subagents.simple[role];
+export function createAdvisorAgent(entry: PoolEntry) {
+  const model = resolveModel(entry.model);
+  const tools = `read, bash, grep, find, ls, lsp, ast_search, ${ALL_CBM_TOOLS}, ${EXA_TOOLS}`;
+  const info = getModelInfo(model);
   return {
     frontmatter: {
       description: "Deep-reasoning advisor for design decisions and 'why is this broken' analysis (pi-pi)",
-      tools: `read, bash, grep, find, ls, lsp, ast_search, ${ALL_CBM_TOOLS}, ${EXA_TOOLS}`,
-      model: resolveModel(roleConfig.model),
-      thinking: roleConfig.thinking,
+      tools,
+      model,
+      thinking: entry.thinking,
       max_turns: 120,
       prompt_mode: "replace",
     },
     prompt: [
+      identityBlock({ displayName: info.displayName, family: info.family, tier: info.tier, thinking: entry.thinking }),
+      "",
       "<constraints>",
       "You are a deep-reasoning ADVISOR. You investigate one hard question — a design decision, an architecture tradeoff, a \"why is this broken\", or a correctness/soundness judgment — and return a reasoned recommendation backed by evidence.",
       "These rules override your default helpfulness. Strict compliance is required.",
@@ -24,7 +26,7 @@ export function createAdvisorAgent(config: PiPiConfig, role: AdvisorRole = "advi
       "",
       PRINCIPLES_BLOCK,
       "",
-      TOOLS_BLOCK,
+      toolsBlock(parseToolNames(tools)),
       "",
       "<task>",
       "- Verify every claim with tool calls — read the actual code. Never reason from memory about this codebase.",

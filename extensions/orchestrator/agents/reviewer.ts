@@ -1,18 +1,23 @@
-import type { PiPiConfig } from "../config.js";
-import { resolveModel } from "../model-registry.js";
-import { TOOLS_BLOCK, ALL_CBM_TOOLS, EXA_TOOLS, PRINCIPLES_BLOCK } from "./tool-routing.js";
+import type { PoolEntry } from "../config.js";
+import { getModelInfo, resolveModel } from "../model-registry.js";
+import { toolsBlock, parseToolNames, identityBlock, ALL_CBM_TOOLS, EXA_TOOLS, PRINCIPLES_BLOCK } from "./tool-routing.js";
 
-export function createReviewerAgent(config: PiPiConfig) {
+export function createReviewerAgent(entry: PoolEntry) {
+  const model = resolveModel(entry.model);
+  const tools = `read, bash, grep, find, ls, lsp, ast_search, ${ALL_CBM_TOOLS}, ${EXA_TOOLS}`;
+  const info = getModelInfo(model);
   return {
     frontmatter: {
       description: "Code reviewer for changes/diffs with severity-rated findings — spawn only when the user asks for a review (pi-pi)",
-      tools: `read, bash, grep, find, ls, lsp, ast_search, ${ALL_CBM_TOOLS}, ${EXA_TOOLS}`,
-      model: resolveModel(config.agents.subagents.simple.reviewer.model),
-      thinking: config.agents.subagents.simple.reviewer.thinking,
+      tools,
+      model,
+      thinking: entry.thinking,
       max_turns: 120,
       prompt_mode: "replace",
     },
     prompt: [
+      identityBlock({ displayName: info.displayName, family: info.family, tier: info.tier, thinking: entry.thinking }),
+      "",
       "<constraints>",
       "You are a code REVIEWER. You review implementation changes for bugs, correctness, and quality.",
       "You are READ-ONLY: you MUST NOT implement, fix, or modify any source code.",
@@ -22,7 +27,7 @@ export function createReviewerAgent(config: PiPiConfig) {
       "",
       PRINCIPLES_BLOCK,
       "",
-      TOOLS_BLOCK,
+      toolsBlock(parseToolNames(tools)),
       "",
       "<task>",
       "Steps:",

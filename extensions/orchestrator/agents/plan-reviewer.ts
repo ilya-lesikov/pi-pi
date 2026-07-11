@@ -3,7 +3,7 @@ import { loadAllContextFiles, formatManifestBlock } from "../context.js";
 import { resolveModel, getModelInfo } from "../model-registry.js";
 import type { RepoInfo } from "../repo-utils.js";
 import { buildRepoContext } from "./repo-context.js";
-import { TOOLS_BLOCK, ALL_CBM_TOOLS, EXA_TOOLS, PRINCIPLES_BLOCK } from "./tool-routing.js";
+import { toolsBlock, parseToolNames, identityBlock, ALL_CBM_TOOLS, EXA_TOOLS, PRINCIPLES_BLOCK } from "./tool-routing.js";
 
 export function createPlanReviewerAgent(
   variant: string,
@@ -18,20 +18,24 @@ export function createPlanReviewerAgent(
   if (!variantConfig) {
     throw new Error(`Unknown plan-reviewer variant: ${variant}`);
   }
+  const info = getModelInfo(resolveModel(variantConfig.model));
   const contextFiles = loadAllContextFiles(contextDirs, "planReviewer", "system", phase, getModelInfo(variantConfig.model));
   const contextBlock = contextFiles.map((f) => f.content).join("\n\n");
   const repoContext = buildRepoContext(repos);
+  const tools = `read, grep, find, bash, write, lsp, ast_search, ${ALL_CBM_TOOLS}, ${EXA_TOOLS}`;
 
   return {
     frontmatter: {
       description: `Plan reviewer (${variant} variant, pi-pi)`,
-      tools: `read, grep, find, bash, write, lsp, ast_search, ${ALL_CBM_TOOLS}, ${EXA_TOOLS}`,
+      tools,
       model: resolveModel(variantConfig.model),
       thinking: variantConfig.thinking,
       max_turns: 120,
       prompt_mode: "replace",
     },
     prompt: [
+      identityBlock({ displayName: info.displayName, family: info.family, tier: info.tier, thinking: variantConfig.thinking }),
+      "",
       // --- static prefix (cacheable) ---
       "<constraints>",
       "You are a plan reviewer. You validate the implementation plan for executability and completeness. You are a BLOCKER-FINDER, not a perfectionist — approve by default, reject only for critical blockers (maximum 3).",
@@ -43,7 +47,7 @@ export function createPlanReviewerAgent(
       "",
       PRINCIPLES_BLOCK,
       "",
-      TOOLS_BLOCK,
+      toolsBlock(parseToolNames(tools)),
       "",
       ...(contextBlock ? ["<project_context>", contextBlock, "</project_context>", ""] : []),
       "<task>",

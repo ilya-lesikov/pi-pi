@@ -20,7 +20,7 @@ import { planningSystemPrompt, spawnPlanners } from "./phases/planning.js";
 import { implementationSystemPrompt } from "./phases/implementation.js";
 import { reviewSystemPrompt as reviewCycleSystemPrompt } from "./phases/review.js";
 import { reviewSystemPrompt as reviewTaskSystemPrompt } from "./phases/review-task.js";
-import { registerAgentDefinitions, unregisterAgentDefinitions } from "./agents/registry.js";
+import { registerAgentDefinitions, unregisterAgentDefinitions, encodePoolVariant } from "./agents/registry.js";
 import { createExploreAgent } from "./agents/explore.js";
 import { createLibrarianAgent } from "./agents/librarian.js";
 import { createTaskAgent } from "./agents/task.js";
@@ -715,11 +715,6 @@ export class Orchestrator {
     const explore = createExploreAgent(this.config);
     const librarian = createLibrarianAgent(this.config);
     const taskAgent = createTaskAgent(this.config);
-    const advisor = createAdvisorAgent(this.config, "advisor");
-    const advisor2 = createAdvisorAgent(this.config, "advisor2");
-    const advisor3 = createAdvisorAgent(this.config, "advisor3");
-    const deepDebugger = createDeepDebuggerAgent(this.config);
-    const reviewer = createReviewerAgent(this.config);
     const phase = this.active?.state.phase;
     const repos = this.active?.state.repos ?? [];
     log.debug({ s: "agents", phase, repoCount: repos.length }, "registering agent definitions");
@@ -756,37 +751,58 @@ export class Orchestrator {
         ...taskAgent,
         prompt: appendContext("task", taskAgent.prompt, getModelInfo(resolveModel(this.config.agents.subagents.simple.task.model))),
       },
-      {
-        type: "advisor",
-        variant: null,
-        ...advisor,
-        prompt: appendContext("advisor", advisor.prompt, getModelInfo(resolveModel(this.config.agents.subagents.simple.advisor.model))),
-      },
-      {
-        type: "advisor2",
-        variant: null,
-        ...advisor2,
-        prompt: appendContext("advisor2", advisor2.prompt, getModelInfo(resolveModel(this.config.agents.subagents.simple.advisor2.model))),
-      },
-      {
-        type: "advisor3",
-        variant: null,
-        ...advisor3,
-        prompt: appendContext("advisor3", advisor3.prompt, getModelInfo(resolveModel(this.config.agents.subagents.simple.advisor3.model))),
-      },
-      {
-        type: "deep-debugger",
-        variant: null,
-        ...deepDebugger,
-        prompt: appendContext("deep-debugger", deepDebugger.prompt, getModelInfo(resolveModel(this.config.agents.subagents.simple["deep-debugger"].model))),
-      },
-      {
-        type: "reviewer",
-        variant: null,
-        ...reviewer,
-        prompt: appendContext("reviewer", reviewer.prompt, getModelInfo(resolveModel(this.config.agents.subagents.simple.reviewer.model))),
-      },
+      ...this.buildPoolAgentDefinitions(appendContext),
     ]);
+  }
+
+  // Register one model-named subagent per ENABLED entry in each on-demand pool
+  // (advisors / reviewers / deep-debuggers). The variant token encodes the
+  // model+thinking so the caller can see exactly what each is; the base `type`
+  // (advisor/reviewer/deep-debugger) drives context-file lookup. A collision
+  // after name sanitization is skipped (do not silently merge two entries).
+  private buildPoolAgentDefinitions(
+    appendContext: (agentType: string, prompt: string, modelInfo: { vendor: string; family: string; tier: string }) => string,
+  ): Array<{ type: string; variant: string; frontmatter: any; prompt: string }> {
+    const pools = this.config.agents.subagents.pools;
+    const defs: Array<{ type: string; variant: string; frontmatter: any; prompt: string }> = [];
+    const seen = new Set<string>();
+    const add = (
+      baseType: "advisor" | "reviewer" | "deep-debugger",
+      entry: { model: string; thinking: string; enabled?: boolean },
+      make: (e: { model: string; thinking: string }) => { frontmatter: any; prompt: string },
+    ) => {
+      if (entry.enabled === false) return;
+      const variant = encodePoolVariant(resolveModel(entry.model), entry.thinking);
+      const name = `${baseType}_${variant}`;
+      if (seen.has(name)) {
+        getLogger().warn({ s: "agents", name }, "pool entry collides after sanitization; skipping");
+        return;
+      }
+      seen.add(name);
+      const agent = make(entry);
+      defs.push({
+        type: baseType,
+        variant,
+        frontmatter: agent.frontmatter,
+        prompt: appendContext(baseType, agent.prompt, getModelInfo(resolveModel(entry.model))),
+      });
+    };
+    for (const e of pools.advisors) add("advisor", e, createAdvisorAgent);
+    for (const e of pools.reviewers) add("reviewer", e, createReviewerAgent);
+    for (const e of pools.deepDebuggers) add("deep-debugger", e, createDeepDebuggerAgent);
+    return defs;
+  }
+
+  // The orchestrator (main-agent) model config that applies to a phase — the
+  // source of truth for the thinking level shown in the main agent's identity
+  // block. Mirrors the phase→model selection in injectContextAndArtifacts.
+  mainAgentConfigForPhase(phase: Phase | undefined): { model: string; thinking: string } {
+    const o = this.config.agents.orchestrators;
+    if (phase === "debug" && this.active?.type === "debug") return o.debug;
+    if (phase === "brainstorm" && this.active?.type === "brainstorm") return o.brainstorm;
+    if (phase === "review" && this.active?.type === "review") return o.review;
+    if (phase === "plan") return o.plan;
+    return o.implement;
   }
 
   injectContextAndArtifacts(taskDir: string, phase: Phase): void {

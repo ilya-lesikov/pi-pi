@@ -40,14 +40,18 @@ vi.mock("./cbm.js", () => ({ registerCbmTools: vi.fn() }));
 vi.mock("./exa.js", () => ({ registerExaTools: vi.fn() }));
 vi.mock("./ast-search.js", () => ({ registerAstSearchTool: vi.fn() }));
 vi.mock("./doctor.js", () => ({ runDoctor: vi.fn(async () => undefined) }));
-vi.mock("./agents/registry.js", () => ({
-  registerAgentDefinitions: vi.fn(),
-  unregisterAgentDefinitions: vi.fn(),
-  setExtensionOnlyMode: vi.fn(),
-  getAgentConfigSnapshot: vi.fn(() => undefined),
-  spawnViaRpc: vi.fn(async (_pi: any, _type: string) => ({ id: `mock-${Math.random().toString(36).slice(2)}` })),
-  waitForCompletion: vi.fn(async () => undefined),
-}));
+vi.mock("./agents/registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./agents/registry.js")>();
+  return {
+    ...actual,
+    registerAgentDefinitions: vi.fn(),
+    unregisterAgentDefinitions: vi.fn(),
+    setExtensionOnlyMode: vi.fn(),
+    getAgentConfigSnapshot: vi.fn(() => undefined),
+    spawnViaRpc: vi.fn(async (_pi: any, _type: string) => ({ id: `mock-${Math.random().toString(36).slice(2)}` })),
+    waitForCompletion: vi.fn(async () => undefined),
+  };
+});
 
 vi.mock("./config.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("./config.js")>();
@@ -72,11 +76,14 @@ vi.mock("./config.js", async (importOriginal) => {
           explore: { model: "test/explore", thinking: "low" },
           librarian: { model: "test/librarian", thinking: "medium" },
           task: { model: "test/task", thinking: "medium" },
-          advisor: { model: "test/advisor", thinking: "high" },
-          advisor2: { model: "test/advisor2", thinking: "high" },
-          advisor3: { model: "test/advisor3", thinking: "high" },
-          "deep-debugger": { model: "test/deep-debugger", thinking: "high" },
-          reviewer: { model: "test/reviewer", thinking: "high" },
+        },
+        pools: {
+          advisors: [
+            { enabled: true, model: "test/advisor-fable", thinking: "high" },
+            { enabled: true, model: "test/advisor-gpt", thinking: "high" },
+          ],
+          reviewers: [{ enabled: true, model: "test/reviewer", thinking: "high" }],
+          deepDebuggers: [{ enabled: true, model: "test/deep-debugger", thinking: "high" }],
         },
         presetGroups: {
           planners: {
@@ -231,11 +238,14 @@ function makeConfig() {
           explore: { model: "test/explore", thinking: "low" },
           librarian: { model: "test/librarian", thinking: "medium" },
           task: { model: "test/task", thinking: "medium" },
-          advisor: { model: "test/advisor", thinking: "high" },
-          advisor2: { model: "test/advisor2", thinking: "high" },
-          advisor3: { model: "test/advisor3", thinking: "high" },
-          "deep-debugger": { model: "test/deep-debugger", thinking: "high" },
-          reviewer: { model: "test/reviewer", thinking: "high" },
+        },
+        pools: {
+          advisors: [
+            { enabled: true, model: "test/advisor-fable", thinking: "high" },
+            { enabled: true, model: "test/advisor-gpt", thinking: "high" },
+          ],
+          reviewers: [{ enabled: true, model: "test/reviewer", thinking: "high" }],
+          deepDebuggers: [{ enabled: true, model: "test/deep-debugger", thinking: "high" }],
         },
         presetGroups: {
           planners: {
@@ -2199,7 +2209,8 @@ describe("task modes and quick task", () => {
     const beforeStart = pi._handlers.get("before_agent_start")!;
     const result = await beforeStart({ systemPrompt: "HARNESS_BASE_PROMPT" }, ctx);
     const prompt = result?.systemPrompt ?? "";
-    expect(prompt.startsWith("<constraints>")).toBe(true);
+    expect(prompt.startsWith("<identity>")).toBe(true);
+    expect(prompt).toContain("<constraints>");
     expect(prompt).not.toContain("HARNESS_BASE_PROMPT");
     expect(prompt).toContain("The moment its work is complete, call pp_phase_complete");
     // No interactive '/pp menu' advance guidance in autonomous mode.
@@ -2218,7 +2229,8 @@ describe("task modes and quick task", () => {
 
     const beforeStart = pi._handlers.get("before_agent_start")!;
     const prompt = (await beforeStart({ systemPrompt: "HARNESS_BASE_PROMPT" }, ctx))?.systemPrompt ?? "";
-    expect(prompt.startsWith("<constraints>")).toBe(true);
+    expect(prompt.startsWith("<identity>")).toBe(true);
+    expect(prompt).toContain("<constraints>");
     expect(prompt).toContain("ACTIVE PHASE: plan (READ-ONLY)");
     expect(prompt).toContain("<principles>");
     expect(prompt).toContain("<tools>");

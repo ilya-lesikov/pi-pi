@@ -3,7 +3,7 @@ import { loadAllContextFiles, formatManifestBlock } from "../context.js";
 import { resolveModel, getModelInfo } from "../model-registry.js";
 import type { RepoInfo } from "../repo-utils.js";
 import { buildRepoContext } from "./repo-context.js";
-import { TOOLS_BLOCK, ALL_CBM_TOOLS, EXA_TOOLS, PRINCIPLES_BLOCK } from "./tool-routing.js";
+import { toolsBlock, parseToolNames, identityBlock, ALL_CBM_TOOLS, EXA_TOOLS, PRINCIPLES_BLOCK } from "./tool-routing.js";
 
 export function createCodeReviewerAgent(
   variant: string,
@@ -24,17 +24,21 @@ export function createCodeReviewerAgent(
   // A standalone review task (phase "review") has no synthesized plan: review the
   // diff against USER_REQUEST.md/RESEARCH.md, not an implementation plan.
   const hasPlan = typeof taskArtifacts.synthesizedPlan === "string" && taskArtifacts.synthesizedPlan.trim().length > 0;
+  const info = getModelInfo(resolveModel(variantConfig.model));
+  const tools = `read, grep, find, ls, bash, write, lsp, ast_search, ${ALL_CBM_TOOLS}, ${EXA_TOOLS}`;
 
   return {
     frontmatter: {
       description: `Code reviewer (${variant} variant, pi-pi)`,
-      tools: `read, grep, find, ls, bash, write, lsp, ast_search, ${ALL_CBM_TOOLS}, ${EXA_TOOLS}`,
+      tools,
       model: resolveModel(variantConfig.model),
       thinking: variantConfig.thinking,
       max_turns: 120,
       prompt_mode: "replace",
     },
     prompt: [
+      identityBlock({ displayName: info.displayName, family: info.family, tier: info.tier, thinking: variantConfig.thinking }),
+      "",
       // --- static prefix (cacheable) ---
       "<constraints>",
       "You are a code reviewer. You review implementation changes for bugs, correctness, and quality.",
@@ -47,7 +51,7 @@ export function createCodeReviewerAgent(
       "",
       PRINCIPLES_BLOCK,
       "",
-      TOOLS_BLOCK,
+      toolsBlock(parseToolNames(tools)),
       "",
       ...(contextBlock ? ["<project_context>", contextBlock, "</project_context>", ""] : []),
       "<task>",

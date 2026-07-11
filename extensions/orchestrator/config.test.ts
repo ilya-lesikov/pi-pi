@@ -416,6 +416,49 @@ describe("config regressions", () => {
       }),
     ).not.toThrow();
   });
+
+  it("validates dynamic pool entries and rejects a non-array pool", () => {
+    expect(() =>
+      validateConfig({
+        agents: {
+          subagents: {
+            pools: { advisors: { model: "x/y", thinking: "high" } },
+          },
+        },
+      }),
+    ).toThrow("config.agents.subagents.pools.advisors must be an array");
+
+    expect(() =>
+      validateConfig({
+        agents: {
+          subagents: {
+            pools: { advisors: [{ model: "", thinking: "high" }] },
+          },
+        },
+      }),
+    ).toThrow("config.agents.subagents.pools.advisors[0].model must be a non-empty string");
+
+    expect(() =>
+      validateConfig({
+        agents: {
+          subagents: {
+            pools: {
+              advisors: [{ enabled: true, model: "anthropic/claude-fable-latest", thinking: "high" }],
+              reviewers: [{ enabled: false, model: "openai/gpt-latest", thinking: "high" }],
+            },
+          },
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it("default config ships enabled fable+gpt advisors and no fixed advisor role", () => {
+    const config = getDefaultConfig();
+    const advisors = config.agents.subagents.pools.advisors;
+    expect(advisors.filter((a) => a.enabled !== false).length).toBe(2);
+    expect(advisors.some((a) => a.model.includes("fable"))).toBe(true);
+    expect("advisor" in (config.agents.subagents.simple as Record<string, unknown>)).toBe(false);
+  });
 });
 
 describe("config write helpers", () => {

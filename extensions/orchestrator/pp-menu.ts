@@ -18,6 +18,8 @@ import {
   writeConfigValue,
   type PiPiConfig,
   type PresetGroup,
+  type PoolKey,
+  type PoolEntry,
   type OrchestratorRole,
   type VariantConfig,
 } from "./config.js";
@@ -917,11 +919,13 @@ function collectRoleAssignments(config: Partial<PiPiConfig> | null): string[] {
   add("agents.subagents.simple.explore", config.agents?.subagents?.simple?.explore?.model);
   add("agents.subagents.simple.librarian", config.agents?.subagents?.simple?.librarian?.model);
   add("agents.subagents.simple.task", config.agents?.subagents?.simple?.task?.model);
-  add("agents.subagents.simple.advisor", config.agents?.subagents?.simple?.advisor?.model);
-  add("agents.subagents.simple.advisor2", config.agents?.subagents?.simple?.advisor2?.model);
-  add("agents.subagents.simple.advisor3", config.agents?.subagents?.simple?.advisor3?.model);
-  add("agents.subagents.simple.deep-debugger", config.agents?.subagents?.simple?.["deep-debugger"]?.model);
-  add("agents.subagents.simple.reviewer", config.agents?.subagents?.simple?.reviewer?.model);
+  for (const poolKey of ["advisors", "reviewers", "deepDebuggers"] as const) {
+    const pool = config.agents?.subagents?.pools?.[poolKey];
+    if (!Array.isArray(pool)) continue;
+    pool.forEach((entry: any, i: number) => {
+      if (entry?.enabled !== false) add(`agents.subagents.pools.${poolKey}[${i}]`, entry?.model);
+    });
+  }
   return out;
 }
 
@@ -1345,11 +1349,12 @@ const SUBAGENT_ROLES: Array<{ role: AgentRole; label: string; description: strin
   { role: "explore", label: "Explore", description: "agents.subagents.simple.explore" },
   { role: "librarian", label: "Librarian", description: "agents.subagents.simple.librarian" },
   { role: "task", label: "Task", description: "agents.subagents.simple.task" },
-  { role: "advisor", label: "Advisor (Opus)", description: "agents.subagents.simple.advisor" },
-  { role: "advisor2", label: "Advisor 2 (GPT)", description: "agents.subagents.simple.advisor2" },
-  { role: "advisor3", label: "Advisor 3 (Gemini)", description: "agents.subagents.simple.advisor3" },
-  { role: "deep-debugger", label: "Deep debugger", description: "agents.subagents.simple.deep-debugger" },
-  { role: "reviewer", label: "Reviewer", description: "agents.subagents.simple.reviewer" },
+];
+
+const POOL_ITEMS: Array<{ pool: PoolKey; label: string }> = [
+  { pool: "advisors", label: "Advisors" },
+  { pool: "reviewers", label: "Reviewers" },
+  { pool: "deepDebuggers", label: "Deep debuggers" },
 ];
 
 const PRESET_GROUP_ITEMS: Array<{ group: PresetGroup; label: string }> = [
@@ -2290,12 +2295,118 @@ async function showPresetSettings(
   }
 }
 
+// The dynamic on-demand pools (advisors/reviewers/deepDebuggers) are arrays, not
+// keyed records. writeConfigValue treats arrays as opaque leaves, so every edit
+// rewrites the WHOLE array into the chosen scope (deepMerge replaces arrays).
+function poolModelLabel(pool: PoolKey): string {
+  return pool === "deepDebuggers" ? "deep-debugger" : pool.replace(/s$/, "");
+}
+
+async function writePool(orchestrator: Orchestrator, ctx: any, pool: PoolKey, next: PoolEntry[]): Promise<boolean> {
+  const scope = await pickScope(ctx, orchestrator);
+  if (!scope) return false;
+  applyConfigChange(orchestrator, scope, ["agents", "subagents", "pools", pool], next);
+  return true;
+}
+
+async function showPoolEntryEditor(
+  orchestrator: Orchestrator,
+  ctx: any,
+  pool: PoolKey,
+  index: number,
+): Promise<typeof BACK> {
+  while (true) {
+    const entries = orchestrator.config.agents.subagents.pools[pool] ?? [];
+    const entry = entries[index];
+    if (!entry) return BACK;
+    const options: OptionInput[] = [
+      opt(`Enabled: ${entry.enabled === false ? "No" : "Yes"}`, "Toggle whether this model registers as a subagent"),
+      opt(`Model: ${entry.model}`, "Choose the model for this pool entry"),
+      opt(`Thinking: ${thinkingLabel(entry.thinking)}`, "Choose how much this agent thinks before acting"),
+      opt("Delete", "Remove this entry from the pool"),
+      opt("Back", "Return to the previous menu"),
+    ];
+    const choice = await selectOption(ctx, `${poolModelLabel(pool)} entry`, options);
+    if (!choice || choice === "Back") return BACK;
+    if (choice.startsWith("Model:")) {
+      const model = await pickModel(ctx, entry.model);
+      if (!model) continue;
+      const next = structuredClone(entries);
+      next[index] = { ...next[index], model };
+      await writePool(orchestrator, ctx, pool, next);
+      continue;
+    }
+    if (choice.startsWith("Thinking:")) {
+      const thinking = await pickThinking(ctx, true);
+      if (!thinking) continue;
+      const next = structuredClone(entries);
+      next[index] = { ...next[index], thinking };
+      await writePool(orchestrator, ctx, pool, next);
+      continue;
+    }
+    if (choice.startsWith("Enabled:")) {
+      const next = structuredClone(entries);
+      next[index] = { ...next[index], enabled: entry.enabled === false };
+      await writePool(orchestrator, ctx, pool, next);
+      continue;
+    }
+    const confirm = await selectOption(ctx, "Confirm delete?", [
+      opt("Yes, delete", "This cannot be undone"),
+      opt("Back", "Cancel"),
+    ]);
+    if (confirm !== "Yes, delete") continue;
+    const next = structuredClone(entries);
+    next.splice(index, 1);
+    if (await writePool(orchestrator, ctx, pool, next)) return BACK;
+  }
+}
+
+async function addPoolEntry(orchestrator: Orchestrator, ctx: any, pool: PoolKey): Promise<void> {
+  const model = await pickModel(ctx);
+  if (!model) return;
+  const thinking = await pickThinking(ctx, true);
+  if (!thinking) return;
+  const next = structuredClone(orchestrator.config.agents.subagents.pools[pool] ?? []);
+  next.push({ enabled: true, model, thinking });
+  await writePool(orchestrator, ctx, pool, next);
+}
+
+async function showPoolSettings(orchestrator: Orchestrator, ctx: any, pool: PoolKey, label: string): Promise<typeof BACK> {
+  while (true) {
+    const entries = orchestrator.config.agents.subagents.pools[pool] ?? [];
+    const options: OptionInput[] = [];
+    const byTitle = new Map<string, number>();
+    entries.forEach((entry, i) => {
+      const tag = entry.enabled === false ? " (disabled)" : "";
+      const title = `${entry.model}${tag}`;
+      options.push(opt(title, `thinking ${thinkingLabel(entry.thinking)}`));
+      byTitle.set(title, i);
+    });
+    options.push(opt("New entry", `Add a model to the ${label.toLowerCase()} pool`));
+    options.push(opt("Back", "Return to the previous menu"));
+    const choice = await selectOption(ctx, label, options);
+    if (!choice || choice === "Back") return BACK;
+    if (choice === "New entry") {
+      await addPoolEntry(orchestrator, ctx, pool);
+      continue;
+    }
+    const idx = byTitle.get(choice);
+    if (idx === undefined) continue;
+    await showPoolEntryEditor(orchestrator, ctx, pool, idx);
+  }
+}
+
 async function showSubagentSettings(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
   while (true) {
     const options: OptionInput[] = SUBAGENT_ROLES.map(({ role, label, description }) => {
       const current = orchestrator.config.agents.subagents.simple[role];
       return opt(label, `${current.model} / ${thinkingLabel(current.thinking)} — ${description}`);
     });
+    for (const item of POOL_ITEMS) {
+      const pool = orchestrator.config.agents.subagents.pools[item.pool] ?? [];
+      const enabled = pool.filter((e) => e.enabled !== false).length;
+      options.push(opt(item.label, `${enabled}/${pool.length} enabled — on-demand model pool`));
+    }
     for (const item of PRESET_GROUP_ITEMS) {
       options.push(opt(item.label, `${Object.keys(orchestrator.config.agents.subagents.presetGroups[item.group].presets ?? {}).length} presets`));
     }
@@ -2305,6 +2416,11 @@ async function showSubagentSettings(orchestrator: Orchestrator, ctx: any): Promi
     const simple = SUBAGENT_ROLES.find((item) => item.label === choice);
     if (simple) {
       await showSimpleSubagentEditor(orchestrator, ctx, simple.role, simple.label);
+      continue;
+    }
+    const pool = POOL_ITEMS.find((item) => item.label === choice);
+    if (pool) {
+      await showPoolSettings(orchestrator, ctx, pool.pool, pool.label);
       continue;
     }
     const group = PRESET_GROUP_ITEMS.find((item) => item.label === choice);

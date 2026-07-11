@@ -7,12 +7,23 @@ import { isValidLogLevel, getLogger, type LogLevel } from "./log.js";
 
 export type DurationValue = string | number;
 export type OrchestratorRole = "implement" | "plan" | "debug" | "brainstorm" | "review" | "quick";
-export type SimpleSubagentRole = "explore" | "librarian" | "task" | "advisor" | "advisor2" | "advisor3" | "deep-debugger" | "reviewer";
+export type SimpleSubagentRole = "explore" | "librarian" | "task";
 export type PresetGroupKey = "planners" | "codeReviewers" | "planReviewers" | "brainstormReviewers";
+// Dynamic on-demand subagent pools (item 2): advisor / reviewer / deep-debugger
+// are no longer fixed roles but configurable lists of models. Each enabled entry
+// registers one model-named subagent.
+export type PoolKey = "advisors" | "reviewers" | "deepDebuggers";
+export const POOL_KEYS = ["advisors", "reviewers", "deepDebuggers"] as const;
 
 export interface AgentConfig {
   model: string;
   thinking: string;
+}
+
+export interface PoolEntry {
+  model: string;
+  thinking: string;
+  enabled?: boolean;
 }
 
 export interface PresetAgentConfig extends AgentConfig {
@@ -52,6 +63,7 @@ export interface PiPiConfig {
     orchestrators: Record<OrchestratorRole, AgentConfig>;
     subagents: {
       simple: Record<SimpleSubagentRole, AgentConfig>;
+      pools: Record<PoolKey, PoolEntry[]>;
       presetGroups: Record<PresetGroupKey, PresetGroupConfig>;
     };
   };
@@ -101,7 +113,7 @@ export type TimeoutConfig = NormalizedPiPiConfig["performance"]["internals"];
 export const PRESET_GROUPS = ["planners", "codeReviewers", "planReviewers", "brainstormReviewers"] as const;
 
 const ORCHESTRATOR_ROLES: OrchestratorRole[] = ["implement", "plan", "debug", "brainstorm", "review", "quick"];
-const SIMPLE_SUBAGENT_ROLES: SimpleSubagentRole[] = ["explore", "librarian", "task", "advisor", "advisor2", "advisor3", "deep-debugger", "reviewer"];
+const SIMPLE_SUBAGENT_ROLES: SimpleSubagentRole[] = ["explore", "librarian", "task"];
 
 const DEFAULT_CONFIG: PiPiConfig = {
   general: {
@@ -125,11 +137,23 @@ const DEFAULT_CONFIG: PiPiConfig = {
         explore: { model: "google/gemini-flash-latest", thinking: "low" },
         librarian: { model: "google/gemini-flash-latest", thinking: "medium" },
         task: { model: "anthropic/claude-opus-latest", thinking: "medium" },
-        advisor: { model: "anthropic/claude-opus-latest", thinking: "high" },
-        advisor2: { model: "openai/gpt-latest", thinking: "high" },
-        advisor3: { model: "google/gemini-pro-latest", thinking: "high" },
-        "deep-debugger": { model: "openai/gpt-latest", thinking: "high" },
-        reviewer: { model: "openai/gpt-latest", thinking: "high" },
+      },
+      pools: {
+        advisors: [
+          { enabled: true, model: "anthropic/claude-fable-latest", thinking: "high" },
+          { enabled: true, model: "openai/gpt-latest", thinking: "high" },
+          { enabled: false, model: "google/gemini-pro-latest", thinking: "high" },
+        ],
+        reviewers: [
+          { enabled: true, model: "openai/gpt-latest", thinking: "high" },
+          { enabled: true, model: "anthropic/claude-fable-latest", thinking: "high" },
+          { enabled: false, model: "google/gemini-pro-latest", thinking: "high" },
+        ],
+        deepDebuggers: [
+          { enabled: true, model: "openai/gpt-latest", thinking: "high" },
+          { enabled: true, model: "anthropic/claude-fable-latest", thinking: "high" },
+          { enabled: false, model: "google/gemini-pro-latest", thinking: "high" },
+        ],
       },
       presetGroups: {
         planners: {
@@ -399,6 +423,20 @@ export function validateConfig(config: Record<string, any>): void {
         }
       }
 
+      if (subagents.pools !== undefined) {
+        const pools = requireObject(subagents.pools, "config.agents.subagents.pools");
+        for (const poolKey of POOL_KEYS) {
+          if (pools[poolKey] !== undefined) {
+            if (!Array.isArray(pools[poolKey])) {
+              throw new Error(`config.agents.subagents.pools.${poolKey} must be an array`);
+            }
+            pools[poolKey].forEach((entry: unknown, i: number) => {
+              validateAgentPartial(entry, `config.agents.subagents.pools.${poolKey}[${i}]`);
+            });
+          }
+        }
+      }
+
       if (subagents.presetGroups !== undefined) {
         const presetGroups = requireObject(subagents.presetGroups, "config.agents.subagents.presetGroups");
         for (const groupName of PRESET_GROUPS) {
@@ -471,6 +509,14 @@ export function validateMergedConfig(config: Record<string, any>): void {
 
   for (const role of SIMPLE_SUBAGENT_ROLES) {
     ensureMergedAgent(typed.agents.subagents.simple[role], `config.agents.subagents.simple.${role}`);
+  }
+
+  for (const poolKey of POOL_KEYS) {
+    const pool = typed.agents.subagents.pools?.[poolKey];
+    if (!Array.isArray(pool)) {
+      throw new Error(`config.agents.subagents.pools.${poolKey} must be an array`);
+    }
+    pool.forEach((entry, i) => ensureMergedAgent(entry, `config.agents.subagents.pools.${poolKey}[${i}]`));
   }
 
   for (const groupName of PRESET_GROUPS) {

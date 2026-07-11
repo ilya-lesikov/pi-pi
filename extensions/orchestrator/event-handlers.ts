@@ -16,7 +16,7 @@ import {
   getArtifactManifest,
   loadPhaseReviewOutputs,
 } from "./context.js";
-import { PRINCIPLES_BLOCK, TOOLS_BLOCK, DELEGATION_BLOCK } from "./agents/tool-routing.js";
+import { PRINCIPLES_BLOCK, toolsBlock, identityBlock, delegationBlock } from "./agents/tool-routing.js";
 import { constraintsBlock, phaseConstraint } from "./agents/constraints.js";
 import { registerCbmTools } from "./cbm.js";
 import { registerExaTools } from "./exa.js";
@@ -26,7 +26,7 @@ import { registerCommandHandlers, runAfterImplementForActive } from "./command-h
 import { registerStateFileTools } from "./pp-state-tools.js";
 import { isAiCommentOnlyChange } from "./ai-comment-cleanup.js";
 import { handleMainRateLimit, handleSubagentRateLimit, isRateLimitError, isSdkRetryableError } from "./rate-limit-fallback.js";
-import { getAgentConfigSnapshot, setExtensionOnlyMode, unregisterAgentDefinitions } from "./agents/registry.js";
+import { getAgentConfigSnapshot, setExtensionOnlyMode, unregisterAgentDefinitions, registeredAgentNames, buildPoolRoster, baseRoleForName } from "./agents/registry.js";
 import { resolveModel, getModelInfo, updateRegistryFromAvailableModels } from "./model-registry.js";
 import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
 import { spawnCodeReviewers } from "./phases/review.js";
@@ -2091,11 +2091,28 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       .filter(Boolean)
       .join("\n");
 
+    const HOST_BUILTINS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
+    const registeredToolNames = pi.getAllTools().map((t) => t.name);
+    const mainToolNames = [...new Set([...HOST_BUILTINS, ...registeredToolNames])];
+    const mainConfig = orchestrator.mainAgentConfigForPhase(phase as Phase);
+    const identity = identityBlock({
+      displayName: modelInfo.displayName,
+      family: modelInfo.family,
+      tier: modelInfo.tier,
+      thinking: mainConfig.thinking,
+    });
+    const delegation = delegationBlock(modelInfo.family, {
+      advisors: buildPoolRoster(orchestrator.config, "advisors"),
+      reviewers: buildPoolRoster(orchestrator.config, "reviewers"),
+      deepDebuggers: buildPoolRoster(orchestrator.config, "deepDebuggers"),
+    });
+
     const fullPrompt = [
+      identity,
       constraintsBlock(phase as Phase, effectiveMode),
       PRINCIPLES_BLOCK,
-      TOOLS_BLOCK,
-      DELEGATION_BLOCK,
+      toolsBlock(mainToolNames),
+      delegation,
       projectContext,
       agentsMd,
       taskBlock,
@@ -2120,24 +2137,28 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (event.toolName === "Agent" && orchestrator.active) {
       const input = event.input as Record<string, unknown>;
       const requestedType = ((input.subagent_type as string) || "").toLowerCase();
-      const validTypes = ["explore", "librarian", "task", "advisor", "advisor2", "advisor3", "deep-debugger", "reviewer"];
+      const validTypes = registeredAgentNames(orchestrator.config);
       if (!requestedType) {
-        return { block: true, reason: "subagent_type is required. Valid types: explore (codebase research), librarian (external docs), task (implementation subtask), advisor/advisor2/advisor3 (design/'why is this broken' judgment — opus/gpt/gemini respectively), deep-debugger (hard persistent failures), reviewer (code review — only when the user explicitly asks)." };
+        return { block: true, reason: "subagent_type is required. Valid types: explore (codebase research), librarian (external docs), task (implementation subtask), advisor_* (design/'why is this broken' judgment), deep-debugger_* (hard persistent failures), reviewer_* (code review — only when the user explicitly asks). Advisors/reviewers/deep-debuggers are model-named pools — pick one by its encoded model+thinking from the roster in your delegation guidance." };
       }
       if (!validTypes.includes(requestedType)) {
         return { block: true, reason: `Unknown subagent_type "${requestedType}". Valid types: ${validTypes.join(", ")}.` };
       }
 
-      const simple = orchestrator.config.agents.subagents.simple;
-      const role = requestedType as keyof typeof simple;
       input.subagent_type = requestedType;
-      input.model = resolveModel(simple[role].model);
-      input.thinking = simple[role].thinking;
+      // Dynamic pool names carry their own registered model/thinking (via
+      // getAgentConfigSnapshot); the fixed simple roles do too. Read the snapshot
+      // rather than re-deriving from the name string.
+      const snapshot = getAgentConfigSnapshot(requestedType);
+      if (snapshot) {
+        input.model = resolveModel(snapshot.model);
+        input.thinking = snapshot.thinking;
+      }
 
       // Spawn-time context injection: append USER_REQUEST + RESEARCH content and a
       // path-aware manifest of on-demand documents to the LLM-supplied spawn prompt.
       // explore/librarian intentionally get nothing (fast, scoped retrieval).
-      if (["task", "advisor", "advisor2", "advisor3", "deep-debugger", "reviewer"].includes(requestedType)) {
+      if (["task", "advisor", "reviewer", "deep-debugger"].includes(baseRoleForName(requestedType))) {
         const contextBlock = buildSpawnContextBlock(orchestrator.active.dir);
         if (contextBlock) {
           const existingPrompt = typeof input.prompt === "string" ? input.prompt : "";

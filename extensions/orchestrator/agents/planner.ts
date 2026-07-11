@@ -3,7 +3,7 @@ import { loadAllContextFiles, formatManifestBlock } from "../context.js";
 import { resolveModel, getModelInfo } from "../model-registry.js";
 import type { RepoInfo } from "../repo-utils.js";
 import { buildRepoContext } from "./repo-context.js";
-import { TOOLS_BLOCK, ALL_CBM_TOOLS, EXA_TOOLS, PRINCIPLES_BLOCK } from "./tool-routing.js";
+import { toolsBlock, parseToolNames, identityBlock, ALL_CBM_TOOLS, EXA_TOOLS, PRINCIPLES_BLOCK } from "./tool-routing.js";
 
 export function createPlannerAgent(
   variant: string,
@@ -18,20 +18,24 @@ export function createPlannerAgent(
   if (!variantConfig) {
     throw new Error(`Unknown planner variant: ${variant}`);
   }
+  const info = getModelInfo(resolveModel(variantConfig.model));
   const contextFiles = loadAllContextFiles(contextDirs, "planner", "system", phase, getModelInfo(variantConfig.model));
   const contextBlock = contextFiles.map((f) => f.content).join("\n\n");
   const repoContext = buildRepoContext(repos);
+  const tools = `read, grep, find, bash, write, lsp, ast_search, ${ALL_CBM_TOOLS}, ${EXA_TOOLS}`;
 
   return {
     frontmatter: {
       description: `Planner (${variant} variant, pi-pi)`,
-      tools: `read, grep, find, bash, write, lsp, ast_search, ${ALL_CBM_TOOLS}, ${EXA_TOOLS}`,
+      tools,
       model: resolveModel(variantConfig.model),
       thinking: variantConfig.thinking,
       max_turns: 120,
       prompt_mode: "replace",
     },
     prompt: [
+      identityBlock({ displayName: info.displayName, family: info.family, tier: info.tier, thinking: variantConfig.thinking }),
+      "",
       // --- static prefix (cacheable) ---
       "<constraints>",
       "You are a planning agent. You produce a detailed implementation PLAN — you do NOT implement it.",
@@ -42,7 +46,7 @@ export function createPlannerAgent(
       "",
       PRINCIPLES_BLOCK,
       "",
-      TOOLS_BLOCK,
+      toolsBlock(parseToolNames(tools)),
       "",
       ...(contextBlock ? ["<project_context>", contextBlock, "</project_context>", ""] : []),
       "<task>",
@@ -60,6 +64,7 @@ export function createPlannerAgent(
     '- Agent(subagent_type="explore", ...) — codebase research. Prefer this for most lookups. Fast and cheap.',
     '- Agent(subagent_type="librarian", ...) — external docs, library APIs, web research.',
     "Spawn multiple explore agents in parallel for broad searches. Do NOT spawn task, advisor, advisor2, advisor3, deep-debugger, or reviewer.",
+      "(You are a phased planner; the on-demand advisor/reviewer/deep-debugger pools are for the main agent, not for you.)",
       "</task>",
       "",
       // --- dynamic suffix ---

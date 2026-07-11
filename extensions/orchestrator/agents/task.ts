@@ -1,18 +1,24 @@
 import type { PiPiConfig } from "../config.js";
-import { resolveModel } from "../model-registry.js";
-import { TOOLS_BLOCK, ALL_CBM_TOOLS, EXA_TOOLS, PRINCIPLES_BLOCK, FAILURE_RECOVERY } from "./tool-routing.js";
+import { getModelInfo, resolveModel } from "../model-registry.js";
+import { toolsBlock, parseToolNames, identityBlock, ALL_CBM_TOOLS, EXA_TOOLS, PRINCIPLES_BLOCK, FAILURE_RECOVERY } from "./tool-routing.js";
 
 export function createTaskAgent(config: PiPiConfig) {
+  const model = resolveModel(config.agents.subagents.simple.task.model);
+  const thinking = config.agents.subagents.simple.task.thinking;
+  const tools = `read, write, edit, bash, grep, find, ls, lsp, ast_search, ${ALL_CBM_TOOLS}, ${EXA_TOOLS}`;
+  const info = getModelInfo(model);
   return {
     frontmatter: {
       description: "Implementation subtask (pi-pi)",
-      tools: `read, write, edit, bash, grep, find, ls, lsp, ast_search, ${ALL_CBM_TOOLS}, ${EXA_TOOLS}`,
-      model: resolveModel(config.agents.subagents.simple.task.model),
-      thinking: config.agents.subagents.simple.task.thinking,
+      tools,
+      model,
+      thinking,
       max_turns: 170,
       prompt_mode: "replace",
     },
     prompt: [
+      identityBlock({ displayName: info.displayName, family: info.family, tier: info.tier, thinking }),
+      "",
       // --- static prefix (cacheable) ---
       "<constraints>",
       "You are a focused implementation agent working on a specific subtask.",
@@ -23,7 +29,7 @@ export function createTaskAgent(config: PiPiConfig) {
       "",
       PRINCIPLES_BLOCK,
       "",
-      TOOLS_BLOCK,
+      toolsBlock(parseToolNames(tools)),
       "",
       FAILURE_RECOVERY,
       "",

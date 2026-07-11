@@ -5,6 +5,8 @@ import { tmpdir } from "os";
 import { registerEventHandlers, checkoutPrHead, isReviewCycleLive, finalizeReviewCycle } from "./event-handlers.js";
 import { Orchestrator, type ActiveTask } from "./orchestrator.js";
 import { getDefaultConfig } from "./config.js";
+import { encodePoolVariant } from "./agents/registry.js";
+import { resolveModel } from "./model-registry.js";
 
 type Handler = (event: any, ctx: any) => any;
 
@@ -394,15 +396,25 @@ describe("tool_call Agent routing and spawn-time context injection", () => {
     expect(input.subagent_type).toBe("wizard");
   });
 
-  it("routes advisor to its own model/thinking and injects context into the prompt", async () => {
+  // Name of the first enabled entry in a pool, as registerAgents encodes it.
+  function poolName(base: "advisor" | "reviewer" | "deep-debugger", poolKey: "advisors" | "reviewers" | "deepDebuggers"): string {
+    const entry = orchestrator.config.agents.subagents.pools[poolKey][0];
+    return `${base}_${encodePoolVariant(resolveModel(entry.model), entry.thinking)}`;
+  }
+
+  it("routes a dynamic advisor to its own model/thinking and injects context into the prompt", async () => {
     const dir = makeTaskDir();
     orchestrator.active = activeWith(dir);
+    orchestrator.registerAgents();
+    const entry = orchestrator.config.agents.subagents.pools.advisors[0];
+    const name = poolName("advisor", "advisors");
     const handler = getHandler("tool_call");
-    const input: Record<string, unknown> = { subagent_type: "advisor", prompt: "why is this broken" };
+    const input: Record<string, unknown> = { subagent_type: name, prompt: "why is this broken" };
     const result = await handler({ toolName: "Agent", input }, {});
     expect(result).toBeUndefined();
-    expect(input.subagent_type).toBe("advisor");
-    expect(input.thinking).toBe("high");
+    expect(input.subagent_type).toBe(name);
+    expect(input.model).toBe(resolveModel(entry.model));
+    expect(input.thinking).toBe(entry.thinking);
     const prompt = input.prompt as string;
     expect(prompt).toContain("why is this broken");
     expect(prompt).toContain("=== USER REQUEST ===");
@@ -415,30 +427,33 @@ describe("tool_call Agent routing and spawn-time context injection", () => {
     expect(prompt).not.toContain("the plan");
   });
 
-  it("allows advisor2 and advisor3 to spawn and routes them to their own models", async () => {
+  it("allows dynamic reviewer and deep-debugger pool names to spawn with context", async () => {
     const dir = makeTaskDir();
     orchestrator.active = activeWith(dir);
+    orchestrator.registerAgents();
     const handler = getHandler("tool_call");
-    for (const t of ["advisor2", "advisor3"]) {
-      const input: Record<string, unknown> = { subagent_type: t, prompt: "judge this" };
+    for (const [base, key] of [["reviewer", "reviewers"], ["deep-debugger", "deepDebuggers"]] as const) {
+      const name = poolName(base, key);
+      const entry = orchestrator.config.agents.subagents.pools[key][0];
+      const input: Record<string, unknown> = { subagent_type: name, prompt: "judge this" };
       const result = await handler({ toolName: "Agent", input }, {});
       expect(result).toBeUndefined();
-      expect(input.subagent_type).toBe(t);
-      expect(input.thinking).toBe("high");
+      expect(input.subagent_type).toBe(name);
+      expect(input.thinking).toBe(entry.thinking);
       const prompt = input.prompt as string;
       expect(prompt).toContain("=== USER REQUEST ===");
     }
   });
 
-  it("maps deep-debugger via bracket-notation config", async () => {
+  it("rejects a fixed legacy role name (advisor2) now that pools are dynamic", async () => {
     const dir = makeTaskDir();
     orchestrator.active = activeWith(dir);
+    orchestrator.registerAgents();
     const handler = getHandler("tool_call");
-    const input: Record<string, unknown> = { subagent_type: "deep-debugger", prompt: "trace it" };
+    const input: Record<string, unknown> = { subagent_type: "advisor2", prompt: "x" };
     const result = await handler({ toolName: "Agent", input }, {});
-    expect(result).toBeUndefined();
-    expect(input.subagent_type).toBe("deep-debugger");
-    expect(input.thinking).toBe("high");
+    expect(result?.block).toBe(true);
+    expect(result?.reason).toContain('Unknown subagent_type "advisor2"');
   });
 
   it("does NOT inject task context into explore spawns", async () => {

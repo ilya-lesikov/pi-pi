@@ -222,7 +222,7 @@ describe("flant-infra", () => {
     const fOpus = flant.agents.subagents.presetGroups.planners.presets.regular.agents.opus.model;
     expect(fFable).toBe("pp-flant-anthropic/claude-fable-5");
     expect(fOpus).toBe("pp-flant-anthropic/claude-opus-4-8");
-    expect(flant.agents.subagents.simple.advisor.model).toBe("pp-flant-anthropic/claude-fable-5");
+    expect(flant.agents.subagents.pools.advisors[0].model).toBe("pp-flant-anthropic/claude-fable-5");
 
     // Subscription-confirmed (bare + sub/ variants present): both route through
     // pp-flant-anthropic-sub/sub/claude-<family>-*.
@@ -234,7 +234,7 @@ describe("flant-infra", () => {
     const sOpus = subCfg.agents.subagents.presetGroups.planners.presets.regular.agents.opus.model;
     expect(sFable).toBe("pp-flant-anthropic-sub/sub/claude-fable-5");
     expect(sOpus).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
-    expect(subCfg.agents.subagents.simple.advisor.model).toBe("pp-flant-anthropic-sub/sub/claude-fable-5");
+    expect(subCfg.agents.subagents.pools.advisors[0].model).toBe("pp-flant-anthropic-sub/sub/claude-fable-5");
   });
 
   it("skips the sub provider when subscription enabled but OAuth token missing", async () => {

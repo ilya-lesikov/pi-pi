@@ -1,5 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { resolveModel } from "../model-registry.js";
+import type { PiPiConfig, PoolKey } from "../config.js";
+import { resolveModel, getModelInfo } from "../model-registry.js";
+import type { RosterEntry } from "./tool-routing.js";
 
 interface AgentFrontmatter {
   description: string;
@@ -26,6 +28,61 @@ const agentConfigByName = new Map<string, AgentConfigSnapshot>();
 
 export function getAgentConfigSnapshot(name: string): AgentConfigSnapshot | undefined {
   return agentConfigByName.get(name);
+}
+
+// Encode a pool entry's model + thinking into a subagent variant token. Subagent
+// type-names are identifiers used as Agent(subagent_type=…); the host allows
+// only [A-Za-z0-9._-], so any other char (notably the `/` in a provider/model
+// spec) is collapsed to `-`. Deterministic, so the same entry always yields the
+// same name.
+export function encodePoolVariant(model: string, thinking: string): string {
+  const sanitize = (s: string) => s.replace(/[^A-Za-z0-9._-]/g, "-");
+  return `${sanitize(model)}_${sanitize(thinking)}`;
+}
+
+const POOL_BASE_TYPE: Record<PoolKey, "advisor" | "reviewer" | "deep-debugger"> = {
+  advisors: "advisor",
+  reviewers: "reviewer",
+  deepDebuggers: "deep-debugger",
+};
+
+// Build the roster of ENABLED pool members for one pool, deduped by sanitized
+// name (matching the registration skip). Each entry carries the model metadata
+// the caller needs to apply the same-provider/same-or-weaker-tier rule.
+export function buildPoolRoster(config: PiPiConfig, poolKey: PoolKey): RosterEntry[] {
+  const base = POOL_BASE_TYPE[poolKey];
+  const out: RosterEntry[] = [];
+  const seen = new Set<string>();
+  for (const entry of config.agents.subagents.pools[poolKey]) {
+    if (entry.enabled === false) continue;
+    const model = resolveModel(entry.model);
+    const name = `${base}_${encodePoolVariant(model, entry.thinking)}`;
+    if (seen.has(name)) continue;
+    seen.add(name);
+    const info = getModelInfo(model);
+    out.push({ name, model, family: info.family, tier: info.tier, thinking: entry.thinking });
+  }
+  return out;
+}
+
+// All registered subagent type-names the Agent tool must accept: the fixed
+// simple roles plus every enabled dynamic pool member.
+export function registeredAgentNames(config: PiPiConfig): string[] {
+  const names = ["explore", "librarian", "task"];
+  for (const poolKey of Object.keys(POOL_BASE_TYPE) as PoolKey[]) {
+    for (const r of buildPoolRoster(config, poolKey)) names.push(r.name);
+  }
+  return names;
+}
+
+// Map a dynamic pool name (advisor_*/reviewer_*/deep-debugger_*) back to its base
+// role, for context-file lookup and spawn-context injection. Fixed roles map to
+// themselves.
+export function baseRoleForName(name: string): string {
+  if (name.startsWith("advisor_")) return "advisor";
+  if (name.startsWith("reviewer_")) return "reviewer";
+  if (name.startsWith("deep-debugger_")) return "deep-debugger";
+  return name;
 }
 
 export function registerAgentDefinitions(

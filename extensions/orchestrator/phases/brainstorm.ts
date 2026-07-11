@@ -16,13 +16,15 @@ function isEnabled(value: { enabled?: boolean } | undefined): boolean {
 
 // The streamlined interactive-phase flow (design-decisions §3b). driverFamily is
 // the phase's own orchestrator model family; defaultAdvisor is the family-differing
-// advisor to consult by default (Claude-driven → advisor2 gpt; GPT-driven → advisor opus).
+// advisor to consult by default (Claude-driven → a GPT-family advisor; GPT-driven
+// → a Claude-family advisor). Advisors are model-named pool subagents; pick one
+// from the roster in the delegation guidance.
 export function interactiveFlowBlock(driverFamily: string, defaultAdvisor: string): string {
   return [
     "# Flow (minimize interruptions):",
     "1. CLARIFY UP-FRONT: if the request is ambiguous, ask your clarifying question(s) now, at the very start — batch them. If it's clear, skip straight to step 2.",
     "2. WORK AUTONOMOUSLY: research, explore, and design without stopping to ask. Delegate to subagents (parallel explores for broad searches). Do NOT interrupt mid-flow with questions — collect uncertainties for step 4 instead. Only a genuine blocker (you cannot proceed at all) justifies an ask here.",
-    `3. CONSULT AN ADVISOR: before presenting, get an independent second opinion from an advisor whose model family differs from yours. You run on ${driverFamily}, so default to ${defaultAdvisor}. Escalate to a second/third advisor for hard or high-stakes calls.`,
+    `3. CONSULT AN ADVISOR: before presenting, get an independent second opinion from an advisor whose model family differs from yours. You run on ${driverFamily}, so default to ${defaultAdvisor}. Escalate to more advisors for hard or high-stakes calls.`,
     "4. CLARIFY AT THE END: surface any remaining decisions as focused asks — one at a time.",
     "5. APPROVE COMMITTED SPECIFICS: before finalizing, when your output commits to concrete, costly-to-reverse or opinion-heavy choices — exact wording, structure, naming, default values, or interface signatures — show the ACTUAL proposed text/values inline in your message, then ask for explicit approval. Don't silently invent and bury them.",
     "6. PRESENT RESULTS: end with a structured summary (what you found, the decisions, the recommended direction) and hand back with the standard closing block.",
@@ -40,7 +42,7 @@ export function brainstormSystemPrompt(taskType: TaskType, taskDescription: stri
       "",
     "Read-only diagnosis mode. You MAY use write/edit for diagnosis only (repro/test/analysis files) — never to implement the actual fix or feature.",
       "",
-      interactiveFlowBlock("GPT", "advisor (opus)"),
+      interactiveFlowBlock("GPT", "a Claude-family advisor"),
       "",
     "# Your job:",
     "1. Clarify the problem with the user if needed",
@@ -100,7 +102,7 @@ export function brainstormSystemPrompt(taskType: TaskType, taskDescription: stri
       "# Flow (minimize interruptions — the streamlined flow, adapted to conversation):",
       "1. CLARIFY UP-FRONT: if the topic is ambiguous, ask your clarifying question(s) at the very start — batch them into one focused round rather than dripping them out.",
       "2. WORK AUTONOMOUSLY IN THE MIDDLE: once the topic is clear, research/explore/design without stopping to ask. Delegate to subagents (parallel explores for broad searches) and use tools directly for quick lookups. Do NOT interrupt with piecemeal mid-flow questions — collect uncertainties and raise them together at a natural checkpoint.",
-      "3. CONSULT AN ADVISOR: before landing on a recommendation, get an independent second opinion from an advisor whose model family differs from yours. You run on Claude, so default to advisor2 (gpt). Escalate to a second/third advisor for hard or high-stakes calls.",
+      "3. CONSULT AN ADVISOR: before landing on a recommendation, get an independent second opinion from an advisor whose model family differs from yours. You run on Claude, so default to a GPT-family advisor. Escalate to more advisors for hard or high-stakes calls.",
       "4. CLARIFY AT THE END: before finalizing, surface any remaining open decisions as focused asks — one at a time. Don't bury unresolved questions inside an approval prompt or the summary.",
       "5. APPROVE COMMITTED SPECIFICS: when you commit to concrete, costly-to-reverse or opinion-heavy choices — exact wording, structure, naming, default values, or interface signatures — show the ACTUAL proposed text/values inline, then get explicit approval. Don't silently invent and bury them.",
       "6. PRESENT RESULTS: give conclusions as a clear, structured summary (findings, decisions, recommended direction) — don't just dump raw results.",
@@ -139,7 +141,7 @@ export function brainstormSystemPrompt(taskType: TaskType, taskDescription: stri
     "exists, but exploring the design space: weigh the viable approaches and their tradeoffs so the plan phase inherits a clear",
     "direction rather than an open-ended problem.",
     "",
-    interactiveFlowBlock("Claude", "advisor2 (gpt)"),
+    interactiveFlowBlock("Claude", "a GPT-family advisor"),
     "",
     "# Steps:",
     "1. Clarify requirements with the user if anything is ambiguous",

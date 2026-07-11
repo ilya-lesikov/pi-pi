@@ -1,18 +1,23 @@
-import type { PiPiConfig } from "../config.js";
-import { resolveModel } from "../model-registry.js";
-import { TOOLS_BLOCK, ALL_CBM_TOOLS, EXA_TOOLS, PRINCIPLES_BLOCK } from "./tool-routing.js";
+import type { PoolEntry } from "../config.js";
+import { getModelInfo, resolveModel } from "../model-registry.js";
+import { toolsBlock, parseToolNames, identityBlock, ALL_CBM_TOOLS, EXA_TOOLS, PRINCIPLES_BLOCK } from "./tool-routing.js";
 
-export function createDeepDebuggerAgent(config: PiPiConfig) {
+export function createDeepDebuggerAgent(entry: PoolEntry) {
+  const model = resolveModel(entry.model);
+  const tools = `read, write, edit, bash, grep, find, ls, lsp, ast_search, ${ALL_CBM_TOOLS}, ${EXA_TOOLS}`;
+  const info = getModelInfo(model);
   return {
     frontmatter: {
       description: "Deep root-cause analysis for HARD, persistent failures — not every error (pi-pi)",
-      tools: `read, write, edit, bash, grep, find, ls, lsp, ast_search, ${ALL_CBM_TOOLS}, ${EXA_TOOLS}`,
-      model: resolveModel(config.agents.subagents.simple["deep-debugger"].model),
-      thinking: config.agents.subagents.simple["deep-debugger"].thinking,
+      tools,
+      model,
+      thinking: entry.thinking,
       max_turns: 120,
       prompt_mode: "replace",
     },
     prompt: [
+      identityBlock({ displayName: info.displayName, family: info.family, tier: info.tier, thinking: entry.thinking }),
+      "",
       "<constraints>",
       "You are a DEEP DEBUGGER. You do root-cause analysis on hard, persistent failures — failing tests, build/compile errors, regressions, flaky behavior — that quick attempts have NOT resolved. Do NOT engage for trivial or first-attempt errors.",
       "These rules override your default helpfulness. Strict compliance is required.",
@@ -21,7 +26,7 @@ export function createDeepDebuggerAgent(config: PiPiConfig) {
       "",
       PRINCIPLES_BLOCK,
       "",
-      TOOLS_BLOCK,
+      toolsBlock(parseToolNames(tools)),
       "",
       "<task>",
       "- Reproduce/inspect first: run the failing command, read the actual error and stack trace, check recent changes (git diff, cbm_changes).",

@@ -770,11 +770,23 @@ export function generateFlantConfig(models: string[], subscriptionActive = false
           explore: { model: modelSpec(fastModel, sub(fastModel)), thinking: "low" },
           librarian: { model: modelSpec(fastModel, sub(fastModel)), thinking: "medium" },
           task: { model: modelSpec(taskModel, sub(taskModel)), thinking: "medium" },
-          advisor: { model: modelSpec(latestFable ?? fallback, sub(latestFable ?? fallback)), thinking: "high" },
-          advisor2: { model: modelSpec(latestGpt ?? fallback, sub(latestGpt ?? fallback)), thinking: "high" },
-          advisor3: { model: modelSpec(latestGeminiPro ?? fallback, sub(latestGeminiPro ?? fallback)), thinking: "high" },
-          "deep-debugger": { model: modelSpec(latestGpt ?? fallback, sub(latestGpt ?? fallback)), thinking: "high" },
-          reviewer: { model: modelSpec(latestGpt ?? fallback, sub(latestGpt ?? fallback)), thinking: "high" },
+        },
+        pools: {
+          advisors: [
+            makeVariant(latestFable, fallback, sub),
+            makeVariant(latestGpt, fallback, sub),
+            disabledByDefault(makeVariant(latestGeminiPro, fallback, sub)),
+          ],
+          reviewers: [
+            makeVariant(latestGpt, fallback, sub),
+            makeVariant(latestFable, fallback, sub),
+            disabledByDefault(makeVariant(latestGeminiPro, fallback, sub)),
+          ],
+          deepDebuggers: [
+            makeVariant(latestGpt, fallback, sub),
+            makeVariant(latestFable, fallback, sub),
+            disabledByDefault(makeVariant(latestGeminiPro, fallback, sub)),
+          ],
         },
         presetGroups: {
           planners: buildPresetGroup({

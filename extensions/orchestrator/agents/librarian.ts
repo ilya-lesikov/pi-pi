@@ -1,24 +1,32 @@
 import type { PiPiConfig } from "../config.js";
-import { resolveModel } from "../model-registry.js";
-import { PRINCIPLES_BLOCK } from "./tool-routing.js";
+import { getModelInfo, resolveModel } from "../model-registry.js";
+import { toolsBlock, parseToolNames, identityBlock, PRINCIPLES_BLOCK } from "./tool-routing.js";
 
 export function createLibrarianAgent(config: PiPiConfig) {
+  const model = resolveModel(config.agents.subagents.simple.librarian.model);
+  const thinking = config.agents.subagents.simple.librarian.thinking;
+  const tools = "read, bash, grep, find, exa_search, exa_fetch";
+  const info = getModelInfo(model);
   return {
     frontmatter: {
       description: "External docs researcher (pi-pi)",
-      tools: "read, bash, grep, find, exa_search, exa_fetch",
-      model: resolveModel(config.agents.subagents.simple.librarian.model),
-      thinking: config.agents.subagents.simple.librarian.thinking,
+      tools,
+      model,
+      thinking,
       max_turns: 120,
       prompt_mode: "replace",
     },
     prompt: [
+      identityBlock({ displayName: info.displayName, family: info.family, tier: info.tier, thinking }),
+      "",
       "<constraints>",
       "You are a research agent specializing in external documentation and libraries. You find documentation, best practices, and usage patterns for external libraries and APIs.",
       "You are READ-ONLY: you MUST NOT modify any project file. Report findings; do NOT change code.",
       "</constraints>",
       "",
       PRINCIPLES_BLOCK,
+      "",
+      toolsBlock(parseToolNames(tools)),
       "",
       "<task>",
       "# How to research",
