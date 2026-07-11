@@ -166,6 +166,26 @@ describe("probeSubscriptionCleared", () => {
     await expect(mod.probeSubscriptionCleared("sub/claude-haiku-4-5")).resolves.toBe("rate_limited");
   });
 
+  it("treats a 400 extra-usage response as still-limited (item 10)", async () => {
+    const dir = makeTempDir();
+    writeAuth(dir);
+    process.env.LLM_API_KEY = "gw";
+    const mod = await loadModule(dir);
+    stubFetch(() => ({ ok: false, status: 400, text: async () => "Third-party apps now draw from extra usage, not plan limits" }));
+    await expect(mod.probeSubscriptionCleared("sub/claude-haiku-4-5")).resolves.toBe("rate_limited");
+  });
+
+  it("does not send temperature in the probe body (avoids the deprecated-temperature 400)", async () => {
+    const dir = makeTempDir();
+    writeAuth(dir);
+    process.env.LLM_API_KEY = "gw";
+    const mod = await loadModule(dir);
+    const fn = stubFetch(() => ({ ok: true, status: 200 }));
+    await mod.probeSubscriptionCleared("sub/claude-haiku-4-5");
+    const body = JSON.parse(fn.mock.calls[0][1].body);
+    expect(body.temperature).toBeUndefined();
+  });
+
   it("returns error on an unexpected status and on a thrown fetch", async () => {
     const dir = makeTempDir();
     writeAuth(dir);

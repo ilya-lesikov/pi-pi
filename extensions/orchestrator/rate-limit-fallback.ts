@@ -11,6 +11,18 @@ export function isRateLimitError(message?: string): boolean {
   return /\b429\b|rate.?limit|too many requests|exceed your account/i.test(message);
 }
 
+// Recognise the subscription-routing-specific 400 "extra usage" error, e.g.
+// "Third-party apps now draw from extra usage, not plan limits". This is a
+// DISTINCT failure class from 429 (not retryable, not a plan rate-limit) but is
+// funneled into the SAME sub→non-sub fallback. Kept separate from
+// isRateLimitError so the 429 regex stays clean. Anchored on the specific
+// phrasing to avoid over-matching other 400s; the CALLER additionally requires
+// isSubscriptionRouted.
+export function isExtraUsageError(message?: string): boolean {
+  if (typeof message !== "string" || !message) return false;
+  return /extra usage|draw from[\s\S]{0,40}plan limits/i.test(message);
+}
+
 // Mirror of the SDK's AgentSession._isRetryableError classifier
 // (agent-session.js: overloaded/rate-limit/5xx/network/stream-ended/timeout/...).
 // When true, the SDK auto-retries the SAME turn itself (abortable backoff bound

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isRateLimitError, isSdkRetryableError } from "./rate-limit-fallback.js";
+import { isRateLimitError, isExtraUsageError, isSdkRetryableError } from "./rate-limit-fallback.js";
 import { isSubscriptionRouted } from "./usage-tracker.js";
 import { SUB_MODEL_PREFIX, SUB_PROVIDER, subProbeModelId } from "./flant-infra.js";
 
@@ -17,6 +17,25 @@ describe("isRateLimitError", () => {
     expect(isRateLimitError("500 internal server error")).toBe(false);
     expect(isRateLimitError("")).toBe(false);
     expect(isRateLimitError(undefined)).toBe(false);
+  });
+
+  it("does not match the 400 extra-usage message (kept separate from 429)", () => {
+    expect(isRateLimitError("Third-party apps now draw from extra usage, not plan limits")).toBe(false);
+  });
+});
+
+describe("isExtraUsageError", () => {
+  it("matches the subscription 400 extra-usage phrasing", () => {
+    expect(isExtraUsageError("400 Third-party apps now draw from extra usage, not plan limits")).toBe(true);
+    expect(isExtraUsageError("you are out of extra usage")).toBe(true);
+    expect(isExtraUsageError("requests now draw from your extra usage balance")).toBe(true);
+  });
+
+  it("does not match 429 or unrelated errors (no over-match)", () => {
+    expect(isExtraUsageError("Error 429: too many requests")).toBe(false);
+    expect(isExtraUsageError("500 internal server error")).toBe(false);
+    expect(isExtraUsageError("")).toBe(false);
+    expect(isExtraUsageError(undefined)).toBe(false);
   });
 });
 

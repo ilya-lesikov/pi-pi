@@ -8,6 +8,7 @@ import type { PiPiConfig } from "./config.js";
 import { updateRegistryFromAvailableModels } from "./model-registry.js";
 import { compareModelVersion } from "./model-version.js";
 import { getLogger } from "./log.js";
+import { buildUserAgent } from "./billing-spoof.js";
 
 export interface OpenRouterModelData {
   name: string;
@@ -383,6 +384,13 @@ export function subProbeModelId(modelId: string): string {
   return `${SUB_MODEL_PREFIX}${bare}`;
 }
 
+// Local matcher for the 400 "extra usage" body (kept here to avoid a circular
+// import with rate-limit-fallback, which imports this module). Mirrors
+// isExtraUsageError's phrasing.
+function isExtraUsageMessage(text: string): boolean {
+  return /extra usage|draw from[\s\S]{0,40}plan limits/i.test(text);
+}
+
 export async function probeSubscriptionCleared(
   modelId: string,
 ): Promise<"ok" | "rate_limited" | "error"> {
@@ -411,10 +419,11 @@ export async function probeSubscriptionCleared(
         Authorization: `Bearer ${oauthToken}`,
         "x-litellm-api-key": `Bearer ${gatewayKey}`,
       },
+      // No `temperature`: the gateway rejects it as deprecated for some models
+      // (a separate 400 source) — sending it would make the probe 400 forever.
       body: JSON.stringify({
         model: probeModel,
         max_tokens: 1,
-        temperature: 0,
         messages: [{ role: "user", content: "just respond hi" }],
       }),
       signal: AbortSignal.timeout(30000),
@@ -426,6 +435,17 @@ export async function probeSubscriptionCleared(
     if (res.ok) {
       log.debug({ s: "flant", model: probeModel }, "probe: capacity back");
       return "ok";
+    }
+    // A 400 "extra usage" means the subscription pool is still exhausted (the
+    // same failure the fallback was triggered for) — treat it as still-limited so
+    // the shared switch-back probe keeps waiting rather than declaring recovery.
+    if (res.status === 400) {
+      let bodyText = "";
+      try { bodyText = await res.text(); } catch { /* ignore */ }
+      if (isExtraUsageMessage(bodyText)) {
+        log.debug({ s: "flant", model: probeModel }, "probe: still out of extra usage (400)");
+        return "rate_limited";
+      }
     }
     log.debug({ s: "flant", model: probeModel, status: res.status }, "probe: unexpected status");
     return "error";
@@ -640,7 +660,12 @@ function registerSubProvider(
     // headers and is forwarded as `Authorization: Bearer ...`.
     apiKey: oauthToken,
     // Gateway key travels in a side header so it does not clobber the OAuth auth.
-    headers: { "x-litellm-api-key": `Bearer ${gatewayKey}` },
+    // The full-form Claude Code user-agent (item 10) overrides pi-ai's hardcoded
+    // bare `claude-cli/<ver>`: mergeHeaders applies these model headers AFTER the
+    // default UA, and Anthropic's plan-billing validation expects this form. Its
+    // version must match the billing header's cc_version (both from CC_VERSION).
+    // Best-effort — LiteLLM may replace it upstream.
+    headers: { "x-litellm-api-key": `Bearer ${gatewayKey}`, "user-agent": buildUserAgent() },
     // Model id carries the `sub/` prefix the gateway expects, while pricing/
     // metadata is looked up by the bare claude-* id.
     models: anthropicModels.map((m) => {

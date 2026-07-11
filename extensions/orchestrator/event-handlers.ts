@@ -25,7 +25,7 @@ import { SUBAGENT_SESSION_KEY } from "./index.js";
 import { registerCommandHandlers, runAfterImplementForActive } from "./command-handlers.js";
 import { registerStateFileTools } from "./pp-state-tools.js";
 import { isAiCommentOnlyChange } from "./ai-comment-cleanup.js";
-import { handleMainRateLimit, handleSubagentRateLimit, isRateLimitError, isSdkRetryableError } from "./rate-limit-fallback.js";
+import { handleMainRateLimit, handleSubagentRateLimit, isRateLimitError, isExtraUsageError, isSdkRetryableError } from "./rate-limit-fallback.js";
 import { getAgentConfigSnapshot, setExtensionOnlyMode, unregisterAgentDefinitions, registeredAgentNames, buildPoolRoster, baseRoleForName } from "./agents/registry.js";
 import { resolveModel, getModelInfo, updateRegistryFromAvailableModels } from "./model-registry.js";
 import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
@@ -35,6 +35,7 @@ import { reviewPassUnanimousApprove } from "./phases/verdict.js";
 import { nextPhase, validateExitCriteria } from "./phases/machine.js";
 import { openPlannotator, waitForPlannotatorResult, cancelPendingPlannotatorWait } from "./plannotator.js";
 import { advanceBanner } from "./messages.js";
+import { injectBillingHeader } from "./billing-spoof.js";
 import { Orchestrator, type ActiveTask } from "./orchestrator.js";
 import { createCustomFooter, setFooterContext, setFooterTracker, setFooterOrchestrator } from "./custom-footer.js";
 import { createUsageTracker, dumpUsageSummary, loadUsageSummary, isSubscriptionRouted, type UsageTracker } from "./usage-tracker.js";
@@ -1156,6 +1157,22 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
 
   registerMainTraceHooks(orchestrator);
 
+  // Item 10 billing spoof: prepend the Claude Code billing header as system[0]
+  // of OAuth-stealth Anthropic payloads so subscription requests bill against
+  // the Pro/Max PLAN instead of the "extra usage" bucket. The hook exposes only
+  // the request PAYLOAD (no header surface); the matching user-agent override
+  // travels via the sub provider's model.headers (see flant-infra). Idempotent
+  // and gated to Claude + identity-block payloads, so non-Anthropic and
+  // plain-API-key requests are untouched.
+  pi.on("before_provider_request", async (event) => {
+    try {
+      injectBillingHeader(event.payload);
+    } catch (err: any) {
+      getLogger().debug({ s: "billing", err: err?.message }, "billing header injection failed");
+    }
+    return event.payload;
+  });
+
   // Personal-subscription Claude routing registers the sub provider with a
   // literal OAuth token (a static snapshot). That token expires within a few
   // hours, so a long-lived session would keep sending a stale token and the
@@ -1892,7 +1909,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     // carries the subagent's resolved model id.
     const failedModelId = typeof data.modelId === "string" ? data.modelId : undefined;
     const subRateLimited =
-      isRateLimitError(data.error) &&
+      (isRateLimitError(data.error) || isExtraUsageError(data.error)) &&
       isSubscriptionRouted(failedModelId) &&
       !orchestrator.subFallbackActive;
     if (subRateLimited) {
@@ -2557,7 +2574,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       const activeModelId = (typeof msg.model === "string" && msg.model) || ctx.model?.id;
       const activeProvider = (typeof msg.provider === "string" && msg.provider) || ctx.model?.provider;
       if (
-        isRateLimitError(errorMsg) &&
+        (isRateLimitError(errorMsg) || isExtraUsageError(errorMsg)) &&
         isSubscriptionRouted(activeModelId, activeProvider) &&
         !orchestrator.subFallbackActive
       ) {
