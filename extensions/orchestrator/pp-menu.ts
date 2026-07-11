@@ -1001,7 +1001,7 @@ async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise
     }
     options.push({ title: "Back", description: "Return to the previous menu" });
 
-    const choice = await selectOption(ctx, "Flant AI Infrastructure", options);
+    const choice = await selectOption(ctx, "Flant", options);
     if (!choice || choice === "Back") return BACK;
 
     if (choice === enableLabel) {
@@ -1010,7 +1010,7 @@ async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise
         saveFlantSettings(next);
         unregisterFlantProviders(orchestrator.pi);
         clearFlantGeneratedConfig();
-        ctx.ui.notify("Flant AI Infrastructure disabled.", "info");
+        ctx.ui.notify("Flant disabled.", "info");
       } else {
         if (!process.env.FLANT_API_KEY) {
           ctx.ui.notify("Set FLANT_API_KEY environment variable first.", "warning");
@@ -2852,7 +2852,6 @@ async function showGeneralSettings(orchestrator: Orchestrator, ctx: any): Promis
       opt(`Ignore configs from other repos: ${orchestrator.config.general.loadExtraRepoConfigs ? "No" : "Yes"}`, "Load only root repo config"),
       opt(`Log level: ${logLevelLabel(orchestrator.config.general.logLevel)}`, "Logging verbosity"),
       opt(`Tracing: ${orchestrator.config.general.tracing ? "Yes" : "No"}`, "Capture full session traces to .pp/logs/traces/"),
-      opt("Flant AI Infrastructure", "Configure corporate AI model provider"),
       opt("Back", "Return to the previous menu"),
     ]);
     if (!choice || choice === "Back") return BACK;
@@ -2876,7 +2875,6 @@ async function showGeneralSettings(orchestrator: Orchestrator, ctx: any): Promis
       await showBooleanSetting(orchestrator, ctx, "Tracing", ["general", "tracing"], "Capture full session traces to .pp/logs/traces/", "Do not record session traces");
       continue;
     }
-    await showFlantInfraMenu(orchestrator, ctx);
   }
 }
 
@@ -2964,24 +2962,26 @@ async function showLspSettings(ctx: any): Promise<typeof BACK> {
 async function showSettingsMenu(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
   while (true) {
     const options: OptionInput[] = [
-      opt("Info", "Usage and task status"),
-      opt("General", "Commit, log level, Flant AI, repos"),
+      opt("General", "Commit, log level, repos"),
       opt("Agents", "Orchestrator and subagent configuration"),
       opt("Commands", "After file edit and after implementation"),
       opt("Performance", "Per-operation timeout limits"),
       opt("LSP", "Language server controls"),
+      opt("Flant", "Configure corporate AI model provider"),
+      opt("Info", "Usage and task status"),
       opt("Back", "Return to the previous menu"),
     ];
 
     const choice = await selectOption(ctx, "Settings", options);
     if (!choice || choice === "Back") return BACK;
 
-    if (choice === "Info") await showInfoMenu(orchestrator, ctx);
-    else if (choice === "General") await showGeneralSettings(orchestrator, ctx);
+    if (choice === "General") await showGeneralSettings(orchestrator, ctx);
     else if (choice === "Agents") await showAgentsSettings(orchestrator, ctx);
     else if (choice === "Commands") await showCommandsSettings(orchestrator, ctx);
     else if (choice === "Performance") await showPerformanceSettings(orchestrator, ctx);
     else if (choice === "LSP") await showLspSettings(ctx);
+    else if (choice === "Flant") await showFlantInfraMenu(orchestrator, ctx);
+    else if (choice === "Info") await showInfoMenu(orchestrator, ctx);
   }
 }
 

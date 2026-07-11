@@ -234,7 +234,7 @@ describe("General settings — boolean/inverted/log-level flows", () => {
   });
 });
 
-describe("Flant AI Infrastructure submenu", () => {
+describe("Flant submenu", () => {
   let cwd: string;
   beforeEach(() => {
     cwd = makeTmp("pp-leaves-flant-");
@@ -248,7 +248,7 @@ describe("Flant AI Infrastructure submenu", () => {
     const ctx = makeCtx((t) => notes.push(t));
     orchestrator.lastCtx = ctx;
     askQueue.push(
-      "Settings", "General", "Flant AI Infrastructure",
+      "Settings", "Flant",
       "Auto-update on startup: ON",
       "Back", "Back", "Back", "Back",
     );
@@ -262,7 +262,7 @@ describe("Flant AI Infrastructure submenu", () => {
     flantSettings.enabled = true;
     orchestrator.lastCtx = makeCtx();
     askQueue.push(
-      "Settings", "General", "Flant AI Infrastructure",
+      "Settings", "Flant",
       "Enable: ON",
       "Back", "Back", "Back", "Back",
     );
@@ -277,7 +277,7 @@ describe("Flant AI Infrastructure submenu", () => {
     flantSettings.enabled = true;
     orchestrator.lastCtx = makeCtx();
     askQueue.push(
-      "Settings", "General", "Flant AI Infrastructure",
+      "Settings", "Flant",
       "Cache period: 7 days",
       "14 days",
       "Back", "Back", "Back", "Back",
@@ -293,7 +293,7 @@ describe("Flant AI Infrastructure submenu", () => {
     const notes: string[] = [];
     orchestrator.lastCtx = makeCtx((t) => notes.push(t));
     askQueue.push(
-      "Settings", "General", "Flant AI Infrastructure",
+      "Settings", "Flant",
       "Enable: OFF",
       "Back", "Back", "Back", "Back",
     );
@@ -309,7 +309,7 @@ describe("Flant AI Infrastructure submenu", () => {
     const notes: string[] = [];
     orchestrator.lastCtx = makeCtx((t) => notes.push(t));
     askQueue.push(
-      "Settings", "General", "Flant AI Infrastructure",
+      "Settings", "Flant",
       "Current status",
       "Back", "Back", "Back", "Back",
     );
