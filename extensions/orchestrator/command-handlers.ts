@@ -172,6 +172,9 @@ export function registerCommandHandlers(orchestrator: Orchestrator): void {
       if (text) {
         orchestrator.safeSendUserMessage(text.startsWith("[PI-PI]") ? text : `[PI-PI] ${text}`);
       }
+      // If a review-ready instruction arrived while the menu was open, deliver it
+      // as a fresh idle-gated turn now that the menu has closed (item 9).
+      orchestrator.flushPendingReviewReady();
     },
   });
 }

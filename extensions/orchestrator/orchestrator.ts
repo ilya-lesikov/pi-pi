@@ -131,6 +131,12 @@ export class Orchestrator {
   // legitimately parked on a human is not aborted. Set on dialogue open, cleared
   // in finally on every exit (resolve, ESC/cancel, error).
   interactivePromptOpen = false;
+  // One-shot review-ready instruction (item 9). While a menu/ask turn is live,
+  // the review-ready banner must NOT be queued as a followUp (ESC/abort flushes
+  // the queue into the editor input — the stray-banner bug). Instead it is
+  // stashed here and delivered as a FRESH idle-gated turn once the dialogue
+  // closes. Cleared after delivery so it fires exactly once.
+  pendingReviewReady: string | null = null;
   // Set SYNCHRONOUSLY the moment a sub-429 is detected (before any async dialog),
   // and cleared once the decision resolves. The autonomous planner/reviewer
   // auto-retry consults this to avoid re-spawning a failed variant on the still-
@@ -291,6 +297,30 @@ export class Orchestrator {
       }
     };
     attempt(0);
+  }
+
+  // Deliver the review-ready instruction WITHOUT leaking it into the editor on
+  // ESC/abort (item 9). If a menu/ask dialogue is live, the followUp queue would
+  // be dumped into the prompt input by restoreQueuedMessagesToEditor on abort —
+  // so stash the message and deliver it as a fresh idle-gated turn once the
+  // dialogue closes (flushPendingReviewReady). If nothing is open, deliver now.
+  deliverReviewReady(text: string): void {
+    if (this.interactivePromptOpen) {
+      this.pendingReviewReady = text;
+      return;
+    }
+    this.pendingReviewReady = null;
+    this.sendUserMessageWhenIdle(text, this.activeTaskToken);
+  }
+
+  // Deliver a stashed review-ready instruction (if any) as a fresh idle-gated
+  // turn. One-shot: cleared before sending so it never re-fires on a later idle.
+  // Called when a menu/ask dialogue closes (including ESC/abort).
+  flushPendingReviewReady(): void {
+    const text = this.pendingReviewReady;
+    if (!text || !this.active) return;
+    this.pendingReviewReady = null;
+    this.sendUserMessageWhenIdle(text, this.activeTaskToken);
   }
 
   truncateResult(result: string): string {
@@ -656,6 +686,7 @@ export class Orchestrator {
     this.pendingNudges.clear();
     this.phaseStartTime = 0;
     this.userGatePending = false;
+    this.pendingReviewReady = null;
     this.failedPlannerVariants = [];
     this.failedReviewerVariants = [];
     this.plannerFailureDialogPending = false;

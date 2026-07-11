@@ -123,6 +123,46 @@ describe("Orchestrator.safeSendUserMessage", () => {
   });
 });
 
+describe("Orchestrator.deliverReviewReady (item 9: no editor leak on /pp close)", () => {
+  function setup() {
+    const sendUserMessage = vi.fn();
+    const orchestrator = new Orchestrator(makePi({ sendUserMessage }));
+    orchestrator.active = makeActiveTask(null);
+    // isIdle true so sendUserMessageWhenIdle delivers synchronously.
+    orchestrator.lastCtx = { isIdle: () => true };
+    return { orchestrator, sendUserMessage };
+  }
+
+  it("does NOT queue the banner while a menu/ask dialogue is live (nothing to leak on ESC)", () => {
+    const { orchestrator, sendUserMessage } = setup();
+    orchestrator.interactivePromptOpen = true;
+    orchestrator.deliverReviewReady("[PI-PI] Review cycle is ready for apply_feedback.");
+    expect(sendUserMessage).not.toHaveBeenCalled();
+    expect(orchestrator.pendingReviewReady).toContain("ready for apply_feedback");
+  });
+
+  it("delivers exactly once as a fresh turn when the dialogue closes, then never re-fires", () => {
+    const { orchestrator, sendUserMessage } = setup();
+    orchestrator.interactivePromptOpen = true;
+    orchestrator.deliverReviewReady("[PI-PI] Review cycle is ready for apply_feedback.");
+    orchestrator.interactivePromptOpen = false;
+    orchestrator.flushPendingReviewReady();
+    expect(sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(orchestrator.pendingReviewReady).toBeNull();
+    // A second flush (e.g. a later idle) must not re-send.
+    orchestrator.flushPendingReviewReady();
+    expect(sendUserMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("delivers immediately when no dialogue is open", () => {
+    const { orchestrator, sendUserMessage } = setup();
+    orchestrator.interactivePromptOpen = false;
+    orchestrator.deliverReviewReady("[PI-PI] Review cycle is ready for apply_feedback.");
+    expect(sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(orchestrator.pendingReviewReady).toBeNull();
+  });
+});
+
 describe("Orchestrator.cancelPendingRetry", () => {
   it("clears the pending timer, disarms the ESC interrupt, and resets the counter", () => {
     vi.useFakeTimers();

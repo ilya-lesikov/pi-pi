@@ -237,7 +237,7 @@ function tryCompleteReviewCycle(orchestrator: Orchestrator, spawnedReviewers?: n
   // would emit the neutral wording and the agent might never re-call
   // pp_phase_complete, silently stalling the loop.
   const manualLoopActive = orchestrator.active.state.manualAutoReview?.phase === phase;
-  orchestrator.safeSendUserMessage(
+  orchestrator.deliverReviewReady(
     advanceBanner(reviewReadyMessage(phase, getEffectivePhaseMode(orchestrator.active.state), manualLoopActive)),
   );
 }
@@ -1372,9 +1372,11 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   });
   pi.events.on("ask:answered", () => {
     orchestrator.interactivePromptOpen = false;
+    orchestrator.flushPendingReviewReady();
   });
   pi.events.on("ask:cancelled", () => {
     orchestrator.interactivePromptOpen = false;
+    orchestrator.flushPendingReviewReady();
   });
 
   pi.events.on("subagents:created", (data: any) => {
@@ -2314,6 +2316,10 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
         endMainTurn(orchestrator);
         orchestrator.interactivePromptOpen = false;
         ctx.abort?.();
+        // Deliver any review-ready instruction that arrived while this dialogue
+        // was live as a fresh idle-gated turn (item 9) — nothing was queued, so
+        // the abort didn't dump it into the editor.
+        orchestrator.flushPendingReviewReady();
       }
     }
 
