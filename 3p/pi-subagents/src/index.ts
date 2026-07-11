@@ -258,10 +258,22 @@ export default function (pi: ExtensionAPI) {
     }
   );
 
+  // The Agent tool's `subagent_type` description enumerates the currently
+  // available agent types. It is built once at tool registration, but sibling
+  // extensions (e.g. pi-pi) register dynamic agents LATER via
+  // `subagents:register-agents`. The host reads `parameters.…description` by
+  // reference fresh on each request, so mutating this field in place refreshes
+  // the advertised list without re-registering the tool.
+  let subagentTypeSchema: { description?: string } | undefined;
+  const buildSubagentTypeDesc = (): string =>
+    `The type of specialized agent to use. Available types: ${getAvailableTypes().join(", ")}. Custom agents from .pi/agents/*.md (project) or ${getAgentDir()}/agents/*.md (global) are also available.`;
+
   /** Reload agents from .pi/agents/*.md and merge with defaults (called on init and each Agent invocation). */
   const reloadCustomAgents = () => {
     const userAgents = loadCustomAgents(process.cwd());
     registerAgents(userAgents);
+    // Refresh the advertised subagent_type list in place (see above).
+    if (subagentTypeSchema) subagentTypeSchema.description = buildSubagentTypeDesc();
   };
 
   // Initial load
@@ -836,9 +848,9 @@ Terse command-style prompts produce shallow, generic work.
       description: Type.String({
         description: "A short (3-5 word) description of the task (shown in UI).",
       }),
-      subagent_type: Type.String({
-        description: `The type of specialized agent to use. Available types: ${getAvailableTypes().join(", ")}. Custom agents from .pi/agents/*.md (project) or ${getAgentDir()}/agents/*.md (global) are also available.`,
-      }),
+      subagent_type: (subagentTypeSchema = Type.String({
+        description: buildSubagentTypeDesc(),
+      })),
       model: Type.Optional(
         Type.String({
           description:

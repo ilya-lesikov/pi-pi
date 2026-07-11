@@ -239,6 +239,23 @@ describe("tool_result implementation tracking", () => {
     );
     expect(orchestrator.active.modifiedFiles.has("/project/src/bar.ts")).toBe(true);
   });
+
+  it("clears reviewApprovedClean when a state artifact is written (#9defe review-2)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-pi-artifact-clear-"));
+    mkdirSync(join(dir, "artifacts"), { recursive: true });
+    writeFileSync(join(dir, "artifacts", "design.md"), "# Design\n\nbody\n", "utf-8");
+    orchestrator.active = makeActiveTask();
+    orchestrator.active.dir = dir;
+    orchestrator.active.state.phase = "brainstorm";
+    orchestrator.active.state.reviewApprovedClean = true;
+    const handler = getHandler("tool_result");
+    await handler(
+      { toolName: "write", input: { path: join(dir, "artifacts", "design.md") }, isError: false, content: [] },
+      {},
+    );
+    expect(orchestrator.active.state.reviewApprovedClean).toBe(false);
+    rmSync(dir, { recursive: true, force: true });
+  });
 });
 
 describe("ask_user ESC aborts the turn", () => {

@@ -25,7 +25,10 @@ function makePi() {
       }),
       events: {
         emit: vi.fn(),
-        on: vi.fn(() => vi.fn()),
+        on: vi.fn((event: string, handler: any) => {
+          handlers.set(`evt:${event}`, handler);
+          return vi.fn();
+        }),
       },
       appendEntry: vi.fn(),
       sendMessage: vi.fn(),
@@ -62,7 +65,7 @@ describe("toolDescriptionMode", () => {
     shutdown = async () => {
       await handlers.get("session_shutdown")?.({}, { hasUI: false, ui: {} } as any);
     };
-    return tools;
+    return { tools, handlers };
   }
 
   afterEach(async () => {
@@ -78,7 +81,7 @@ describe("toolDescriptionMode", () => {
   });
 
   it("defaults to the full description", () => {
-    const tools = setup();
+    const { tools } = setup();
     const desc: string = tools.get("Agent").description;
     expect(desc).toContain("## Usage notes");
     expect(desc).toContain("## Writing the prompt");
@@ -86,10 +89,27 @@ describe("toolDescriptionMode", () => {
   });
 
   it("ignores a toolDescriptionMode override in subagents.json (file config disabled)", () => {
-    const tools = setup({ toolDescriptionMode: "compact" });
+    const { tools } = setup({ toolDescriptionMode: "compact" });
     const desc: string = tools.get("Agent").description;
     // Still the full description — the file was not consulted.
     expect(desc).toContain("## Usage notes");
     expect(desc).toContain("## Writing the prompt");
+  });
+
+  it("refreshes the subagent_type description in place when dynamic agents register", () => {
+    const { tools, handlers } = setup();
+    const params = tools.get("Agent").parameters;
+    const schema = params.properties.subagent_type;
+    expect(schema.description).not.toContain("advisor_pp-flant");
+    // A sibling extension registers a dynamic model-named pool agent.
+    const registerHandler = handlers.get("evt:subagents:register-agents");
+    expect(registerHandler).toBeDefined();
+    const agents = new Map<string, any>([
+      ["advisor_pp-flant-anthropic-sub_sub-claude-fable-5_high", { description: "advisor", model: "x", enabled: true }],
+    ]);
+    registerHandler({ agents });
+    // Same schema object, description mutated in place to include the new type.
+    expect(tools.get("Agent").parameters.properties.subagent_type).toBe(schema);
+    expect(schema.description).toContain("advisor_pp-flant-anthropic-sub_sub-claude-fable-5_high");
   });
 });

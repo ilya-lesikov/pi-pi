@@ -431,7 +431,7 @@ export function validateConfig(config: Record<string, any>): void {
               throw new Error(`config.agents.subagents.pools.${poolKey} must be an array`);
             }
             pools[poolKey].forEach((entry: unknown, i: number) => {
-              validateAgentPartial(entry, `config.agents.subagents.pools.${poolKey}[${i}]`);
+              validatePresetAgentPartial(entry, `config.agents.subagents.pools.${poolKey}[${i}]`);
             });
           }
         }

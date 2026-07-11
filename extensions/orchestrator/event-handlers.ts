@@ -2387,6 +2387,22 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
         }
       }
 
+      // Editing a reviewed state artifact (RESEARCH.md/USER_REQUEST.md/artifacts)
+      // invalidates a prior clean review for THIS phase, so "Auto review, then
+      // continue" can't skip re-review over the changed content. Do this BEFORE
+      // the .pp early-return below (implement-phase source writes clear it later).
+      const taskArtifactsDir = join(taskDir, "artifacts");
+      if (
+        resolvedWrite === join(taskDir, "USER_REQUEST.md") ||
+        resolvedWrite === join(taskDir, "RESEARCH.md") ||
+        isPathInside(taskArtifactsDir, resolvedWrite)
+      ) {
+        if (orchestrator.active.state.reviewApprovedClean) {
+          orchestrator.active.state.reviewApprovedClean = false;
+          try { saveTask(orchestrator.active.dir, orchestrator.active.state); } catch {}
+        }
+      }
+
       const ppDir = resolve(orchestrator.cwd, ".pp");
       if (isPathInside(ppDir, resolvedWrite)) return;
 

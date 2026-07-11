@@ -442,6 +442,16 @@ describe("config regressions", () => {
       validateConfig({
         agents: {
           subagents: {
+            pools: { advisors: [{ enabled: "false", model: "x/y", thinking: "high" }] },
+          },
+        },
+      }),
+    ).toThrow("config.agents.subagents.pools.advisors[0].enabled must be a boolean");
+
+    expect(() =>
+      validateConfig({
+        agents: {
+          subagents: {
             pools: {
               advisors: [{ enabled: true, model: "anthropic/claude-fable-latest", thinking: "high" }],
               reviewers: [{ enabled: false, model: "openai/gpt-latest", thinking: "high" }],
