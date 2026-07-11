@@ -140,6 +140,20 @@ describe("validateConfig", () => {
       }),
     ).not.toThrow();
   });
+
+  it("rejects invalid maxConcurrentSubagents values", () => {
+    for (const bad of [0, -1, 1.5, 1025, "7"]) {
+      expect(() => validateConfig({ agents: { maxConcurrentSubagents: bad } as any })).toThrow(
+        "config.agents.maxConcurrentSubagents must be an integer between 1 and 1024",
+      );
+    }
+  });
+
+  it("accepts valid maxConcurrentSubagents values", () => {
+    for (const good of [1, 7, 1024]) {
+      expect(() => validateConfig({ agents: { maxConcurrentSubagents: good } })).not.toThrow();
+    }
+  });
 });
 
 describe("loadConfig", () => {
@@ -468,6 +482,10 @@ describe("config regressions", () => {
     expect(advisors.filter((a) => a.enabled !== false).length).toBe(2);
     expect(advisors.some((a) => a.model.includes("fable"))).toBe(true);
     expect("advisor" in (config.agents.subagents.simple as Record<string, unknown>)).toBe(false);
+  });
+
+  it("default config sets maxConcurrentSubagents to 7", () => {
+    expect(getDefaultConfig().agents.maxConcurrentSubagents).toBe(7);
   });
 });
 

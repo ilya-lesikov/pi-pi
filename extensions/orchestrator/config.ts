@@ -60,6 +60,7 @@ export interface PiPiConfig {
     tracing: boolean;
   };
   agents: {
+    maxConcurrentSubagents: number;
     orchestrators: Record<OrchestratorRole, AgentConfig>;
     subagents: {
       simple: Record<SimpleSubagentRole, AgentConfig>;
@@ -124,6 +125,7 @@ const DEFAULT_CONFIG: PiPiConfig = {
     tracing: false,
   },
   agents: {
+    maxConcurrentSubagents: 7,
     orchestrators: {
       implement: { model: "anthropic/claude-opus-latest", thinking: "high" },
       plan: { model: "anthropic/claude-opus-latest", thinking: "high" },
@@ -402,6 +404,8 @@ export function validateConfig(config: Record<string, any>): void {
   if (config.agents !== undefined) {
     const agents = requireObject(config.agents, "config.agents");
 
+    ensureMaxConcurrentSubagents(agents.maxConcurrentSubagents);
+
     if (agents.orchestrators !== undefined) {
       const orchestrators = requireObject(agents.orchestrators, "config.agents.orchestrators");
       for (const role of ORCHESTRATOR_ROLES) {
@@ -483,6 +487,22 @@ export function validateConfig(config: Record<string, any>): void {
   }
 }
 
+const MAX_CONCURRENT_SUBAGENTS_CEILING = 1024;
+
+function ensureMaxConcurrentSubagents(value: unknown): void {
+  if (value === undefined) return;
+  if (
+    typeof value !== "number" ||
+    !Number.isInteger(value) ||
+    value < 1 ||
+    value > MAX_CONCURRENT_SUBAGENTS_CEILING
+  ) {
+    throw new Error(
+      `config.agents.maxConcurrentSubagents must be an integer between 1 and ${MAX_CONCURRENT_SUBAGENTS_CEILING}`,
+    );
+  }
+}
+
 function ensureMergedAgent(agent: AgentConfig, path: string): void {
   if (typeof agent.model !== "string" || agent.model.length === 0) {
     throw new Error(`${path}.model must be a non-empty string`);
@@ -502,6 +522,8 @@ export function validateMergedConfig(config: Record<string, any>): void {
   if (!typed.general || !isValidLogLevel(typed.general.logLevel)) {
     throw new Error("config.general.logLevel must be one of: debug, info, warn, error");
   }
+
+  ensureMaxConcurrentSubagents(typed.agents?.maxConcurrentSubagents);
 
   for (const role of ORCHESTRATOR_ROLES) {
     ensureMergedAgent(typed.agents.orchestrators[role], `config.agents.orchestrators.${role}`);
