@@ -3939,8 +3939,11 @@ export async function showActiveTaskMenu(
         if (phase === "review") {
           finishOptions.push(opt("Publish", "Publish the synthesized review findings as file comments or GitHub PR comments"));
         }
+        const nextPhaseName = phase === "plan" ? "implement" : "plan & implement";
+        const autoThenContinueLabel = `Auto review, then continue to ${nextPhaseName}`;
         if (canContinue) {
           finishOptions.push(opt(continueLabel, "Approve and advance to the next phase"));
+          finishOptions.push(opt(autoThenContinueLabel, "Loop reviewers over this phase until they approve (up to N passes), then advance"));
         }
         finishOptions.push(opt("Complete", "Mark task as done and clean up"));
         finishOptions.push(opt("Pause", "Suspend task to resume later"));
@@ -3948,6 +3951,54 @@ export async function showActiveTaskMenu(
 
         const finishChoice = await selectOption(ctx, "Next", finishOptions);
         if (!finishChoice || finishChoice === "Back") break;
+        if (finishChoice === autoThenContinueLabel) {
+          const next = nextPhase(task.type, phase);
+          // Collect the SAME advance inputs the plain-continue path would, NOW,
+          // and stash them on the flag — the later headless pp_phase_complete
+          // branch that advances cannot prompt the user.
+          const deferred: { mode?: TaskMode; autonomousConfig?: AutonomousConfig; plannerPreset?: string } = {};
+          if (next === "plan" && task.type === "brainstorm") {
+            const modeSelection = await pickModeForTaskStart(orchestrator, ctx, "implement");
+            if (!modeSelection) continue;
+            deferred.mode = modeSelection.mode;
+            deferred.autonomousConfig = modeSelection.autonomousConfig;
+          }
+          if (next === "plan" && getEffectiveMode(task.state) !== "autonomous") {
+            const pickedPlannerPreset = await pickPreset(ctx, orchestrator, "planners", "Planner preset");
+            if (!pickedPlannerPreset) continue;
+            deferred.plannerPreset = pickedPlannerPreset;
+          }
+          // Already approved clean this phase: skip review, advance straight through.
+          if (task.state.reviewApprovedClean) {
+            if (deferred.mode) task.state.mode = deferred.mode;
+            if (deferred.autonomousConfig) task.state.autonomousConfig = deferred.autonomousConfig;
+            task.state.effectiveMode = undefined;
+            finalizeReviewCycle(task);
+            const advResult = await orchestrator.transitionToNextPhase(ctx, deferred.plannerPreset);
+            if (!advResult.ok) return `Transition blocked: ${advResult.error}`;
+            return "";
+          }
+          const loopPreset = await pickPreset(ctx, orchestrator, getReviewPresetGroup(phase), "Review preset");
+          if (!loopPreset) continue;
+          if (!hasEnabledReviewers(orchestrator, loopPreset)) {
+            const rg = reviewPresetGroupForPhase(phase);
+            const label = rg === "brainstormReviewers" ? "artifact" : rg === "planReviewers" ? "plan" : "code";
+            ctx.ui.notify(`No ${label} reviewers enabled.`, "info");
+            continue;
+          }
+          const passes = await pickMaxReviewPasses(ctx, 3);
+          if (passes === null) continue;
+          finalizeReviewCycle(task);
+          if (task.state.reviewPassByKind?.[phase]) task.state.reviewPassByKind[phase].auto = 0;
+          task.state.reviewApprovedClean = false;
+          task.state.manualAutoReview = { phase, preset: loopPreset, maxPasses: passes, advanceOnComplete: true, deferredAdvance: deferred };
+          saveTask(task.dir, task.state);
+          return advanceBanner(
+            `[PI-PI] Auto-review-then-continue started over ${reviewTarget} (up to ${passes >= 999 ? "unlimited" : passes} passes). ` +
+            "Call pp_phase_complete now to run the first review pass; after each pass, apply the reviewers' feedback and call pp_phase_complete again. " +
+            `When reviewers unanimously approve or the pass cap is reached, the task advances to ${nextPhaseName} automatically.`,
+          );
+        }
         if (finishChoice === "Publish") {
           const target = await selectOption(ctx, "Publish", [
             opt("As file comments", "Insert AI_COMMENT: markers at each finding's location in the source"),
@@ -4020,6 +4071,7 @@ export async function showActiveTaskMenu(
       }
       const reviewOptions: OptionInput[] = [
         opt(autoLabel, `Run configured reviewers over ${reviewTarget}`),
+        opt("Auto review until approved", `Loop reviewers over ${reviewTarget} until they unanimously approve, up to N passes`),
       ];
       const hasArtifactPlannotator = phase === "brainstorm" || phase === "debug";
       if (hasPlannotator) {
@@ -4122,6 +4174,31 @@ export async function showActiveTaskMenu(
           );
         }
         return readOnlyReviewBanner(phase, task.dir);
+      }
+
+      if (reviewChoice === "Auto review until approved") {
+        const loopPreset = await pickPreset(ctx, orchestrator, getReviewPresetGroup(phase), "Review preset");
+        if (!loopPreset) continue;
+        if (!hasEnabledReviewers(orchestrator, loopPreset)) {
+          const rg = reviewPresetGroupForPhase(phase);
+          const label = rg === "brainstormReviewers" ? "artifact" : rg === "planReviewers" ? "plan" : "code";
+          ctx.ui.notify(`No ${label} reviewers enabled.`, "info");
+          continue;
+        }
+        const passes = await pickMaxReviewPasses(ctx, 3);
+        if (passes === null) continue;
+        finalizeReviewCycle(task);
+        // Item 5: stop-in-phase loop. Reset the per-phase auto-pass counter so the
+        // cap counts THIS run's passes, and clear any stale clean flag.
+        if (task.state.reviewPassByKind?.[phase]) task.state.reviewPassByKind[phase].auto = 0;
+        task.state.reviewApprovedClean = false;
+        task.state.manualAutoReview = { phase, preset: loopPreset, maxPasses: passes, advanceOnComplete: false };
+        saveTask(task.dir, task.state);
+        return advanceBanner(
+          `[PI-PI] Auto-review-until-approved started over ${reviewTarget} (up to ${passes >= 999 ? "unlimited" : passes} passes). ` +
+          "Call pp_phase_complete now to run the first review pass; after each pass, apply the reviewers' feedback and call pp_phase_complete again. " +
+          "The loop stops when reviewers unanimously approve or the pass cap is reached. Do NOT advance the phase yourself.",
+        );
       }
 
       const reviewPreset = await pickPreset(ctx, orchestrator, getReviewPresetGroup(phase), "Review preset");

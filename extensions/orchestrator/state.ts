@@ -56,6 +56,20 @@ export interface TaskState {
   mode?: TaskMode;
   effectiveMode?: TaskMode;
   autonomousConfig?: AutonomousConfig;
+  // Manual auto-review-until-approved (#5/#7): drives the same review-cycle loop
+  // as autonomous mode over ONE phase, independently of effectiveMode (so it
+  // works in force-guided brainstorm/debug/review). advanceOnComplete=false
+  // (item 5) stops in-phase on approve/max-passes; =true (item 7) finalizes and
+  // transitions to the next phase. deferredAdvance carries the next-phase inputs
+  // the plain-continue path would have collected, captured up front because the
+  // headless pp_phase_complete branch cannot prompt.
+  manualAutoReview?: {
+    phase: string;
+    preset: string;
+    maxPasses: number;
+    advanceOnComplete: boolean;
+    deferredAdvance?: { mode?: TaskMode; autonomousConfig?: AutonomousConfig; plannerPreset?: string };
+  };
   plannerFailureAutoRetried?: boolean;
   reviewerFailureAutoRetried?: boolean;
   // Set once afterImplement has run for the current implement phase (either at

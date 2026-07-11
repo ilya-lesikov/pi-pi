@@ -232,18 +232,24 @@ function tryCompleteReviewCycle(orchestrator: Orchestrator, spawnedReviewers?: n
     },
     "instruction",
   );
-  orchestrator.safeSendUserMessage(advanceBanner(reviewReadyMessage(phase, getEffectivePhaseMode(orchestrator.active.state))));
+  // Force the re-call directive when a manual auto-review loop is active: that
+  // loop runs in a force-GUIDED phase, so without this signal reviewReadyMessage
+  // would emit the neutral wording and the agent might never re-call
+  // pp_phase_complete, silently stalling the loop.
+  const manualLoopActive = orchestrator.active.state.manualAutoReview?.phase === phase;
+  orchestrator.safeSendUserMessage(
+    advanceBanner(reviewReadyMessage(phase, getEffectivePhaseMode(orchestrator.active.state), manualLoopActive)),
+  );
 }
 
-function reviewReadyMessage(phase: string, mode: TaskMode): string {
-  if (reviewPresetGroupForPhase(phase) === "brainstormReviewers") {
+function reviewReadyMessage(phase: string, mode: TaskMode, forceRecall = false): string {
+  if (reviewPresetGroupForPhase(phase) === "brainstormReviewers" && !forceRecall) {
     return "[PI-PI] Review cycle is ready for apply_feedback. The reviewers assessed your research artifacts (USER_REQUEST.md, RESEARCH.md, and artifacts/), not a code diff. Read their outputs and update those artifacts as needed.";
   }
-  // Only autonomous plan/implement auto-advance: those must re-call
-  // pp_phase_complete to finalize the pass and transition. Guided phases
-  // (including debug and the interactive review phase) stay user-driven, so
-  // they get neutral wording with no re-call/auto-advance directive.
-  if (mode === "autonomous") {
+  // Autonomous plan/implement auto-advance AND any manual auto-review loop must
+  // re-call pp_phase_complete to finalize the pass. Other guided phases stay
+  // user-driven, so they get neutral wording with no re-call directive.
+  if (mode === "autonomous" || forceRecall) {
     return "[PI-PI] Review cycle is ready for apply_feedback. Read the reviewer outputs, apply any required changes, then call pp_phase_complete again to finalize this review pass and advance the phase. Do NOT stop or wait for the user — the phase is NOT complete until you re-call pp_phase_complete.";
   }
   return "[PI-PI] Review cycle is ready for apply_feedback. Read the reviewer outputs and apply any required changes.";
@@ -457,6 +463,72 @@ export function finalizeReviewCycleAutonomous(task: ActiveTask): void {
     task.state.step = "llm_work";
   }
   saveTask(task.dir, task.state);
+}
+
+type PhaseCompleteResult = { content: Array<{ type: "text"; text: string }>; isError?: boolean; details: Record<string, never> };
+
+// One iteration of the review-until-approved loop, shared by the autonomous
+// pp_phase_complete path and the manual auto-review flag (items 5/7). Finalizes
+// a just-completed review round (marking reviewApprovedClean on unanimous
+// approve), then either re-reviews (returns a handler result to relay) or
+// reports the cycle done. `manual` forces the re-call directive in the
+// review-ready message; the loop is otherwise identical.
+async function runReviewCyclePass(
+  orchestrator: Orchestrator,
+  ctx: any,
+  phase: Phase,
+  reviewPreset: string | undefined,
+  maxReviewPasses: number,
+): Promise<{ handled: PhaseCompleteResult } | { done: true }> {
+  const active = orchestrator.active!;
+  let justFinalizedReviewCycle = false;
+  if (active.state.reviewCycle?.step === "apply_feedback") {
+    const completedRound = active.state.reviewCycle.pass;
+    const completedPreset = normalizeStoredReviewPresetName(orchestrator, phase);
+    const enabledReviewerCount = Object.values(resolveReviewers(orchestrator, phase, completedPreset)).filter((v) => isEnabled(v)).length;
+    finalizeReviewCycleAutonomous(active);
+    justFinalizedReviewCycle = true;
+    if (reviewPassUnanimousApprove(active.dir, phase, completedRound, enabledReviewerCount)) {
+      active.state.reviewApprovedClean = true;
+      saveTask(active.dir, active.state);
+    }
+  }
+  const completedAutoPasses = active.state.reviewPassByKind?.[phase]?.auto ?? 0;
+  const capLabel = maxReviewPasses >= 999 ? "∞" : `${maxReviewPasses}`;
+
+  if (justFinalizedReviewCycle && !active.state.reviewApprovedClean && reviewPreset && maxReviewPasses > 0 && completedAutoPasses < maxReviewPasses) {
+    return {
+      handled: {
+        content: [{ type: "text", text: `The review pass found changes to make. Apply the reviewers' required changes, then call pp_phase_complete again to re-review (pass ${completedAutoPasses + 1}/${capLabel}). Do NOT wait for the user and do NOT advance the phase.` }],
+        details: {},
+      },
+    };
+  }
+
+  if (!justFinalizedReviewCycle && !active.state.reviewApprovedClean && reviewPreset && maxReviewPasses > 0 && completedAutoPasses < maxReviewPasses) {
+    const exitCheck = validateExitCriteria(active.dir, active.type, phase);
+    if (!exitCheck.ok) {
+      return {
+        handled: {
+          content: [{ type: "text", text: `Cannot start review yet: ${exitCheck.reason}\n\nFix this and call pp_phase_complete again. Do NOT wait for the user.` }],
+          details: {},
+        },
+      };
+    }
+    const reviewText = await enterReviewCycle(orchestrator, ctx, reviewPreset);
+    if (orchestrator.active?.state.step === "await_reviewers") {
+      return {
+        handled: {
+          content: [{ type: "text", text: `Reviews are running (${reviewPreset}, pass ${completedAutoPasses + 1}/${capLabel}). You will be notified automatically when the reviewer outputs are ready — then read them and proceed. Do NOT wait for the user and do NOT stop.` }],
+          details: {},
+        },
+      };
+    }
+    if (!reviewText.includes("No") || !reviewText.includes("reviewers enabled")) {
+      return { handled: { content: [{ type: "text", text: reviewText }], details: {} } };
+    }
+  }
+  return { done: true };
 }
 
 export function registerOrchestratorToolsForTest(orchestrator: Orchestrator): void {
@@ -889,64 +961,51 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
       // Gate on the effective PHASE mode, not the task mode: brainstorm/debug/
       // review are always user-driven even for an autonomous task, so they must
       // fall through to the guided menu path below rather than auto-advancing.
+      // Manual auto-review-until-approved (#5/#7): honored INDEPENDENTLY of
+      // effectiveMode (works in force-guided phases), reusing the shared review
+      // loop. On approve/max-passes it either stops in-phase (item 5) or
+      // finalizes + advances (item 7), driven by advanceOnComplete.
+      const manual = orchestrator.active.state.manualAutoReview;
+      if (manual && manual.phase === orchestrator.active.state.phase) {
+        const phase = orchestrator.active.state.phase;
+        const completedManualPasses = orchestrator.active.state.reviewPassByKind?.[phase]?.auto ?? 0;
+        const pass = await runReviewCyclePass(orchestrator, ctx, phase, manual.preset, manual.maxPasses);
+        if ("handled" in pass) return pass.handled;
+        // Loop finished: either unanimous approve or the pass cap was reached.
+        const clean = !!orchestrator.active.state.reviewApprovedClean;
+        const advanceOnComplete = manual.advanceOnComplete;
+        const deferred = manual.deferredAdvance;
+        orchestrator.active.state.manualAutoReview = undefined;
+        saveTask(orchestrator.active.dir, orchestrator.active.state);
+        if (!advanceOnComplete) {
+          // Item 5: stop in the current phase, surface the outcome.
+          const status = clean
+            ? "Reviewers unanimously approved."
+            : `Reached the ${manual.maxPasses >= 999 ? "unlimited" : manual.maxPasses}-pass cap without a clean unanimous approval (${completedManualPasses} pass(es) run).`;
+          return { content: [{ type: "text" as const, text: `Auto-review complete. ${status} Staying in the ${phase} phase.` }], details: {} };
+        }
+        // Item 7: finalize + transition to the next phase using the deferred
+        // advance inputs captured when the loop was armed (this branch is
+        // headless and must not prompt).
+        if (deferred?.mode) orchestrator.active.state.mode = deferred.mode;
+        if (deferred?.autonomousConfig) orchestrator.active.state.autonomousConfig = deferred.autonomousConfig;
+        orchestrator.active.state.effectiveMode = undefined;
+        finalizeReviewCycle(orchestrator.active);
+        const advResult = await orchestrator.transitionToNextPhase(ctx, deferred?.plannerPreset);
+        if (!advResult.ok) {
+          return { content: [{ type: "text" as const, text: `Transition blocked: ${advResult.error}` }], details: {} };
+        }
+        return { content: [{ type: "text" as const, text: "" }], details: {} };
+      }
+
       const effectiveMode = getEffectivePhaseMode(orchestrator.active.state);
       if (effectiveMode === "autonomous") {
         const phase = orchestrator.active.state.phase;
-        let justFinalizedReviewCycle = false;
-        if (orchestrator.active.state.reviewCycle?.step === "apply_feedback") {
-          const completedRound = orchestrator.active.state.reviewCycle.pass;
-          const completedPreset = normalizeStoredReviewPresetName(orchestrator, phase);
-          const enabledReviewerCount = Object.values(resolveReviewers(orchestrator, phase, completedPreset)).filter((v) => isEnabled(v)).length;
-          finalizeReviewCycleAutonomous(orchestrator.active);
-          justFinalizedReviewCycle = true;
-          if (reviewPassUnanimousApprove(orchestrator.active.dir, phase, completedRound, enabledReviewerCount)) {
-            orchestrator.active.state.reviewApprovedClean = true;
-            saveTask(orchestrator.active.dir, orchestrator.active.state);
-          }
-        }
         const phaseConfig = orchestrator.active.state.autonomousConfig?.phases?.[phase];
         const reviewPreset = phaseConfig?.reviewPreset;
         const maxReviewPasses = phaseConfig?.maxReviewPasses ?? 0;
-        const completedAutoPasses = orchestrator.active.state.reviewPassByKind?.[phase]?.auto ?? 0;
-
-        if (
-          justFinalizedReviewCycle &&
-          !orchestrator.active.state.reviewApprovedClean &&
-          reviewPreset &&
-          maxReviewPasses > 0 &&
-          completedAutoPasses < maxReviewPasses
-        ) {
-          return {
-            content: [{ type: "text" as const, text: `The review pass found changes to make. Apply the reviewers' required changes, then call pp_phase_complete again to re-review (pass ${completedAutoPasses + 1}/${maxReviewPasses >= 999 ? "∞" : maxReviewPasses}). Do NOT wait for the user and do NOT advance the phase.` }],
-            details: {},
-          };
-        }
-
-        if (
-          !justFinalizedReviewCycle &&
-          !orchestrator.active.state.reviewApprovedClean &&
-          reviewPreset &&
-          maxReviewPasses > 0 &&
-          completedAutoPasses < maxReviewPasses
-        ) {
-          const exitCheck = validateExitCriteria(orchestrator.active.dir, orchestrator.active.type, phase);
-          if (!exitCheck.ok) {
-            return {
-              content: [{ type: "text" as const, text: `Cannot start review yet: ${exitCheck.reason}\n\nFix this and call pp_phase_complete again. Do NOT wait for the user.` }],
-              details: {},
-            };
-          }
-          const reviewText = await enterReviewCycle(orchestrator, ctx, reviewPreset);
-          if (orchestrator.active?.state.step === "await_reviewers") {
-            return {
-              content: [{ type: "text" as const, text: `Reviews are running (${reviewPreset}, pass ${completedAutoPasses + 1}/${maxReviewPasses >= 999 ? "∞" : maxReviewPasses}). You will be notified automatically when the reviewer outputs are ready — then read them and proceed. Do NOT wait for the user and do NOT stop.` }],
-              details: {},
-            };
-          }
-          if (!reviewText.includes("No") || !reviewText.includes("reviewers enabled")) {
-            return { content: [{ type: "text" as const, text: reviewText }], details: {} };
-          }
-        }
+        const pass = await runReviewCyclePass(orchestrator, ctx, phase, reviewPreset, maxReviewPasses);
+        if ("handled" in pass) return pass.handled;
 
         // Terminal handoff (#1): an autonomous IMPLEMENT phase whose next phase is
         // "done" should NOT auto-complete. Run afterImplement (transitionToNextPhase

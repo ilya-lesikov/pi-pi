@@ -1332,6 +1332,49 @@ describe("edge cases and regressions", () => {
     expect(finalState.reviewCycle).toBeNull();
   });
 
+  it("manual auto-review (item 5) loops in a guided phase then stops in-phase on clean approve", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    // Guided implement task, parked in the implement phase.
+    await orchestrator.startTask(ctx as any, "implement", "Manual auto-review test", undefined, undefined, "guided");
+    const taskDir = orchestrator.active!.dir;
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+    const plansDir = join(taskDir, "plans");
+    mkdirSync(plansDir, { recursive: true });
+    writeFileSync(
+      join(plansDir, `${Math.floor(Date.now() / 1000)}_synthesized.md`),
+      makeValidPlan(["- [x] P1. Done item — Done when: synthesized plan is fully checked"]),
+      "utf-8",
+    );
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "llm_work";
+    // Arm the item-5 flag (advanceOnComplete=false): stop in-phase on approve.
+    orchestrator.active!.state.manualAutoReview = { phase: "implement", preset: "regular", maxPasses: 3, advanceOnComplete: false };
+    saveTask(taskDir, orchestrator.active!.state);
+
+    const ppPhaseComplete = getTool(pi, "pp_phase_complete");
+    // First call: enters the review cycle (spawns reviewers).
+    const first = await ppPhaseComplete.execute("m-1", { summary: "implemented" }, undefined, undefined, ctx);
+    expect(first.content[0].text).toContain("pass 1/3");
+    expect(orchestrator.active!.state.reviewCycle).not.toBeNull();
+
+    // Reviewer approves.
+    const reviewsDir = join(taskDir, "code-reviews");
+    mkdirSync(reviewsDir, { recursive: true });
+    writeFileSync(join(reviewsDir, `${Math.floor(Date.now() / 1000)}_test_round-1.md`), "VERDICT: APPROVE", "utf-8");
+    emitSubagentCreated(pi, "reviewer-1", "Code reviewer (test)");
+    emitSubagentCompleted(pi, "reviewer-1", "Code reviewer (test)");
+
+    // Second call: finalizes the clean pass; item 5 stops in-phase and clears the flag.
+    const second = await ppPhaseComplete.execute("m-2", { summary: "fixes applied" }, undefined, undefined, ctx);
+    expect(second.content[0].text).toContain("Staying in the implement phase");
+    expect(orchestrator.active!.state.phase).toBe("implement");
+    expect(orchestrator.active!.state.manualAutoReview).toBeUndefined();
+  });
+
   it("continue brainstorming sets step back to llm_work", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);
@@ -4468,7 +4511,7 @@ describe("menu contracts", () => {
     await orchestrator.startTask(ctx as any, "implement", "contract next");
     menu
       .expect({ question: m.taskMenu("implement", "brainstorm"), options: { include: ["Next"] }, choose: "Next" })
-      .expect({ question: "Next", options: { exact: ["Continue to plan & implement", "Complete", "Pause", "Back"] }, choose: "Back" })
+      .expect({ question: "Next", options: { exact: ["Continue to plan & implement", "Auto review, then continue to plan & implement", "Complete", "Pause", "Back"] }, choose: "Back" })
       .expect({ question: m.taskMenu("implement", "brainstorm"), options: { include: ["Back to prompt"] }, choose: "Back to prompt" });
 
     const pp = getCommand(pi, "pp");
@@ -4495,7 +4538,7 @@ describe("menu contracts", () => {
 
     menu
       .expect({ question: m.taskMenu("implement", "brainstorm"), options: { include: ["Review"] }, choose: "Review" })
-      .expect({ question: "Review", options: { exact: [m.autoReview, "Review in Plannotator", "Review on my own", "Back"] }, choose: "Back" })
+      .expect({ question: "Review", options: { exact: [m.autoReview, "Auto review until approved", "Review in Plannotator", "Review on my own", "Back"] }, choose: "Back" })
       .expect({ question: m.taskMenu("implement", "brainstorm"), options: { include: ["Back to prompt"] }, choose: "Back to prompt" });
 
     const pp = getCommand(pi, "pp");
