@@ -39,7 +39,6 @@ import { compareModelVersion } from "./model-version.js";
 
 import {
   listTasks,
-  getActiveTaskStatus,
   getEffectiveMode,
   getEffectivePhaseMode,
   loadTask,
@@ -3613,12 +3612,8 @@ async function showConfigErrorMenu(orchestrator: Orchestrator, ctx: any): Promis
 }
 
 async function showNoActiveMenu(orchestrator: Orchestrator, ctx: any): Promise<string | undefined> {
-  const status = getActiveTaskStatus(orchestrator.cwd, orchestrator.config.performance.internals.taskLockStale);
-  const title = status.kind === "ambiguous"
-    ? `/pp\n\n${status.tasks.length} paused tasks found (their locks are free). Choose Task → Resume to pick one.`
-    : "/pp";
   while (true) {
-    const choice = await selectOption(ctx, title, [
+    const choice = await selectOption(ctx, "/pp", [
       { title: "Task", description: "Start a new task or resume a paused one" },
       { title: "Subagents", description: "View and manage running subagents" },
       { title: "Settings", description: "Models, agents, commands, and other configuration" },
