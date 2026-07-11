@@ -1,7 +1,29 @@
 import { describe, expect, it } from "vitest";
 import { renderRunningAgentStatus } from "../src/index.js";
 import type { WidgetMode } from "../src/types.js";
-import { type AgentActivity, AgentWidget, formatSessionTokens } from "../src/ui/agent-widget.js";
+import { type AgentActivity, AgentWidget, fgPreservingNestedStyles, formatSessionTokens } from "../src/ui/agent-widget.js";
+
+describe("fgPreservingNestedStyles", () => {
+  // Real ANSI: dim = \e[2m … \e[22m is not what fg emits here; model theme.fg as
+  // wrapping in a color-set code and a reset (\e[39m), matching how pi-tui themes
+  // emit foreground colors.
+  const theme = {
+    fg: (c: string, s: string) => `\u001b[36m${s}\u001b[39m`,
+    bold: (s: string) => s,
+  };
+
+  it("re-asserts the outer color after a nested reset so it does not bleed", () => {
+    const nested = `a\u001b[39mb`;
+    const out = fgPreservingNestedStyles(theme, "dim", nested);
+    // Every nested reset is followed by a re-assertion of the color-start code,
+    // so text after the reset stays colored instead of blanking the rest.
+    expect(out).toBe(`\u001b[36ma\u001b[39m\u001b[36mb\u001b[39m`);
+  });
+
+  it("is a no-op wrapper when there is no nested reset", () => {
+    expect(fgPreservingNestedStyles(theme, "dim", "plain")).toBe(`\u001b[36mplain\u001b[39m`);
+  });
+});
 
 describe("formatSessionTokens", () => {
   const theme = { fg: (c: string, s: string) => `<${c}>${s}</${c}>`, bold: (s: string) => s };

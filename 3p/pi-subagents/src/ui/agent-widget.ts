@@ -40,6 +40,16 @@ export type Theme = {
   bold(text: string): string;
 };
 
+// Apply theme.fg() while re-asserting the outer color after any nested ANSI
+// reset (\e[0m / \e[39m) inside `text`. Without this, a nested reset in the
+// styled substring clears the foreground for the remainder of the line, so the
+// color bleeds/blanks across subsequent output (upstream fix #136).
+export function fgPreservingNestedStyles(theme: Theme, color: string, text: string): string {
+  const styledEmpty = theme.fg(color, "");
+  const styleStart = styledEmpty.replace(/\u001b\[(?:0|39)m/g, "");
+  return theme.fg(color, text.replace(/\u001b\[(?:0|39)m/g, (reset) => `${reset}${styleStart}`));
+}
+
 export type UICtx = {
   setStatus(key: string, text: string | undefined): void;
   setWidget(
@@ -391,7 +401,7 @@ export class AgentWidget {
       const activity = bg ? describeActivity(bg.activeTools, bg.responseText) : "thinking…";
 
       runningLines.push([
-        truncate(theme.fg("dim", "├─") + ` ${theme.fg("accent", frame)} ${theme.bold(name)}${modeTag}  ${theme.fg("muted", a.description)} ${theme.fg("dim", "·")} ${theme.fg("dim", statsText)}`),
+        truncate(theme.fg("dim", "├─") + ` ${theme.fg("accent", frame)} ${theme.bold(name)}${modeTag}  ${theme.fg("muted", a.description)} ${theme.fg("dim", "·")} ${fgPreservingNestedStyles(theme, "dim", statsText)}`),
         truncate(theme.fg("dim", "│  ") + theme.fg("dim", `  ⎿  ${activity}`)),
       ]);
     }
