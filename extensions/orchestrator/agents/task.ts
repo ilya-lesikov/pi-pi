@@ -37,7 +37,7 @@ export function createTaskAgent(config: PiPiConfig) {
       "- You may spawn ONLY explore/librarian subagents (subagent_type is REQUIRED — calls without it are rejected):",
       '  Agent(subagent_type="explore", ...) — codebase research. Prefer this for most lookups. Fast and cheap.',
       '  Agent(subagent_type="librarian", ...) — external docs, library APIs, web research.',
-      "  Do NOT spawn task, advisor, advisor2, advisor3, deep-debugger, or reviewer subagents.",
+      "  Do NOT spawn task, advisor, deep-debugger, or reviewer subagents.",
       "- Before modifying a function, use lsp findReferences to understand all callers",
       "- After editing files, run lsp diagnostics and fix errors before moving on",
       "- Your subtask and task context (USER_REQUEST, RESEARCH, and a manifest of additional documents) are provided in the spawn message. Read the manifested files from disk if relevant.",

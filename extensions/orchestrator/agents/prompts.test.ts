@@ -105,7 +105,7 @@ describe("task factory no longer bakes artifacts and stays explore/librarian-onl
     expect(t.prompt).not.toContain("=== SYNTHESIZED PLAN ===");
     expect(t.prompt).not.toContain("Do NOT re-read them from disk");
     expect(t.prompt).toContain("ONLY explore/librarian");
-    expect(t.prompt).toContain("Do NOT spawn task, advisor, advisor2, advisor3, deep-debugger, or reviewer");
+    expect(t.prompt).toContain("Do NOT spawn task, advisor, deep-debugger, or reviewer");
   });
 });
 
@@ -120,7 +120,7 @@ describe("phased factory prompts: manifest guidance replaces the do-not-re-read 
     const p = createPlannerAgent("opus", planners, { userRequest: "u", research: "r", manifest }, "/out.md", []);
     expect(p.prompt).toContain("/t/artifacts/design.md");
     expect(p.prompt).toContain("read them from disk with the read tool");
-    expect(p.prompt).toContain("Do NOT spawn task, advisor, advisor2, advisor3, deep-debugger, or reviewer");
+    expect(p.prompt).toContain("Do NOT spawn task, advisor, deep-debugger, or reviewer");
   });
 
   it("plan-reviewer lists manifest paths and restricts spawns", () => {
@@ -132,7 +132,7 @@ describe("phased factory prompts: manifest guidance replaces the do-not-re-read 
       [],
     );
     expect(p.prompt).toContain("/t/artifacts/design.md");
-    expect(p.prompt).toContain("Do NOT spawn task, advisor, advisor2, advisor3, deep-debugger, or reviewer");
+    expect(p.prompt).toContain("Do NOT spawn task, advisor, deep-debugger, or reviewer");
   });
 
   it("code-reviewer lists manifest paths and restricts spawns", () => {
@@ -144,7 +144,7 @@ describe("phased factory prompts: manifest guidance replaces the do-not-re-read 
       [],
     );
     expect(c.prompt).toContain("/t/artifacts/design.md");
-    expect(c.prompt).toContain("Do NOT spawn task, advisor, advisor2, advisor3, deep-debugger, or reviewer");
+    expect(c.prompt).toContain("Do NOT spawn task, advisor, deep-debugger, or reviewer");
   });
 
   it("brainstorm-reviewer restricts spawns and lists manifest paths when provided", () => {
@@ -155,7 +155,7 @@ describe("phased factory prompts: manifest guidance replaces the do-not-re-read 
       "/out.md",
       [],
     );
-    expect(b.prompt).toContain("Do NOT spawn task, advisor, advisor2, advisor3, deep-debugger, or reviewer");
+    expect(b.prompt).toContain("Do NOT spawn task, advisor, deep-debugger, or reviewer");
     expect(b.prompt).toContain("/t/artifacts/design.md");
     expect(b.prompt).toContain("read them from disk with the read tool");
   });

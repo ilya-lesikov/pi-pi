@@ -63,7 +63,7 @@ export function createPlannerAgent(
       "You may spawn ONLY explore/librarian subagents (subagent_type is REQUIRED — calls without it are rejected):",
     '- Agent(subagent_type="explore", ...) — codebase research. Prefer this for most lookups. Fast and cheap.',
     '- Agent(subagent_type="librarian", ...) — external docs, library APIs, web research.',
-    "Spawn multiple explore agents in parallel for broad searches. Do NOT spawn task, advisor, advisor2, advisor3, deep-debugger, or reviewer.",
+    "Spawn multiple explore agents in parallel for broad searches. Do NOT spawn task, advisor, deep-debugger, or reviewer.",
       "(You are a phased planner; the on-demand advisor/reviewer/deep-debugger pools are for the main agent, not for you.)",
       "</task>",
       "",
