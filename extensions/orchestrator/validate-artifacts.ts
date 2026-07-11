@@ -182,34 +182,6 @@ export function validateResearch(content: string): ValidationResult {
   return errors.length > 0 ? { ok: false, errors } : { ok: true };
 }
 
-// Heuristic scan for RESEARCH.md open questions that a task still needs a human
-// to resolve. Autonomous-only gate (#1): the last interactive phase must leave
-// nothing open before handing off to a phase that runs without a user. A line is
-// flagged as unresolved when it carries NO DECIDED/ASSUMED resolution marker AND
-// is either a list item (`-`/`*`/`N.` — a bullet in the Open Questions section is
-// an open item by shape, including statement-style ones like "Need user sign-off")
-// OR free prose that ends with "?" / starts with `Q<n>`. Kept lenient so it never
-// blocks on framing prose (a non-list intro like "All resolved:"), whitespace,
-// empty list markers, or an absent/empty section.
-export function findUnresolvedOpenQuestions(content: string): string[] {
-  const sections = parseH2Sections(content, RESEARCH_ALLOWED_SECTIONS);
-  const section = sections.find((s) => s.name === "Open Questions");
-  if (!section) return [];
-  const body = sectionBody(content, section);
-  const unresolved: string[] = [];
-  for (const raw of splitLines(body)) {
-    const line = raw.trim();
-    if (line.length === 0) continue;
-    const isListItem = /^(?:[-*]|\d+[.)])\s+/.test(line);
-    const text = line.replace(/^(?:[-*]|\d+[.)])\s*/, "").trim();
-    if (text.length === 0) continue;
-    if (/\b(?:decided|assumed)\b/i.test(text)) continue;
-    const looksLikeQuestion = isListItem || text.endsWith("?") || /^Q\d+\b/i.test(text);
-    if (looksLikeQuestion) unresolved.push(text);
-  }
-  return unresolved;
-}
-
 export function validatePlan(content: string): ValidationResult {
   const errors: string[] = [];
   const h1 = getH1(content);

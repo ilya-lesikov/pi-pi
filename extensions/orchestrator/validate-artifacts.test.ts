@@ -1,42 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateArtifact, validatePlan, validateResearch, validateUserRequest, findUnresolvedOpenQuestions } from "./validate-artifacts.js";
-
-describe("findUnresolvedOpenQuestions", () => {
-  it("returns [] when there is no Open Questions section", () => {
-    const content = `## Affected Code\nfoo.ts:bar\n\n## Architecture Context\nstuff\n`;
-    expect(findUnresolvedOpenQuestions(content)).toEqual([]);
-  });
-
-  it("flags an unresolved question line", () => {
-    const content = `## Open Questions\n- Should we reopen or view-only?\n`;
-    expect(findUnresolvedOpenQuestions(content)).toHaveLength(1);
-  });
-
-  it("ignores lines resolved with DECIDED/ASSUMED markers", () => {
-    const content = `## Open Questions\n- Q2 (resume done): DECIDED — reopen the task.\n- Q4: ASSUMED all artifacts are opened.\n`;
-    expect(findUnresolvedOpenQuestions(content)).toEqual([]);
-  });
-
-  it("ignores intro prose, whitespace, and empty list markers", () => {
-    const content = `## Open Questions\nAll resolved (see proposal):\n-\n\n`;
-    expect(findUnresolvedOpenQuestions(content)).toEqual([]);
-  });
-
-  it("flags a Q-numbered item lacking a resolution marker", () => {
-    const content = `## Open Questions\n- Q1 status line placement\n`;
-    expect(findUnresolvedOpenQuestions(content)).toHaveLength(1);
-  });
-
-  it("flags a statement-style bullet with no question mark", () => {
-    const content = `## Open Questions\n- Need user confirmation on deploy timing\n`;
-    expect(findUnresolvedOpenQuestions(content)).toHaveLength(1);
-  });
-
-  it("does not flag the resolved-artifact format (framing prose + DECIDED bullets)", () => {
-    const content = `## Open Questions\nAll resolved (see proposal):\n- Q2 (resume done): DECIDED — reopen the task.\n- Q4: ASSUMED all artifacts opened.\n`;
-    expect(findUnresolvedOpenQuestions(content)).toEqual([]);
-  });
-});
+import { validateArtifact, validatePlan, validateResearch, validateUserRequest } from "./validate-artifacts.js";
 
 describe("validateUserRequest", () => {
   it("rejects placeholder distillation and constraints content", () => {

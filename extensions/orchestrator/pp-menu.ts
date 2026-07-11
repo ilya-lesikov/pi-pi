@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync } from "fs";
+import { existsSync, readdirSync } from "fs";
 import { join, relative, basename } from "path";
 import { isDeepStrictEqual } from "util";
 import { askUser, isCancel, type CancelReason } from "../../3p/pi-ask-user/index.js";
@@ -29,7 +29,6 @@ import { detectDefaultBranch, enterReviewCycle, finalizeReviewCycle, isReviewCyc
 import { Orchestrator } from "./orchestrator.js";
 import { cancelPendingPlannotatorWait, openPlannotator, openAnnotateReview, waitForPlannotatorResult } from "./plannotator.js";
 import { advanceBanner } from "./messages.js";
-import { findUnresolvedOpenQuestions } from "./validate-artifacts.js";
 import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
 import { spawnCodeReviewers } from "./phases/review.js";
 import { spawnBrainstormReviewers } from "./phases/brainstorm.js";
@@ -3869,27 +3868,6 @@ export async function showActiveTaskMenu(
           task.state.effectiveMode = undefined;
           task.state.autonomousConfig = modeSelection.autonomousConfig;
           saveTask(task.dir, task.state);
-        }
-
-        // Autonomous handoff gate (#1): this guided menu only advances interactive
-        // phases (brainstorm/debug/review) or guided-mode tasks. When the mode that
-        // now applies is autonomous and the next phase will run without a user, no
-        // question may be deferred downstream — the plan/implement phases can't ask.
-        // brainstorm picks its mode just above, so task.state.mode is current here.
-        if (getEffectiveMode(task.state) === "autonomous" && next && next !== "done") {
-          const researchPath = join(task.dir, "RESEARCH.md");
-          if (existsSync(researchPath)) {
-            const unresolved = findUnresolvedOpenQuestions(readFileSync(researchPath, "utf-8"));
-            if (unresolved.length > 0) {
-              ctx.ui.notify(
-                `Cannot advance: ${unresolved.length} open question(s) in RESEARCH.md are unresolved. ` +
-                `In autonomous mode the downstream phases cannot ask the user — answer them now, or mark each ` +
-                `with DECIDED:/ASSUMED: and rationale, then advance again.`,
-                "error",
-              );
-              continue;
-            }
-          }
         }
 
         let plannerPreset: string | undefined;
