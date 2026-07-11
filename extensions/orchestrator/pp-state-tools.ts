@@ -178,12 +178,12 @@ function renderStateCall(_args: unknown, theme: any, context: any): Component {
   // the call is still in flight (isPartial, no final result yet) we DO show the
   // line, so a genuine HANG before any result is visible. context.isPartial is
   // true during execution and set false when the final result arrives.
-  if (context?.isPartial) return lineComponent(theme.fg("warning", "Saving state…"));
+  if (context?.isPartial) return lineComponent(theme.fg("warning", "◆ [PI-PI] Saving state…"));
   return emptyComponent();
 }
 
 function renderStateResult(result: ToolResult, options: { isPartial?: boolean }, theme: any, context: any): Component {
-  if (options?.isPartial) return lineComponent(theme.fg("warning", "Saving state…"));
+  if (options?.isPartial) return lineComponent(theme.fg("warning", "◆ [PI-PI] Saving state…"));
   if (result?.isError || context?.isError) {
     const text = result?.content?.[0]?.type === "text" ? result.content[0].text.split("\n")[0] : "State write failed";
     return lineComponent(theme.fg("error", text));
