@@ -487,7 +487,7 @@ export function validateConfig(config: Record<string, any>): void {
   }
 }
 
-const MAX_CONCURRENT_SUBAGENTS_CEILING = 1024;
+export const MAX_CONCURRENT_SUBAGENTS_CEILING = 1024;
 
 function ensureMaxConcurrentSubagents(value: unknown): void {
   if (value === undefined) return;

@@ -16,6 +16,7 @@ import {
   resolvePreset,
   reviewPresetGroupForPhase,
   writeConfigValue,
+  MAX_CONCURRENT_SUBAGENTS_CEILING,
   type PiPiConfig,
   type PresetGroup,
   type PoolKey,
@@ -2888,7 +2889,6 @@ async function showGeneralSettings(orchestrator: Orchestrator, ctx: any): Promis
 
 const MAX_CONCURRENT_SUBAGENTS_LABEL = "Max concurrent subagents";
 const MAX_CONCURRENT_SUBAGENTS_PATH = ["agents", "maxConcurrentSubagents"];
-const MAX_CONCURRENT_SUBAGENTS_CEILING = 1024;
 
 async function showAgentsSettings(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
   while (true) {
@@ -2912,7 +2912,7 @@ async function showAgentsSettings(orchestrator: Orchestrator, ctx: any): Promise
   }
 }
 
-async function showMaxConcurrentSubagentsSetting(orchestrator: Orchestrator, ctx: any): Promise<void> {
+async function showMaxConcurrentSubagentsSetting(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
   while (true) {
     const current = getNestedValue(orchestrator.config, MAX_CONCURRENT_SUBAGENTS_PATH);
     if (typeof current !== "number") break;
@@ -2930,6 +2930,7 @@ async function showMaxConcurrentSubagentsSetting(orchestrator: Orchestrator, ctx
     }
     await maybeHandleResetChoice(orchestrator, ctx, action, MAX_CONCURRENT_SUBAGENTS_PATH);
   }
+  return BACK;
 }
 
 async function pickMaxConcurrentSubagents(ctx: any, current: number): Promise<number | null> {

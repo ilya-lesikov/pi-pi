@@ -4,7 +4,7 @@ import { join } from "node:path";
 import lockfile from "proper-lockfile";
 import { refreshAnthropicToken } from "@earendil-works/pi-ai/oauth";
 import type { ExtensionAPI, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
-import type { PiPiConfig } from "./config.js";
+import { getDefaultConfig, type PiPiConfig } from "./config.js";
 import { updateRegistryFromAvailableModels } from "./model-registry.js";
 import { compareModelVersion } from "./model-version.js";
 import { getLogger } from "./log.js";
@@ -782,7 +782,7 @@ export function generateFlantConfig(models: string[], subscriptionActive = false
 
   return {
     agents: {
-      maxConcurrentSubagents: 7,
+      maxConcurrentSubagents: getDefaultConfig().agents.maxConcurrentSubagents,
       orchestrators: {
         implement: { model: modelSpec(implementModel, sub(implementModel)), thinking: "high" },
         plan: { model: modelSpec(implementModel, sub(implementModel)), thinking: "high" },
