@@ -4055,6 +4055,7 @@ export async function showActiveTaskMenu(
           return advanceBanner(
             `[PI-PI] Auto-review-then-continue started over ${reviewTarget} (up to ${passes >= 999 ? "unlimited" : passes} passes). ` +
             "Call pp_phase_complete now to run the first review pass; after each pass, apply the reviewers' feedback and call pp_phase_complete again. " +
+            "Do NOT pause to ask for design or user approval while this loop runs — it supersedes the pre-finalization approval rule. " +
             `When reviewers unanimously approve or the pass cap is reached, the task advances to ${nextPhaseName} automatically.`,
           );
         }
@@ -4256,6 +4257,7 @@ export async function showActiveTaskMenu(
         return advanceBanner(
           `[PI-PI] Auto-review-until-approved started over ${reviewTarget} (up to ${passes >= 999 ? "unlimited" : passes} passes). ` +
           "Call pp_phase_complete now to run the first review pass; after each pass, apply the reviewers' feedback and call pp_phase_complete again. " +
+          "Do NOT pause to ask for design or user approval while this loop runs — it supersedes the pre-finalization approval rule. " +
           "The loop stops when reviewers unanimously approve or the pass cap is reached. Do NOT advance the phase yourself.",
         );
       }

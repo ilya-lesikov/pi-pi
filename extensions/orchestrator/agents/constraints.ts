@@ -97,12 +97,12 @@ export function completionLine(phase: Phase, mode: TaskMode): string {
     return "There is no user driving this phase. The moment its work is complete, call pp_phase_complete — do NOT pause, ask for confirmation, or wait for input. Never end a turn with prose: every turn ends in a tool call.";
   }
   if (phase === "brainstorm") {
-    return "This is a conversation. Do NOT call pp_phase_complete yourself — keep going until the user ends it or advances via the /pp menu. When you have delivered a complete answer and are handing back for the user to advance, close with the standardized block. " + closingBlockInstruction(phase);
+    return "This is a conversation. Do NOT call pp_phase_complete yourself UNLESS a /pp menu banner in this conversation explicitly instructs you to (e.g. an auto-review loop) — otherwise keep going until the user ends it or advances via the /pp menu. When you have delivered a complete answer and are handing back for the user to advance, close with the standardized block. " + closingBlockInstruction(phase);
   }
   if (phase === "plan" || phase === "implement") {
     return "When you judge this phase complete, call pp_phase_complete — the extension opens the advance gate for the user to review and confirm. Do NOT instead stop and ask the user to run /pp manually.";
   }
-  return "When the work is complete, stop and let the user review and advance it via the /pp menu. Do NOT advance on your own or call pp_phase_complete unprompted. Close with the standardized block. " + closingBlockInstruction(phase);
+  return "When the work is complete, stop and let the user review and advance it via the /pp menu. Do NOT advance on your own or call pp_phase_complete unprompted — EXCEPT when a /pp menu banner explicitly instructs you to (e.g. an auto-review loop). Close with the standardized block. " + closingBlockInstruction(phase);
 }
 
 const PHASE_IDENTITY: Record<string, string> = {

@@ -23,6 +23,24 @@ describe("completionLine", () => {
     expect(line).toContain("Do NOT call pp_phase_complete yourself");
   });
 
+  it("guided brainstorm/review/debug carve out a /pp banner exception", () => {
+    for (const phase of ["brainstorm", "review", "debug"] as const) {
+      expect(completionLine(phase, "guided")).toContain(
+        "a /pp menu banner",
+      );
+      expect(completionLine(phase, "guided")).toContain("e.g. an auto-review loop");
+    }
+  });
+
+  it("autonomous/plan/implement completion lines carry no /pp banner exception", () => {
+    for (const phase of ["plan", "implement"] as const) {
+      expect(completionLine(phase, "guided")).not.toContain("a /pp menu banner");
+    }
+    for (const phase of ["brainstorm", "review", "debug", "plan", "implement"] as const) {
+      expect(completionLine(phase, "autonomous")).not.toContain("a /pp menu banner");
+    }
+  });
+
   it("autonomous phases always self-complete regardless of phase", () => {
     for (const phase of ["plan", "implement", "review", "brainstorm"] as const) {
       expect(completionLine(phase, "autonomous")).toContain("call pp_phase_complete");
@@ -78,5 +96,13 @@ describe("constraintsBlock", () => {
   it("guided plan block tells the agent to self-complete", () => {
     const block = constraintsBlock("plan", "guided");
     expect(block).toContain("call pp_phase_complete");
+  });
+
+  it("guided brainstorm/review/debug blocks embed the /pp banner exception", () => {
+    for (const phase of ["brainstorm", "review", "debug"] as const) {
+      const block = constraintsBlock(phase, "guided");
+      expect(block).toContain("a /pp menu banner");
+      expect(block).toContain("e.g. an auto-review loop");
+    }
   });
 });

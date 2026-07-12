@@ -63,6 +63,7 @@ vi.mock("./config.js", async (importOriginal) => {
       logLevel: "info",
     },
     agents: {
+      maxConcurrentSubagents: 7,
       orchestrators: {
         implement: { model: "test/model", thinking: "high" },
         plan: { model: "test/model", thinking: "high" },
@@ -225,6 +226,7 @@ function makeConfig() {
       logLevel: "info",
     },
     agents: {
+      maxConcurrentSubagents: 7,
       orchestrators: {
         implement: { model: "test/model", thinking: "high" },
         plan: { model: "test/model", thinking: "high" },
@@ -4194,7 +4196,7 @@ describe("menu contracts", () => {
 
     menu
       .expect({ question: "/pp", options: { include: ["Settings"] }, choose: "Settings" })
-      .expect({ question: "Settings", options: { exact: ["Info", "General", "Agents", "Commands", "Performance", "LSP", "Back"] }, choose: "Back" })
+      .expect({ question: "Settings", options: { exact: ["General", "Agents", "Commands", "Performance", "LSP", "Flant", "Info", "Back"] }, choose: "Back" })
       .expect({ question: "/pp", options: { include: ["Back to prompt"] }, choose: "Back to prompt" });
 
     const pp = getCommand(pi, "pp");
@@ -4294,7 +4296,7 @@ describe("menu contracts", () => {
     menu
       .expect({ question: "/pp", options: { include: ["Settings"] }, choose: "Settings" })
       .expect({ question: "Settings", options: { include: ["Agents", "Back"] }, choose: "Agents" })
-      .expect({ question: "Agents", options: { exact: ["Orchestrators", "Subagents", "Back"] }, choose: "Back" })
+      .expect({ question: "Agents", options: { exact: ["Orchestrators", "Subagents", "Max concurrent subagents: 7", "Back"] }, choose: "Back" })
       .expect({ question: "Settings", options: { include: ["Back"] }, choose: "Back" })
       .expect({ question: "/pp", options: { include: ["Back to prompt"] }, choose: "Back to prompt" });
 
