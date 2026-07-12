@@ -782,6 +782,7 @@ export function generateFlantConfig(models: string[], subscriptionActive = false
 
   return {
     agents: {
+      maxConcurrentSubagents: 7,
       orchestrators: {
         implement: { model: modelSpec(implementModel, sub(implementModel)), thinking: "high" },
         plan: { model: modelSpec(implementModel, sub(implementModel)), thinking: "high" },

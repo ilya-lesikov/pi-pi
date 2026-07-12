@@ -2886,11 +2886,17 @@ async function showGeneralSettings(orchestrator: Orchestrator, ctx: any): Promis
   }
 }
 
+const MAX_CONCURRENT_SUBAGENTS_LABEL = "Max concurrent subagents";
+const MAX_CONCURRENT_SUBAGENTS_PATH = ["agents", "maxConcurrentSubagents"];
+const MAX_CONCURRENT_SUBAGENTS_CEILING = 1024;
+
 async function showAgentsSettings(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
   while (true) {
+    const limit = orchestrator.config.agents.maxConcurrentSubagents;
     const choice = await selectOption(ctx, "Agents", [
       opt("Orchestrators", "Orchestrator and subagent configuration"),
       opt("Subagents", "Simple subagents and preset groups"),
+      opt(`${MAX_CONCURRENT_SUBAGENTS_LABEL}: ${limit}`, "Max background/orchestrated subagents run at once; extras queue"),
       opt("Back", "Return to the previous menu"),
     ]);
     if (!choice || choice === "Back") return BACK;
@@ -2898,7 +2904,52 @@ async function showAgentsSettings(orchestrator: Orchestrator, ctx: any): Promise
       await showOrchestratorsSettings(orchestrator, ctx);
       continue;
     }
+    if (choice.startsWith(`${MAX_CONCURRENT_SUBAGENTS_LABEL}:`)) {
+      await showMaxConcurrentSubagentsSetting(orchestrator, ctx);
+      continue;
+    }
     await showSubagentSettings(orchestrator, ctx);
+  }
+}
+
+async function showMaxConcurrentSubagentsSetting(orchestrator: Orchestrator, ctx: any): Promise<void> {
+  while (true) {
+    const current = getNestedValue(orchestrator.config, MAX_CONCURRENT_SUBAGENTS_PATH);
+    if (typeof current !== "number") break;
+    const action = await selectOption(ctx, `${MAX_CONCURRENT_SUBAGENTS_LABEL}: ${current}`, [
+      opt("Edit", "Set the maximum number of concurrent background subagents"),
+      ...buildResetOptions(orchestrator, MAX_CONCURRENT_SUBAGENTS_PATH),
+      opt("Back", "Return to the previous menu"),
+    ]);
+    if (!action || action === "Back") break;
+    if (action === "Edit") {
+      const value = await pickMaxConcurrentSubagents(ctx, current);
+      if (value === null) continue;
+      applyScopeChoice(orchestrator, MAX_CONCURRENT_SUBAGENTS_PATH, value, await pickScope(ctx, orchestrator));
+      continue;
+    }
+    await maybeHandleResetChoice(orchestrator, ctx, action, MAX_CONCURRENT_SUBAGENTS_PATH);
+  }
+}
+
+async function pickMaxConcurrentSubagents(ctx: any, current: number): Promise<number | null> {
+  while (true) {
+    const input = await ctx.ui.input(
+      `Max concurrent subagents (positive integer, 1-${MAX_CONCURRENT_SUBAGENTS_CEILING}) [${current}]`,
+    );
+    if (input === undefined || input === null) return null;
+    const trimmed = String(input).trim();
+    if (trimmed === "") return null;
+    if (!/^\d+$/.test(trimmed)) {
+      ctx.ui.notify(`Please enter a positive integer between 1 and ${MAX_CONCURRENT_SUBAGENTS_CEILING}.`, "warning");
+      continue;
+    }
+    const parsed = Number.parseInt(trimmed, 10);
+    if (parsed < 1 || parsed > MAX_CONCURRENT_SUBAGENTS_CEILING) {
+      ctx.ui.notify(`Please enter a positive integer between 1 and ${MAX_CONCURRENT_SUBAGENTS_CEILING}.`, "warning");
+      continue;
+    }
+    return parsed;
   }
 }
 
