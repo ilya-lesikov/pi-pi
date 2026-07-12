@@ -235,6 +235,61 @@ describe("updateFlantInfra", () => {
     expect([...pi.registered.keys()].sort()).toEqual(["pp-flant-anthropic", "pp-flant-openai"]);
   });
 
+  it("serves a fresh cache without re-fetching by default", async () => {
+    const dir = makeTempDir();
+    const cacheDir = join(dir, "extensions", "pp", "cache");
+    mkdirSync(cacheDir, { recursive: true });
+    writeFileSync(
+      join(cacheDir, "flant-models.json"),
+      JSON.stringify({
+        enabled: true,
+        cacheTTLDays: 7,
+        lastUpdated: new Date().toISOString(),
+        cachedFlantModels: ["claude-opus-4-8"],
+        cachedOpenRouterData: {},
+      }),
+      "utf-8",
+    );
+    process.env.FLANT_API_KEY = "flant-k";
+    const mod = await loadModule(dir);
+    const fetchFn = stubFetch(() => { throw new Error("should not fetch"); });
+    const res = await mod.updateFlantInfra(makePi());
+    expect(res.ok).toBe(true);
+    expect(res.models).toEqual(["claude-opus-4-8"]);
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("force bypasses a fresh cache and re-fetches the model list", async () => {
+    const dir = makeTempDir();
+    const cacheDir = join(dir, "extensions", "pp", "cache");
+    mkdirSync(cacheDir, { recursive: true });
+    writeFileSync(
+      join(cacheDir, "flant-models.json"),
+      JSON.stringify({
+        enabled: true,
+        cacheTTLDays: 7,
+        lastUpdated: new Date().toISOString(),
+        cachedFlantModels: ["claude-opus-4-8"],
+        cachedOpenRouterData: {},
+      }),
+      "utf-8",
+    );
+    process.env.FLANT_API_KEY = "flant-k";
+    const mod = await loadModule(dir);
+    stubFetch((url: string) => {
+      if (url.includes("llm-api.flant.ru/v1/models")) {
+        return { ok: true, status: 200, json: async () => ({ data: [{ id: "sub/claude-fable-5" }, { id: "claude-fable-5" }] }) };
+      }
+      if (url.includes("openrouter.ai")) {
+        return { ok: true, status: 200, json: async () => ({ data: [] }) };
+      }
+      throw new Error(`unexpected ${url}`);
+    });
+    const res = await mod.updateFlantInfra(makePi(), { force: true });
+    expect(res.ok).toBe(true);
+    expect(res.models).toContain("sub/claude-fable-5");
+  });
+
   it("falls back to cached models when discovery throws", async () => {
     const dir = makeTempDir();
     const cacheDir = join(dir, "extensions", "pp", "cache");

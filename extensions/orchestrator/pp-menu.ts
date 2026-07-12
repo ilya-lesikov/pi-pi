@@ -1094,7 +1094,7 @@ async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise
     }
 
     if (choice === "Update now") {
-      const result = await updateFlantInfra(orchestrator.pi);
+      const result = await updateFlantInfra(orchestrator.pi, { force: true });
       const message = describeUpdateResult(result);
       ctx.ui.notify(message.text, message.kind);
       continue;

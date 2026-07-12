@@ -606,10 +606,10 @@ export function registerFlantProviders(
   const subscription = options.subscription ?? loadFlantSettings().subscription;
   let subModels: string[] = [];
   if (subscription) {
-    // The gateway only defines `sub/` model groups for a subset of claude
-    // models (e.g. no sub/claude-fable-5) — registering unconfirmed ones
-    // yields "Invalid model name" 400s. Model lists cached before the gateway
-    // exposed `sub/…` ids have none; fall back to all claude models then.
+    // The gateway defines `sub/` model groups for only some claude models —
+    // registering unconfirmed ones yields "Invalid model name" 400s. Model
+    // lists cached before the gateway exposed `sub/…` ids have none; fall back
+    // to all claude models then.
     const subEligible = subConfirmed.size > 0
       ? anthropicModels.filter((m) => subConfirmed.has(m))
       : anthropicModels;
@@ -899,8 +899,18 @@ export function getFlantGeneratedConfig(): Partial<PiPiConfig> | null {
 
 (globalThis as any)[Symbol.for("pi-pi:flant-config")] = getFlantGeneratedConfig;
 
+export interface UpdateFlantOptions {
+  /**
+   * Bypass the TTL cache and re-fetch the model list from the gateway even when
+   * the cache is still fresh. Set by the explicit "Update now" action so it does
+   * what its label promises; auto/startup callers omit it and stay cache-bound.
+   */
+  force?: boolean;
+}
+
 export async function updateFlantInfra(
   pi: ExtensionAPI,
+  options: UpdateFlantOptions = {},
 ): Promise<{ ok: boolean; error?: string; models?: string[] }> {
   setPI(pi);
   const settings = loadFlantSettings();
@@ -911,8 +921,9 @@ export async function updateFlantInfra(
     await refreshClaudeOAuthToken();
   }
 
-  let models = isCacheValid(settings) ? settings.cachedFlantModels : null;
-  let metadata = isCacheValid(settings) ? settings.cachedOpenRouterData : null;
+  const cacheOk = !options.force && isCacheValid(settings);
+  let models = cacheOk ? settings.cachedFlantModels : null;
+  let metadata = cacheOk ? settings.cachedOpenRouterData : null;
   let refreshed = false;
 
   if (!models || !metadata) {
