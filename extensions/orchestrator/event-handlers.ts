@@ -868,10 +868,12 @@ function registerCommitTool(orchestrator: Orchestrator): void {
       "Commit modified files with a descriptive message. Call after completing a logical " +
       "unit of work (e.g. implementing one plan item, fixing a bug, adding a test). " +
       "The message should describe WHAT changed and WHY, not list files. " +
-      "Prefix the message with a conventional-commit type (fix:, feat:, or chore:) " +
+      "Format: a concise subject line (ideally <=72 chars, but never truncate a meaningful " +
+      "subject to fit), then an optional body separated by a blank line for extra detail. " +
+      "Prefix the subject with a conventional-commit type (fix:, feat:, or chore:) " +
       "unless the user asked for a different commit style.",
     parameters: Type.Object({
-      message: Type.String({ description: "Commit message describing the change (max 72 chars for first line)" }),
+      message: Type.String({ description: "Commit message: a subject line (conventional-commit prefix, aim for <=72 chars) optionally followed by a blank line and a body. Written verbatim; never truncated." }),
       repo: Type.Optional(Type.String({ description: "Absolute path to the repo to commit in. Defaults to root." })),
     }),
     async execute(_toolCallId, params: any) {

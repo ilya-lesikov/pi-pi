@@ -160,7 +160,7 @@ export function loadRepoAfterImplementCommands(repoPath: string): Record<string,
 export function autoCommit(files: string[], message: string, cwd: string): { ok: boolean; commitHash?: string; error?: string } {
   if (files.length === 0) return { ok: true };
 
-  const cleanMessage = message.trim().slice(0, 72) || "checkpoint";
+  const cleanMessage = message.trim() || "checkpoint";
 
   try {
     execFileSync("git", ["add", "--", ...files], { cwd, encoding: "utf-8", stdio: "pipe" });

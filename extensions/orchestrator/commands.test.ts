@@ -95,7 +95,7 @@ describe("autoCommit", () => {
     expect(subject).toBe("fix: resolve auth token expiry");
   });
 
-  it("truncates long messages to 72 chars", () => {
+  it("never truncates long subject lines", () => {
     const cwd = makeRepo();
     const file = "c.ts";
     writeFileSync(join(cwd, file), "export const c = 1;\n", "utf-8");
@@ -105,7 +105,20 @@ describe("autoCommit", () => {
 
     expect(result.ok).toBe(true);
     const subject = execFileSync("git", ["log", "-1", "--pretty=%s"], { cwd, encoding: "utf-8", stdio: "pipe" }).trim();
-    expect(subject).toBe("a".repeat(72));
+    expect(subject).toBe("a".repeat(100));
+  });
+
+  it("preserves a multi-line body", () => {
+    const cwd = makeRepo();
+    const file = "d.ts";
+    writeFileSync(join(cwd, file), "export const d = 1;\n", "utf-8");
+
+    const msg = "feat: add d\n\nThis is a longer explanation of why d was added.";
+    const result = autoCommit([file], msg, cwd);
+
+    expect(result.ok).toBe(true);
+    const full = execFileSync("git", ["log", "-1", "--pretty=%B"], { cwd, encoding: "utf-8", stdio: "pipe" }).trim();
+    expect(full.startsWith(msg)).toBe(true);
   });
 
   it("commits files with spaces in names", () => {
