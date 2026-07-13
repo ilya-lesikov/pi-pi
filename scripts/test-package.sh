@@ -55,8 +55,6 @@ echo "▶ resolving shipped extension runtime imports from the install tree"
 ( cd "$PKG_DIR" && node "$CHECK" )
 STATUS=$?
 
-rm -f "$CHECK"
-
 if [ $STATUS -ne 0 ]; then
   echo "✗ package smoke test FAILED" >&2
   exit $STATUS
