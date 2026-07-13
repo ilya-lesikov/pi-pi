@@ -53,8 +53,10 @@
   "dependencies": {
     "@joplin/turndown-plugin-gfm": "^1.0.64",
     "@pierre/diffs": "^1.2.0",
+    "croner": "^10.0.1",
     "effect": "^3.0.0",
     "minimatch": "^10.0.0",
+    "nanoid": "^5.0.0",
     "pino": "^10.3.1",
     "proper-lockfile": "^4.1.2",
     "turndown": "^7.2.0",
