@@ -37,7 +37,8 @@
     "test": "vitest run --exclude '3p/**'",
     "test:watch": "vitest --exclude '3p/**'",
     "test:3p": "bash scripts/test-3p.sh",
-    "test:all": "vitest run --exclude '3p/**' && bash scripts/test-3p.sh",
+    "test:package": "bash scripts/test-package.sh",
+    "test:all": "vitest run --exclude '3p/**' && bash scripts/test-3p.sh && bash scripts/test-package.sh",
     "coverage": "vitest run --exclude '3p/**' --coverage"
   },
   "pi": {
