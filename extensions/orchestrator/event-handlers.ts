@@ -564,11 +564,15 @@ function registerOrchestratorTools(orchestrator: Orchestrator): void {
 // Extension-side PR-head checkout for the review phase. Performed here (never via the
 // agent prompt) so REVIEW_READONLY_CONSTRAINT stays truthful — the agent never runs
 // `git checkout` itself. Lands the repo on its PR head under strict safety rules (no stash,
-// no --force, no branch switch, no worktree, no detached checkout): when the tree is clean
-// and on the PR head's branch but merely behind, it fast-forwards the branch to the head
-// (`git merge --ff-only`, which never detaches, never rewrites, and refuses a non-ff move).
-// A dirty tree, a different branch, or a non-fast-forwardable divergence all HALT with a
-// message for the user. Checking HEAD's SHA first makes this re-entrant and detached-safe.
+// no --force, no worktree, no detached checkout): when the tree is clean and on the PR head's
+// branch but merely behind, it fast-forwards the branch to the head (`git merge --ff-only`,
+// which never detaches, never rewrites, and refuses a non-ff move). When the tree is clean but
+// on a DIFFERENT branch, it fetches the PR head ref from origin (forced refspec into the
+// remote-tracking ref only), verifies the fetched tip equals the advertised oid, then fast-
+// forwards an existing local branch or creates a tracking branch at the oid and checks it out.
+// A dirty tree, a detached HEAD, a fork/unfetchable ref, an oid mismatch, or a non-fast-
+// forwardable divergence all HALT with a message for the user. Checking HEAD's SHA first makes
+// this re-entrant and detached-safe.
 export async function checkoutPrHead(
   orchestrator: Orchestrator,
   repoPath: string,
@@ -632,12 +636,78 @@ export async function checkoutPrHead(
     };
   }
   if (name && currentBranch !== name) {
-    return {
-      ok: false,
-      message:
-        `HALT: ${repoPath} is on "${currentBranch}", not the PR head branch "${name}" (target commit ${oid}). ` +
-        "Check out that branch at its PR head, then ask me to continue. I will not switch branches for you.",
-    };
+    // Clean tree on the wrong branch: switch to the PR head branch when it is
+    // provably safe. The tree is already known clean (checked above), so no
+    // stash is ever needed. We fetch the head ref, verify it matches the
+    // advertised oid, then either fast-forward an existing local branch to it
+    // or create a fresh tracking branch at it. Anything ambiguous HALTs.
+    if (!/^[^\s]+$/.test(name) || name.startsWith("-")) {
+      return {
+        ok: false,
+        message: `HALT: ${repoPath} PR head branch name "${name}" is not a safe ref to fetch. Bring the repo to its PR head (${oid}) yourself, then ask me to continue.`,
+      };
+    }
+    const fetchRes = await run(["fetch", "origin", `+refs/heads/${name}:refs/remotes/origin/${name}`]);
+    if (fetchRes.code !== 0) {
+      return {
+        ok: false,
+        message:
+          `HALT: ${repoPath} could not fetch PR head branch "${name}" from origin (a fork PR, or the branch is not on origin). ` +
+          `Fetch/add the correct remote and bring the repo to the PR head ${oid} yourself, then ask me to continue. I will not guess a remote for you.` +
+          `${fetchRes.stderr?.trim() ? `\n\n${fetchRes.stderr.trim()}` : ""}`,
+      };
+    }
+    let remoteTip;
+    try {
+      remoteTip = await run(["rev-parse", "--verify", `refs/remotes/origin/${name}`]);
+    } catch (err: any) {
+      return { ok: false, message: `Cannot resolve origin/${name} in ${repoPath} after fetch: ${err?.message ?? "git rev-parse failed"}` };
+    }
+    if (remoteTip.code !== 0 || remoteTip.stdout.trim() !== oid) {
+      return {
+        ok: false,
+        message:
+          `HALT: ${repoPath} fetched origin/${name} is ${remoteTip.stdout.trim() || "unresolvable"}, not the advertised PR head ${oid}. ` +
+          "The PR head may have moved or lives on a fork. Bring the repo to the exact PR head yourself, then ask me to continue.",
+      };
+    }
+    const localExists = (await run(["rev-parse", "--verify", "--quiet", `refs/heads/${name}`])).code === 0;
+    if (localExists) {
+      const co = await run(["checkout", name]);
+      if (co.code !== 0) {
+        return { ok: false, message: `HALT: ${repoPath} could not check out "${name}": ${co.stderr?.trim() || "git checkout failed"}. Resolve it, then ask me to continue.` };
+      }
+      const ffSwitch = await run(["merge", "--ff-only", oid]);
+      if (ffSwitch.code !== 0) {
+        return {
+          ok: false,
+          message:
+            `HALT: ${repoPath} local branch "${name}" cannot fast-forward to PR head ${oid} — it has diverged. ` +
+            "Reconcile it with the PR head, then ask me to continue. I will not force-move or rebase it for you." +
+            `${ffSwitch.stderr?.trim() ? `\n\n${ffSwitch.stderr.trim()}` : ""}`,
+        };
+      }
+    } else {
+      const co = await run(["checkout", "-b", name, "--track", `refs/remotes/origin/${name}`]);
+      if (co.code !== 0) {
+        return { ok: false, message: `HALT: ${repoPath} could not create tracking branch "${name}" at the PR head: ${co.stderr?.trim() || "git checkout -b failed"}. Resolve it, then ask me to continue.` };
+      }
+    }
+    let switched;
+    try {
+      switched = await run(["rev-parse", "HEAD"]);
+    } catch (err: any) {
+      return { ok: false, message: `Cannot confirm HEAD of ${repoPath} after switching to "${name}": ${err?.message ?? "git rev-parse failed"}` };
+    }
+    if (switched.stdout.trim() !== oid) {
+      return {
+        ok: false,
+        message:
+          `HALT: ${repoPath} is on "${name}" but at ${switched.stdout.trim()}, not the PR head ${oid}. ` +
+          "Bring it to the exact PR head yourself, then ask me to continue.",
+      };
+    }
+    return { ok: true, message: `${repoPath} switched to PR head branch "${name}" at ${oid}.` };
   }
 
   // Clean tree, on the PR head's branch, but behind: advance the branch to the head with a
@@ -690,10 +760,13 @@ function registerCheckoutPrHeadTool(orchestrator: Orchestrator): void {
       "Call this ONLY for a PR-scoped review, once per repo, AFTER you have resolved the PR " +
       "(e.g. via `gh pr view --json headRefName,headRefOid`). Do NOT call it for a branch, " +
       "commit-range, or uncommitted-changes review. The extension does this safely (no worktree, " +
-      "no stash, no --force, no branch switch, no detached checkout): a clean repo already on the " +
+      "no stash, no --force, no detached checkout): a clean repo already on the " +
       "PR head succeeds; a clean repo on the PR head's branch but behind is fast-forwarded to the " +
-      "head; a dirty tree, a different branch, or a diverged branch HALTS with a message for you to " +
-      "relay to the user. You never run `git checkout` yourself.",
+      "head; a clean repo on a DIFFERENT branch is switched to the PR head branch only after fetching " +
+      "origin and verifying the fetched tip matches the advertised commit (fast-forwarding an existing " +
+      "local branch or creating a tracking one); a dirty tree, a detached HEAD, a fork/unfetchable ref, " +
+      "an oid mismatch, or a diverged branch HALTS with a message for you to relay to the user. You " +
+      "never run `git checkout` yourself.",
     parameters: Type.Object({
       repoPath: Type.String({ description: "Absolute path to the registered repository" }),
       headRefName: Type.String({ description: "PR head branch name (headRefName)" }),

@@ -365,6 +365,66 @@ describe("checkoutPrHead additional branches", () => {
     expect(result.message).toContain("no PR head commit provided");
     expect(exec).toHaveBeenCalledTimes(1);
   });
+
+  it("creates a tracking branch and switches when the local branch is missing", async () => {
+    // HEAD is asked twice: initial (not on oid) then post-switch (on oid).
+    let headCalls = 0;
+    const exec = vi.fn(async (_cmd: string, args: string[]) => {
+      if (args[0] === "status") return { code: 0, stdout: "", stderr: "" };
+      if (args[0] === "rev-parse" && args[1] === "HEAD") return { code: 0, stdout: headCalls++ === 0 ? "othersha" : "abc123", stderr: "" };
+      if (args[0] === "rev-parse" && args.includes("--abbrev-ref")) return { code: 0, stdout: "main", stderr: "" };
+      if (args[0] === "fetch") return { code: 0, stdout: "", stderr: "" };
+      if (args[0] === "rev-parse" && args.includes("refs/remotes/origin/feature")) return { code: 0, stdout: "abc123", stderr: "" };
+      if (args[0] === "rev-parse" && args.includes("refs/heads/feature")) return { code: 1, stdout: "", stderr: "" };
+      return { code: 0, stdout: "", stderr: "" };
+    });
+    const result = await checkoutPrHead(orchWithExec(exec), "/repo", "feature", "abc123");
+    expect(result.ok).toBe(true);
+    expect(result.message).toContain('switched to PR head branch "feature"');
+    const createdTracking = exec.mock.calls.some((c: any[]) => c[1][0] === "checkout" && c[1].includes("-b"));
+    expect(createdTracking).toBe(true);
+  });
+
+  it("HALTs when the PR head branch cannot be fetched from origin (fork PR)", async () => {
+    let headCalls = 0;
+    const exec = vi.fn(async (_cmd: string, args: string[]) => {
+      if (args[0] === "status") return { code: 0, stdout: "", stderr: "" };
+      if (args[0] === "rev-parse" && args[1] === "HEAD") return { code: 0, stdout: headCalls++ === 0 ? "othersha" : "abc123", stderr: "" };
+      if (args[0] === "rev-parse" && args.includes("--abbrev-ref")) return { code: 0, stdout: "main", stderr: "" };
+      if (args[0] === "fetch") return { code: 128, stdout: "", stderr: "couldn't find remote ref" };
+      return { code: 0, stdout: "", stderr: "" };
+    });
+    const result = await checkoutPrHead(orchWithExec(exec), "/repo", "feature", "abc123");
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain("HALT");
+    expect(result.message).toContain("could not fetch PR head branch");
+  });
+
+  it("HALTs when the fetched origin tip does not match the advertised oid", async () => {
+    let headCalls = 0;
+    const exec = vi.fn(async (_cmd: string, args: string[]) => {
+      if (args[0] === "status") return { code: 0, stdout: "", stderr: "" };
+      if (args[0] === "rev-parse" && args[1] === "HEAD") return { code: 0, stdout: headCalls++ === 0 ? "othersha" : "abc123", stderr: "" };
+      if (args[0] === "rev-parse" && args.includes("--abbrev-ref")) return { code: 0, stdout: "main", stderr: "" };
+      if (args[0] === "fetch") return { code: 0, stdout: "", stderr: "" };
+      if (args[0] === "rev-parse" && args.includes("refs/remotes/origin/feature")) return { code: 0, stdout: "differentsha", stderr: "" };
+      return { code: 0, stdout: "", stderr: "" };
+    });
+    const result = await checkoutPrHead(orchWithExec(exec), "/repo", "feature", "abc123");
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain("HALT");
+    expect(result.message).toContain("not the advertised PR head");
+  });
+
+  it("still HALTs on a dirty tree regardless of branch", async () => {
+    const exec = vi.fn(async (_cmd: string, args: string[]) => {
+      if (args[0] === "status") return { code: 0, stdout: " M file.ts", stderr: "" };
+      return { code: 0, stdout: "", stderr: "" };
+    });
+    const result = await checkoutPrHead(orchWithExec(exec), "/repo", "feature", "abc123");
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain("uncommitted changes");
+  });
 });
 
 describe("registered handler branches", () => {

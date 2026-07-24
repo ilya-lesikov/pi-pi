@@ -615,16 +615,36 @@ describe("checkoutPrHead", () => {
     expect(calls.some((c) => c[0] === "checkout")).toBe(false);
   });
 
-  it("HALTs when on a different branch, and never runs git checkout", async () => {
+  it("switches to the PR head branch (clean tree, different branch) after fetch+verify", async () => {
+    const { orchestrator, calls } = makeGitOrchestrator({
+      "status --porcelain": { code: 0, stdout: "" },
+      "rev-parse HEAD": [{ code: 0, stdout: "othersha\n" }, { code: 0, stdout: "abc123\n" }],
+      "rev-parse --abbrev-ref HEAD": { code: 0, stdout: "main\n" },
+      "fetch origin": { code: 0, stdout: "" },
+      "rev-parse --verify refs/remotes/origin/feature": { code: 0, stdout: "abc123\n" },
+      "rev-parse --verify --quiet refs/heads/feature": { code: 0, stdout: "localsha\n" },
+      "checkout feature": { code: 0, stdout: "" },
+      "merge --ff-only abc123": { code: 0, stdout: "Updating localsha..abc123\n" },
+    });
+    const result = await checkoutPrHead(orchestrator, "/repo", "feature", "abc123");
+    expect(result.ok).toBe(true);
+    expect(result.message).toContain('switched to PR head branch "feature"');
+    expect(calls.some((c) => c[0] === "checkout" && c[1] === "feature")).toBe(true);
+    expect(calls.some((c) => c[0] === "fetch")).toBe(true);
+  });
+
+  it("HALTs on a different branch when the fetched tip does not match the advertised oid", async () => {
     const { orchestrator, calls } = makeGitOrchestrator({
       "status --porcelain": { code: 0, stdout: "" },
       "rev-parse HEAD": { code: 0, stdout: "othersha\n" },
       "rev-parse --abbrev-ref HEAD": { code: 0, stdout: "main\n" },
+      "fetch origin": { code: 0, stdout: "" },
+      "rev-parse --verify refs/remotes/origin/feature": { code: 0, stdout: "differentsha\n" },
     });
     const result = await checkoutPrHead(orchestrator, "/repo", "feature", "abc123");
     expect(result.ok).toBe(false);
     expect(result.message).toContain("HALT");
-    expect(result.message).toContain("feature");
+    expect(result.message).toContain("not the advertised PR head");
     expect(calls.some((c) => c[0] === "checkout")).toBe(false);
     expect(calls.some((c) => c[0] === "merge")).toBe(false);
   });

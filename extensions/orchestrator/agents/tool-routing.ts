@@ -57,8 +57,10 @@ const TOOL_SEGMENTS: ToolSegment[] = [
         text:
           "**pp_checkout_pr_head** (review phase, PR-scoped only): after resolving a repo's PR (e.g. `gh pr view " +
           "--json headRefName,headRefOid`), call this once per repo to land it on its PR head before reviewing. " +
-          "The extension fast-forwards a clean branch to the head; if the tree is dirty, on a different branch, or " +
-          "diverged it HALTS and returns a message to relay to the user. Do NOT call it for a " +
+          "On a clean tree the extension fast-forwards the PR head's branch when behind, or switches to it from a " +
+          "different branch after fetching origin and verifying the fetched tip matches the PR head commit; if the " +
+          "tree is dirty, HEAD is detached, the branch has diverged, or the head is on a fork/unfetchable ref it " +
+          "HALTS and returns a message to relay to the user. Do NOT call it for a " +
           "branch/commit-range/uncommitted-changes review, and never run `git checkout` yourself.",
       },
     ],
