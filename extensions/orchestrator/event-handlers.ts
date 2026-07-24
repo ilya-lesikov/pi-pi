@@ -1441,6 +1441,18 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     }
   }
 
+  // Mark ONE agent's record consumed. The subagents:completed event is emitted
+  // synchronously from pi-subagents' onComplete callback BEFORE it checks
+  // record.resultConsumed to decide whether to send the individual nudge, so
+  // setting the flag here (during the event) suppresses the per-agent nudge for
+  // a phased-batch member whose completion is instead reported by the single
+  // aggregated signal once the whole batch finishes.
+  function markAgentConsumed(id: string): void {
+    const mgr = (globalThis as any)[Symbol.for("pi-subagents:manager")];
+    const record = mgr?.getRecord?.(id);
+    if (record) record.resultConsumed = true;
+  }
+
   function checkPlannerCompletion(): void {
     if (
       !orchestrator.active ||
@@ -1866,7 +1878,9 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     // only completion signal.
     const step = orchestrator.active.state.step;
     const isPhasedBatch = step === "await_planners" || step === "await_reviewers";
-    if (!isPhasedBatch) {
+    if (isPhasedBatch) {
+      markAgentConsumed(data.id);
+    } else {
       const desc = data.description || data.type || data.id;
       const duration = data.durationMs ? `${(data.durationMs / 1000).toFixed(1)}s` : "";
       const tokens = data.tokens?.total ? `${data.tokens.total} tok` : "";

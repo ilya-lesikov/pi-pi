@@ -428,6 +428,33 @@ describe("registered handler branches", () => {
     }
   });
 
+  it("marks a phased-batch agent's record consumed to suppress the vendor nudge; leaves free agents alone", () => {
+    const records = new Map<string, { resultConsumed?: boolean }>();
+    const managerKey = Symbol.for("pi-subagents:manager");
+    (globalThis as any)[managerKey] = { getRecord: (id: string) => records.get(id) };
+    try {
+      // Phased batch: the record IS marked consumed (nudge suppressed).
+      records.set("agent-p", {});
+      orchestrator.active = makeActiveTask();
+      orchestrator.active.state.step = "await_reviewers";
+      orchestrator.spawnedAgentIds.add("agent-p");
+      orchestrator.agentDescriptions.set("agent-p", "reviewer gpt");
+      getEventHandler("subagents:completed")({ id: "agent-p", description: "reviewer gpt" }, {});
+      expect(records.get("agent-p")!.resultConsumed).toBe(true);
+
+      // Free (non-phased) agent: the record is NOT touched (keeps its nudge).
+      records.set("agent-free", {});
+      orchestrator.active = makeActiveTask();
+      orchestrator.active.state.step = "llm_work";
+      orchestrator.spawnedAgentIds.add("agent-free");
+      orchestrator.agentDescriptions.set("agent-free", "advisor gpt");
+      getEventHandler("subagents:completed")({ id: "agent-free", description: "advisor gpt" }, {});
+      expect(records.get("agent-free")!.resultConsumed).toBeUndefined();
+    } finally {
+      delete (globalThis as any)[managerKey];
+    }
+  });
+
   it("cleans up a stopped subagent without emitting an error", () => {
     orchestrator.active = makeActiveTask();
     orchestrator.spawnedAgentIds.add("agent-1");
