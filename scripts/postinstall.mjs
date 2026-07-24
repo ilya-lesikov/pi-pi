@@ -3,7 +3,8 @@
 // Windows limitation) and rely on the npm-pack HTML fallback below. vendor.sh is still the single
 // source used by `npm run build`/CI — this script does not fork its logic.
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, copyFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { gunzipSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -31,6 +32,23 @@ function htmlPresent() {
   return existsSync(join(PI_EXT_DIR, "plannotator.html")) && existsSync(join(PI_EXT_DIR, "review-editor.html"));
 }
 
+// Extract a specific file from an npm tarball (gzipped POSIX/ustar tar) using only
+// Node builtins — no external `tar` executable, which is not guaranteed on native
+// Windows. Returns the file's bytes, or null when the entry is absent.
+function extractFromTar(tarBytes, wantPath) {
+  let off = 0;
+  while (off + 512 <= tarBytes.length) {
+    const header = tarBytes.subarray(off, off + 512);
+    const name = header.subarray(0, 100).toString("utf-8").replace(/\0.*$/, "");
+    if (name === "") break;
+    const size = parseInt(header.subarray(124, 136).toString("utf-8").replace(/\0.*$/, "").trim() || "0", 8);
+    const dataStart = off + 512;
+    if (name === wantPath) return tarBytes.subarray(dataStart, dataStart + size);
+    off = dataStart + Math.ceil(size / 512) * 512;
+  }
+  return null;
+}
+
 function extractHtmlFallback() {
   const tmp = mkdtempSync(join(tmpdir(), "pi-pi-plannotator-"));
   try {
@@ -39,9 +57,12 @@ function extractHtmlFallback() {
     });
     const tgz = readdirSync(tmp).find((name) => name.endsWith(".tgz"));
     if (!tgz) fail("npm pack produced no tarball for @plannotator/pi-extension");
-    execFileSync("tar", ["-xzf", join(tmp, tgz), "-C", tmp], { stdio: "pipe" });
-    copyFileSync(join(tmp, "package", "plannotator.html"), join(PI_EXT_DIR, "plannotator.html"));
-    copyFileSync(join(tmp, "package", "review-editor.html"), join(PI_EXT_DIR, "review-editor.html"));
+    const tarBytes = gunzipSync(readFileSync(join(tmp, tgz)));
+    for (const file of ["plannotator.html", "review-editor.html"]) {
+      const bytes = extractFromTar(tarBytes, `package/${file}`);
+      if (!bytes) fail(`@plannotator/pi-extension tarball is missing ${file}`);
+      writeFileSync(join(PI_EXT_DIR, file), bytes);
+    }
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

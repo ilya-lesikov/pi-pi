@@ -416,6 +416,49 @@ describe("checkoutPrHead additional branches", () => {
     expect(result.message).toContain("not the advertised PR head");
   });
 
+  it("fast-forwards and switches an existing local branch that is a safe ancestor of the PR head", async () => {
+    let headCalls = 0;
+    const exec = vi.fn(async (_cmd: string, args: string[]) => {
+      if (args[0] === "status") return { code: 0, stdout: "", stderr: "" };
+      if (args[0] === "rev-parse" && args[1] === "HEAD") return { code: 0, stdout: headCalls++ === 0 ? "othersha" : "abc123", stderr: "" };
+      if (args[0] === "rev-parse" && args.includes("--abbrev-ref")) return { code: 0, stdout: "main", stderr: "" };
+      if (args[0] === "fetch") return { code: 0, stdout: "", stderr: "" };
+      if (args[0] === "rev-parse" && args.includes("refs/remotes/origin/feature")) return { code: 0, stdout: "abc123", stderr: "" };
+      if (args[0] === "rev-parse" && args.includes("refs/heads/feature")) return { code: 0, stdout: "localtip", stderr: "" };
+      if (args[0] === "merge-base" && args.includes("--is-ancestor")) return { code: 0, stdout: "", stderr: "" };
+      return { code: 0, stdout: "", stderr: "" };
+    });
+    const result = await checkoutPrHead(orchWithExec(exec), "/repo", "feature", "abc123");
+    expect(result.ok).toBe(true);
+    expect(result.message).toContain('switched to PR head branch "feature"');
+    // Ancestry was proven BEFORE the checkout.
+    const order = exec.mock.calls.map((c: any[]) => c[1].join(" "));
+    const ancestorIdx = order.findIndex((c: string) => c.includes("merge-base --is-ancestor"));
+    const checkoutIdx = order.findIndex((c: string) => c.startsWith("checkout feature"));
+    expect(ancestorIdx).toBeGreaterThanOrEqual(0);
+    expect(checkoutIdx).toBeGreaterThan(ancestorIdx);
+  });
+
+  it("HALTs on a diverged local branch WITHOUT checking it out (never switches then fails)", async () => {
+    const exec = vi.fn(async (_cmd: string, args: string[]) => {
+      if (args[0] === "status") return { code: 0, stdout: "", stderr: "" };
+      if (args[0] === "rev-parse" && args[1] === "HEAD") return { code: 0, stdout: "othersha", stderr: "" };
+      if (args[0] === "rev-parse" && args.includes("--abbrev-ref")) return { code: 0, stdout: "main", stderr: "" };
+      if (args[0] === "fetch") return { code: 0, stdout: "", stderr: "" };
+      if (args[0] === "rev-parse" && args.includes("refs/remotes/origin/feature")) return { code: 0, stdout: "abc123", stderr: "" };
+      if (args[0] === "rev-parse" && args.includes("refs/heads/feature")) return { code: 0, stdout: "divergedtip", stderr: "" };
+      if (args[0] === "merge-base" && args.includes("--is-ancestor")) return { code: 1, stdout: "", stderr: "" };
+      return { code: 0, stdout: "", stderr: "" };
+    });
+    const result = await checkoutPrHead(orchWithExec(exec), "/repo", "feature", "abc123");
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain("HALT");
+    expect(result.message).toContain("has diverged");
+    // The critical guarantee: no checkout was issued — the user stays on their branch.
+    const checkedOut = exec.mock.calls.some((c: any[]) => c[1][0] === "checkout");
+    expect(checkedOut).toBe(false);
+  });
+
   it("still HALTs on a dirty tree regardless of branch", async () => {
     const exec = vi.fn(async (_cmd: string, args: string[]) => {
       if (args[0] === "status") return { code: 0, stdout: " M file.ts", stderr: "" };

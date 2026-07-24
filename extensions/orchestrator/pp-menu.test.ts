@@ -475,10 +475,31 @@ describe("showActiveTaskMenu Publish/Next Back navigation (#6)", () => {
     // Only opened once for the review; the second selection applied fixes (no re-open).
     expect(plannotatorOpenCwds).toEqual(["/repo/a"]);
     // Cursor persists so /pp returns to the picker after the agent's turn; repo a
-    // stays flagged changes-requested but its pending feedback was consumed.
-    expect(orchestrator.active.state.plannotatorCursor?.status?.["/repo/a"]).toBe("changes-requested");
+    // moves to fixes-applied (so the picker next offers a re-review, not a repeat
+    // fix handoff) and its pending feedback was consumed.
+    expect(orchestrator.active.state.plannotatorCursor?.status?.["/repo/a"]).toBe("fixes-applied");
     expect(orchestrator.active.state.plannotatorCursor?.feedback?.["/repo/a"]).toBeUndefined();
     expect(orchestrator.active.state.plannotatorCursor?.repoPaths).toEqual(["/repo/a", "/repo/b"]);
+  });
+
+  it("multi-repo fixes-applied repo re-opens Plannotator on re-review, not the fix handoff (#3)", async () => {
+    const orchestrator = makeCursorOrchestrator();
+    plannotatorOpenCwds.length = 0;
+    // Repo a: review → changes requested → select to apply fixes (→ fixes-applied,
+    // exits with the fix banner). Next /pp: select repo a again — now it re-opens
+    // Plannotator (a re-review), and this time approves.
+    plannotatorResults.push({ approved: false, feedback: "tighten it" });
+    askQueue.push("/repo/a (root)", "Uncommitted changes", "/repo/a (root)");
+    await showActiveTaskMenu(orchestrator, ctx, "/pp", "tool");
+    expect(orchestrator.active.state.plannotatorCursor?.status?.["/repo/a"]).toBe("fixes-applied");
+
+    plannotatorResults.push({ approved: true });
+    askQueue.push("/repo/a (root)", "Uncommitted changes", "Done (stop reviewing)", "Back to prompt");
+    plannotatorOpenCwds.length = 0;
+    await showActiveTaskMenu(orchestrator, ctx, "/pp", "tool");
+    // The re-review re-opened Plannotator for repo a (not a fix handoff) and approved it.
+    expect(plannotatorOpenCwds).toEqual(["/repo/a"]);
+    expect(orchestrator.active.state.plannotatorCursor).toBeUndefined();
   });
 
   it("multi-repo Done immediately stops and clears the cursor (#3)", async () => {

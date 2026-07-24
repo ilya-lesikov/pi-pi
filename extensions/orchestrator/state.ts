@@ -91,7 +91,7 @@ export interface TaskState {
   plannotatorCursor?: {
     repoPaths: string[];
     index: number;
-    status?: Record<string, "approved" | "changes-requested">;
+    status?: Record<string, "approved" | "changes-requested" | "fixes-applied">;
     feedback?: Record<string, string>;
   };
   // The phase the task was in when it was marked done. Recorded so the Resume

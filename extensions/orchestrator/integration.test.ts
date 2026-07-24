@@ -4513,6 +4513,43 @@ describe("menu contracts", () => {
     expect(loadTask(taskDir).phase).toBe("done");
   });
 
+  it("autonomous /pp Complete emits the terminal assumptions summary", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "complete assumptions", undefined, undefined, "autonomous");
+    const taskDir = orchestrator.active!.dir;
+    mkdirSync(join(taskDir, "artifacts"), { recursive: true });
+    writeFileSync(join(taskDir, "artifacts", "ASSUMPTIONS.md"), "# A\n\n- statement: idempotent; confidence: med; status: open\n", "utf-8");
+
+    expectActiveTaskNext(menu, "Complete");
+    const pp = getCommand(pi, "pp");
+    await pp(undefined, ctx);
+
+    const summaryCall = (ctx.ui.notify as any).mock.calls.find((c: any[]) => String(c[0]).includes("Assumptions recorded this run"));
+    expect(summaryCall).toBeTruthy();
+    expect(String(summaryCall[0])).toContain("idempotent");
+  });
+
+  it("guided /pp Complete does NOT emit a terminal assumptions summary", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "guided complete no assumptions");
+    const taskDir = orchestrator.active!.dir;
+    mkdirSync(join(taskDir, "artifacts"), { recursive: true });
+    writeFileSync(join(taskDir, "artifacts", "ASSUMPTIONS.md"), "# A\n\n- statement: x; confidence: low; status: open\n", "utf-8");
+
+    expectActiveTaskNext(menu, "Complete");
+    const pp = getCommand(pi, "pp");
+    await pp(undefined, ctx);
+
+    const summaryCall = (ctx.ui.notify as any).mock.calls.find((c: any[]) => String(c[0]).includes("Assumptions recorded this run"));
+    expect(summaryCall).toBeFalsy();
+  });
+
   it("autonomous menu 'Pause task' pauses without completing", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);

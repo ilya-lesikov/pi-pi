@@ -673,6 +673,19 @@ export async function checkoutPrHead(
     }
     const localExists = (await run(["rev-parse", "--verify", "--quiet", `refs/heads/${name}`])).code === 0;
     if (localExists) {
+      // Prove the fast-forward is safe BEFORE moving HEAD: if the local branch tip
+      // is not an ancestor of the PR head, it has diverged and we must HALT while
+      // the user is still on their original branch (never switch then fail).
+      const localTip = await run(["rev-parse", "--verify", `refs/heads/${name}`]);
+      const ancestry = await run(["merge-base", "--is-ancestor", localTip.stdout.trim(), oid]);
+      if (ancestry.code !== 0) {
+        return {
+          ok: false,
+          message:
+            `HALT: ${repoPath} local branch "${name}" cannot fast-forward to PR head ${oid} — it has diverged. ` +
+            "Reconcile it with the PR head, then ask me to continue. I will not force-move or rebase it for you.",
+        };
+      }
       const co = await run(["checkout", name]);
       if (co.code !== 0) {
         return { ok: false, message: `HALT: ${repoPath} could not check out "${name}": ${co.stderr?.trim() || "git checkout failed"}. Resolve it, then ask me to continue.` };

@@ -32,7 +32,7 @@ import { detectDefaultBranch, enterReviewCycle, finalizeReviewCycle, isReviewCyc
 import { Orchestrator } from "./orchestrator.js";
 import { cancelPendingPlannotatorWait, openPlannotator, openAnnotateReview, waitForPlannotatorResult } from "./plannotator.js";
 import { advanceBanner } from "./messages.js";
-import { openAssumptionsBanner } from "./assumptions.js";
+import { openAssumptionsBanner, terminalAssumptionsSummary } from "./assumptions.js";
 import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
 import { spawnCodeReviewers } from "./phases/review.js";
 import { spawnBrainstormReviewers } from "./phases/brainstorm.js";
@@ -458,6 +458,7 @@ async function finishTask(orchestrator: Orchestrator, ctx: any): Promise<string>
   const name = orchestrator.active.description;
   const type = orchestrator.active.type;
   const dir = orchestrator.active.dir;
+  const wasAutonomous = getEffectiveMode(orchestrator.active.state) === "autonomous";
 
   orchestrator.lastCtx = ctx;
 
@@ -483,6 +484,12 @@ async function finishTask(orchestrator: Orchestrator, ctx: any): Promise<string>
     discard: true,
     summary: `Task "${name}" (${type}) is finished — DISCARD its entire conversation. Do NOT carry forward, reference, or act on any of this task's messages, phase, plan, or aborted turns; the next task starts from a clean slate.`,
   });
+
+  // Terminal assumptions summary (#B/e): mirror the automatic done transition so a
+  // /pp → Complete finish of an autonomous run also lists recorded assumptions.
+  if (wasAutonomous) {
+    ctx.ui.notify(terminalAssumptionsSummary(dir), "info");
+  }
 
   const urExists = existsSync(join(dir, "USER_REQUEST.md"));
   const resExists = existsSync(join(dir, "RESEARCH.md"));
@@ -3704,6 +3711,7 @@ async function runMultiRepoCursor(orchestrator: Orchestrator, ctx: any): Promise
       const st = status[repoPath];
       const label = st === "approved" ? "approved"
         : st === "changes-requested" ? "changes requested — select to apply fixes"
+        : st === "fixes-applied" ? "fixes applied — select to re-review"
         : "unreviewed — select to review";
       return opt(formatRepoLabel(repo), label);
     });
@@ -3722,13 +3730,16 @@ async function runMultiRepoCursor(orchestrator: Orchestrator, ctx: any): Promise
     const repo = resolveRepo(orchestrator, repoPath);
 
     // A changes-requested repo the user selects: hand off the fix instruction now
-    // (the user explicitly starts applying fixes). Clear its pending feedback so a
-    // later resume does not offer it again; the repo stays in the cursor so the
-    // user returns to the picker after the agent's turn.
+    // (the user explicitly starts applying fixes). Clear its pending feedback and
+    // move it to "fixes-applied" so the picker next offers a re-review (reopening
+    // Plannotator) rather than repeating the fix handoff. The repo stays in the
+    // cursor so the user returns to the picker after the agent's turn.
     if (status[repoPath] === "changes-requested") {
       const feedback = feedbackMap[repoPath];
       delete feedbackMap[repoPath];
       cur.feedback = feedbackMap;
+      status[repoPath] = "fixes-applied";
+      cur.status = status;
       setStep(orchestrator, "llm_work");
       saveTask(task.dir, task.state);
       return plannotatorFixBanner(
