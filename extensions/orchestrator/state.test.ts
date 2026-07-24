@@ -52,15 +52,6 @@ describe("createTask", () => {
     expect(raw.endsWith("\n")).toBe(true);
   });
 
-  it("uses debug as initial phase for debug", () => {
-    const cwd = makeCwd();
-    const taskDir = createTask(cwd, "debug", "Fix timeout issue");
-    const state = loadTask(taskDir);
-    expect(state.phase).toBe("debug");
-    expect(state.step).toBe("llm_work");
-    expect(state.reviewCycle).toBeNull();
-    expect(state.reviewPass).toBe(0);
-  });
 
   it("uses brainstorm as initial phase for brainstorm", () => {
     const cwd = makeCwd();
@@ -103,6 +94,16 @@ describe("loadTask", () => {
 
     expect(() => loadTask(taskDir)).toThrowError(/Failed to parse .*state\.json:/);
   });
+
+  it("throws for a legacy debug-phase task", () => {
+    const cwd = makeCwd();
+    const taskDir = createTask(cwd, "implement", "Legacy debug");
+    const state = loadTask(taskDir);
+    (state as any).phase = "debug";
+    saveTask(taskDir, state);
+
+    expect(() => loadTask(taskDir)).toThrowError(/Debug tasks are no longer supported/);
+  });
 });
 
 describe("saveTask", () => {
@@ -134,18 +135,18 @@ describe("listTasks", () => {
   it("lists only non-done tasks and respects type filter", () => {
     const cwd = makeCwd();
     const implementTask = createTask(cwd, "implement", "Implement feature");
-    const debugTask = createTask(cwd, "debug", "Debug crash");
+    const reviewTask = createTask(cwd, "review", "Review crash");
     const brainstormTask = createTask(cwd, "brainstorm", "Idea storm");
 
-    const doneState = loadTask(debugTask);
+    const doneState = loadTask(reviewTask);
     doneState.phase = "done";
-    saveTask(debugTask, doneState);
+    saveTask(reviewTask, doneState);
 
     const all = listTasks(cwd);
     const allDirs = all.map((t) => t.dir);
     expect(allDirs).toContain(implementTask);
     expect(allDirs).toContain(brainstormTask);
-    expect(allDirs).not.toContain(debugTask);
+    expect(allDirs).not.toContain(reviewTask);
 
     const brainstormOnly = listTasks(cwd, "brainstorm");
     expect(brainstormOnly).toHaveLength(1);
@@ -384,7 +385,7 @@ describe("getActiveTask", () => {
   it("returns null when multiple unlocked tasks exist (ambiguous)", () => {
     const cwd = makeCwd();
     createTask(cwd, "implement", "First abandoned");
-    createTask(cwd, "debug", "Second abandoned");
+    createTask(cwd, "review", "Second abandoned");
     vi.spyOn(lockfile, "checkSync").mockReturnValue(false);
 
     expect(getActiveTask(cwd)).toBeNull();
@@ -393,7 +394,7 @@ describe("getActiveTask", () => {
   it("returns the single unlocked task when others are locked", () => {
     const cwd = makeCwd();
     const lockedTask = createTask(cwd, "implement", "Locked by other");
-    const unlockedTask = createTask(cwd, "debug", "Abandoned");
+    const unlockedTask = createTask(cwd, "review", "Abandoned");
 
     vi.spyOn(lockfile, "checkSync").mockImplementation((path: string, _options?: { stale?: number }) => {
       if (path === join(lockedTask, "state.json")) return true;
@@ -434,7 +435,7 @@ describe("getActiveTaskStatus", () => {
   it("reports ambiguous with all tasks when multiple are unlocked", () => {
     const cwd = makeCwd();
     createTask(cwd, "implement", "First");
-    createTask(cwd, "debug", "Second");
+    createTask(cwd, "review", "Second");
     vi.spyOn(lockfile, "checkSync").mockReturnValue(false);
 
     const status = getActiveTaskStatus(cwd);
@@ -447,7 +448,6 @@ describe("getFirstPhase", () => {
   it("returns expected first phase for each task type", () => {
     expect(getFirstPhase("implement")).toBe("brainstorm");
     expect(getFirstPhase("brainstorm")).toBe("brainstorm");
-    expect(getFirstPhase("debug")).toBe("debug");
     expect(getFirstPhase("review")).toBe("review");
     expect(getFirstPhase("quick")).toBe("quick");
   });

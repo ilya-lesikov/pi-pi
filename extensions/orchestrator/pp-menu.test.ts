@@ -5,7 +5,7 @@ import { tmpdir } from "os";
 import { getDefaultConfig, GLOBAL_CONFIG_PATH, parseDuration } from "./config.js";
 import * as configModule from "./config.js";
 import * as flantInfra from "./flant-infra.js";
-import { formatDuration, formatSourceTags, getConfigSourceInfo, pickMaxReviewPasses, publishGuard, publishFileCommentsBanner, publishPrCommentsBanner, showActiveTaskMenu, showUsage } from "./pp-menu.js";
+import { formatDuration, formatSourceTags, getConfigSourceInfo, pickMaxReviewPasses, publishGuard, publishFileCommentsBanner, publishPrCommentsBanner, restoreMenuStepAfterReview, showActiveTaskMenu, showUsage } from "./pp-menu.js";
 import { createUsageTracker } from "./usage-tracker.js";
 
 // Drives showActiveTaskMenu's submenu navigation by scripting selectOption answers.
@@ -26,8 +26,9 @@ const plannotatorResults: Array<{ approved: boolean; feedback?: string; error?: 
 const plannotatorOpenCwds: string[] = [];
 const annotateReviewResults: Array<{ feedback: string; approved?: boolean; exit?: boolean } | null> = [];
 const annotateReviewPayloads: any[] = [];
+const cancelPendingPlannotatorWaitMock = vi.fn();
 vi.mock("./plannotator.js", () => ({
-  cancelPendingPlannotatorWait: () => {},
+  cancelPendingPlannotatorWait: (...args: any[]) => cancelPendingPlannotatorWaitMock(...args),
   openPlannotator: vi.fn(async (_pi: any, _action: string, payload: any) => {
     plannotatorOpenCwds.push(payload?.cwd);
     return { opened: true, reviewId: "rev" };
@@ -208,7 +209,7 @@ describe("settings helpers", () => {
 });
 
 describe("pickMaxReviewPasses", () => {
-  function makeInputCtx(responses: (string | undefined)[]) {
+  function makeInputCtx(responses: (string | undefined | null)[]) {
     let i = 0;
     return {
       ui: {
@@ -292,6 +293,35 @@ describe("publishGuard", () => {
     writeFileSync(join(dir, "code-reviews", "20260101-000000_final_pass-1.md"), "ANCHORS:\nsrc/a.ts:10 — bug\n");
     writeFileSync(join(dir, "code-reviews", "20260102-000000_final_pass-2.md"), "# Findings\n\nno anchors here\n");
     expect(publishGuard(dir)).toBeTruthy();
+  });
+});
+
+describe("restoreMenuStepAfterReview (plannotator stop-reviewing deadlock)", () => {
+  function makeOrch() {
+    return { orchestrator: {} as any };
+  }
+
+  it("resets an await_reviewers step to a menu-usable value and cancels the pending wait", () => {
+    cancelPendingPlannotatorWaitMock.mockClear();
+    const { orchestrator } = makeOrch();
+    const task = { state: { phase: "implement", step: "await_reviewers" as string | null } };
+    restoreMenuStepAfterReview(orchestrator, task);
+    expect(task.state.step).toBe("llm_work");
+    expect(cancelPendingPlannotatorWaitMock).toHaveBeenCalledWith(orchestrator);
+  });
+
+  it("resets to synthesize in the plan phase", () => {
+    const { orchestrator } = makeOrch();
+    const task = { state: { phase: "plan", step: "await_reviewers" as string | null } };
+    restoreMenuStepAfterReview(orchestrator, task);
+    expect(task.state.step).toBe("synthesize");
+  });
+
+  it("leaves an already-interactive step untouched", () => {
+    const { orchestrator } = makeOrch();
+    const task = { state: { phase: "implement", step: "llm_work" as string | null } };
+    restoreMenuStepAfterReview(orchestrator, task);
+    expect(task.state.step).toBe("llm_work");
   });
 });
 

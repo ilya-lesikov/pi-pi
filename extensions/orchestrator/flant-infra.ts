@@ -786,7 +786,6 @@ export function generateFlantConfig(models: string[], subscriptionActive = false
       orchestrators: {
         implement: { model: modelSpec(implementModel, sub(implementModel)), thinking: "high" },
         plan: { model: modelSpec(implementModel, sub(implementModel)), thinking: "high" },
-        debug: { model: modelSpec(debugModel, sub(debugModel)), thinking: "high" },
         brainstorm: { model: modelSpec(brainstormModel, sub(brainstormModel)), thinking: "high" },
         review: { model: modelSpec(implementModel, sub(implementModel)), thinking: "high" },
         quick: { model: modelSpec(implementModel, sub(implementModel)), thinking: "high" },

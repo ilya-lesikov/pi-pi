@@ -441,8 +441,6 @@ export class Orchestrator {
     switch (this.active.state.phase) {
       case "brainstorm":
         return brainstormSystemPrompt(this.active.type, this.active.description, this.active.dir, this.cwd);
-      case "debug":
-        return brainstormSystemPrompt(this.active.type, this.active.description, this.active.dir, this.cwd);
       case "plan":
         return planningSystemPrompt(this.active.dir, mode);
       case "implement":
@@ -592,8 +590,7 @@ export class Orchestrator {
     log.info({ s: "task", dir, taskId: this.active.taskId, phase: state.phase, step: state.step }, "task activated");
 
     const modelConfig = this.config.agents.orchestrators[
-      type === "debug" ? "debug"
-      : type === "brainstorm" ? "brainstorm"
+      type === "brainstorm" ? "brainstorm"
       : type === "review" ? "review"
       : type === "quick" ? "quick"
       : "implement"
@@ -611,7 +608,7 @@ export class Orchestrator {
     this.injectContextAndArtifacts(this.active.dir, this.active.state.phase);
 
     this.phaseStartTime = Date.now();
-    const isGenericDescription = ["implement", "debug", "brainstorm", "review"].includes(this.active.description);
+    const isGenericDescription = ["implement", "brainstorm", "review"].includes(this.active.description);
     const isGenericQuickDescription = this.active.description === "quick";
     const hasInheritedTaskContext = Boolean(fromTaskDir && type === "implement");
     const isWaitingForPlanners = this.active.state.phase === "plan" && this.active.state.step === "await_planners";
@@ -829,7 +826,6 @@ export class Orchestrator {
   // block. Mirrors the phase→model selection in injectContextAndArtifacts.
   mainAgentConfigForPhase(phase: Phase | undefined): { model: string; thinking: string } {
     const o = this.config.agents.orchestrators;
-    if (phase === "debug" && this.active?.type === "debug") return o.debug;
     if (phase === "brainstorm" && this.active?.type === "brainstorm") return o.brainstorm;
     if (phase === "review" && this.active?.type === "review") return o.review;
     if (phase === "plan") return o.plan;
@@ -840,9 +836,7 @@ export class Orchestrator {
     const log = getLogger();
     log.debug({ s: "context", taskDir, phase }, "injecting context and artifacts");
     const modelSpec =
-      phase === "debug" && this.active?.type === "debug"
-        ? this.config.agents.orchestrators.debug.model
-      : phase === "brainstorm" && this.active?.type === "brainstorm"
+      phase === "brainstorm" && this.active?.type === "brainstorm"
         ? this.config.agents.orchestrators.brainstorm.model
       : phase === "review" && this.active?.type === "review"
         ? this.config.agents.orchestrators.review.model

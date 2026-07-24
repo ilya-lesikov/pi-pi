@@ -835,33 +835,6 @@ describe("standalone brainstorm", () => {
   });
 });
 
-describe("debug flow", () => {
-  it("finishes debug and can start implementation", async () => {
-    const cwd = makeTempDir();
-    const { pi, orchestrator } = await setupOrchestrator(cwd);
-    const ctx = makeCtx();
-
-    await orchestrator.startTask(ctx as any, "debug", "Fix timeout bug");
-
-    expect(orchestrator.active!.state.phase).toBe("debug");
-    expect(orchestrator.active!.type).toBe("debug");
-
-    const taskDir = orchestrator.active!.dir;
-    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
-    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
-
-    expectBrainstormToPlan(menu);
-
-    const ppPhaseComplete = getTool(pi, "pp_phase_complete");
-    await ppPhaseComplete.execute("call-1", { summary: "Diagnosis complete" }, undefined, undefined, ctx);
-    await new Promise((r) => setTimeout(r, 10));
-
-    expect(orchestrator.active!.type).toBe("debug");
-    expect(orchestrator.active!.state.phase).toBe("plan");
-    expect(orchestrator.active!.state.step).toBe("await_planners");
-  });
-});
-
 describe("planner completion tracking", () => {
   it("transitions await_planners → synthesize when all planners complete", async () => {
     const cwd = makeTempDir();
@@ -1535,24 +1508,6 @@ describe("edge cases and regressions", () => {
     expect(orchestrator.active!.state.step).toBe("llm_work");
   });
 
-  it("editor-review Done returns AI_REVIEW state-file instructions in debug phase", async () => {
-    const cwd = makeTempDir();
-    const { pi, orchestrator } = await setupOrchestrator(cwd);
-    const ctx = makeCtx();
-
-    await orchestrator.startTask(ctx as any, "debug", "Debug editor review");
-
-    expectReviewOnMyOwn(menu, "Done");
-    const ppPhaseComplete = getTool(pi, "pp_phase_complete");
-    const result = await ppPhaseComplete.execute("call-1", { summary: "diagnosed" }, undefined, undefined, ctx);
-
-    expect(result.content[0].text).toContain("AI_REVIEW:");
-    expect(result.content[0].text).toContain("USER_REQUEST.md");
-    expect(result.content[0].text).not.toContain("CHANGED files");
-    expect(orchestrator.active!.state.phase).toBe("debug");
-    expect(orchestrator.active!.state.step).toBe("llm_work");
-  });
-
   it("editor-review Done targets synthesized plan in plan phase", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);
@@ -1606,17 +1561,17 @@ describe("edge cases and regressions", () => {
     expect(sendUserCalls.length).toBe(0);
   });
 
-  it("implement --from debug skips brainstorm", async () => {
+  it("implement --from review skips brainstorm", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);
     const ctx = makeCtx();
 
-    await orchestrator.startTask(ctx as any, "debug", "Find bug");
-    const debugDir = orchestrator.active!.dir;
-    writeFileSync(join(debugDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
-    writeFileSync(join(debugDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+    await orchestrator.startTask(ctx as any, "review", "Find bug");
+    const reviewDir = orchestrator.active!.dir;
+    writeFileSync(join(reviewDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(reviewDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
 
-    await orchestrator.startTask(ctx as any, "implement", "Fix it", debugDir, true);
+    await orchestrator.startTask(ctx as any, "implement", "Fix it", reviewDir, true);
 
     expect(orchestrator.active!.state.phase).toBe("plan");
     expect(orchestrator.active!.state.step).toBe("await_planners");
@@ -1624,17 +1579,17 @@ describe("edge cases and regressions", () => {
     expect(existsSync(join(orchestrator.active!.dir, "RESEARCH.md"))).toBe(true);
   });
 
-  it("implement --from debug with generic description skips blank-task prompt", async () => {
+  it("implement --from review with generic description skips blank-task prompt", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);
     const ctx = makeCtx();
 
-    await orchestrator.startTask(ctx as any, "debug", "Find bug");
-    const debugDir = orchestrator.active!.dir;
-    writeFileSync(join(debugDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
-    writeFileSync(join(debugDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+    await orchestrator.startTask(ctx as any, "review", "Find bug");
+    const reviewDir = orchestrator.active!.dir;
+    writeFileSync(join(reviewDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(reviewDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
 
-    await orchestrator.startTask(ctx as any, "implement", "implement", debugDir, true);
+    await orchestrator.startTask(ctx as any, "implement", "implement", reviewDir, true);
 
     expect(ctx.ui.notify).not.toHaveBeenCalledWith("Task created. Describe what you'd like to do.", "info");
     expect(ctx.ui.notify).toHaveBeenCalledWith("Entered plan phase. Waiting for planners to complete before synthesis.", "info");
@@ -1661,22 +1616,22 @@ describe("edge cases and regressions", () => {
     expect(existsSync(join(orchestrator.active!.dir, "RESEARCH.md"))).toBe(true);
   });
 
-  it("implement from debug task stores source path and skips brainstorm", async () => {
+  it("implement from review task stores source path and skips brainstorm", async () => {
     const cwd = makeTempDir();
     const { orchestrator } = await setupOrchestrator(cwd);
     const ctx = makeCtx();
 
-    await orchestrator.startTask(ctx as any, "debug", "Find bug");
-    const debugDir = orchestrator.active!.dir;
-    writeFileSync(join(debugDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
-    writeFileSync(join(debugDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+    await orchestrator.startTask(ctx as any, "review", "Find bug");
+    const reviewDir = orchestrator.active!.dir;
+    writeFileSync(join(reviewDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(reviewDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
 
-    await orchestrator.startTask(ctx as any, "implement", "implement", debugDir, true);
+    await orchestrator.startTask(ctx as any, "implement", "implement", reviewDir, true);
 
     expect(orchestrator.active!.type).toBe("implement");
     expect(orchestrator.active!.state.phase).toBe("plan");
     expect(orchestrator.active!.state.step).toBe("await_planners");
-    expect(orchestrator.active!.state.from).toBe(`debug/${debugDir.split("/").pop()}`);
+    expect(orchestrator.active!.state.from).toBe(`review/${reviewDir.split("/").pop()}`);
     expect(orchestrator.active!.state.description).toBe("implement");
     expect(ctx.ui.notify).toHaveBeenCalledWith("Entered plan phase. Waiting for planners to complete before synthesis.", "info");
   });
@@ -2263,12 +2218,12 @@ describe("task modes and quick task", () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);
 
-    await orchestrator.startTask({ ...makeCtx(), cwd } as any, "debug", "Find bug");
-    const debugDir = orchestrator.active!.dir;
-    writeFileSync(join(debugDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
-    writeFileSync(join(debugDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+    await orchestrator.startTask({ ...makeCtx(), cwd } as any, "review", "Find bug");
+    const reviewDir = orchestrator.active!.dir;
+    writeFileSync(join(reviewDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(reviewDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
 
-    await orchestrator.startTask({ ...makeCtx(), cwd } as any, "implement", "implement", debugDir, true, "autonomous");
+    await orchestrator.startTask({ ...makeCtx(), cwd } as any, "implement", "implement", reviewDir, true, "autonomous");
     expect(orchestrator.active!.state.initialPhase).toBe("plan");
     expect(orchestrator.active!.state.phase).toBe("plan");
 
@@ -2282,11 +2237,11 @@ describe("task modes and quick task", () => {
     const { pi, orchestrator } = await setupOrchestrator(cwd);
     const ctx = makeCtx();
 
-    await orchestrator.startTask({ ...ctx, cwd } as any, "debug", "Find bug");
-    const debugDir = orchestrator.active!.dir;
-    writeFileSync(join(debugDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
-    writeFileSync(join(debugDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
-    await orchestrator.startTask({ ...ctx, cwd } as any, "implement", "implement", debugDir, true, "autonomous");
+    await orchestrator.startTask({ ...ctx, cwd } as any, "review", "Find bug");
+    const reviewDir = orchestrator.active!.dir;
+    writeFileSync(join(reviewDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(reviewDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+    await orchestrator.startTask({ ...ctx, cwd } as any, "implement", "implement", reviewDir, true, "autonomous");
     orchestrator.active!.state.phase = "implement";
     orchestrator.active!.state.step = "llm_work";
 
@@ -2800,37 +2755,6 @@ describe("review task lifecycle", () => {
   });
 });
 
-describe("debug task lifecycle", () => {
-  it("debug task starts in debug phase", async () => {
-    const cwd = makeTempDir();
-    const { orchestrator } = await setupOrchestrator(cwd);
-
-    await orchestrator.startTask(makeCtx() as any, "debug", "Debug issue");
-
-    expect(orchestrator.active!.type).toBe("debug");
-    expect(orchestrator.active!.state.phase).toBe("debug");
-  });
-
-  it("debug task transitions debug to plan to implement to done", async () => {
-    const cwd = makeTempDir();
-    const { pi, orchestrator } = await setupOrchestrator(cwd);
-    const ctx = makeCtx();
-
-    await orchestrator.startTask(ctx as any, "debug", "Debug flow");
-    const taskDir = orchestrator.active!.dir;
-
-    await moveTaskToImplementPhase(pi, orchestrator, ctx, "call-debug-to-plan", "call-debug-plan-to-implement");
-    expect(orchestrator.active!.state.phase).toBe("implement");
-
-    expectImplementToDone(menu);
-    const ppPhaseComplete = getTool(pi, "pp_phase_complete");
-    await ppPhaseComplete.execute("call-debug-implement-to-done", { summary: "done" }, undefined, undefined, ctx);
-
-    expect(orchestrator.active).toBeNull();
-    expect(loadTask(taskDir).phase).toBe("done");
-  });
-});
-
 describe("modified file tracking", () => {
   it("tool_result tracks write and edit in implement phase", async () => {
     const cwd = makeTempDir();
@@ -3157,7 +3081,7 @@ describe("resume and recovery", () => {
   it("getActiveTask returns null when multiple unlocked tasks exist", () => {
     const cwd = makeTempDir();
     createTask(cwd, "implement", "first unlocked");
-    createTask(cwd, "debug", "second unlocked");
+    createTask(cwd, "review", "second unlocked");
 
     const active = getActiveTask(cwd);
 
@@ -4395,25 +4319,6 @@ describe("menu contracts", () => {
     // shows the full interactive menu (Next/Review).
     menu.expect({
       question: m.taskMenu("implement", "brainstorm"),
-      options: {
-        exact: ["Next", "Review", "Subagents", "Settings", "Back to prompt"],
-      },
-      choose: "Back to prompt",
-    });
-
-    const pp = getCommand(pi, "pp");
-    await pp(undefined, ctx);
-  });
-
-  it("autonomous debug task shows interactive menu in debug phase", async () => {
-    const cwd = makeTempDir();
-    const { pi, orchestrator } = await setupOrchestrator(cwd);
-    const ctx = makeCtx();
-
-    await orchestrator.startTask(ctx as any, "debug", "contract debug auto", undefined, undefined, "autonomous");
-
-    menu.expect({
-      question: m.taskMenu("debug", "debug"),
       options: {
         exact: ["Next", "Review", "Subagents", "Settings", "Back to prompt"],
       },

@@ -97,7 +97,7 @@ export async function transitionToNextPhase(
     orchestrator.active.state.step = "spawn_planners";
   } else if (next === "implement") {
     orchestrator.active.state.step = "llm_work";
-  } else if (next === "brainstorm" || next === "debug") {
+  } else if (next === "brainstorm") {
     orchestrator.active.state.step = "llm_work";
   } else if (next === "done") {
     orchestrator.active.state.step = null;

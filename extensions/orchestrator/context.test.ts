@@ -189,7 +189,7 @@ describe("loadContextFiles", () => {
       loadContextFiles(cwd, "codeReviewer", "context", "review", { vendor: "google", family: "gpt-mini", tier: "stupid" }),
     ).toEqual([]);
     expect(
-      loadContextFiles(cwd, "codeReviewer", "context", "debug", { vendor: "openai", family: "gpt-mini", tier: "stupid" }),
+      loadContextFiles(cwd, "codeReviewer", "context", "plan", { vendor: "openai", family: "gpt-mini", tier: "stupid" }),
     ).toEqual([]);
   });
 
@@ -530,17 +530,12 @@ describe("context regressions", () => {
     ]);
   });
 
-  it("loadPhaseReviewOutputs reads brainstorm-reviews for both brainstorm and debug", () => {
+  it("loadPhaseReviewOutputs reads brainstorm-reviews for brainstorm", () => {
     const taskDir = makeTempDir();
     const brainstormReviewsDir = join(taskDir, "brainstorm-reviews");
     mkdirSync(brainstormReviewsDir, { recursive: true });
     writeFileSync(join(brainstormReviewsDir, "001_alpha_round-1.md"), "artifact review", "utf-8");
 
-    // Debug must resolve to the brainstorm-reviews dir (regression: it previously
-    // fell through to the empty code-reviews dir, discarding reviewer outputs).
-    expect(loadPhaseReviewOutputs(taskDir, "debug", 1).map((r) => r.name)).toEqual([
-      "001_alpha_round-1.md",
-    ]);
     expect(loadPhaseReviewOutputs(taskDir, "brainstorm", 1).map((r) => r.name)).toEqual([
       "001_alpha_round-1.md",
     ]);

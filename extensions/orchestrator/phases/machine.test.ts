@@ -63,12 +63,6 @@ describe("canTransition", () => {
     expect(canTransition("implement", "done", "implement")).toBe(false);
   });
 
-  it("handles debug transitions", () => {
-    expect(canTransition("debug", "debug", "plan")).toBe(true);
-    expect(canTransition("debug", "debug", "done")).toBe(false);
-    expect(canTransition("debug", "done", "debug")).toBe(false);
-  });
-
   it("handles brainstorm transitions", () => {
     expect(canTransition("brainstorm", "brainstorm", "plan")).toBe(true);
     expect(canTransition("brainstorm", "brainstorm", "done")).toBe(false);
@@ -89,11 +83,6 @@ describe("nextPhase", () => {
     expect(nextPhase("implement", "done")).toBeNull();
   });
 
-  it("returns debug next phase and terminal null", () => {
-    expect(nextPhase("debug", "debug")).toBe("plan");
-    expect(nextPhase("debug", "done")).toBeNull();
-  });
-
   it("returns brainstorm next phase and terminal null", () => {
     expect(nextPhase("brainstorm", "brainstorm")).toBe("plan");
     expect(nextPhase("brainstorm", "done")).toBeNull();
@@ -108,10 +97,6 @@ describe("nextPhase", () => {
 describe("phasePipeline", () => {
   it("returns implement pipeline", () => {
     expect(phasePipeline("implement")).toEqual(["brainstorm", "plan", "implement", "done"]);
-  });
-
-  it("returns debug pipeline", () => {
-    expect(phasePipeline("debug")).toEqual(["debug", "plan", "implement", "done"]);
   });
 
   it("returns brainstorm pipeline", () => {
@@ -283,19 +268,6 @@ Fix bug.
     writeFileSync(join(pass, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
     writeFileSync(join(pass, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
     expect(validateExitCriteria(pass, "implement", "brainstorm")).toEqual({ ok: true });
-  });
-
-  it("validates debug artifacts", () => {
-    const missing = makeTempDir();
-    expect(validateExitCriteria(missing, "debug", "debug")).toEqual({
-      ok: false,
-      reason: "USER_REQUEST.md does not exist or is empty",
-    });
-
-    const pass = makeTempDir();
-    writeFileSync(join(pass, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
-    writeFileSync(join(pass, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
-    expect(validateExitCriteria(pass, "debug", "debug")).toEqual({ ok: true });
   });
 
   it("validates review phase — requires artifacts and an ANCHORS-bearing final_pass file", () => {

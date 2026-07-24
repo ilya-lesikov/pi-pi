@@ -15,7 +15,7 @@ function isEnabled(value: { enabled?: boolean } | undefined): boolean {
 
 export function reviewSystemPrompt(taskDir: string, pass: number, phase?: string, mode?: "guided" | "autonomous"): string {
   // Each phase writes/loads its review outputs in a distinct directory:
-  // brainstorm/debug -> brainstorm-reviews, plan -> plan-reviews, everything else
+  // brainstorm -> brainstorm-reviews, plan -> plan-reviews, everything else
   // (implement/review) -> code-reviews. The apply_feedback prompt must point the
   // agent at the SAME directory the reviewers wrote to (see planning.ts /
   // context.ts), otherwise it synthesizes against the wrong (empty) directory.
@@ -29,9 +29,9 @@ export function reviewSystemPrompt(taskDir: string, pass: number, phase?: string
 
   if (reviewPresetGroupForPhase(phase ?? "") === "brainstormReviewers") {
     return [
-      `[PI-PI — ${phase === "debug" ? "DEBUG" : "BRAINSTORM"} REVIEW CYCLE (pass ${pass})]`,
+      `[PI-PI — BRAINSTORM REVIEW CYCLE (pass ${pass})]`,
       "",
-      `${phase === "debug" ? "Debug" : "Brainstorm"} reviewer outputs are ready.`,
+      `Brainstorm reviewer outputs are ready.`,
       `Read them from ${reviewsDir}/.`,
       "",
       "# FORBIDDEN:",
@@ -49,7 +49,7 @@ export function reviewSystemPrompt(taskDir: string, pass: number, phase?: string
       "",
       "# Interaction (adapted streamlined flow for this synthesis step):",
       "- Work autonomously through the reviewer outputs; do NOT interrupt with mid-flow questions — a genuine blocker is the only reason to stop and ask.",
-      `- For a hard or contentious call (reviewers disagree, or a high-stakes change to USER_REQUEST/RESEARCH), consult an advisor whose model family differs from yours before committing — you run on ${phase === "debug" ? "GPT, so default to a Claude-family advisor" : "Claude, so default to a GPT-family advisor"}; escalate for the hardest calls.`,
+      `- For a hard or contentious call (reviewers disagree, or a high-stakes change to USER_REQUEST/RESEARCH), consult an advisor whose model family differs from yours before committing — you run on Claude, so default to a GPT-family advisor; escalate for the hardest calls.`,
       "- Before finalizing any concrete, costly-to-reverse or opinion-heavy edit (exact wording, structure, naming, defaults), surface the ACTUAL proposed change rather than silently burying it.",
       "",
       "USER_REQUEST.md MUST keep exactly: # User Request, ## Problem, ## Constraints",

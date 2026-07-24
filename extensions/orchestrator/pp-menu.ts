@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from "fs";
+import { existsSync, readdirSync, readFileSync } from "fs";
 import { join, relative, basename } from "path";
 import { isDeepStrictEqual } from "util";
 import { askUser, isCancel, type CancelReason } from "../../3p/pi-ask-user/index.js";
@@ -246,6 +246,21 @@ function setStep(orchestrator: Orchestrator, step: string): void {
   saveTask(orchestrator.active.dir, orchestrator.active.state);
 }
 
+// Leaving a Plannotator/review flow (stop, exhaust, or cancel) must return the
+// task's step to an interactive value. Otherwise a step left at "await_reviewers"
+// keeps transitionController.isRunning() false, which hides the Review/Continue
+// actions in /pp and starves the idle watchdog until it stalls (the reported
+// post-"Stop reviewing" deadlock). Also drop any pending Plannotator wait so a
+// stale reject/timeout can't fire after the user has moved on. The caller owns
+// the subsequent saveTask.
+export function restoreMenuStepAfterReview(orchestrator: Orchestrator, task: { state: { phase: string; step: string | null } }): void {
+  cancelPendingPlannotatorWait(orchestrator);
+  const step = task.state.step;
+  if (step === "await_reviewers" || step === "await_planners" || step === null) {
+    task.state.step = task.state.phase === "plan" ? "synthesize" : "llm_work";
+  }
+}
+
 // Publish the latest synthesized review findings to a target. The agent (not the
 // extension) performs the writes: file comments = insert `AI_COMMENT:` markers at
 // each finding's line; PR comments = run `gh` to post line-anchored comments from
@@ -306,7 +321,7 @@ const AI_REVIEW_MARKER_LOOP =
   "repeat until no `AI_REVIEW:` markers remain. Then verify your work and report what you changed per marker. When complete, " +
   "call pp_phase_complete.";
 
-// Read-only phases (brainstorm/debug/review) and plan produce markdown state files rather than
+// Read-only phases (brainstorm/review) and plan produce markdown state files rather than
 // source changes, so their AI_REVIEW scan targets those artifacts. Missing targets are skipped,
 // not errors. Kept as literal-token guidance (no regexp/parser), mirroring the implement banner.
 function readOnlyReviewBanner(phase: string, taskDir: string): string {
@@ -435,7 +450,7 @@ async function finishTask(orchestrator: Orchestrator, ctx: any): Promise<string>
   const urExists = existsSync(join(dir, "USER_REQUEST.md"));
   const resExists = existsSync(join(dir, "RESEARCH.md"));
 
-  if ((type === "brainstorm" || type === "debug") && urExists && resExists) {
+  if (type === "brainstorm" && urExists && resExists) {
     const taskRelPath = relative(join(orchestrator.cwd, ".pp", "state"), dir);
     ctx.ui.notify(
       `Task "${name}" completed. Artifacts saved.\nUse /pp → Implement → From and choose ${taskRelPath}`,
@@ -499,7 +514,7 @@ export async function pickPreset(
 // phase, which is wrong only for tasks completed early).
 function reopenPhaseForDoneTask(type: TaskType, state: TaskState): Phase {
   if (state.completedFrom) return state.completedFrom;
-  for (const phase of ["implement", "plan", "review", "debug", "brainstorm", "quick"] as Phase[]) {
+  for (const phase of ["implement", "plan", "review", "brainstorm", "quick"] as Phase[]) {
     if (nextPhase(type, phase) === "done") return phase;
   }
   return "implement" as Phase;
@@ -597,8 +612,7 @@ export async function resumeTask(
   getLogger().info({ s: "task", dir: task.dir, type: task.type, phase: task.state.phase }, "task resumed");
 
   const modelConfig = orchestrator.config.agents.orchestrators[
-    task.type === "debug" ? "debug"
-    : task.type === "brainstorm" ? "brainstorm"
+    task.type === "brainstorm" ? "brainstorm"
     : task.type === "review" ? "review"
     : "implement"
   ];
@@ -826,15 +840,14 @@ export async function resumeTask(
   return { ok: true };
 }
 
-function listCompletedFromTasks(cwd: string): TaskInfo[] {
+export function listCompletedFromTasks(cwd: string): TaskInfo[] {
   const paused = new Set<string>([
     ...listTasks(cwd, "brainstorm").map((t) => t.dir),
-    ...listTasks(cwd, "debug").map((t) => t.dir),
     ...listTasks(cwd, "review").map((t) => t.dir),
   ]);
   const results: TaskInfo[] = [];
 
-  for (const type of ["brainstorm", "debug", "review"] as TaskType[]) {
+  for (const type of ["brainstorm", "review"] as TaskType[]) {
     const typeDir = join(cwd, ".pp", "state", type);
     if (!existsSync(typeDir)) continue;
     for (const entry of readdirSync(typeDir, { withFileTypes: true })) {
@@ -846,6 +859,27 @@ function listCompletedFromTasks(cwd: string): TaskInfo[] {
         if (state.phase !== "done") continue;
         if (!existsSync(join(dir, "USER_REQUEST.md")) || !existsSync(join(dir, "RESEARCH.md"))) continue;
         results.push({ dir, state, type });
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  // Legacy .pp/state/debug/ tasks predate the removal of the debug task type, so
+  // their state.json cannot pass loadTask (its phase is a now-unsupported value).
+  // Read state.json directly so done debug tasks with artifacts stay reachable.
+  const debugDir = join(cwd, ".pp", "state", "debug");
+  if (existsSync(debugDir)) {
+    for (const entry of readdirSync(debugDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const dir = join(debugDir, entry.name);
+      const sp = join(dir, "state.json");
+      if (!existsSync(sp)) continue;
+      try {
+        const state = JSON.parse(readFileSync(sp, "utf-8")) as TaskState;
+        if (state.phase !== "done") continue;
+        if (!existsSync(join(dir, "USER_REQUEST.md")) || !existsSync(join(dir, "RESEARCH.md"))) continue;
+        results.push({ dir, state, type: "implement" });
       } catch {
         continue;
       }
@@ -892,7 +926,6 @@ function collectRoleAssignments(config: Partial<PiPiConfig> | null): string[] {
 
   add("agents.orchestrators.implement", config.agents?.orchestrators?.implement?.model);
   add("agents.orchestrators.plan", config.agents?.orchestrators?.plan?.model);
-  add("agents.orchestrators.debug", config.agents?.orchestrators?.debug?.model);
   add("agents.orchestrators.brainstorm", config.agents?.orchestrators?.brainstorm?.model);
   add("agents.orchestrators.review", config.agents?.orchestrators?.review?.model);
 
@@ -1341,7 +1374,6 @@ const ORCHESTRATOR_ROLES: Array<{ role: MainModelRole; label: string; descriptio
   { role: "brainstorm", label: "Brainstormer", description: "agents.orchestrators.brainstorm" },
   { role: "implement", label: "Implementer", description: "agents.orchestrators.implement" },
   { role: "plan", label: "Planner", description: "agents.orchestrators.plan" },
-  { role: "debug", label: "Debugger", description: "agents.orchestrators.debug" },
   { role: "review", label: "Reviewer", description: "agents.orchestrators.review" },
   { role: "quick", label: "Quick", description: "agents.orchestrators.quick" },
 ];
@@ -3045,10 +3077,10 @@ async function showSettingsMenu(orchestrator: Orchestrator, ctx: any): Promise<t
   }
 }
 
-// First phases (brainstorm/debug/review) are always interactive and can never run
+// First phases (brainstorm/review) are always interactive and can never run
 // autonomously — autonomous configs only ever cover plan/implement.
 export function autonomousPhasesForTask(type: TaskType): string[] {
-  if (type === "implement" || type === "debug" || type === "review") return ["plan", "implement"];
+  if (type === "implement" || type === "review") return ["plan", "implement"];
   return [];
 }
 
@@ -3254,7 +3286,7 @@ interface ResumeFilters {
 }
 
 const STATUS_CYCLE: StatusFilter[] = ["Active", "Active + Done", "Done only", "All"];
-const TYPE_CYCLE: Array<"All" | TaskType> = ["All", "implement", "debug", "brainstorm", "review", "quick"];
+const TYPE_CYCLE: Array<"All" | TaskType> = ["All", "implement", "brainstorm", "review", "quick"];
 const MODE_CYCLE: Array<"All" | TaskMode> = ["All", "guided", "autonomous"];
 
 function defaultResumeFilters(): ResumeFilters {
@@ -3375,7 +3407,7 @@ async function showFromMenu(orchestrator: Orchestrator, ctx: any): Promise<typeo
   while (true) {
     const tasks = listCompletedFromTasks(orchestrator.cwd);
     if (tasks.length === 0) {
-      ctx.ui.notify("No completed brainstorm/debug/review tasks with artifacts found.", "info");
+      ctx.ui.notify("No completed brainstorm/review tasks with artifacts found.", "info");
       return BACK;
     }
 
@@ -3409,7 +3441,7 @@ async function showImplementMenu(orchestrator: Orchestrator, ctx: any): Promise<
   while (true) {
     const choice = await selectOption(ctx, "Implement", [
       { title: "New", description: "Start a new implementation from scratch" },
-      { title: "From", description: "Continue from a completed brainstorm or debug task" },
+      { title: "From", description: "Continue from a completed brainstorm task" },
       { title: "Resume", description: "Resume a paused implementation" },
       { title: "Back", description: "Return to the previous menu" },
     ]);
@@ -3550,6 +3582,7 @@ async function runPlannotatorCursor(orchestrator: Orchestrator, ctx: any): Promi
 
     if (!diffChoice || diffChoice === "Done (stop reviewing)") {
       task.state.plannotatorCursor = undefined;
+      restoreMenuStepAfterReview(orchestrator, task);
       saveTask(task.dir, task.state);
       return null;
     }
@@ -3589,6 +3622,7 @@ async function runPlannotatorCursor(orchestrator: Orchestrator, ctx: any): Promi
       ]);
       if (!errorChoice || errorChoice === "Done (stop reviewing)") {
         task.state.plannotatorCursor = undefined;
+        restoreMenuStepAfterReview(orchestrator, task);
         saveTask(task.dir, task.state);
         return null;
       }
@@ -3627,6 +3661,7 @@ async function runPlannotatorCursor(orchestrator: Orchestrator, ctx: any): Promi
 
   // Cursor exhausted with no outstanding changes: clear it and fall back to /pp.
   task.state.plannotatorCursor = undefined;
+  restoreMenuStepAfterReview(orchestrator, task);
   saveTask(task.dir, task.state);
   return null;
 }
@@ -3669,19 +3704,7 @@ async function showTaskTypeMenu(
     if (!choice || choice === "Back") return BACK;
 
     if (choice === "New") {
-      let mode: TaskMode | undefined;
-      let autonomousConfig: AutonomousConfig | undefined;
-      if (type === "debug") {
-        const modeSelection = await pickModeForTaskStart(orchestrator, ctx, type);
-        if (!modeSelection) continue;
-        mode = modeSelection.mode;
-        autonomousConfig = modeSelection.autonomousConfig;
-      }
-      await orchestrator.startTask(ctx, type, type, undefined, undefined, mode);
-      if (orchestrator.active) {
-        orchestrator.active.state.autonomousConfig = autonomousConfig;
-        saveTask(orchestrator.active.dir, orchestrator.active.state);
-      }
+      await orchestrator.startTask(ctx, type, type, undefined, undefined, undefined);
       return "started";
     }
 
@@ -3694,7 +3717,6 @@ async function showTaskMenu(orchestrator: Orchestrator, ctx: any): Promise<typeo
   while (true) {
     const choice = await selectOption(ctx, "Task", [
       { title: "Implement", description: "Want to make some changes? Research any topic or a codebase, brainstorm solutions and implement the chosen one" },
-      { title: "Debug", description: "Something is broken? Investigate it. If there is an issue — brainstorm solutions and fix it" },
       { title: "Brainstorm", description: "No idea where to start? Research any topic or a codebase. If there is a problem to solve — brainstorm solutions and solve it" },
       { title: "Review", description: "Want to ensure that some commits or a GitHub PR are good to go? Review it. Even fix it yourself, if you want" },
       { title: "Quick", description: "Quick freeform task — no phases, no reviews, just work" },
@@ -3702,12 +3724,6 @@ async function showTaskMenu(orchestrator: Orchestrator, ctx: any): Promise<typeo
       { title: "Back", description: "Return to the previous menu" },
     ]);
     if (!choice || choice === "Back") return BACK;
-
-    if (choice === "Debug") {
-      const result = await showTaskTypeMenu(orchestrator, ctx, "debug");
-      if (result === "started") return "started";
-      continue;
-    }
 
     if (choice === "Brainstorm") {
       const result = await showTaskTypeMenu(orchestrator, ctx, "brainstorm");
@@ -3912,7 +3928,7 @@ export async function showActiveTaskMenu(
     const isReviewPhase = phase === "review";
     const hasPlannotator = phase === "plan" || phase === "implement" || isReviewPhase;
     // The artifact the automated reviewers scan, mirroring reviewPresetGroupForPhase:
-    // brainstorm/debug → brainstormReviewers (research artifacts), plan → planReviewers
+    // brainstorm → brainstormReviewers (research artifacts), plan → planReviewers
     // (synthesized plan), implement/review → codeReviewers (code changes). This is the primary
     // "Review" target named at the top level; the per-phase "Review on my own" description names
     // the manual editor pass's target separately (it can differ).
@@ -4129,7 +4145,7 @@ export async function showActiveTaskMenu(
         opt(autoLabel, `Run configured reviewers over ${reviewTarget}`),
         opt("Auto review until approved", `Loop reviewers over ${reviewTarget} until they unanimously approve, up to N passes`),
       ];
-      const hasArtifactPlannotator = phase === "brainstorm" || phase === "debug";
+      const hasArtifactPlannotator = phase === "brainstorm";
       if (hasPlannotator) {
         reviewOptions.push(opt("Review in Plannotator", phase === "plan" ? "Open plan review in browser" : "Open code diff review in browser"));
       } else if (hasArtifactPlannotator) {
@@ -4147,7 +4163,7 @@ export async function showActiveTaskMenu(
 
       if (reviewChoice === "Review in Plannotator") {
         if (hasArtifactPlannotator) {
-          // brainstorm/debug have no diff or plan file: review the whole artifact
+          // brainstorm has no diff or plan file: review the whole artifact
           // set in one annotate-folder pass over the task dir (walks USER_REQUEST.md +
           // RESEARCH.md + artifacts/*.md recursively). The result comes back on the
           // synchronous annotate respond callback, NOT via waitForPlannotatorResult.

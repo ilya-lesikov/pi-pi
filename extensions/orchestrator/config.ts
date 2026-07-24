@@ -6,7 +6,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { isValidLogLevel, getLogger, type LogLevel } from "./log.js";
 
 export type DurationValue = string | number;
-export type OrchestratorRole = "implement" | "plan" | "debug" | "brainstorm" | "review" | "quick";
+export type OrchestratorRole = "implement" | "plan" | "brainstorm" | "review" | "quick";
 export type SimpleSubagentRole = "explore" | "librarian" | "task";
 export type PresetGroupKey = "planners" | "codeReviewers" | "planReviewers" | "brainstormReviewers";
 // Dynamic on-demand subagent pools (item 2): advisor / reviewer / deep-debugger
@@ -105,7 +105,7 @@ export type PresetGroup = PresetGroupKey;
 export type VariantConfig = PresetAgentConfig;
 
 export function reviewPresetGroupForPhase(phase: string): PresetGroupKey {
-  if (phase === "brainstorm" || phase === "debug") return "brainstormReviewers";
+  if (phase === "brainstorm") return "brainstormReviewers";
   if (phase === "plan") return "planReviewers";
   return "codeReviewers";
 }
@@ -113,7 +113,7 @@ export type TimeoutConfig = NormalizedPiPiConfig["performance"]["internals"];
 
 export const PRESET_GROUPS = ["planners", "codeReviewers", "planReviewers", "brainstormReviewers"] as const;
 
-const ORCHESTRATOR_ROLES: OrchestratorRole[] = ["implement", "plan", "debug", "brainstorm", "review", "quick"];
+const ORCHESTRATOR_ROLES: OrchestratorRole[] = ["implement", "plan", "brainstorm", "review", "quick"];
 const SIMPLE_SUBAGENT_ROLES: SimpleSubagentRole[] = ["explore", "librarian", "task"];
 
 const DEFAULT_CONFIG: PiPiConfig = {
@@ -129,7 +129,6 @@ const DEFAULT_CONFIG: PiPiConfig = {
     orchestrators: {
       implement: { model: "anthropic/claude-opus-latest", thinking: "high" },
       plan: { model: "anthropic/claude-opus-latest", thinking: "high" },
-      debug: { model: "openai/gpt-latest", thinking: "high" },
       brainstorm: { model: "anthropic/claude-opus-latest", thinking: "high" },
       review: { model: "anthropic/claude-opus-latest", thinking: "high" },
       quick: { model: "anthropic/claude-opus-latest", thinking: "high" },

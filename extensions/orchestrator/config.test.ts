@@ -203,7 +203,6 @@ describe("loadConfig", () => {
 
     expect(config.agents.orchestrators.implement.model).toBe("custom/implement");
     expect(config.agents.orchestrators.plan.model).toBe("anthropic/claude-opus-latest");
-    expect(config.agents.orchestrators.debug.model).toBe("openai/gpt-latest");
     const planners = resolvePreset(config, "planners");
     expect(planners.opus.enabled).toBe(false);
     expect(planners.opus.model).toBe("anthropic/claude-opus-latest");
@@ -553,9 +552,8 @@ describe("config write helpers", () => {
 });
 
 describe("reviewPresetGroupForPhase", () => {
-  it("routes brainstorm and debug to brainstormReviewers", () => {
+  it("routes brainstorm to brainstormReviewers", () => {
     expect(reviewPresetGroupForPhase("brainstorm")).toBe("brainstormReviewers");
-    expect(reviewPresetGroupForPhase("debug")).toBe("brainstormReviewers");
   });
 
   it("routes plan to planReviewers", () => {

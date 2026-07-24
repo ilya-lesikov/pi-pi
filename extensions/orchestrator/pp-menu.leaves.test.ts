@@ -232,6 +232,23 @@ describe("General settings — boolean/inverted/log-level flows", () => {
     expect(orchestrator.config.general.logLevel).toBe("warn");
     expect(projectStore.general.logLevel).toBe("warn");
   });
+
+  it("keeps the Debug log level selectable", async () => {
+    const orchestrator = makeOrchestrator(cwd);
+    orchestrator.lastCtx = makeCtx();
+    askQueue.push(
+      "Settings", "General",
+      "Log level: Info",
+      "Debug", "Set for project",
+      "Back", "Back", "Back", "Back",
+    );
+    await navigate(orchestrator, orchestrator.lastCtx);
+    expect(orchestrator.config.general.logLevel).toBe("debug");
+    expect(projectStore.general.logLevel).toBe("debug");
+    const levelOpts = askOptions.find((opts) => opts.some((t) => t.startsWith("Debug")) && opts.some((t) => t.startsWith("Info")));
+    expect(levelOpts).toBeDefined();
+    expect(levelOpts!.some((t) => t.startsWith("Debug"))).toBe(true);
+  });
 });
 
 describe("Flant submenu", () => {

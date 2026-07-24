@@ -28,14 +28,13 @@ export interface AutonomousConfig {
   phases: Record<string, AutonomousPhaseConfig>;
 }
 
-export type TaskType = "implement" | "debug" | "brainstorm" | "review" | "quick";
+export type TaskType = "implement" | "brainstorm" | "review" | "quick";
 
 export type ImplementPhase = "brainstorm" | "plan" | "implement" | "done";
-export type DebugPhase = "debug" | "plan" | "implement" | "done";
 export type BrainstormPhase = "brainstorm" | "plan" | "implement" | "done";
 export type ReviewPhase = "review" | "plan" | "implement" | "done";
 export type QuickPhase = "quick";
-export type Phase = ImplementPhase | DebugPhase | BrainstormPhase | ReviewPhase | QuickPhase;
+export type Phase = ImplementPhase | BrainstormPhase | ReviewPhase | QuickPhase;
 
 export interface TaskState {
   phase: Phase;
@@ -102,7 +101,6 @@ function taskStatePath(taskDir: string): string {
 
 export function getFirstPhase(type: TaskType): Exclude<Phase, "done"> {
   if (type === "implement" || type === "brainstorm") return "brainstorm";
-  if (type === "debug") return "debug";
   if (type === "review") return "review";
   return "quick";
 }
@@ -115,7 +113,7 @@ export function getEffectiveMode(state: TaskState): TaskMode | undefined {
 // drives them, so they never inherit the task's autonomous mode even when one is set.
 // plan/implement are autonomous-capable regardless of whether they are the task's initial phase.
 export function getEffectivePhaseMode(state: TaskState): TaskMode {
-  if (state.phase === "brainstorm" || state.phase === "debug" || state.phase === "review") return "guided";
+  if (state.phase === "brainstorm" || state.phase === "review") return "guided";
   return getEffectiveMode(state) ?? "guided";
 }
 
@@ -162,8 +160,19 @@ export function createTask(cwd: string, type: TaskType, description: string, mod
 export function loadTask(taskDir: string): TaskState {
   const sp = taskStatePath(taskDir);
   const raw = readFileSync(sp, "utf-8");
+  let parsed: TaskState;
   try {
-    const state = JSON.parse(raw) as TaskState;
+    parsed = JSON.parse(raw) as TaskState;
+  } catch (err: any) {
+    throw new Error(`Failed to parse ${sp}: ${err.message}`);
+  }
+  if ((parsed as any).phase === "debug") {
+    throw new Error(
+      "Debug tasks are no longer supported; use /pp → Implement → From to reuse their artifacts.",
+    );
+  }
+  try {
+    const state = parsed;
     if ((state as any).phase === "planning") {
       state.phase = "plan";
     }
@@ -203,7 +212,7 @@ export function listTasks(cwd: string, typeOrOptions?: TaskType | ListTasksOptio
   const base = stateDir(cwd);
   if (!existsSync(base)) return [];
 
-  const types: TaskType[] = options.type ? [options.type] : ["implement", "debug", "brainstorm", "review", "quick"];
+  const types: TaskType[] = options.type ? [options.type] : ["implement", "brainstorm", "review", "quick"];
   const results: TaskInfo[] = [];
 
   for (const t of types) {
@@ -343,7 +352,7 @@ function firstMarkdownContent(path: string): string | null {
 export function taskFullName(taskDir: string, state: TaskState): string {
   let desc = state.description ?? "";
 
-  if (["implement", "debug", "brainstorm", "review", "quick"].includes(desc)) {
+  if (["implement", "brainstorm", "review", "quick"].includes(desc)) {
     const fallback =
       firstMarkdownContent(join(taskDir, "USER_REQUEST.md")) ??
       firstMarkdownContent(join(taskDir, "RESEARCH.md")) ??

@@ -2221,7 +2221,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       // user's initiating prompt, collapse whitespace, and cap at ~700 chars so
       // the state file never holds an unbounded prompt. Only the genuine first
       // user prompt qualifies (not a [PI-PI] injection).
-      const GENERIC_DESCRIPTIONS = ["implement", "debug", "brainstorm", "review", "quick"];
+      const GENERIC_DESCRIPTIONS = ["implement", "brainstorm", "review", "quick"];
       if (GENERIC_DESCRIPTIONS.includes(orchestrator.active.state.description) && event.prompt) {
         // Collapse the whole multi-line prompt into one line (newlines → spaces)
         // so a request whose intent spans several lines isn't cut off at line 1;

@@ -11,8 +11,8 @@ describe("completionLine", () => {
     }
   });
 
-  it("guided review and debug stay hands-off (no unprompted self-complete)", () => {
-    for (const phase of ["review", "debug"] as const) {
+  it("guided review stays hands-off (no unprompted self-complete)", () => {
+    for (const phase of ["review"] as const) {
       const line = completionLine(phase, "guided");
       expect(line).toContain("Do NOT advance on your own or call pp_phase_complete unprompted");
     }
@@ -23,8 +23,8 @@ describe("completionLine", () => {
     expect(line).toContain("Do NOT call pp_phase_complete yourself");
   });
 
-  it("guided brainstorm/review/debug carve out a /pp banner exception", () => {
-    for (const phase of ["brainstorm", "review", "debug"] as const) {
+  it("guided brainstorm/review carve out a /pp banner exception", () => {
+    for (const phase of ["brainstorm", "review"] as const) {
       expect(completionLine(phase, "guided")).toContain(
         "a /pp menu banner",
       );
@@ -36,7 +36,7 @@ describe("completionLine", () => {
     for (const phase of ["plan", "implement"] as const) {
       expect(completionLine(phase, "guided")).not.toContain("a /pp menu banner");
     }
-    for (const phase of ["brainstorm", "review", "debug", "plan", "implement"] as const) {
+    for (const phase of ["brainstorm", "review", "plan", "implement"] as const) {
       expect(completionLine(phase, "autonomous")).not.toContain("a /pp menu banner");
     }
   });
@@ -48,7 +48,7 @@ describe("completionLine", () => {
   });
 
   it("guided handoff phases require the standardized closing block", () => {
-    for (const phase of ["brainstorm", "review", "debug"] as const) {
+    for (const phase of ["brainstorm", "review"] as const) {
       const line = completionLine(phase, "guided");
       expect(line).toContain("the standardized block");
       expect(line).toContain("Advance via the /pp menu");
@@ -91,8 +91,8 @@ describe("closingBlockInstruction", () => {
     expect(review.indexOf("## Review Summary")).toBeLessThan(review.indexOf("✅ <one-sentence summary"));
   });
 
-  it("does NOT emit the Review Summary schema for brainstorm or debug closes", () => {
-    for (const phase of ["brainstorm", "debug"] as const) {
+  it("does NOT emit the Review Summary schema for brainstorm closes", () => {
+    for (const phase of ["brainstorm"] as const) {
       expect(closingBlockInstruction(phase)).not.toContain("## Review Summary");
     }
   });
@@ -110,8 +110,8 @@ describe("constraintsBlock", () => {
     expect(block).toContain("call pp_phase_complete");
   });
 
-  it("guided brainstorm/review/debug blocks embed the /pp banner exception", () => {
-    for (const phase of ["brainstorm", "review", "debug"] as const) {
+  it("guided brainstorm/review blocks embed the /pp banner exception", () => {
+    for (const phase of ["brainstorm", "review"] as const) {
       const block = constraintsBlock(phase, "guided");
       expect(block).toContain("a /pp menu banner");
       expect(block).toContain("e.g. an auto-review loop");

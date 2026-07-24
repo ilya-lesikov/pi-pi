@@ -422,7 +422,6 @@ describe("flant-infra", () => {
 
     expect(config.agents.orchestrators.implement.model).toBe("pp-flant-anthropic/claude-opus-4-6");
     expect(config.agents.orchestrators.plan.model).toBe("pp-flant-anthropic/claude-opus-4-6");
-    expect(config.agents.orchestrators.debug.model).toBe("pp-flant-openai/gpt-5-4");
     expect(config.agents.orchestrators.brainstorm.model).toBe("pp-flant-anthropic/claude-opus-4-6");
     expect(config.agents.orchestrators.review.model).toBe("pp-flant-anthropic/claude-opus-4-6");
     expect(config.agents.subagents.simple.explore.model).toBe("pp-flant-openai/gemini-3-1-flash");
@@ -448,7 +447,6 @@ describe("flant-infra", () => {
     expect(config.agents.subagents.simple.task.model).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
     expect(config.agents.subagents.presetGroups.planners.presets.regular.agents.opus.model).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
     // Non-Claude roles stay on the openai (company-billed) provider
-    expect(config.agents.orchestrators.debug.model).toBe("pp-flant-openai/gpt-5-4");
     expect(config.agents.subagents.simple.explore.model).toBe("pp-flant-openai/gemini-3-1-flash");
     expect(config.agents.subagents.presetGroups.planners.presets.regular.agents.gpt.model).toBe("pp-flant-openai/gpt-5-4");
   });
@@ -541,7 +539,6 @@ describe("flant-infra", () => {
 
     expect(config.agents.orchestrators.implement.model).toBe("pp-flant-anthropic/claude-opus-4-7");
     expect(config.agents.orchestrators.plan.model).toBe("pp-flant-anthropic/claude-opus-4-7");
-    expect(config.agents.orchestrators.debug.model).toBe("pp-flant-openai/gpt-5-4");
     expect(config.agents.subagents.presetGroups.planners.presets.regular.agents.gemini.model).toBe("pp-flant-openai/gemini-3-1-pro");
     expect(config.agents.subagents.simple.explore.model).toBe("pp-flant-openai/gemini-3-1-flash-lite");
   });

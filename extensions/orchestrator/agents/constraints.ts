@@ -27,7 +27,7 @@ const UNIVERSAL_RULES = [
 ].join("\n");
 
 export function isReadOnlyPhase(phase: Phase): boolean {
-  return phase === "brainstorm" || phase === "debug" || phase === "review" || phase === "plan";
+  return phase === "brainstorm" || phase === "review" || phase === "plan";
 }
 
 export function phaseConstraint(phase: Phase): string {
@@ -37,13 +37,12 @@ export function phaseConstraint(phase: Phase): string {
   return READONLY_CONSTRAINT;
 }
 
-// Guided phases that stop and hand back to the user (brainstorm, review, debug) end their turn
+// Guided phases that stop and hand back to the user (brainstorm, review) end their turn
 // with prose rather than a tool call. To keep that handoff consistent, the model must close with
 // this exact block. NEXT_PHASE_LABEL supplies the phase the /pp menu advances into.
 const NEXT_PHASE_LABEL: Partial<Record<Phase, string>> = {
   brainstorm: "plan",
   review: "plan",
-  debug: "plan",
 };
 
 // The structured summary a review must print when it finishes, on BOTH review finish paths
@@ -107,7 +106,6 @@ export function completionLine(phase: Phase, mode: TaskMode): string {
 
 const PHASE_IDENTITY: Record<string, string> = {
   brainstorm: "You clarify the request and research the codebase to produce USER_REQUEST.md and RESEARCH.md.",
-  debug: "You diagnose the problem and research the codebase to produce USER_REQUEST.md and RESEARCH.md — investigation only, no fixes.",
   plan: "You synthesize the planner outputs into one plan — you do not write a plan from scratch, and you do not implement.",
   implement: "You implement the approved plan.",
   review: "You review the code changes to produce USER_REQUEST.md and RESEARCH.md capturing the findings — you do not apply fixes.",

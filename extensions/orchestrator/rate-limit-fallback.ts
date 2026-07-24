@@ -160,7 +160,7 @@ async function activateFallback(
 function currentThinking(orchestrator: Orchestrator): string {
   const phase = orchestrator.active?.state.phase;
   const orchestrators = orchestrator.config?.agents?.orchestrators as Record<string, { thinking?: string }> | undefined;
-  const key = phase === "debug" || phase === "brainstorm" || phase === "review" || phase === "quick" ? phase : "implement";
+  const key = phase === "brainstorm" || phase === "review" || phase === "quick" ? phase : "implement";
   return orchestrators?.[key]?.thinking ?? "high";
 }
 

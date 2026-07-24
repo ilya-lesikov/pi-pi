@@ -10,7 +10,7 @@ import { reviewPresetGroupForPhase } from "./config.js";
 type AgentType = "main" | "explore" | "librarian" | "planner" | "planReviewer" | "task" | "codeReviewer" | "brainstormReviewer" | "advisor" | "deep-debugger" | "reviewer";
 type AgentGroup = "all" | "subagents";
 type InjectMode = "system" | "context";
-type PhaseFilter = "brainstorm" | "debug" | "plan" | "implement" | "review";
+type PhaseFilter = "brainstorm" | "plan" | "implement" | "review";
 type VendorFilter = "anthropic" | "openai" | "google" | "unknown";
 type FamilyFilter = "opus" | "fable" | "sonnet" | "haiku" | "gpt" | "gpt-mini" | "gemini-pro" | "gemini-flash" | "unknown";
 type TierFilter = "stupid" | "regular" | "smart" | "xsmart" | "unknown";
@@ -34,7 +34,7 @@ interface Frontmatter {
 const VALID_INJECT_MODES: readonly string[] = ["system", "context"];
 const VALID_AGENTS: readonly string[] = ["main", "explore", "librarian", "planner", "planReviewer", "task", "codeReviewer", "brainstormReviewer", "advisor", "deep-debugger", "reviewer"];
 const VALID_AGENT_GROUPS: readonly string[] = ["all", "subagents"];
-const VALID_PHASES: readonly string[] = ["brainstorm", "debug", "plan", "implement", "review"];
+const VALID_PHASES: readonly string[] = ["brainstorm", "plan", "implement", "review"];
 const VALID_VENDORS: readonly string[] = ["anthropic", "openai", "google", "unknown"];
 const VALID_FAMILIES: readonly string[] = ["opus", "fable", "sonnet", "haiku", "gpt", "gpt-mini", "gemini-pro", "gemini-flash", "unknown"];
 const VALID_TIERS: readonly string[] = ["stupid", "regular", "smart", "xsmart", "unknown"];
@@ -388,7 +388,7 @@ export function loadPlanReviewOutputs(taskDir: string, pass: number): { name: st
 }
 
 // Single source for phase→review-output loading, mirroring reviewPresetGroupForPhase
-// (brainstorm/debug → brainstorm-reviews, plan → plan-reviews, else code-reviews).
+// (brainstorm → brainstorm-reviews, plan → plan-reviews, else code-reviews).
 // Imported by both the /pp menu and the review-cycle completion path so the two
 // cannot drift.
 export function loadPhaseReviewOutputs(taskDir: string, phase: string, pass: number): { name: string; content: string }[] {

@@ -30,14 +30,14 @@ import { handleMainRateLimit, handleSubagentRateLimit } from "./rate-limit-fallb
 
 function makeOrchestrator() {
   return {
-    active: { state: { phase: "debug" } },
+    active: { state: { phase: "implement" } },
     activeTaskToken: 1,
     subFallbackActive: false,
     subFallbackDialogPending: false,
     subFallbackPendingDecision: false,
     subFallbackModelId: null as string | null,
     subSwitchBackTimer: null as any,
-    config: { agents: { orchestrators: { debug: { thinking: "high" }, implement: { thinking: "high" } } } },
+    config: { agents: { orchestrators: { implement: { thinking: "high" } } } },
     switchModel: vi.fn().mockResolvedValue(true),
     sendUserMessageWhenIdle: vi.fn(),
     cancelPendingRetry: vi.fn(),
