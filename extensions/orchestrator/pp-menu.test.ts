@@ -419,36 +419,6 @@ describe("showActiveTaskMenu Publish/Next Back navigation (#6)", () => {
     expect(askQuestions.filter((q) => q.startsWith("/pp")).length).toBe(2);
   });
 
-  it("resumes the per-repo Plannotator cursor and interleaves fixes (#3a)", async () => {
-    const orchestrator = makeReviewOrchestrator();
-    orchestrator.active.type = "implement";
-    orchestrator.active.state.phase = "implement";
-    orchestrator.active.state.repos = [
-      { path: "/repo/a", isRoot: true },
-      { path: "/repo/b", isRoot: false },
-    ];
-    orchestrator.active.state.plannotatorCursor = { repoPaths: ["/repo/a", "/repo/b"], index: 0 };
-    orchestrator.pi = { exec: vi.fn(async () => ({ code: 0, stdout: "", stderr: "" })) };
-    orchestrator.config = getDefaultConfig();
-
-    // First repo: choose a diff scope, Plannotator returns NEEDS_CHANGES → the
-    // menu exits with a work instruction and the cursor advances to repo b.
-    plannotatorResults.push({ approved: false, feedback: "fix the thing" });
-    askQueue.push("Uncommitted changes");
-    const first = await showActiveTaskMenu(orchestrator, ctx, "/pp", "tool");
-    expect(first).toContain("Plannotator requested changes");
-    expect(first).toContain("fix the thing");
-    expect(orchestrator.active.state.plannotatorCursor).toEqual({ repoPaths: ["/repo/a", "/repo/b"], index: 1 });
-
-    // Next /pp resumes at repo b; APPROVED → cursor is cleared and the loop ends,
-    // falling through to the normal menu (top-level Back exits).
-    plannotatorResults.push({ approved: true });
-    askQueue.push("Uncommitted changes", "Back to prompt");
-    const second = await showActiveTaskMenu(orchestrator, ctx, "/pp", "tool");
-    expect(second).toBe("");
-    expect(orchestrator.active.state.plannotatorCursor).toBeUndefined();
-  });
-
   function makeCursorOrchestrator(): any {
     const orchestrator = makeReviewOrchestrator();
     orchestrator.active.type = "implement";
@@ -460,41 +430,62 @@ describe("showActiveTaskMenu Publish/Next Back navigation (#6)", () => {
     return orchestrator;
   }
 
-  it("Plannotator error + Retry leaves the cursor on the same repo (#3, error retention)", async () => {
-    const orchestrator = makeCursorOrchestrator();
-    plannotatorOpenCwds.length = 0;
-    // Repo a errors; user chooses Retry → cursor stays at index 0. Then a second
-    // attempt on repo a approves, advancing to b, which approves and clears.
-    plannotatorResults.push({ approved: false, error: "boom" });
-    plannotatorResults.push({ approved: true });
-    plannotatorResults.push({ approved: true });
-    askQueue.push("Uncommitted changes", "Retry", "Uncommitted changes", "Uncommitted changes", "Back to prompt");
-    const result = await showActiveTaskMenu(orchestrator, ctx, "/pp", "tool");
-    expect(result).toBe("");
-    // Retry re-opened repo a (opened twice) before advancing to b; none dropped.
-    expect(plannotatorOpenCwds).toEqual(["/repo/a", "/repo/a", "/repo/b"]);
-    // Both repos ultimately reviewed and the cursor cleared (none silently dropped).
+  it("single-repo review keeps the streamlined flow (needs_changes returns the fix instruction)", async () => {
+    const orchestrator = makeReviewOrchestrator();
+    orchestrator.active.type = "implement";
+    orchestrator.active.state.phase = "implement";
+    orchestrator.active.state.repos = [{ path: "/repo/a", isRoot: true }];
+    orchestrator.active.state.plannotatorCursor = { repoPaths: ["/repo/a"], index: 0 };
+    orchestrator.pi = { exec: vi.fn(async () => ({ code: 0, stdout: "", stderr: "" })) };
+    orchestrator.config = getDefaultConfig();
+
+    plannotatorResults.push({ approved: false, feedback: "fix the thing" });
+    askQueue.push("Uncommitted changes");
+    const first = await showActiveTaskMenu(orchestrator, ctx, "/pp", "tool");
+    expect(first).toContain("Plannotator requested changes");
+    expect(first).toContain("fix the thing");
     expect(orchestrator.active.state.plannotatorCursor).toBeUndefined();
   });
 
-  it("Plannotator error + Skip advances the cursor past the failed repo (#3)", async () => {
+  it("multi-repo review is user-directed: pick a repo, review it, then return to the picker (#3)", async () => {
     const orchestrator = makeCursorOrchestrator();
     plannotatorOpenCwds.length = 0;
-    // Repo a errors; Skip advances to repo b, which approves and clears the cursor.
-    plannotatorResults.push({ approved: false, error: "boom" });
+    // Picker: pick repo a → diff scope → APPROVED → back to picker; pick repo b →
+    // scope → APPROVED → back to picker; Done stops. No auto-advance between repos.
     plannotatorResults.push({ approved: true });
-    askQueue.push("Uncommitted changes", "Skip this repo", "Uncommitted changes", "Back to prompt");
-    await showActiveTaskMenu(orchestrator, ctx, "/pp", "tool");
-    // Skip moved on to repo b (each repo opened exactly once — a not retried, b reached).
+    plannotatorResults.push({ approved: true });
+    askQueue.push("/repo/a (root)", "Uncommitted changes", "/repo/b", "Uncommitted changes", "Done (stop reviewing)", "Back to prompt");
+    const result = await showActiveTaskMenu(orchestrator, ctx, "/pp", "tool");
+    expect(result).toBe("");
     expect(plannotatorOpenCwds).toEqual(["/repo/a", "/repo/b"]);
     expect(orchestrator.active.state.plannotatorCursor).toBeUndefined();
   });
 
-  it("Plannotator error + Done stops and clears the cursor (#3)", async () => {
+  it("multi-repo changes-requested: fixes are applied only when the user explicitly selects the repo (#3)", async () => {
     const orchestrator = makeCursorOrchestrator();
-    plannotatorResults.push({ approved: false, error: "boom" });
-    askQueue.push("Uncommitted changes", "Done (stop reviewing)");
-    await showActiveTaskMenu(orchestrator, ctx, "/pp", "tool");
+    plannotatorOpenCwds.length = 0;
+    // Pick repo a → scope → CHANGES REQUESTED. The loop does NOT auto-apply; it
+    // records the status and returns to the picker. Selecting repo a again hands
+    // off the fix instruction (user-initiated) and exits the menu.
+    plannotatorResults.push({ approved: false, feedback: "tighten it" });
+    askQueue.push("/repo/a (root)", "Uncommitted changes", "/repo/a (root)");
+    const result = await showActiveTaskMenu(orchestrator, ctx, "/pp", "tool");
+    expect(result).toContain("Plannotator requested changes");
+    expect(result).toContain("tighten it");
+    // Only opened once for the review; the second selection applied fixes (no re-open).
+    expect(plannotatorOpenCwds).toEqual(["/repo/a"]);
+    // Cursor persists so /pp returns to the picker after the agent's turn; repo a
+    // stays flagged changes-requested but its pending feedback was consumed.
+    expect(orchestrator.active.state.plannotatorCursor?.status?.["/repo/a"]).toBe("changes-requested");
+    expect(orchestrator.active.state.plannotatorCursor?.feedback?.["/repo/a"]).toBeUndefined();
+    expect(orchestrator.active.state.plannotatorCursor?.repoPaths).toEqual(["/repo/a", "/repo/b"]);
+  });
+
+  it("multi-repo Done immediately stops and clears the cursor (#3)", async () => {
+    const orchestrator = makeCursorOrchestrator();
+    askQueue.push("Done (stop reviewing)", "Back to prompt");
+    const result = await showActiveTaskMenu(orchestrator, ctx, "/pp", "tool");
+    expect(result).toBe("");
     expect(orchestrator.active.state.plannotatorCursor).toBeUndefined();
   });
 

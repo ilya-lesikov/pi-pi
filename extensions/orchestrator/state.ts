@@ -75,10 +75,19 @@ export interface TaskState {
   // the guided/autonomous transition or the autonomous terminal handoff), so the
   // hooks never run twice for the same completion.
   afterImplementRan?: boolean;
-  // Per-repo interleaved Plannotator review cursor (#3a). repoPaths is the ordered
-  // set of repos to review; index is the next repo. Persisted so the loop resumes
-  // on the next /pp after the agent fixes one repo's feedback. Undefined = no loop.
-  plannotatorCursor?: { repoPaths: string[]; index: number };
+  // Per-repo Plannotator review cursor. repoPaths is the ordered set of repos to
+  // review; index is retained for backward compatibility with cursors persisted
+  // before the manual multi-repo flow (used as the resume point). For multi-repo
+  // reviews the user drives repo selection and fix application via a status
+  // picker; `status` records each repo's outcome (absent = unreviewed) and
+  // `feedback` holds pending changes-requested feedback for a repo the user has
+  // not yet applied. Undefined = no active loop.
+  plannotatorCursor?: {
+    repoPaths: string[];
+    index: number;
+    status?: Record<string, "approved" | "changes-requested">;
+    feedback?: Record<string, string>;
+  };
   // The phase the task was in when it was marked done. Recorded so the Resume
   // "reopen a done task" flow (#2) can restore the actual last working phase
   // (done itself carries no phase history). Absent on legacy done tasks.
