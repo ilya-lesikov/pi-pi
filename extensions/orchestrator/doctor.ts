@@ -53,8 +53,10 @@ function flantCacheDir(): string {
 
 function which(bin: string): string | null {
   try {
-    const out = execFileSync("which", [bin], { encoding: "utf-8", stdio: "pipe" }).trim();
-    return out || null;
+    const whichCmd = process.platform === "win32" ? "where" : "which";
+    const out = execFileSync(whichCmd, [bin], { encoding: "utf-8", stdio: "pipe" });
+    const first = out.split("\n").map((line) => line.trim()).find((line) => line.length > 0);
+    return first || null;
   } catch {
     return null;
   }

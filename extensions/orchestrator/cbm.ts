@@ -6,7 +6,10 @@ import { getLogger } from "./log.js";
 
 function findCbmBin(): string | null {
   try {
-    return execFileSync("which", ["codebase-memory-mcp"], { encoding: "utf-8", stdio: "pipe" }).trim() || null;
+    const whichCmd = process.platform === "win32" ? "where" : "which";
+    const out = execFileSync(whichCmd, ["codebase-memory-mcp"], { encoding: "utf-8", stdio: "pipe" });
+    const first = out.split("\n").map((line) => line.trim()).find((line) => line.length > 0);
+    return first || null;
   } catch {
     return null;
   }

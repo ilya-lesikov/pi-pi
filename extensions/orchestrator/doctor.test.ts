@@ -381,6 +381,41 @@ describe("runDoctor", () => {
     expect(report).toContain("gh: /usr/local/bin/gh");
   });
 
+  it("resolves binaries via `where` on win32, taking the first line", async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    const cwd = makeTempDir("pi-pi-doctor-win-");
+    const ctx = createCtx();
+    const orchestrator = {
+      cwd,
+      config: createConfig(),
+      active: null,
+    } as any;
+
+    mocks.execFileSync.mockImplementation((command: string, args: string[]) => {
+      if (command !== "where") throw new Error(`Unexpected command: ${command}`);
+      const bin = args[0];
+      if (bin === "git") return "C:\\Program Files\\Git\\cmd\\git.exe\r\nC:\\other\\git.exe\r\n";
+      if (bin === "gh") return "C:\\bin\\gh.exe\r\n";
+      if (bin === "codebase-memory-mcp") throw new Error("INFO: Could not find files");
+      if (bin === "sg") throw new Error("INFO: Could not find files");
+      if (bin === "node") return "C:\\Program Files\\nodejs\\node.exe\r\n";
+      if (bin === "npm") return "C:\\Program Files\\nodejs\\npm.cmd\r\n";
+      throw new Error(`${bin} not found`);
+    });
+
+    try {
+      await runDoctor(orchestrator, ctx);
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    }
+
+    const [report] = ctx.ui.notify.mock.calls[0] as [string, string];
+    expect(report).toContain("git: C:\\Program Files\\Git\\cmd\\git.exe");
+    expect(report).not.toContain("C:\\other\\git.exe");
+    expect(report).toContain("gh: C:\\bin\\gh.exe");
+  });
+
   it("checks current working directory as repo when no task is active", async () => {
     const cwd = makeTempDir("pi-pi-doctor-cwd-repo-");
     mkdirSync(join(cwd, ".git"), { recursive: true });
