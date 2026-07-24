@@ -49,12 +49,30 @@ function extractFromTar(tarBytes, wantPath) {
   return null;
 }
 
+// Run `npm pack` without depending on PATH/PATHEXT resolution of `npm`, which on
+// Windows is `npm.cmd` and cannot be spawned by execFileSync without a shell
+// (Node rejects .cmd without shell:true). In a lifecycle script npm exports
+// npm_execpath (the CLI's JS entry); run it with the current node. Fall back to a
+// shell-resolved `npm`/`npm.cmd` only if that env var is somehow absent.
+function runNpmPack(destDir) {
+  const npmCli = process.env.npm_execpath;
+  if (npmCli) {
+    execFileSync(process.execPath, [npmCli, "pack", "@plannotator/pi-extension", "--pack-destination", destDir, "--silent"], {
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+    return;
+  }
+  const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
+  execFileSync(npmCmd, ["pack", "@plannotator/pi-extension", "--pack-destination", destDir, "--silent"], {
+    stdio: ["ignore", "ignore", "ignore"],
+    shell: true,
+  });
+}
+
 function extractHtmlFallback() {
   const tmp = mkdtempSync(join(tmpdir(), "pi-pi-plannotator-"));
   try {
-    execFileSync("npm", ["pack", "@plannotator/pi-extension", "--pack-destination", tmp, "--silent"], {
-      stdio: ["ignore", "ignore", "ignore"],
-    });
+    runNpmPack(tmp);
     const tgz = readdirSync(tmp).find((name) => name.endsWith(".tgz"));
     if (!tgz) fail("npm pack produced no tarball for @plannotator/pi-extension");
     const tarBytes = gunzipSync(readFileSync(join(tmp, tgz)));

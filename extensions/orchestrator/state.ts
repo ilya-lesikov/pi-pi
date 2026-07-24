@@ -82,12 +82,11 @@ export interface TaskState {
   reconciledPhase?: string;
   reconcilePending?: boolean;
   // Per-repo Plannotator review cursor. repoPaths is the ordered set of repos to
-  // review; index is retained for backward compatibility with cursors persisted
-  // before the manual multi-repo flow (used as the resume point). For multi-repo
-  // reviews the user drives repo selection and fix application via a status
-  // picker; `status` records each repo's outcome (absent = unreviewed) and
-  // `feedback` holds pending changes-requested feedback for a repo the user has
-  // not yet applied. Undefined = no active loop.
+  // review; index is read only by the single-repo path (retained for
+  // backward-compatible deserialization of older cursors). For multi-repo reviews
+  // the user drives repo selection via a status picker; `status` records each
+  // repo's outcome (absent = unreviewed) and `feedback` holds pending
+  // changes-requested feedback not yet applied. Undefined = no active loop.
   plannotatorCursor?: {
     repoPaths: string[];
     index: number;

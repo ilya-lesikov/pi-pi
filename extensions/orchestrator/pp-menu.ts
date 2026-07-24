@@ -3190,7 +3190,7 @@ async function showAutonomousPhaseSettings(
 
   while (true) {
     const reviewPreset = phaseConfig.reviewPreset ?? defaultAutonomousReviewPreset(type, phase);
-    const maxReview = phaseConfig.maxReviewPasses >= 999 ? "No limit" : String(phaseConfig.maxReviewPasses);
+    const maxReview = phaseConfig.maxReviewPasses >= 999 ? "No limit" : phaseConfig.maxReviewPasses === 0 ? "0 (disabled)" : String(phaseConfig.maxReviewPasses);
     const options: OptionInput[] = [
       opt(`Review preset: ${reviewPreset}`, "Pick which reviewer group runs in this phase"),
     ];
