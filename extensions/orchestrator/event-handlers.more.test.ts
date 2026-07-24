@@ -615,6 +615,7 @@ describe("pp_phase_complete tool", () => {
     orchestrator.active.state.phase = "plan";
     orchestrator.active.state.step = "llm_work";
     orchestrator.active.state.mode = "autonomous";
+    orchestrator.active.state.reconciledPhase = "plan";
     const transitionSpy = vi.fn(async () => ({ ok: true as const }));
     orchestrator.transitionToNextPhase = transitionSpy;
     registerOrchestratorToolsForTest(orchestrator);
@@ -629,6 +630,7 @@ describe("pp_phase_complete tool", () => {
     orchestrator.active.state.phase = "plan";
     orchestrator.active.state.step = "llm_work";
     orchestrator.active.state.mode = "autonomous";
+    orchestrator.active.state.reconciledPhase = "plan";
     orchestrator.transitionToNextPhase = async () => ({ ok: false, error: "boom" });
     registerOrchestratorToolsForTest(orchestrator);
     const tool = getTool("pp_phase_complete");
@@ -640,9 +642,62 @@ describe("pp_phase_complete tool", () => {
     orchestrator.active = makeActiveTask();
     orchestrator.active.state.phase = "implement";
     orchestrator.active.state.step = "llm_work";
+    orchestrator.active.state.reconciledPhase = "implement";
     registerOrchestratorToolsForTest(orchestrator);
     const tool = getTool("pp_phase_complete");
     const result = await tool.execute("id", { summary: "s" }, undefined, undefined, ctxWithUi());
+    expect(result.content[0].text).toBe("MENU_RESULT");
+  });
+
+  it("prompts to reconcile on the first call of a phase, then proceeds on the re-call", async () => {
+    orchestrator.active = makeActiveTask();
+    orchestrator.active.state.phase = "implement";
+    orchestrator.active.state.step = "llm_work";
+    const transitionSpy = vi.fn(async () => ({ ok: true as const }));
+    orchestrator.transitionToNextPhase = transitionSpy;
+    registerOrchestratorToolsForTest(orchestrator);
+    const tool = getTool("pp_phase_complete");
+
+    const first = await tool.execute("id", { summary: "s" }, undefined, undefined, ctxWithUi());
+    expect(first.content[0].text).toContain("reconcile the task's state files");
+    expect(first.isError).toBeUndefined();
+    expect(transitionSpy).not.toHaveBeenCalled();
+    expect(orchestrator.active.state.phase).toBe("implement");
+    expect(orchestrator.active.state.reviewCycle).toBeNull();
+
+    const second = await tool.execute("id", { summary: "s" }, undefined, undefined, ctxWithUi());
+    expect(second.content[0].text).toBe("MENU_RESULT");
+  });
+
+  it("an autonomous run reconciles once then advances on the immediate re-call (no loop)", async () => {
+    orchestrator.active = makeActiveTask();
+    orchestrator.active.state.phase = "plan";
+    orchestrator.active.state.step = "llm_work";
+    orchestrator.active.state.mode = "autonomous";
+    const transitionSpy = vi.fn(async () => ({ ok: true as const }));
+    orchestrator.transitionToNextPhase = transitionSpy;
+    registerOrchestratorToolsForTest(orchestrator);
+    const tool = getTool("pp_phase_complete");
+
+    const first = await tool.execute("id", { summary: "s" }, undefined, undefined, ctxWithUi());
+    expect(first.content[0].text).toContain("reconcile the task's state files");
+    expect(transitionSpy).not.toHaveBeenCalled();
+
+    const second = await tool.execute("id", { summary: "s" }, undefined, undefined, ctxWithUi());
+    expect(second.content[0].text).toBe("");
+    expect(transitionSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("never gates a quick-phase task", async () => {
+    orchestrator.active = makeActiveTask();
+    orchestrator.active.type = "quick";
+    orchestrator.active.state.phase = "quick";
+    orchestrator.active.state.step = "llm_work";
+    registerOrchestratorToolsForTest(orchestrator);
+    const tool = getTool("pp_phase_complete");
+
+    const result = await tool.execute("id", { summary: "s" }, undefined, undefined, ctxWithUi());
+    expect(result.content[0].text).not.toContain("reconcile the task's state files");
     expect(result.content[0].text).toBe("MENU_RESULT");
   });
 });

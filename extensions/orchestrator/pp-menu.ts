@@ -32,6 +32,7 @@ import { detectDefaultBranch, enterReviewCycle, finalizeReviewCycle, isReviewCyc
 import { Orchestrator } from "./orchestrator.js";
 import { cancelPendingPlannotatorWait, openPlannotator, openAnnotateReview, waitForPlannotatorResult } from "./plannotator.js";
 import { advanceBanner } from "./messages.js";
+import { openAssumptionsBanner } from "./assumptions.js";
 import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
 import { spawnCodeReviewers } from "./phases/review.js";
 import { spawnBrainstormReviewers } from "./phases/brainstorm.js";
@@ -246,6 +247,16 @@ function setStep(orchestrator: Orchestrator, step: string): void {
   saveTask(orchestrator.active.dir, orchestrator.active.state);
 }
 
+// Pause/finish run synchronously from the menu and abort the main agent, so they
+// cannot make it reconcile state files in-line. When the current phase has not
+// been reconciled, flag it pending so the next resume forces the one-time
+// reconcile prompt before any spawn and the /pp gate can surface the staleness.
+function markReconcilePendingIfStale(state: { phase: string; reconciledPhase?: string; reconcilePending?: boolean }): void {
+  if (state.phase !== "quick" && state.reconciledPhase !== state.phase) {
+    state.reconcilePending = true;
+  }
+}
+
 // Leaving a Plannotator/review flow (stop, exhaust, or cancel) must return the
 // task's step to an interactive value. Otherwise a step left at "await_reviewers"
 // keeps transitionController.isRunning() false, which hides the Review/Continue
@@ -370,6 +381,13 @@ async function abortCurrentWork(orchestrator: Orchestrator, ctx: any): Promise<v
 async function pauseTask(orchestrator: Orchestrator, ctx: any): Promise<string> {
   if (!orchestrator.active) return "No active task.";
 
+  // A synchronous menu handler cannot make the (possibly mid-turn) main agent
+  // reconcile its state files before we abort it. If the current phase has not
+  // been reconciled, flag it so the next resume forces the reconcile prompt
+  // before any spawn and the /pp gate can surface the staleness. Deterministic
+  // and non-blocking: we never wait on the agent here.
+  markReconcilePendingIfStale(orchestrator.active.state);
+
   cancelPendingPlannotatorWait(orchestrator);
   orchestrator.abortAllSubagents();
   orchestrator.transitionController.abortMainAgent(ctx.abort?.bind(ctx));
@@ -412,6 +430,11 @@ async function finishTask(orchestrator: Orchestrator, ctx: any): Promise<string>
     ctx.ui.notify(MISSING_FINAL_PASS_ANCHORS, "warning");
     return MISSING_FINAL_PASS_ANCHORS;
   }
+
+  // Same idle-vs-mid-turn split as pause: we abort the agent below, so we cannot
+  // reconcile in-line. Flag a stale phase (moot once the task closes, but keeps
+  // the marker consistent if the finish is later aborted/resumed).
+  markReconcilePendingIfStale(orchestrator.active.state);
 
   cancelPendingPlannotatorWait(orchestrator);
   orchestrator.abortAllSubagents();
@@ -4060,6 +4083,11 @@ export async function showActiveTaskMenu(
     options.push(opt("Back to prompt", "Return to the prompt and keep working"));
 
     const headerLines = [`/pp\n\nTask: ${task.type}\nPhase: ${phase}`];
+    if (task.state.reconcilePending) {
+      headerLines.push("\n\n⚠ State files may be stale — reconcile pending; they'll be refreshed before the next review/planner run.");
+    }
+    const assumptionsBanner = openAssumptionsBanner(task.dir);
+    if (assumptionsBanner) headerLines.push(`\n\n${assumptionsBanner}`);
     if (summary !== "/pp") headerLines.push(`\n\n${summary}`);
     const menuTitle = headerLines.join("");
     const { choice, cancelReason } = await selectOptionCancelable(ctx, menuTitle, options);

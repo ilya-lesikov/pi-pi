@@ -1010,6 +1010,42 @@ function registerCommitTool(orchestrator: Orchestrator): void {
   });
 }
 
+// State-freshness ACK protocol. Returns a reconcile directive to hand back to
+// the main agent (the single writer) the FIRST time pp_phase_complete is called
+// for a phase, then null on the re-call (the acknowledgement) so the caller
+// proceeds to spawn/advance. `reconcilePending` (set by a pause/complete that
+// could not reconcile in-line) forces the prompt again on resume. Bounded to one
+// extra round-trip per phase: a legitimate "nothing changed" re-call proceeds,
+// so autonomous runs never loop. Read-only handoff phases still reconcile before
+// advancing since every advance flows through pp_phase_complete.
+function maybePromptReconcile(orchestrator: Orchestrator): string | null {
+  const active = orchestrator.active;
+  if (!active) return null;
+  const phase = active.state.phase;
+  if (phase === "quick") return null;
+
+  if (active.state.reconciledPhase === phase && !active.state.reconcilePending) {
+    return null;
+  }
+  const alreadyPrompted = active.state.reconcilePromptedPhase === phase && !active.state.reconcilePending;
+  if (alreadyPrompted) {
+    active.state.reconciledPhase = phase;
+    active.state.reconcilePending = false;
+    saveTask(active.dir, active.state);
+    return null;
+  }
+  active.state.reconcilePromptedPhase = phase;
+  active.state.reconcilePending = false;
+  saveTask(active.dir, active.state);
+  return (
+    "Before finishing this phase, reconcile the task's state files with everything you've learned so far: " +
+    "update USER_REQUEST.md, RESEARCH.md, the active synthesized plan, and any artifacts/*.md you own so a " +
+    "freshly-spawned planner or reviewer (which only sees these files) is not working from a stale snapshot. " +
+    "Use pp_write_state_file / pp_edit_state_file. Then call pp_phase_complete again to proceed — if nothing " +
+    "needed changing, just call it again. (This one-time reconcile check runs once per phase.)"
+  );
+}
+
 function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
   const pi = orchestrator.pi;
 
@@ -1034,6 +1070,17 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
         const count = orchestrator.spawnedAgentIds.size + orchestrator.pendingSubagentSpawns;
         return { content: [{ type: "text" as const, text: `${count} subagent(s) still running. Wait for them to complete before calling pp_phase_complete.` }], isError: true as const, details: {} };
       }
+
+      // State-freshness reconcile gate (single-writer: the main agent, which is
+      // live and driving here). Before this phase spawns planners/reviewers or
+      // advances, the agent is prompted ONCE to reconcile the task's state files;
+      // the re-call of pp_phase_complete after the prompt is the acknowledgement.
+      // Bounded to one extra round-trip per phase so autonomous runs never loop.
+      const reconcileDirective = maybePromptReconcile(orchestrator);
+      if (reconcileDirective) {
+        return { content: [{ type: "text" as const, text: reconcileDirective }], details: {} };
+      }
+
       // Gate on the effective PHASE mode, not the task mode: brainstorm/debug/
       // review are always user-driven even for an autonomous task, so they must
       // fall through to the guided menu path below rather than auto-advancing.
