@@ -718,6 +718,80 @@ describe("review cycle lifecycle", () => {
     expect(result.content[0].text).toContain("continue");
     expect(orchestrator.active!.state.reviewCycle).toBeNull();
   });
+
+  it("manual /pp Review on an un-reconciled phase warns and cancels without spawning", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "stale review cancel");
+    const taskDir = orchestrator.active!.dir;
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "llm_work";
+    // No reconciledPhase stamp → the phase is stale; the manual Review path must warn.
+    saveTask(taskDir, orchestrator.active!.state);
+    const plansDir = join(taskDir, "plans");
+    mkdirSync(plansDir, { recursive: true });
+    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000)}_synthesized.md`), makeValidPlan(["- [x] P1 — Done when: done"]), "utf-8");
+
+    expectReviewAuto(menu);
+    menu.expect({ question: /may not include the agent's latest findings/, options: { include: ["Review anyway", "Cancel"] }, choose: "Cancel" });
+    menu.expect({ question: "Review", options: { include: [m.autoReview] }, choose: "Back" });
+    menu.expect({ question: m.anyTaskMenu, options: { include: ["Back to prompt"] }, choose: "Back to prompt" });
+
+    const pp = getCommand(pi, "pp");
+    await pp(undefined, ctx);
+
+    expect(orchestrator.active!.state.reviewCycle).toBeNull();
+    expect(orchestrator.active!.state.step).toBe("llm_work");
+  });
+
+  it("manual /pp Review 'Review anyway' proceeds and keeps reconcilePending for the next agent turn", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "stale review proceed");
+    orchestrator.config = {
+      ...orchestrator.config,
+      agents: {
+        ...orchestrator.config.agents,
+        subagents: {
+          ...orchestrator.config.agents.subagents,
+          presetGroups: {
+            ...orchestrator.config.agents.subagents.presetGroups,
+            codeReviewers: {
+              ...orchestrator.config.agents.subagents.presetGroups.codeReviewers,
+              presets: {
+                ...orchestrator.config.agents.subagents.presetGroups.codeReviewers.presets,
+                regular: { enabled: true, agents: {} },
+              },
+            },
+          },
+        },
+      },
+    } as any;
+    const taskDir = orchestrator.active!.dir;
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "llm_work";
+    saveTask(taskDir, orchestrator.active!.state);
+    const plansDir = join(taskDir, "plans");
+    mkdirSync(plansDir, { recursive: true });
+    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000)}_synthesized.md`), makeValidPlan(["- [x] P1 — Done when: done"]), "utf-8");
+
+    // Zero configured agents under the enabled preset → after confirming, the flow
+    // notifies "no reviewers" and loops back, letting us assert the confirm's effect
+    // (reconcilePending stays set) without a real reviewer spawn.
+    expectReviewAuto(menu);
+    menu.expect({ question: /may not include the agent's latest findings/, options: { include: ["Review anyway"] }, choose: "Review anyway" });
+    menu.expect({ question: "Review", options: { include: [m.autoReview] }, choose: "Back" });
+    menu.expect({ question: m.anyTaskMenu, options: { include: ["Back to prompt"] }, choose: "Back to prompt" });
+
+    const pp = getCommand(pi, "pp");
+    await pp(undefined, ctx);
+
+    expect(loadTask(taskDir).reconcilePending).toBe(true);
+  });
 });
 
 describe("subagent instrumentation", () => {
@@ -4473,7 +4547,7 @@ describe("menu contracts", () => {
     expect(loadTask(taskDir).reconcilePending).toBe(true);
   });
 
-  it("pausing an already-reconciled phase does NOT flag reconcilePending", async () => {
+  it("pausing an already-reconciled phase STILL flags reconcilePending (later work may have made it stale)", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);
     const ctx = makeCtx();
@@ -4488,7 +4562,7 @@ describe("menu contracts", () => {
     await pp(undefined, ctx);
 
     expect(orchestrator.active).toBeNull();
-    expect(loadTask(taskDir).reconcilePending ?? false).toBe(false);
+    expect(loadTask(taskDir).reconcilePending).toBe(true);
   });
 
   it("a resumed task with reconcilePending re-prompts the reconcile gate before advancing", async () => {

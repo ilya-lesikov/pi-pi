@@ -75,15 +75,9 @@ export interface TaskState {
   // the guided/autonomous transition or the autonomous terminal handoff), so the
   // hooks never run twice for the same completion.
   afterImplementRan?: boolean;
-  // State-freshness reconciliation (single-writer: main agent only). Before
-  // planner/reviewer spawn and on phase completion the agent is prompted ONCE
-  // per phase to reconcile the task's state files with what it learned; the
-  // re-call of pp_phase_complete after that prompt IS the acknowledgement.
-  // reconcilePromptedPhase = the phase for which the one-time prompt was issued;
-  // reconciledPhase = the phase already reconciled (skip the prompt). Both absent
-  // on legacy tasks (treated as un-reconciled). reconcilePending is set when a
-  // pause/complete could not reconcile in-line (agent mid-turn); the next resume
-  // forces the reconcile prompt before any spawn and the /pp gate flags staleness.
+  // State-freshness reconcile markers (see maybePromptReconcile). Absent on legacy
+  // tasks. reconcilePending forces a re-prompt after a pause/complete that could
+  // not reconcile in-line.
   reconcilePromptedPhase?: string;
   reconciledPhase?: string;
   reconcilePending?: boolean;

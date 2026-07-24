@@ -1010,14 +1010,9 @@ function registerCommitTool(orchestrator: Orchestrator): void {
   });
 }
 
-// State-freshness ACK protocol. Returns a reconcile directive to hand back to
-// the main agent (the single writer) the FIRST time pp_phase_complete is called
-// for a phase, then null on the re-call (the acknowledgement) so the caller
-// proceeds to spawn/advance. `reconcilePending` (set by a pause/complete that
-// could not reconcile in-line) forces the prompt again on resume. Bounded to one
-// extra round-trip per phase: a legitimate "nothing changed" re-call proceeds,
-// so autonomous runs never loop. Read-only handoff phases still reconcile before
-// advancing since every advance flows through pp_phase_complete.
+// Returns a one-time reconcile directive on the first pp_phase_complete of a
+// phase, null on the acknowledging re-call. Bounded to one round-trip so
+// autonomous runs never loop.
 function maybePromptReconcile(orchestrator: Orchestrator): string | null {
   const active = orchestrator.active;
   if (!active) return null;
@@ -1071,11 +1066,6 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
         return { content: [{ type: "text" as const, text: `${count} subagent(s) still running. Wait for them to complete before calling pp_phase_complete.` }], isError: true as const, details: {} };
       }
 
-      // State-freshness reconcile gate (single-writer: the main agent, which is
-      // live and driving here). Before this phase spawns planners/reviewers or
-      // advances, the agent is prompted ONCE to reconcile the task's state files;
-      // the re-call of pp_phase_complete after the prompt is the acknowledgement.
-      // Bounded to one extra round-trip per phase so autonomous runs never loop.
       const reconcileDirective = maybePromptReconcile(orchestrator);
       if (reconcileDirective) {
         return { content: [{ type: "text" as const, text: reconcileDirective }], details: {} };

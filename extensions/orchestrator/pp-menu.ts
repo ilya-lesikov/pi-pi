@@ -247,14 +247,36 @@ function setStep(orchestrator: Orchestrator, step: string): void {
   saveTask(orchestrator.active.dir, orchestrator.active.state);
 }
 
-// Pause/finish run synchronously from the menu and abort the main agent, so they
-// cannot make it reconcile state files in-line. When the current phase has not
-// been reconciled, flag it pending so the next resume forces the one-time
-// reconcile prompt before any spawn and the /pp gate can surface the staleness.
-function markReconcilePendingIfStale(state: { phase: string; reconciledPhase?: string; reconcilePending?: boolean }): void {
-  if (state.phase !== "quick" && state.reconciledPhase !== state.phase) {
+// Pause/finish abort the agent, so they cannot reconcile in-line; flag pending so
+// the next resume re-prompts. Set unconditionally (not gated on reconciledPhase):
+// work done AFTER a phase was reconciled would otherwise resume from a stale stamp.
+function flagReconcilePending(state: { phase: string; reconcilePending?: boolean }): void {
+  if (state.phase !== "quick") {
     state.reconcilePending = true;
   }
+}
+
+// Manual /pp → Review launches reviewer subagents while the main agent is idle, so
+// the pp_phase_complete reconcile gate never ran and cannot run (no live turn to
+// prompt). Reviewers read the on-disk state files at spawn, which may lag the
+// agent's latest work. Guard just those synchronous automated-review launches with
+// a confirm; the guided flow reaches Review right after pp_phase_complete
+// reconciled (reconciledPhase === phase, not pending), so it never prompts.
+async function confirmReviewDespiteStaleState(orchestrator: Orchestrator, ctx: any): Promise<boolean> {
+  const state = orchestrator.active?.state;
+  if (!state) return true;
+  const stale = state.reconcilePending || state.reconciledPhase !== state.phase;
+  if (!stale) return true;
+  const choice = await selectOption(ctx, "Reviewers will use the current on-disk state files, which may not include the agent's latest findings. Continue?", [
+    opt("Review anyway", "Spawn reviewers against the on-disk state files"),
+    opt("Cancel", "Return to the menu without reviewing"),
+  ]);
+  if (choice !== "Review anyway") return false;
+  // The manual bypass must not count as a fresh reconciliation: keep it pending so
+  // the next live-agent pp_phase_complete re-prompts.
+  state.reconcilePending = true;
+  saveTask(orchestrator.active!.dir, state);
+  return true;
 }
 
 // Leaving a Plannotator/review flow (stop, exhaust, or cancel) must return the
@@ -381,12 +403,7 @@ async function abortCurrentWork(orchestrator: Orchestrator, ctx: any): Promise<v
 async function pauseTask(orchestrator: Orchestrator, ctx: any): Promise<string> {
   if (!orchestrator.active) return "No active task.";
 
-  // A synchronous menu handler cannot make the (possibly mid-turn) main agent
-  // reconcile its state files before we abort it. If the current phase has not
-  // been reconciled, flag it so the next resume forces the reconcile prompt
-  // before any spawn and the /pp gate can surface the staleness. Deterministic
-  // and non-blocking: we never wait on the agent here.
-  markReconcilePendingIfStale(orchestrator.active.state);
+  flagReconcilePending(orchestrator.active.state);
 
   cancelPendingPlannotatorWait(orchestrator);
   orchestrator.abortAllSubagents();
@@ -431,10 +448,7 @@ async function finishTask(orchestrator: Orchestrator, ctx: any): Promise<string>
     return MISSING_FINAL_PASS_ANCHORS;
   }
 
-  // Same idle-vs-mid-turn split as pause: we abort the agent below, so we cannot
-  // reconcile in-line. Flag a stale phase (moot once the task closes, but keeps
-  // the marker consistent if the finish is later aborted/resumed).
-  markReconcilePendingIfStale(orchestrator.active.state);
+  flagReconcilePending(orchestrator.active.state);
 
   cancelPendingPlannotatorWait(orchestrator);
   orchestrator.abortAllSubagents();
@@ -4385,6 +4399,7 @@ export async function showActiveTaskMenu(
 
       const reviewPreset = await pickPreset(ctx, orchestrator, getReviewPresetGroup(phase), "Review preset");
       if (!reviewPreset) continue;
+      if (!(await confirmReviewDespiteStaleState(orchestrator, ctx))) continue;
       finalizeReviewCycle(task);
       if (!hasEnabledReviewers(orchestrator, reviewPreset)) {
         const reviewGroup = reviewPresetGroupForPhase(phase);
