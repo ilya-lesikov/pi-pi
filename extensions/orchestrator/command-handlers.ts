@@ -6,6 +6,7 @@ import { spawnPlanners } from "./phases/planning.js";
 import { Orchestrator } from "./orchestrator.js";
 import { groupFilesByRepo } from "./repo-utils.js";
 import { getEffectiveMode, saveTask } from "./state.js";
+import { terminalAssumptionsSummary } from "./assumptions.js";
 import { getLogger } from "./log.js";
 import { handleSpawnResult } from "./spawn-cleanup.js";
 
@@ -110,6 +111,13 @@ export async function transitionToNextPhase(
   if (next === "done") {
     const name = orchestrator.active.description;
     const type = orchestrator.active.type;
+
+    // Terminal assumptions summary (#B/e): an autonomous run can reach done without
+    // ever hitting a /pp gate (where the banner surfaces), so emit the full list of
+    // recorded assumptions once here. Read before cleanup while the task dir is live.
+    if (getEffectiveMode(orchestrator.active.state) === "autonomous") {
+      ctx.ui.notify(terminalAssumptionsSummary(orchestrator.active.dir), "info");
+    }
 
     orchestrator.abortAllSubagents();
     unregisterAgentDefinitions(orchestrator.pi);

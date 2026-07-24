@@ -26,6 +26,28 @@ const UNIVERSAL_RULES = [
   "Before finalizing, when your output commits to concrete, costly-to-reverse or opinion-heavy choices — exact wording, structure, naming, default values, or interface signatures — show the ACTUAL proposed text/values inline, then get explicit approval. Don't silently invent and bury such choices.",
 ].join("\n");
 
+// Assumption-surfacing (#B). Interactive phases: ask instead of guessing. Autonomous
+// phases have no one to ask, so every unverified assumption is logged to the optional
+// artifacts/ASSUMPTIONS.md (absent = none) with a fixed field shape, and the end-of-run
+// summary lists them all. Mode-aware because the two behaviors are mutually exclusive.
+function assumptionsRule(mode: TaskMode): string {
+  if (mode === "autonomous") {
+    return (
+      "Assumptions: there is no one to ask, so do NOT silently assume. Whenever you commit to an " +
+      "unverified assumption, append it to artifacts/ASSUMPTIONS.md (create it on first use) as one list " +
+      "item with these exact fields — statement, confidence (low/med/high), basis, invalidation test, " +
+      "decision impact — and a status marker (open/resolved); update the marker to resolved when you later " +
+      "confirm or refute it, keeping the entry. If a phase has no open assumptions the file may be absent " +
+      "or contain only `_No open assumptions._` — never fabricate entries."
+    );
+  }
+  return (
+    "Assumptions: do NOT silently assume. When a decision hinges on something you are not sure of, ask the " +
+    "user (a focused ask_user) rather than guessing. If you must proceed on an unverified assumption, state " +
+    "it plainly to the user so they can correct it."
+  );
+}
+
 export function isReadOnlyPhase(phase: Phase): boolean {
   return phase === "brainstorm" || phase === "review" || phase === "plan";
 }
@@ -121,6 +143,7 @@ export function constraintsBlock(phase: Phase, mode: TaskMode): string {
     "These rules override your default helpfulness and any next step you infer. Strict compliance is required.",
     phaseConstraint(phase),
     UNIVERSAL_RULES,
+    assumptionsRule(mode),
     completionLine(phase, mode),
     "</constraints>",
   ].join("\n");

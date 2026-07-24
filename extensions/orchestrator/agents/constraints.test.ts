@@ -117,4 +117,25 @@ describe("constraintsBlock", () => {
       expect(block).toContain("e.g. an auto-review loop");
     }
   });
+
+  it("guided phases tell the agent to ask rather than silently assume", () => {
+    for (const phase of ["brainstorm", "plan", "implement", "review"] as const) {
+      const block = constraintsBlock(phase, "guided");
+      expect(block).toContain("do NOT silently assume");
+      expect(block).toContain("ask the");
+      expect(block).not.toContain("artifacts/ASSUMPTIONS.md");
+    }
+  });
+
+  it("autonomous phases record unverified assumptions in artifacts/ASSUMPTIONS.md with the fixed fields", () => {
+    for (const phase of ["brainstorm", "plan", "implement", "review"] as const) {
+      const block = constraintsBlock(phase, "autonomous");
+      expect(block).toContain("artifacts/ASSUMPTIONS.md");
+      for (const field of ["statement", "confidence", "basis", "invalidation test", "decision impact"]) {
+        expect(block).toContain(field);
+      }
+      expect(block).toContain("_No open assumptions._");
+      expect(block).toContain("never fabricate");
+    }
+  });
 });
