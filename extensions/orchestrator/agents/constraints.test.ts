@@ -58,6 +58,18 @@ describe("completionLine", () => {
   it("autonomous phases do not emit the prose closing block", () => {
     expect(completionLine("brainstorm", "autonomous")).not.toContain("Advance via the /pp menu");
   });
+
+  it("quick phase does not self-complete for a mere question/answer", () => {
+    const line = completionLine("quick", "guided");
+    expect(line).toContain("ONLY after you have actually performed the requested work");
+    expect(line).toMatch(/do NOT call pp_phase_complete/i);
+    expect(line).toContain("/pp");
+  });
+
+  it("quick phase still self-completes after real work", () => {
+    const line = completionLine("quick", "guided");
+    expect(line).toContain("call pp_phase_complete");
+  });
 });
 
 describe("closingBlockInstruction", () => {

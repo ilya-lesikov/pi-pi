@@ -91,7 +91,7 @@ export function closingBlockInstruction(phase: Phase): string {
 
 export function completionLine(phase: Phase, mode: TaskMode): string {
   if (phase === "quick") {
-    return "When the user's request is complete, call pp_phase_complete. Do NOT stop and wait for the user before then.";
+    return "Call pp_phase_complete ONLY after you have actually performed the requested work (an edit, a command, a produced artifact). If the turn merely answered a question or provided information with no action taken, do NOT call pp_phase_complete — end the turn with your answer, at most suggesting the user run /pp if they want to start a tracked task. When you did do the requested work, call pp_phase_complete and do NOT stop to wait for the user before then.";
   }
   if (mode === "autonomous") {
     return "There is no user driving this phase. The moment its work is complete, call pp_phase_complete — do NOT pause, ask for confirmation, or wait for input. Never end a turn with prose: every turn ends in a tool call.";

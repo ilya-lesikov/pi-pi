@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { getDefaultConfig, resolvePreset } from "../config.js";
-import { delegationBlock, toolsBlock, parseToolNames } from "./tool-routing.js";
+import { delegationBlock, toolsBlock, parseToolNames, PRINCIPLES_BLOCK } from "./tool-routing.js";
 import { createAdvisorAgent } from "./advisor.js";
 import { createDeepDebuggerAgent } from "./deep-debugger.js";
 import { createReviewerAgent } from "./reviewer.js";
@@ -58,6 +58,39 @@ describe("toolsBlock only advertises granted tools", () => {
     expect(block).toContain("pp_register_repo");
     expect(block).toContain("NEVER grep for definitions");
     expect(block).toContain("cbm_search");
+  });
+});
+
+describe("PRINCIPLES_BLOCK code-style rules", () => {
+  it("forbids private-symbol comments and volatile-detail comments", () => {
+    expect(PRINCIPLES_BLOCK).toContain("NEVER comment a private (non-exported) symbol");
+    expect(PRINCIPLES_BLOCK).toContain("volatile detail");
+  });
+
+  it("prefers larger functions / inlining single-use helpers", () => {
+    expect(PRINCIPLES_BLOCK).toContain("Prefer fewer, larger functions");
+    expect(PRINCIPLES_BLOCK).toContain("inline it");
+  });
+
+  it("keeps symbols as private as possible", () => {
+    expect(PRINCIPLES_BLOCK).toContain("Keep everything as private as possible");
+  });
+
+  it("is embedded in every agent factory prompt", () => {
+    const planners = resolvePreset(config, "planners");
+    const artifacts = { userRequest: "u", research: "r", manifest: [] as { title: string; path: string }[] };
+    const factories = [
+      createAdvisorAgent({ model: "anthropic/claude-fable-latest", thinking: "high" }),
+      createDeepDebuggerAgent({ model: "openai/gpt-latest", thinking: "high" }),
+      createReviewerAgent({ model: "openai/gpt-latest", thinking: "high" }),
+      createTaskAgent(config),
+      createPlannerAgent("opus", planners, artifacts, "/out.md", []),
+      createBrainstormReviewerAgent("opus", resolvePreset(config, "brainstormReviewers"), artifacts, "/out.md", []),
+    ];
+    for (const f of factories) {
+      expect(f.prompt).toContain("Keep everything as private as possible");
+      expect(f.prompt).toContain("NEVER comment a private (non-exported) symbol");
+    }
   });
 });
 
