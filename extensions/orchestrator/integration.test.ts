@@ -1991,6 +1991,45 @@ describe("task modes and quick task", () => {
     expect(finalState.reviewPassByKind?.implement?.auto).toBe(1);
   });
 
+  it("autonomous review disabled with maxReviewPasses:0 advances without spawning reviewers", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "implement", undefined, undefined, "autonomous");
+    const taskDir = orchestrator.active!.dir;
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "llm_work";
+    orchestrator.active!.state.reviewPass = 0;
+    orchestrator.active!.state.reviewPassByKind = {};
+    orchestrator.active!.state.autonomousConfig = {
+      phases: { implement: { reviewPreset: "regular", maxReviewPasses: 0 } },
+    };
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+    const plansDir = join(taskDir, "plans");
+    mkdirSync(plansDir, { recursive: true });
+    writeFileSync(
+      join(plansDir, "1_synthesized.md"),
+      makeValidPlan(["- [x] P1. Done item — Done when: synthesized plan is fully checked"]),
+      "utf-8",
+    );
+
+    const ppPhaseComplete = getTool(pi, "pp_phase_complete");
+    // implement→done is the terminal handoff, so the guided menu opens instead of
+    // auto-completing; the key assertion is that NO review cycle was ever entered.
+    expectImplementToDone(menu);
+    const result = await ppPhaseComplete.execute("call-1", { summary: "done" }, undefined, undefined, ctx);
+
+    expect(result.content[0].text).not.toMatch(/Reviews are running|review cycle/i);
+    expect(orchestrator.active).toBeNull();
+    const finalState = loadTask(taskDir);
+    expect(finalState.phase).toBe("done");
+    expect(finalState.reviewCycle).toBeNull();
+    // No auto review pass ran because review was disabled.
+    expect(finalState.reviewPassByKind?.implement?.auto ?? 0).toBe(0);
+  });
+
   it("autonomous PLAN review cycle: apply feedback (clean approve) advances to implement", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);

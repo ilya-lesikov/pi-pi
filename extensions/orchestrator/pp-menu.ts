@@ -2924,7 +2924,7 @@ async function showMaxConcurrentSubagentsSetting(orchestrator: Orchestrator, ctx
     if (!action || action === "Back") break;
     if (action === "Edit") {
       const value = await pickMaxConcurrentSubagents(ctx, current);
-      if (value === null) continue;
+      if (value === null || value === current) continue;
       applyScopeChoice(orchestrator, MAX_CONCURRENT_SUBAGENTS_PATH, value, await pickScope(ctx, orchestrator));
       continue;
     }
@@ -2940,7 +2940,7 @@ async function pickMaxConcurrentSubagents(ctx: any, current: number): Promise<nu
     );
     if (input === undefined || input === null) return null;
     const trimmed = String(input).trim();
-    if (trimmed === "") return null;
+    if (trimmed === "") return current;
     if (!/^\d+$/.test(trimmed)) {
       ctx.ui.notify(`Please enter a positive integer between 1 and ${MAX_CONCURRENT_SUBAGENTS_CEILING}.`, "warning");
       continue;
@@ -3081,25 +3081,20 @@ async function showTaskModePicker(ctx: any): Promise<TaskMode | "back"> {
 }
 
 export async function pickMaxReviewPasses(ctx: any, current: number): Promise<number | null> {
-  const currentLabel = current >= 999 ? "-" : String(current);
+  const currentLabel = current >= 999 ? "-" : current === 0 ? "0 (disabled)" : String(current);
   while (true) {
     const input = await ctx.ui.input(
-      `Max review passes (enter a positive integer, or "-" for unlimited) [${currentLabel}]`,
+      `Max review passes (0 to disable, a positive integer, or "-" for unlimited) [${currentLabel}]`,
     );
     if (input === undefined || input === null) return null;
     const trimmed = String(input).trim();
-    if (trimmed === "") return null;
+    if (trimmed === "") return current;
     if (trimmed === "-") return 999;
     if (!/^\d+$/.test(trimmed)) {
-      ctx.ui.notify('Please enter a positive integer, or "-" for unlimited.', "warning");
+      ctx.ui.notify('Please enter 0 (disable), a positive integer, or "-" for unlimited.', "warning");
       continue;
     }
-    const parsed = Number.parseInt(trimmed, 10);
-    if (parsed <= 0) {
-      ctx.ui.notify('Please enter a positive integer, or "-" for unlimited.', "warning");
-      continue;
-    }
-    return parsed;
+    return Number.parseInt(trimmed, 10);
   }
 }
 
@@ -4047,7 +4042,7 @@ export async function showActiveTaskMenu(
             continue;
           }
           const passes = await pickMaxReviewPasses(ctx, 3);
-          if (passes === null) continue;
+          if (passes === null || passes === 0) continue;
           finalizeReviewCycle(task);
           if (task.state.reviewPassByKind?.[phase]) task.state.reviewPassByKind[phase].auto = 0;
           task.state.reviewApprovedClean = false;
@@ -4247,7 +4242,7 @@ export async function showActiveTaskMenu(
           continue;
         }
         const passes = await pickMaxReviewPasses(ctx, 3);
-        if (passes === null) continue;
+        if (passes === null || passes === 0) continue;
         finalizeReviewCycle(task);
         // Item 5: stop-in-phase loop. Reset the per-phase auto-pass counter so the
         // cap counts THIS run's passes, and clear any stale clean flag.

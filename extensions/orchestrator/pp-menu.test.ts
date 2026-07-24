@@ -234,9 +234,22 @@ describe("pickMaxReviewPasses", () => {
     expect(ctx.ui.notify).toHaveBeenCalledTimes(2);
   });
 
-  it("returns null when input is cancelled or empty", async () => {
+  it("returns null only when input is cancelled", async () => {
     expect(await pickMaxReviewPasses(makeInputCtx([undefined]), 3)).toBeNull();
-    expect(await pickMaxReviewPasses(makeInputCtx([""]), 3)).toBeNull();
+    expect(await pickMaxReviewPasses(makeInputCtx([null]), 3)).toBeNull();
+  });
+
+  it("returns the current value on empty Enter (picks the bracketed default)", async () => {
+    expect(await pickMaxReviewPasses(makeInputCtx([""]), 3)).toBe(3);
+    expect(await pickMaxReviewPasses(makeInputCtx(["  "]), 5)).toBe(5);
+  });
+
+  it("accepts 0 to disable review", async () => {
+    expect(await pickMaxReviewPasses(makeInputCtx(["0"]), 3)).toBe(0);
+  });
+
+  it("round-trips the unlimited value on empty Enter when current is 999", async () => {
+    expect(await pickMaxReviewPasses(makeInputCtx([""]), 999)).toBe(999);
   });
 });
 
