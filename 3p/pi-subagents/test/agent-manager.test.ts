@@ -912,3 +912,36 @@ describe("AgentManager — runAgent rejection leaves the record visible with err
     expect(record.completedAt).toBeGreaterThan(0);
   });
 });
+
+describe("AgentManager — resolvedModelId capture (usage-by-model)", () => {
+  let manager: AgentManager;
+
+  afterEach(() => {
+    manager?.dispose();
+  });
+
+  it("captures provider/id onto the record when an explicit model is supplied", () => {
+    manager = new AgentManager();
+    resolvedRun();
+
+    const id = manager.spawn(mockPi, mockCtx, "general-purpose", "test", {
+      description: "Planner (gpt)",
+      isBackground: true,
+      model: { provider: "openai", id: "gpt-5" } as any,
+    });
+
+    expect(manager.getRecord(id)!.resolvedModelId).toBe("openai/gpt-5");
+  });
+
+  it("leaves resolvedModelId undefined when no model is supplied (inherits parent)", () => {
+    manager = new AgentManager();
+    resolvedRun();
+
+    const id = manager.spawn(mockPi, mockCtx, "general-purpose", "test", {
+      description: "test",
+      isBackground: true,
+    });
+
+    expect(manager.getRecord(id)!.resolvedModelId).toBeUndefined();
+  });
+});

@@ -174,6 +174,7 @@ export class AgentManager {
       // have no inline surface — stay visible instead of vanishing.
       isBackground: options.isBackground,
       invocation: options.invocation,
+      resolvedModelId: options.model ? `${options.model.provider}/${options.model.id}` : undefined,
     };
     this.agents.set(id, record);
 

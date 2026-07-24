@@ -381,6 +381,7 @@ export default function (pi: ExtensionAPI) {
       toolUses: record.toolUses,
       durationMs,
       tokens,
+      modelId: record.resolvedModelId,
     };
   }
 

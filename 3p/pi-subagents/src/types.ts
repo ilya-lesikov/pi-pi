@@ -126,6 +126,14 @@ export interface AgentRecord {
   isBackground?: boolean;
   /** Resolved spawn params, captured for UI display. Fixed at spawn time. */
   invocation?: AgentInvocation;
+  /**
+   * Fully-qualified model id (`provider/id`) this agent ran under, captured at
+   * spawn from the resolved model. Surfaced in lifecycle events so usage can be
+   * attributed to a real model instead of falling back to the description.
+   * Absent when the caller supplied no explicit model (the agent inherits the
+   * parent model).
+   */
+  resolvedModelId?: string;
 }
 
 export interface AgentInvocation {
