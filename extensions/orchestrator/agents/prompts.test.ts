@@ -74,6 +74,7 @@ describe("PRINCIPLES_BLOCK degrees-of-freedom split", () => {
       "DO NOT WRITE COMMENTS",
       "No temporary artifacts",
       "Smallest viable change",
+      "Understand before modifying",
     ]) {
       expect(IMPLEMENTATION_PRINCIPLES_BLOCK).toContain(phrase);
       expect(PRINCIPLES_BLOCK).not.toContain(phrase);
@@ -239,13 +240,27 @@ describe("routing-contract descriptions (what / when / exclusion)", () => {
     expect(descs.task).toMatch(/implementation|slice/i);
   });
 
+  it("extends the advisor / deep-debugger / reviewer descriptions with what+when+exclusion, preserving protected exclusions", () => {
+    const advisor = createAdvisorAgent({ model: "anthropic/claude-fable-latest", thinking: "high" }).frontmatter.description;
+    const debugger_ = createDeepDebuggerAgent({ model: "openai/gpt-latest", thinking: "high" }).frontmatter.description;
+    const reviewer = createReviewerAgent({ model: "openai/gpt-latest", thinking: "high" }).frontmatter.description;
+    for (const d of [advisor, debugger_, reviewer]) {
+      expect(d).toMatch(/not for|not every|not as|never/i);
+      expect(d.endsWith("(pi-pi)")).toBe(true);
+    }
+    expect(debugger_).toContain("not every error");
+    expect(reviewer).toContain("only when the user asks");
+    expect(advisor).toMatch(/judgment|tradeoff|why is this broken/i);
+  });
+
   it("delegationBlock remains the sole owner of numeric routing thresholds", () => {
     const pools = {
       advisors: [{ name: "advisor_x_high", model: "anthropic/claude-fable-latest", family: "fable", tier: "xsmart", thinking: "high" }],
       reviewers: [{ name: "reviewer_y_high", model: "openai/gpt-latest", family: "gpt", tier: "smart", thinking: "high" }],
       deepDebuggers: [{ name: "deep-debugger_z_high", model: "openai/gpt-latest", family: "gpt", tier: "smart", thinking: "high" }],
     };
-    expect(delegationBlock("opus", pools)).toMatch(/2–3 parallel|4\+ only/);
+    expect(delegationBlock("opus", pools)).toContain("2–3 parallel");
+    expect(delegationBlock("opus", pools)).toContain("4+ only");
     for (const d of [createExploreAgent(config).frontmatter.description, createTaskAgent(config).frontmatter.description]) {
       expect(d).not.toMatch(/2–3|4\+/);
     }
@@ -267,5 +282,15 @@ describe("affordance-aligned evidence gates", () => {
       expect(p).toMatch(/MUST NOT run tests|not run test suites/i);
       expect(p).toMatch(/OPEN QUESTIONS|Open Questions/);
     }
+  });
+});
+
+describe("advisor anti-sycophancy", () => {
+  it("requires taking a position + naming what would change it, behavior-framed with any quoted phrase marked as an example", () => {
+    const a = createAdvisorAgent({ model: "anthropic/claude-fable-latest", thinking: "high" }).prompt;
+    expect(a).toContain("Take a position");
+    expect(a).toMatch(/what evidence would change|what would change/i);
+    expect(a).toMatch(/in any language|targets the behavior/i);
+    expect(a).toMatch(/illustrative|e\.g\.|for example|example/i);
   });
 });

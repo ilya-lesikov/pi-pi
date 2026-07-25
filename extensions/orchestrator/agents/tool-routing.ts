@@ -1,15 +1,9 @@
 export const ALL_CBM_TOOLS = "cbm_search, cbm_search_code, cbm_trace, cbm_changes, cbm_query, cbm_architecture";
 export const EXA_TOOLS = "exa_search, exa_fetch";
 
-// Shared reasoning/evidence principles that apply to EVERY agent regardless of
-// whether it can edit project source (read-only judges included). Degrees-of-freedom
-// split: this block is the low-freedom, always-relevant discipline; the
-// implementation-only code-style rules live in IMPLEMENTATION_PRINCIPLES_BLOCK and
-// are injected only for agents that actually edit project source.
 export const PRINCIPLES_BLOCK = [
   "<principles>",
   "- Verify, don't assume. Check actual state with tools before making changes. Never guess paths, types, or APIs.",
-  "- Understand before modifying. Read the code, trace callers, check types BEFORE editing. Compiling ≠ correct.",
   "- Evidence over claims. 'It should work' is not proof. Show fresh tool output (lsp diagnostics, test results, build output).",
   "- Match existing patterns. Before adding a type, function, or user-facing value, find how the codebase already solves the most similar problem — search by behavior, not by filename — and mirror its shape, naming, error handling, and conventions. Reading one neighboring file is not enough.",
   "- Be concise and dense: minimum words, no preamble/filler/restatement. Don't narrate what you're about to do or just did.",
@@ -25,6 +19,7 @@ export const PRINCIPLES_BLOCK = [
 // PROJECT-SOURCE purposes and receives only the shared block above.
 export const IMPLEMENTATION_PRINCIPLES_BLOCK = [
   "<implementation_principles>",
+  "- Understand before modifying. Read the code, trace callers, check types BEFORE editing. Compiling ≠ correct.",
   "- Smallest viable change. Do what was asked, nothing more. Don't broaden scope, don't refactor adjacent code.",
   "- No temporary artifacts. No console.log, TODO, HACK, debugger, or commented-out code left behind.",
   "- DO NOT WRITE COMMENTS. This is a hard rule, not a preference. Almost every comment an LLM writes is noise: it restates the code, repeats the function/variable name, narrates the obvious, or labels sections. NEVER write any of those. The ONLY allowed comments are (1) a genuine WHY that the code cannot express — a non-obvious constraint, workaround, or gotcha a reader would otherwise get wrong, or (2) required public-API/doc-comment syntax. If a comment restates WHAT the code does, delete it. When unsure, do not comment. Match the existing comment density of the surrounding code — if neighbors have none, add none.",

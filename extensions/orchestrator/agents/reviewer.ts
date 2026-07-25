@@ -8,7 +8,7 @@ export function createReviewerAgent(entry: PoolEntry) {
   const info = getModelInfo(model);
   return {
     frontmatter: {
-      description: "Code reviewer for changes/diffs with severity-rated findings — spawn only when the user asks for a review (pi-pi)",
+      description: "Read-only code reviewer that inspects a change/diff and returns severity-rated findings with file:line anchors (never edits) — best for a focused review of completed work; spawn only when the user asks for a review, not as a routine step (pi-pi)",
       tools,
       model,
       thinking: entry.thinking,

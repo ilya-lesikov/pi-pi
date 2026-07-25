@@ -45,6 +45,28 @@ describe("reviewSystemPrompt apply_feedback wording", () => {
     expect(impl).toContain("Implement the fixes");
   });
 
+  it("edit-capable synthesis paths carry the verify-before-accepting fix gate; standalone review does not", () => {
+    for (const args of [
+      ["implement", "autonomous"],
+      ["implement", "guided"],
+      ["plan", "guided"],
+    ] as const) {
+      const prompt = reviewSystemPrompt("/tmp/task", 1, args[0], args[1]);
+      expect(prompt).toContain("Before accepting a finding, verify it against the actual");
+      expect(prompt).toMatch(/reject it with your technical reasoning rather than agreeing performatively/);
+      expect(prompt).toContain("blocking-severity first");
+    }
+    const standalone = reviewSystemPrompt("/tmp/task", 1, "review", "guided");
+    expect(standalone).not.toContain("Before accepting a finding, verify it against the actual");
+  });
+
+  it("guided plan-phase fix gate does not demand code-only evidence (afterImplement/lsp) for a plan fix", () => {
+    const plan = reviewSystemPrompt("/tmp/task", 1, "plan", "guided");
+    const impl = reviewSystemPrompt("/tmp/task", 1, "implement", "guided");
+    expect(plan).toContain("corrected plan text");
+    expect(impl).toContain("afterImplement");
+  });
+
   it("standalone review phase omits the fix-plan/implement/afterImplement tail", () => {
     const prompt = reviewSystemPrompt("/tmp/task", 1, "review", "guided");
     expect(prompt).toContain("REVIEW CYCLE");

@@ -8,7 +8,7 @@ export function createDeepDebuggerAgent(entry: PoolEntry) {
   const info = getModelInfo(model);
   return {
     frontmatter: {
-      description: "Deep root-cause analysis for HARD, persistent failures — not every error (pi-pi)",
+      description: "Diagnoses the root cause of a HARD, persistent failure that survived one real fix attempt and returns a diagnosis (it does NOT apply the fix) — best when a bug resists the obvious fix; not every error, and not for trivial/obvious failures (pi-pi)",
       tools,
       model,
       thinking: entry.thinking,

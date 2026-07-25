@@ -8,7 +8,7 @@ export function createAdvisorAgent(entry: PoolEntry) {
   const info = getModelInfo(model);
   return {
     frontmatter: {
-      description: "Deep-reasoning advisor for design decisions and 'why is this broken' analysis (pi-pi)",
+      description: "Deep-reasoning advisor that investigates ONE hard judgment call — a design/architecture tradeoff or a 'why is this broken' — and returns a reasoned, evidence-backed recommendation; best for genuine judgment, not for locating code (use explore), fetching external docs (use librarian), or applying edits (pi-pi)",
       tools,
       model,
       thinking: entry.thinking,
