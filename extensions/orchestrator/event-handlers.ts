@@ -25,7 +25,7 @@ import { SUBAGENT_SESSION_KEY } from "./index.js";
 import { registerCommandHandlers, runAfterImplementForActive } from "./command-handlers.js";
 import { registerStateFileTools } from "./pp-state-tools.js";
 import { isAiCommentOnlyChange } from "./ai-comment-cleanup.js";
-import { handleMainRateLimit, handleSubagentRateLimit, isRateLimitError, isExtraUsageError, isSdkRetryableError } from "./rate-limit-fallback.js";
+import { handleMainRateLimit, handleSubagentRateLimit, isRateLimitError, isExtraUsageError, isMalformedToolHistoryError, isSdkRetryableError } from "./rate-limit-fallback.js";
 import { getAgentConfigSnapshot, setExtensionOnlyMode, unregisterAgentDefinitions, registeredAgentNames, buildPoolRoster, baseRoleForName } from "./agents/registry.js";
 import { resolveModel, getModelInfo, updateRegistryFromAvailableModels } from "./model-registry.js";
 import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
@@ -1151,8 +1151,7 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
             const { showActiveTaskMenu, USER_CANCELLED } = await import("./pp-menu.js");
             const text = await showActiveTaskMenu(orchestrator, ctx, params.summary, "tool", true);
             if (text === USER_CANCELLED) {
-              ctx.abort?.();
-              return { content: [{ type: "text" as const, text: "" }], details: {} };
+              return { content: [{ type: "text" as const, text: "User dismissed the phase-completion menu. Stop and wait for the user's next message." }], details: {} };
             }
             return { content: [{ type: "text" as const, text: text ?? "" }], details: {} };
           } finally {
@@ -1171,13 +1170,8 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
       try {
         const { showActiveTaskMenu, USER_CANCELLED } = await import("./pp-menu.js");
         const text = await showActiveTaskMenu(orchestrator, ctx, params.summary, "tool");
-        // A deliberate user ESC on the menu means "stop cleanly, let me type" —
-        // mirror ask_user: abort the turn and return nothing so no new LLM turn
-        // starts. This takes precedence over the reminder path below, in ALL
-        // interactive cases (including while a transition is mid-flight).
         if (text === USER_CANCELLED) {
-          ctx.abort?.();
-          return { content: [{ type: "text" as const, text: "" }], details: {} };
+          return { content: [{ type: "text" as const, text: "User dismissed the phase-completion menu. Stop and wait for the user's next message." }], details: {} };
         }
         // A transition or await may have started while the menu was open. The
         // controller is the source of truth; abort the pending turn so it can't
@@ -2726,6 +2720,15 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
         contentBlocks: msg.content?.length ?? 0,
         contentSummary,
       }, "turn ended with error");
+      if (isMalformedToolHistoryError(errorMsg)) {
+        orchestrator.cancelPendingRetry();
+        orchestrator.errorNudgeHalted = true;
+        ctx.ui.notify(
+          "The conversation history became invalid after an interrupted tool call, so retrying cannot succeed. Start a new pi session, run /pp, and resume the existing task.",
+          "error",
+        );
+        return;
+      }
       // Subscription rate-limit (429) on a sub-routed main turn: retrying the
       // same sub model is futile against an account-level limit. Offer a
       // user-gated switch to non-sub Claude instead of the generic backoff.

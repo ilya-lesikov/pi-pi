@@ -23,6 +23,11 @@ export function isExtraUsageError(message?: string): boolean {
   return /extra usage|draw from[\s\S]{0,40}plan limits/i.test(message);
 }
 
+export function isMalformedToolHistoryError(message?: string): boolean {
+  if (typeof message !== "string" || !message) return false;
+  return /unexpected tool_use_id found in tool_result|tool_result blocks?[\s\S]{0,120}corresponding tool_use/i.test(message);
+}
+
 // Mirror of the SDK's AgentSession._isRetryableError classifier
 // (agent-session.js: overloaded/rate-limit/5xx/network/stream-ended/timeout/...).
 // When true, the SDK auto-retries the SAME turn itself (abortable backoff bound

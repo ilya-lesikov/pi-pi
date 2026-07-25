@@ -1919,7 +1919,7 @@ describe("task modes and quick task", () => {
     expect(menu.transcript.filter((entry) => entry.question.startsWith("/pp"))).not.toHaveLength(0);
   });
 
-  it("ESC on pp_phase_complete stops the turn cleanly (aborts, no reminder text)", async () => {
+  it("ESC on pp_phase_complete returns a normal dismissal result", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);
     const ctx = makeCtx();
@@ -1936,8 +1936,8 @@ describe("task modes and quick task", () => {
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     const result = await ppPhaseComplete.execute("esc-1", { summary: "done" }, undefined, undefined, ctx);
 
-    expect(ctx.abort).toHaveBeenCalled();
-    expect(result.content[0].text).toBe("");
+    expect(ctx.abort).not.toHaveBeenCalled();
+    expect(result.content[0].text).toBe("User dismissed the phase-completion menu. Stop and wait for the user's next message.");
   });
 
   it("Back on pp_phase_complete keeps the artifact-update reminder (does NOT abort)", async () => {
@@ -1959,7 +1959,7 @@ describe("task modes and quick task", () => {
     expect(result.content[0].text).toContain("update USER_REQUEST.md and RESEARCH.md");
   });
 
-  it("ESC on pp_phase_complete for a quick task also stops the turn cleanly", async () => {
+  it("ESC on pp_phase_complete for a quick task returns a normal dismissal result", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);
     const ctx = makeCtx();
@@ -1972,8 +1972,8 @@ describe("task modes and quick task", () => {
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
     const result = await ppPhaseComplete.execute("quick-esc-1", { summary: "done" }, undefined, undefined, ctx);
 
-    expect(ctx.abort).toHaveBeenCalled();
-    expect(result.content[0].text).toBe("");
+    expect(ctx.abort).not.toHaveBeenCalled();
+    expect(result.content[0].text).toBe("User dismissed the phase-completion menu. Stop and wait for the user's next message.");
   });
 
   it("autonomous review loop re-runs until cap then advances", async () => {
@@ -3701,6 +3701,30 @@ describe("error retry", () => {
 
     await vi.advanceTimersByTimeAsync(2000);
     expect(pi.sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("Transient API error"), { deliverAs: "followUp" });
+    vi.useRealTimers();
+  });
+
+  it("turn_end halts immediately for malformed tool history", async () => {
+    vi.useFakeTimers();
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "malformed history test");
+    const turnEnd = pi._handlers.get("turn_end")!;
+
+    await turnEnd({ message: {
+      stopReason: "error",
+      errorMessage: "400: unexpected tool_use_id found in tool_result blocks. Each tool_result block must have a corresponding tool_use block in the previous message.",
+      content: [],
+    } }, ctx);
+
+    expect(orchestrator.errorNudgeHalted).toBe(true);
+    expect(orchestrator.pendingRetryTimer).toBeNull();
+    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Start a new pi session, run /pp"), "error");
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(pi.sendUserMessage).not.toHaveBeenCalledWith(expect.stringContaining("Transient API error"), expect.anything());
     vi.useRealTimers();
   });
 

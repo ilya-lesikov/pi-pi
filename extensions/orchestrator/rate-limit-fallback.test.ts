@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isRateLimitError, isExtraUsageError, isSdkRetryableError } from "./rate-limit-fallback.js";
+import { isRateLimitError, isExtraUsageError, isMalformedToolHistoryError, isSdkRetryableError } from "./rate-limit-fallback.js";
 import { isSubscriptionRouted } from "./usage-tracker.js";
 import { SUB_MODEL_PREFIX, SUB_PROVIDER, subProbeModelId } from "./flant-infra.js";
 
@@ -36,6 +36,18 @@ describe("isExtraUsageError", () => {
     expect(isExtraUsageError("500 internal server error")).toBe(false);
     expect(isExtraUsageError("")).toBe(false);
     expect(isExtraUsageError(undefined)).toBe(false);
+  });
+});
+
+describe("isMalformedToolHistoryError", () => {
+  it("matches orphaned Anthropic tool-result errors", () => {
+    expect(isMalformedToolHistoryError("messages.18.content.2: unexpected tool_use_id found in tool_result blocks: toolu_123")).toBe(true);
+    expect(isMalformedToolHistoryError("Each tool_result block must have a corresponding tool_use block in the previous message.")).toBe(true);
+  });
+
+  it("rejects unrelated request errors", () => {
+    expect(isMalformedToolHistoryError("invalid request: bad tool arguments")).toBe(false);
+    expect(isMalformedToolHistoryError(undefined)).toBe(false);
   });
 });
 

@@ -82,9 +82,8 @@ const BACK = "back" as const;
 
 // Sentinel returned by showActiveTaskMenu when the user dismissed the top-level
 // menu with a deliberate ESC (cancelReason "user"), as opposed to selecting the
-// "Back" option or a programmatic dismissal. Callers (pp_phase_complete) use it
-// to stop the turn cleanly instead of returning reminder text that starts a new
-// LLM turn. It is intentionally distinct from the empty-string "Back" return.
+// "Back" option or a programmatic dismissal. It is intentionally distinct from
+// the empty-string "Back" return.
 export const USER_CANCELLED = "\u0000user-cancelled" as const;
 
 type OptionInput = string | { title: string; description?: string };
@@ -106,9 +105,8 @@ async function selectOption(ctx: any, question: string, options: OptionInput[]):
 }
 
 // Like selectOption but also surfaces the cancel reason so callers can tell a
-// deliberate user ESC (reason "user") apart from a normal non-selection. Used by
-// showActiveTaskMenu so pp_phase_complete can stop the turn cleanly on ESC
-// (mirroring ask_user) while keeping the "Back" navigation reminder.
+// deliberate user ESC (reason "user") apart from a normal non-selection while
+// keeping the "Back" navigation reminder.
 async function selectOptionCancelable(
   ctx: any,
   question: string,
