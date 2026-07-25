@@ -45,11 +45,12 @@ describe("reviewSystemPrompt apply_feedback wording", () => {
     expect(impl).toContain("Implement the fixes");
   });
 
-  it("edit-capable synthesis paths carry the verify-before-accepting fix gate; standalone review does not", () => {
+  it("EVERY edit-capable synthesis path carries the verify-before-accepting fix gate; standalone review does not", () => {
     for (const args of [
       ["implement", "autonomous"],
       ["implement", "guided"],
       ["plan", "guided"],
+      ["plan", "autonomous"],
     ] as const) {
       const prompt = reviewSystemPrompt("/tmp/task", 1, args[0], args[1]);
       expect(prompt).toContain("Before accepting a finding, verify it against the actual");
@@ -60,11 +61,24 @@ describe("reviewSystemPrompt apply_feedback wording", () => {
     expect(standalone).not.toContain("Before accepting a finding, verify it against the actual");
   });
 
-  it("guided plan-phase fix gate does not demand code-only evidence (afterImplement/lsp) for a plan fix", () => {
-    const plan = reviewSystemPrompt("/tmp/task", 1, "plan", "guided");
+  it("plan-phase fix gate demands plan-text evidence (not afterImplement/lsp) in BOTH modes", () => {
+    for (const mode of ["guided", "autonomous"] as const) {
+      const plan = reviewSystemPrompt("/tmp/task", 1, "plan", mode);
+      expect(plan).toContain("corrected plan text");
+      expect(plan).toContain("a code fix is out of scope in the plan phase");
+    }
     const impl = reviewSystemPrompt("/tmp/task", 1, "implement", "guided");
-    expect(plan).toContain("corrected plan text");
     expect(impl).toContain("afterImplement");
+  });
+
+  it("plan-phase feedback lands in a new synthesized plan (never a fix-plan file or code changes) in BOTH modes", () => {
+    for (const mode of ["guided", "autonomous"] as const) {
+      const plan = reviewSystemPrompt("/tmp/task", 1, "plan", mode);
+      expect(plan).toContain("NEW synthesized plan");
+      expect(plan).not.toContain("Create a fix plan");
+      expect(plan).not.toContain("Implement the fixes");
+      expect(plan).not.toContain("Run afterImplement commands");
+    }
   });
 
   it("standalone review phase omits the fix-plan/implement/afterImplement tail", () => {

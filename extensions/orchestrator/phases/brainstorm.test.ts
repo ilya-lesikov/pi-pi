@@ -26,12 +26,15 @@ describe("brainstormSystemPrompt", () => {
     expect(prompt).toContain("artifacts/ASSUMPTIONS.md");
   });
 
-  it("both branches state anti-sycophancy as a behavior, with any quoted phrase marked as an example", () => {
+  it("both branches state anti-sycophancy as a behavior, with the quoted phrase adjacent to an example marker", () => {
     for (const t of ["brainstorm", "task"] as const) {
       const prompt = brainstormSystemPrompt(t, "x", "/tmp/task", "/tmp");
       expect(prompt).toContain("take a position");
       expect(prompt).toMatch(/what evidence would change|what would change it/i);
-      expect(prompt).toMatch(/e\.g\.|illustrative|Examples/);
+      // The quoted anti-pattern phrase must sit right after an explicit example
+      // marker on the same line — a stray "e.g." elsewhere in the prompt must not
+      // satisfy this.
+      expect(prompt).toMatch(/(illustrative anti-patterns|Examples of the anti-pattern)[^\n]{0,60}'that could work'/);
     }
   });
 });

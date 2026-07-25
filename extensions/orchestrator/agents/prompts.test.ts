@@ -291,6 +291,6 @@ describe("advisor anti-sycophancy", () => {
     expect(a).toContain("Take a position");
     expect(a).toMatch(/what evidence would change|what would change/i);
     expect(a).toMatch(/in any language|targets the behavior/i);
-    expect(a).toMatch(/illustrative|e\.g\.|for example|example/i);
+    expect(a).toMatch(/illustrative anti-patterns[^\n]{0,40}'that could work'/);
   });
 });

@@ -107,38 +107,45 @@ export function reviewSystemPrompt(taskDir: string, pass: number, phase?: string
       ? "3. Call pp_phase_complete again to finalize this review pass. The phase is NOT complete until you do — do NOT stop or wait for the user"
       : "3. Present the synthesis to the user";
 
+  // Every edit-capable synthesis/fix path (phase !== "review") carries the same
+  // verify-before-accepting gate, with evidence wording matched to what the phase
+  // can actually produce: a plan fix proves itself with the corrected plan text
+  // (code changes are out of scope in the plan phase), a code fix with fresh
+  // tool output. The standalone review phase returns earlier and never reaches
+  // this tail.
+  const verifyGate =
+    phase === "plan"
+      ? "Before accepting a finding, verify it against the actual plan and code — do not apply a fix on the reviewer's say-so. If a finding is wrong or does not survive that check, reject it with your technical reasoning rather than agreeing performatively; agreeing without verifying is the failure mode to avoid, in any language. Order the fixes you accept blocking-severity first, then simple, then complex. When you apply a fix, prove it with the corrected plan text (a code fix is out of scope in the plan phase) before treating it as done."
+      : "Before accepting a finding, verify it against the actual code — do not apply a fix on the reviewer's say-so. If a finding is wrong or does not survive that check, reject it with your technical reasoning rather than agreeing performatively; agreeing without verifying is the failure mode to avoid, in any language. Order the fixes you accept blocking-severity first, then simple, then complex. When you apply a fix, prove it with fresh tool output (lsp diagnostics / the afterImplement result) before treating it as done.";
+
   // In the plan phase the synthesized plan IS the reviewed artifact: re-review
   // and the phase transition both read only the LATEST `*synthesized*` file (see
-  // getLatestSynthesizedPlan). So autonomous plan feedback must be folded into a
-  // new synthesized plan, NOT a separate fix-plan file (which those readers
-  // ignore). In the implement phase the synthesized plan is code guidance, so
-  // the fix-plan/implement/afterImplement pattern is correct there.
-  const tail =
+  // getLatestSynthesizedPlan), so plan feedback must be folded into a new
+  // synthesized plan in BOTH modes, never a separate fix-plan file (which those
+  // readers ignore) and never out-of-scope code changes. In the implement phase
+  // the synthesized plan is code guidance, so the fix-plan/implement/afterImplement
+  // pattern is correct there.
+  const closer =
     mode === "autonomous"
-      ? phase === "plan"
-        ? [
-            "",
-            "If the reviewers require changes:",
-            `1. Fold the required changes into a NEW synthesized plan at ${plansDir}/<timestamp>_synthesized.md (re-review and the phase transition read only the latest \`*synthesized*\` plan, so the fixes MUST land there — do not write them to a separate fix-plan file)`,
-            "2. Then call pp_phase_complete again — the extension will start a new review pass or advance the phase as appropriate. Do NOT wait for the user.",
-          ]
-        : [
-            "",
-            "Before accepting a finding, verify it against the actual code — do not apply a fix on the reviewer's say-so. If a finding is wrong or does not survive that check, reject it with your technical reasoning rather than agreeing performatively; agreeing without verifying is the failure mode to avoid, in any language. Order the fixes you accept blocking-severity first, then simple, then complex. When you apply a fix, prove it with fresh tool output (lsp diagnostics / the afterImplement result) before treating it as done.",
-            "If changes are needed:",
-            `1. Create a fix plan at ${plansDir}/<timestamp>_<description>.md (do NOT modify the original synthesized plan)`,
-            "2. Implement the fixes",
-            "3. Run afterImplement commands",
-            "4. Then call pp_phase_complete again — the extension will start a new review pass or advance the phase as appropriate. Do NOT wait for the user.",
-          ]
+      ? "Then call pp_phase_complete again — the extension will start a new review pass or advance the phase as appropriate. Do NOT wait for the user."
+      : "A new review pass will begin.";
+  const tail =
+    phase === "plan"
+      ? [
+          "",
+          verifyGate,
+          "If the reviewers require changes:",
+          `1. Fold the required changes into a NEW synthesized plan at ${plansDir}/<timestamp>_synthesized.md (re-review and the phase transition read only the latest \`*synthesized*\` plan, so the fixes MUST land there — do not write them to a separate fix-plan file, and do not make code changes in the plan phase)`,
+          `2. ${closer}`,
+        ]
       : [
           "",
-          `Before accepting a finding, verify it against the actual ${phase === "plan" ? "plan and code" : "code"} — do not apply a fix on the reviewer's say-so. If a finding is wrong or does not survive that check, reject it with your technical reasoning rather than agreeing performatively; agreeing without verifying is the failure mode to avoid, in any language. Order the fixes you accept blocking-severity first, then simple, then complex. When you apply a fix, prove it with the fresh evidence appropriate to what you changed${phase === "plan" ? " (the corrected plan text; a code fix is out of scope in the plan phase)" : " (e.g. lsp diagnostics / the afterImplement result for a code change)"} before treating it as done.`,
+          verifyGate,
           "If changes are needed:",
           `1. Create a fix plan at ${plansDir}/<timestamp>_<description>.md (do NOT modify the original synthesized plan)`,
           "2. Implement the fixes",
           "3. Run afterImplement commands",
-          "4. A new review pass will begin",
+          `4. ${closer}`,
         ];
 
   return [

@@ -3,7 +3,13 @@ import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { planningSystemPrompt, spawnPlanReviewers } from "./planning.js";
-import { getDefaultConfig } from "../config.js";
+import { createPlannerAgent } from "../agents/planner.js";
+import { getDefaultConfig, resolvePreset } from "../config.js";
+
+function plannerPlanFormatLines(): string {
+  const p = createPlannerAgent("opus", resolvePreset(getDefaultConfig(), "planners"), { userRequest: "u", research: "r", manifest: [] }, "/out.md", []);
+  return p.prompt;
+}
 
 describe("planningSystemPrompt self-complete directive", () => {
   it("guided synthesis instructs the agent to call pp_phase_complete when synthesis is complete", () => {
@@ -16,6 +22,26 @@ describe("planningSystemPrompt self-complete directive", () => {
     const prompt = planningSystemPrompt("/tmp/task", "autonomous");
     expect(prompt).not.toContain("pp_phase_complete");
     expect(prompt).not.toContain("Do NOT instead ask the user to run /pp manually");
+  });
+});
+
+describe("plan no-placeholders rule is behavior-framed and lockstep across both surfaces", () => {
+  const behavior = "an item that defers a decision instead of stating a concrete outcome is a plan failure";
+  it("phrases the rule on behavior, with TBD/TODO marked as an illustrative example only", () => {
+    for (const prompt of [planningSystemPrompt("/tmp/task", "guided"), plannerPlanFormatLines()]) {
+      expect(prompt).toContain(behavior);
+      // The English placeholder tokens must appear only as an example, adjacent
+      // to an explicit example marker — never as the literal matching rule.
+      expect(prompt).toMatch(/'TBD'\/'TODO'\/'decide later' is only an illustrative example/);
+    }
+  });
+
+  it("keeps the plan-format guidance identical between planning.ts and planner.ts", () => {
+    const fromPhase = planningSystemPrompt("/tmp/task", "guided");
+    const fromAgent = plannerPlanFormatLines();
+    const line = (p: string) => p.split("\n").find((l) => l.includes(behavior));
+    expect(line(fromPhase)).toBeDefined();
+    expect(line(fromPhase)).toBe(line(fromAgent));
   });
 });
 
