@@ -60,6 +60,7 @@ describe("orchestrator extension entrypoint", () => {
     const pi = makePi();
     init(pi);
     expect((globalThis as any)[SUBAGENT_SESSION_KEY]).toEqual({ depth: 1 });
+    expect(mocks.initFlantSync).toHaveBeenCalledWith(pi);
     expect(mocks.registerCbmTools).toHaveBeenCalledTimes(1);
     expect(mocks.registerExaTools).toHaveBeenCalledWith(pi);
     expect(mocks.registerAstSearchTool).toHaveBeenCalledTimes(1);

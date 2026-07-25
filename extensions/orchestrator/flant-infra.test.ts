@@ -64,6 +64,32 @@ describe("flant-infra", () => {
     expect([...registered.keys()].sort()).toEqual(["pp-flant-anthropic", "pp-flant-openai"]);
   });
 
+  it("registers regular providers with the resolved gateway key", async () => {
+    const dir = makeTempDir();
+    const previousLlmKey = process.env.LLM_API_KEY;
+    const previousFlantKey = process.env.FLANT_API_KEY;
+    process.env.LLM_API_KEY = "llm-gateway-key";
+    process.env.FLANT_API_KEY = "flant-gateway-key";
+    try {
+      const mod = await loadFlantInfraModule(dir);
+      const registered = new Map<string, any>();
+      const pi = {
+        registerProvider: vi.fn((name: string, config: unknown) => registered.set(name, config)),
+        unregisterProvider: vi.fn((name: string) => registered.delete(name)),
+      } as any;
+
+      mod.registerFlantProviders(pi, ["claude-opus-4-8", "gpt-5"], {}, { subscription: false });
+
+      expect(registered.get("pp-flant-anthropic").apiKey).toBe("llm-gateway-key");
+      expect(registered.get("pp-flant-openai").apiKey).toBe("llm-gateway-key");
+    } finally {
+      if (previousLlmKey === undefined) delete process.env.LLM_API_KEY;
+      else process.env.LLM_API_KEY = previousLlmKey;
+      if (previousFlantKey === undefined) delete process.env.FLANT_API_KEY;
+      else process.env.FLANT_API_KEY = previousFlantKey;
+    }
+  });
+
   it("does not register the sub provider when subscription is disabled", async () => {
     const dir = makeTempDir();
     const mod = await loadFlantInfraModule(dir);

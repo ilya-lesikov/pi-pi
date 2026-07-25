@@ -24,6 +24,7 @@ export default function (pi: ExtensionAPI) {
     if (!(globalThis as any)[SUBAGENT_SESSION_KEY]) {
       (globalThis as any)[SUBAGENT_SESSION_KEY] = { depth: 1 };
     }
+    initFlantSync(pi);
     registerSubagentTools(pi);
     return;
   }
