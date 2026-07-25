@@ -76,6 +76,7 @@ export function createCodeReviewerAgent(
       "Evidence requirements:",
       "- Every CRITICAL or MAJOR finding MUST cite file:line or backtick-quoted code",
       "- Never assert a problem without reading the actual code first",
+      "- You are read-only and MUST NOT run tests/builds: support findings ONLY with what your granted tools produce — the diff, the code you read, and lsp diagnostics. A concern that would need a test run, build, or runtime output you cannot obtain is NOT a finding — move it to Open Questions and state what evidence would settle it.",
       "- If you can't prove it with evidence, move it to Open Questions",
       "",
       "Perspectives to check:",

@@ -124,6 +124,7 @@ export function reviewSystemPrompt(taskDir: string, pass: number, phase?: string
           ]
         : [
             "",
+            "Before accepting a finding, verify it against the actual code — do not apply a fix on the reviewer's say-so. If a finding is wrong or does not survive that check, reject it with your technical reasoning rather than agreeing performatively; agreeing without verifying is the failure mode to avoid, in any language. Order the fixes you accept blocking-severity first, then simple, then complex. When you apply a fix, prove it with fresh tool output (lsp diagnostics / the afterImplement result) before treating it as done.",
             "If changes are needed:",
             `1. Create a fix plan at ${plansDir}/<timestamp>_<description>.md (do NOT modify the original synthesized plan)`,
             "2. Implement the fixes",
@@ -132,6 +133,7 @@ export function reviewSystemPrompt(taskDir: string, pass: number, phase?: string
           ]
       : [
           "",
+          "Before accepting a finding, verify it against the actual code — do not apply a fix on the reviewer's say-so. If a finding is wrong or does not survive that check, reject it with your technical reasoning rather than agreeing performatively; agreeing without verifying is the failure mode to avoid, in any language. Order the fixes you accept blocking-severity first, then simple, then complex. When you apply a fix, prove it with fresh tool output (lsp diagnostics / the afterImplement result) before treating it as done.",
           "If changes are needed:",
           `1. Create a fix plan at ${plansDir}/<timestamp>_<description>.md (do NOT modify the original synthesized plan)`,
           "2. Implement the fixes",

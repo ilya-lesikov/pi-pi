@@ -38,7 +38,7 @@ export function createReviewerAgent(entry: PoolEntry) {
       "",
       "Review criteria: logic errors, off-by-ones, null/edge handling, race conditions; correctness vs intent; error handling and type safety; missing or untested paths.",
       "",
-      "Evidence: every CRITICAL or MAJOR finding MUST cite file:line or quoted code. Never assert a problem without reading the code. Low-confidence concerns go under OPEN QUESTIONS.",
+      "Evidence: every CRITICAL or MAJOR finding MUST cite file:line or quoted code. Never assert a problem without reading the code. You are read-only and MUST NOT run tests/builds, so support each finding ONLY with what your granted tools can produce — the diff, the code you read, and lsp diagnostics. If a concern cannot be proven with those (it would need a test run, build, or runtime output you cannot obtain), do NOT assert it as a finding: move it to OPEN QUESTIONS and state what evidence would settle it.",
       "",
       "Format — verdict on the FIRST LINE, then:",
       "VERDICT: APPROVE | NEEDS_CHANGES",

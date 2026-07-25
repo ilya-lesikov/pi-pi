@@ -16,8 +16,8 @@ import {
   getArtifactManifest,
   loadPhaseReviewOutputs,
 } from "./context.js";
-import { PRINCIPLES_BLOCK, toolsBlock, identityBlock, delegationBlock } from "./agents/tool-routing.js";
-import { constraintsBlock, phaseConstraint } from "./agents/constraints.js";
+import { PRINCIPLES_BLOCK, IMPLEMENTATION_PRINCIPLES_BLOCK, toolsBlock, identityBlock, delegationBlock } from "./agents/tool-routing.js";
+import { constraintsBlock, phaseConstraint, isReadOnlyPhase } from "./agents/constraints.js";
 import { registerCbmTools } from "./cbm.js";
 import { registerExaTools } from "./exa.js";
 import { registerAstSearchTool } from "./ast-search.js";
@@ -2339,6 +2339,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       identity,
       constraintsBlock(phase as Phase, effectiveMode),
       PRINCIPLES_BLOCK,
+      isReadOnlyPhase(phase as Phase) ? "" : IMPLEMENTATION_PRINCIPLES_BLOCK,
       toolsBlock(mainToolNames),
       delegation,
       projectContext,
