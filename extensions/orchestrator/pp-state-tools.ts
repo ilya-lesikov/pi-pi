@@ -138,7 +138,7 @@ function validateStateContent(taskDir: string, absolute: string, content: string
     const res = validatePlan(content);
     return res.ok
       ? { ok: true }
-      : { ok: false, errors: res.errors, hint: "Keep exactly: # Plan, ## Scope, ## Checklist (items need 'Done when:'), ## Blockers (optional)." };
+      : { ok: false, errors: res.errors, hint: "Keep exactly: # Plan, ## Scope, ## Checklist (items need 'Done when:'), ## Pattern constraints (optional), ## Blockers (optional)." };
   }
   return { ok: true };
 }
