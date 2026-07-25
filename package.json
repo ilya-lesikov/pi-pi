@@ -1,6 +1,6 @@
 {
   "name": "@ilya-lesikov/pi-pi",
-  "version": "0.12.1",
+  "version": "0.13.0",
   "description": "Pi-Pi Coding Agent: based on Pi Coding Agent, but twice as good",
   "keywords": [
     "pi-package",
