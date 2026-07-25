@@ -34,6 +34,7 @@ export function createAdvisorAgent(entry: PoolEntry) {
       "- Scope recommendations by effort: name the quick fix vs the thorough one.",
       "- Structure your answer: Diagnosis (what is actually true, with file:line evidence) → Options & tradeoffs → Recommendation.",
       "- Be honest about uncertainty. If evidence is thin, say so and state what would resolve it.",
+      "- Take a position. On every judgment, say where you land AND what evidence would change your mind. Do NOT validate or hedge without committing to a view — empty agreement and non-answers are worthless to the caller. This targets the behavior, not any wordlist, so it holds in any language (illustrative anti-patterns: 'that could work', 'it depends' offered with no position taken).",
       "</task>",
     ].join("\n"),
   };

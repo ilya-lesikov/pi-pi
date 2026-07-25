@@ -9,7 +9,7 @@ export function createLibrarianAgent(config: PiPiConfig) {
   const info = getModelInfo(model);
   return {
     frontmatter: {
-      description: "External docs researcher (pi-pi)",
+      description: "Researches external libraries, APIs, and framework docs from the web and installed packages — best when the answer lives outside this repo; not for searching this codebase (use explore) or applying edits (pi-pi)",
       tools,
       model,
       thinking,

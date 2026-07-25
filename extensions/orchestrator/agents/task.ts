@@ -9,7 +9,7 @@ export function createTaskAgent(config: PiPiConfig) {
   const info = getModelInfo(model);
   return {
     frontmatter: {
-      description: "Implementation subtask (pi-pi)",
+      description: "Carries out a self-contained, parallelizable implementation slice end to end — best for a well-scoped chunk you could hand off; not for open-ended design, whole-task ownership, or work you're mid-edit on yourself (pi-pi)",
       tools,
       model,
       thinking,

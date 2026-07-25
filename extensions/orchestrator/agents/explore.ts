@@ -9,7 +9,7 @@ export function createExploreAgent(config: PiPiConfig) {
   const info = getModelInfo(model);
   return {
     frontmatter: {
-      description: "Codebase explorer (pi-pi)",
+      description: "Finds where code lives and how a flow connects across files — best for locating symbols, tracing usages, and mapping a subsystem; not for design judgment or applying edits (pi-pi)",
       tools,
       model,
       thinking,
