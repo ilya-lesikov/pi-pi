@@ -31,6 +31,17 @@ describe("reviewSystemPrompt apply_feedback wording", () => {
     expect(prompt).toContain("Do NOT add, rename, or remove sections in USER_REQUEST.md or RESEARCH.md");
   });
 
+  it("the brainstorm synthesis path (which edits state files) carries the verify-before-accepting gate", () => {
+    // phase !== "review" AND edit-capable (mutates USER_REQUEST/RESEARCH/artifacts),
+    // so plan ① requires the gate here too; its evidence is the research/artifacts,
+    // not tool output.
+    for (const mode of ["autonomous", "guided"] as const) {
+      const prompt = reviewSystemPrompt("/tmp/task", 1, "brainstorm", mode);
+      expect(prompt).toContain("Before accepting a finding, verify it against the actual");
+      expect(prompt).toMatch(/reject it with your reasoning rather than agreeing performatively/);
+    }
+  });
+
   it("autonomous plan feedback folds into a new synthesized plan, not a separate fix-plan file", () => {
     // Re-review and the transition read only the latest `*synthesized*` plan, so
     // plan-phase feedback must land there.

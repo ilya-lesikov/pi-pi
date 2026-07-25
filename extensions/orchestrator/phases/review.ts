@@ -47,6 +47,8 @@ export function reviewSystemPrompt(taskDir: string, pass: number, phase?: string
       "4. If reviewers found no actionable gaps (e.g. task already done, minor suggestions only): do NOT modify the files",
       "5. Ignore suggestions that don't affect downstream planning quality",
       "",
+      "Before accepting a finding, verify it against the actual research/code and the existing artifacts — do not edit on the reviewer's say-so. If a finding is wrong or would not improve planning, reject it with your reasoning rather than agreeing performatively; agreeing without verifying is the failure mode to avoid, in any language. When you apply a change, ground it in that verified evidence before treating it as done.",
+      "",
       "# Interaction (adapted streamlined flow for this synthesis step):",
       "- Work autonomously through the reviewer outputs; do NOT interrupt with mid-flow questions — a genuine blocker is the only reason to stop and ask.",
       `- For a hard or contentious call (reviewers disagree, or a high-stakes change to USER_REQUEST/RESEARCH), consult an advisor whose model family differs from yours before committing — you run on Claude, so default to a GPT-family advisor; escalate for the hardest calls.`,
