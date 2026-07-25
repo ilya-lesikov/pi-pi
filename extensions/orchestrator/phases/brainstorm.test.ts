@@ -12,6 +12,28 @@ describe("brainstormSystemPrompt", () => {
     expect(prompt).not.toContain("pp_phase_complete");
     expect(prompt).not.toContain("/pp");
   });
+
+  it("conversation branch uses the Socratic one-at-a-time-with-second-push clarify policy", () => {
+    const prompt = brainstormSystemPrompt("brainstorm", "explore ideas", "/tmp/task", "/tmp");
+    expect(prompt).toContain("CLARIFY ONE AT A TIME");
+    expect(prompt).toContain("push once more");
+    expect(prompt).not.toContain("batch them into one focused round");
+  });
+
+  it("task branch also carries the Socratic clarify policy and degrades to recorded assumptions when autonomous", () => {
+    const prompt = brainstormSystemPrompt("task", "do the thing", "/tmp/task", "/tmp");
+    expect(prompt).toContain("CLARIFY ONE AT A TIME");
+    expect(prompt).toContain("artifacts/ASSUMPTIONS.md");
+  });
+
+  it("both branches state anti-sycophancy as a behavior, with any quoted phrase marked as an example", () => {
+    for (const t of ["brainstorm", "task"] as const) {
+      const prompt = brainstormSystemPrompt(t, "x", "/tmp/task", "/tmp");
+      expect(prompt).toContain("take a position");
+      expect(prompt).toMatch(/what evidence would change|what would change it/i);
+      expect(prompt).toMatch(/e\.g\.|illustrative|Examples/);
+    }
+  });
 });
 
 describe("spawnBrainstormReviewers missing prerequisites", () => {

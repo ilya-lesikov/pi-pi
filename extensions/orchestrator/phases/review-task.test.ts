@@ -17,4 +17,11 @@ describe("review-task reviewSystemPrompt", () => {
     expect(prompt).toContain("RESEARCH.md");
     expect(prompt).toContain("pp_write_state_file");
   });
+
+  it("keeps up-front factual scope-clarify intake, NOT the brainstorm Socratic policy", () => {
+    const prompt = reviewSystemPrompt("/tmp/task", "/tmp/cwd");
+    expect(prompt).toContain("CLARIFY SCOPE UP-FRONT");
+    expect(prompt).toContain("If the scope is ambiguous, ask the user before diving in.");
+    expect(prompt).not.toContain("CLARIFY ONE AT A TIME");
+  });
 });

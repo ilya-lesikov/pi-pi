@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { getDefaultConfig, resolvePreset } from "../config.js";
-import { delegationBlock, toolsBlock, parseToolNames, PRINCIPLES_BLOCK } from "./tool-routing.js";
+import { delegationBlock, toolsBlock, parseToolNames, PRINCIPLES_BLOCK, IMPLEMENTATION_PRINCIPLES_BLOCK } from "./tool-routing.js";
 import { createAdvisorAgent } from "./advisor.js";
 import { createDeepDebuggerAgent } from "./deep-debugger.js";
 import { createReviewerAgent } from "./reviewer.js";
 import { createTaskAgent } from "./task.js";
+import { createExploreAgent } from "./explore.js";
+import { createLibrarianAgent } from "./librarian.js";
 import { createPlannerAgent } from "./planner.js";
 import { createPlanReviewerAgent } from "./plan-reviewer.js";
 import { createCodeReviewerAgent } from "./code-reviewer.js";
@@ -61,36 +63,62 @@ describe("toolsBlock only advertises granted tools", () => {
   });
 });
 
-describe("PRINCIPLES_BLOCK code-style rules", () => {
-  it("forbids private-symbol comments and volatile-detail comments", () => {
-    expect(PRINCIPLES_BLOCK).toContain("NEVER comment a private (non-exported) symbol");
-    expect(PRINCIPLES_BLOCK).toContain("volatile detail");
-  });
-
-  it("prefers larger functions / inlining single-use helpers", () => {
-    expect(PRINCIPLES_BLOCK).toContain("Prefer fewer, larger functions");
-    expect(PRINCIPLES_BLOCK).toContain("inline it");
-  });
-
-  it("keeps symbols as private as possible", () => {
-    expect(PRINCIPLES_BLOCK).toContain("Keep everything as private as possible");
-  });
-
-  it("is embedded in every agent factory prompt", () => {
-    const planners = resolvePreset(config, "planners");
-    const artifacts = { userRequest: "u", research: "r", manifest: [] as { title: string; path: string }[] };
-    const factories = [
-      createAdvisorAgent({ model: "anthropic/claude-fable-latest", thinking: "high" }),
-      createDeepDebuggerAgent({ model: "openai/gpt-latest", thinking: "high" }),
-      createReviewerAgent({ model: "openai/gpt-latest", thinking: "high" }),
-      createTaskAgent(config),
-      createPlannerAgent("opus", planners, artifacts, "/out.md", []),
-      createBrainstormReviewerAgent("opus", resolvePreset(config, "brainstormReviewers"), artifacts, "/out.md", []),
-    ];
-    for (const f of factories) {
-      expect(f.prompt).toContain("Keep everything as private as possible");
-      expect(f.prompt).toContain("NEVER comment a private (non-exported) symbol");
+describe("PRINCIPLES_BLOCK degrees-of-freedom split", () => {
+  it("implementation-only code-style rules live in the implementation block, not the shared block", () => {
+    for (const phrase of [
+      "NEVER comment a private (non-exported) symbol",
+      "volatile detail",
+      "Prefer fewer, larger functions",
+      "inline it",
+      "Keep everything as private as possible",
+      "DO NOT WRITE COMMENTS",
+      "No temporary artifacts",
+      "Smallest viable change",
+    ]) {
+      expect(IMPLEMENTATION_PRINCIPLES_BLOCK).toContain(phrase);
+      expect(PRINCIPLES_BLOCK).not.toContain(phrase);
     }
+  });
+
+  it("shared reasoning/evidence rules stay in the shared block", () => {
+    for (const phrase of ["Verify, don't assume", "Evidence over claims", "Match existing patterns", "Think critically"]) {
+      expect(PRINCIPLES_BLOCK).toContain(phrase);
+    }
+  });
+
+  const planners = resolvePreset(config, "planners");
+  const artifacts = { userRequest: "u", research: "r", manifest: [] as { title: string; path: string }[] };
+  const readOnlyFactories: [string, { prompt: string }][] = [
+    ["explore", createExploreAgent(config)],
+    ["librarian", createLibrarianAgent(config)],
+    ["advisor", createAdvisorAgent({ model: "anthropic/claude-fable-latest", thinking: "high" })],
+    ["deep-debugger", createDeepDebuggerAgent({ model: "openai/gpt-latest", thinking: "high" })],
+    ["reviewer", createReviewerAgent({ model: "openai/gpt-latest", thinking: "high" })],
+    ["planner", createPlannerAgent("opus", planners, artifacts, "/out.md", [])],
+    ["plan-reviewer", createPlanReviewerAgent("opus", resolvePreset(config, "planReviewers"), { userRequest: "u", research: "r", synthesizedPlan: "p", manifest: [] }, "/out.md", [])],
+    ["code-reviewer", createCodeReviewerAgent("opus", resolvePreset(config, "codeReviewers"), { userRequest: "u", research: "r", synthesizedPlan: "p", manifest: [] }, "/out.md", [])],
+    ["brainstorm-reviewer", createBrainstormReviewerAgent("opus", resolvePreset(config, "brainstormReviewers"), artifacts, "/out.md", [])],
+  ];
+
+  it("the shared block is embedded in ALL ten agent factory prompts", () => {
+    const all = [...readOnlyFactories.map(([, f]) => f), createTaskAgent(config)];
+    for (const f of all) {
+      expect(f.prompt).toContain("Evidence over claims");
+      expect(f.prompt).toContain("Verify, don't assume");
+    }
+  });
+
+  it("read-only factories do NOT carry implementation-only code-style rules", () => {
+    for (const [, f] of readOnlyFactories) {
+      expect(f.prompt).not.toContain("Keep everything as private as possible");
+      expect(f.prompt).not.toContain("NEVER comment a private (non-exported) symbol");
+    }
+  });
+
+  it("the edit-capable task factory DOES carry implementation-only code-style rules", () => {
+    const t = createTaskAgent(config);
+    expect(t.prompt).toContain("Keep everything as private as possible");
+    expect(t.prompt).toContain("NEVER comment a private (non-exported) symbol");
   });
 });
 
@@ -191,5 +219,53 @@ describe("phased factory prompts: manifest guidance replaces the do-not-re-read 
     expect(b.prompt).toContain("Do NOT spawn task, advisor, deep-debugger, or reviewer");
     expect(b.prompt).toContain("/t/artifacts/design.md");
     expect(b.prompt).toContain("read them from disk with the read tool");
+  });
+});
+
+describe("routing-contract descriptions (what / when / exclusion)", () => {
+  it("explore, librarian, and task descriptions state a fit and an exclusion, third person, with the (pi-pi) suffix", () => {
+    const descs = {
+      explore: createExploreAgent(config).frontmatter.description,
+      librarian: createLibrarianAgent(config).frontmatter.description,
+      task: createTaskAgent(config).frontmatter.description,
+    };
+    for (const d of Object.values(descs)) {
+      expect(d).toContain("best");
+      expect(d).toMatch(/not for|not when/i);
+      expect(d.endsWith("(pi-pi)")).toBe(true);
+    }
+    expect(descs.explore).toMatch(/locat|find|trac/i);
+    expect(descs.librarian).toMatch(/external|docs|librar/i);
+    expect(descs.task).toMatch(/implementation|slice/i);
+  });
+
+  it("delegationBlock remains the sole owner of numeric routing thresholds", () => {
+    const pools = {
+      advisors: [{ name: "advisor_x_high", model: "anthropic/claude-fable-latest", family: "fable", tier: "xsmart", thinking: "high" }],
+      reviewers: [{ name: "reviewer_y_high", model: "openai/gpt-latest", family: "gpt", tier: "smart", thinking: "high" }],
+      deepDebuggers: [{ name: "deep-debugger_z_high", model: "openai/gpt-latest", family: "gpt", tier: "smart", thinking: "high" }],
+    };
+    expect(delegationBlock("opus", pools)).toMatch(/2–3 parallel|4\+ only/);
+    for (const d of [createExploreAgent(config).frontmatter.description, createTaskAgent(config).frontmatter.description]) {
+      expect(d).not.toMatch(/2–3|4\+/);
+    }
+  });
+});
+
+describe("affordance-aligned evidence gates", () => {
+  it("the edit-capable task delegate carries the evidence gate + N/A path", () => {
+    const t = createTaskAgent(config);
+    expect(t.prompt).toContain("Verification gate");
+    expect(t.prompt).toContain("not applicable");
+    expect(t.prompt).toMatch(/in any language/i);
+  });
+
+  it("read-only reviewer / code-reviewer restrict evidence to what their tools can produce", () => {
+    const r = createReviewerAgent({ model: "openai/gpt-latest", thinking: "high" });
+    const c = createCodeReviewerAgent("opus", resolvePreset(config, "codeReviewers"), { userRequest: "u", research: "r", synthesizedPlan: "p", manifest: [] }, "/out.md", []);
+    for (const p of [r.prompt, c.prompt]) {
+      expect(p).toMatch(/MUST NOT run tests|not run test suites/i);
+      expect(p).toMatch(/OPEN QUESTIONS|Open Questions/);
+    }
   });
 });
