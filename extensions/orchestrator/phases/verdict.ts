@@ -96,7 +96,26 @@ export function countOptionalComments(reviewContent: string): number {
       continue;
     }
     const header = raw.match(/^#{1,4}\s*(MINOR|NIT)\b\s*:?(.*)$/i);
-    if (header && header[2].trim() !== "" && !isNoneBody(header[2])) count++;
+    if (header) {
+      // Inline body on the header line counts directly.
+      if (header[2].trim() !== "") {
+        if (!isNoneBody(header[2])) count++;
+        continue;
+      }
+      // Empty header remainder: the finding lives on the following lines (until
+      // the next header). Mirror hasActionableFindings so a `### MINOR` block
+      // with its text below is not silently dropped.
+      let body = "";
+      for (let j = i + 1; j < lines.length; j++) {
+        if (/^#{1,4}\s/.test(lines[j].trim())) break;
+        body += lines[j] + "\n";
+      }
+      const meaningful = body
+        .split("\n")
+        .map((l) => l.trim().replace(/^[-*]\s*/, ""))
+        .filter((l) => l.length > 0);
+      if (meaningful.length > 0 && !meaningful.every((l) => isNoneBody(l))) count++;
+    }
   }
   return count;
 }
@@ -120,7 +139,6 @@ export function reviewPassMinorOnly(
   const files = readdirSync(dir).filter((f) => isReviewFileForRound(f, round));
   if (files.length < expectedReviewerCount) return notMinor;
   let optionalComments = 0;
-  let allApproveClean = true;
   for (const f of files) {
     let content: string;
     try {
@@ -130,12 +148,15 @@ export function reviewPassMinorOnly(
     }
     // Any actionable finding disqualifies minor-only (that's a real re-review).
     if (hasActionableFindings(content)) return notMinor;
-    if (parseVerdict(content) !== "approve") allApproveClean = false;
+    // A NON-approve verdict (NEEDS_CHANGES/REJECT) is NOT minor-only even when
+    // it carries no severity-marked findings — reviewer format drift (prose
+    // findings, no MAJOR:/CRITICAL: bullet) must NOT be silently treated as a
+    // clean pass. Such a verdict stays on the existing re-review path.
+    if (parseVerdict(content) !== "approve") return notMinor;
     optionalComments += countOptionalComments(content);
   }
-  // Fully clean unanimous approve with zero optional comments is NOT minor-only
-  // (it's the clean-pass path); minor-only is "no blockers, but there's optional
-  // feedback or a non-clean-approve verdict".
-  if (allApproveClean && optionalComments === 0) return notMinor;
+  // Every reviewer approved. Zero optional comments = the fully-clean pass
+  // (handled by reviewPassUnanimousApprove), not minor-only.
+  if (optionalComments === 0) return notMinor;
   return { minorOnly: true, optionalComments };
 }

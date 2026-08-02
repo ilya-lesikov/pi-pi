@@ -161,11 +161,37 @@ describe("reviewPassMinorOnly (item 7)", () => {
     expect(r.optionalComments).toBe(2);
   });
 
-  it("is minor-only for a non-approve verdict that carries no actionable finding", () => {
+  it("is NOT minor-only for a NEEDS_CHANGES verdict (stays on re-review, even with only a MINOR note)", () => {
     const rd = join(dir, "code-reviews");
     mkdirSync(rd, { recursive: true });
-    // NEEDS_CHANGES but only a MINOR note -> no blocker, treat as minor-only.
+    // M4: a non-approve verdict must NOT be silently treated as a clean pass —
+    // reviewer format drift (NEEDS_CHANGES + prose, no CRITICAL/MAJOR bullet)
+    // would otherwise advance the phase. It stays on the re-review path.
     writeFileSync(join(rd, "1_a_round-1.md"), "- CRITICAL: none\n- MINOR: tidy import\n- VERDICT: NEEDS_CHANGES");
+    expect(reviewPassMinorOnly(dir, "implement", 1, 1).minorOnly).toBe(false);
+  });
+
+  it("is NOT minor-only for a NEEDS_CHANGES verdict with NO severity markers at all", () => {
+    const rd = join(dir, "code-reviews");
+    mkdirSync(rd, { recursive: true });
+    // The exact M4 inversion: prose findings, no MAJOR:/CRITICAL:/MINOR: bullet.
+    writeFileSync(join(rd, "1_a_round-1.md"), "The error handling here looks fragile.\n- VERDICT: NEEDS_CHANGES");
+    expect(reviewPassMinorOnly(dir, "implement", 1, 1).minorOnly).toBe(false);
+  });
+
+  it("is minor-only when every reviewer APPROVES with optional MINOR comments", () => {
+    const rd = join(dir, "code-reviews");
+    mkdirSync(rd, { recursive: true });
+    writeFileSync(join(rd, "1_a_round-1.md"), "- CRITICAL: none\n- MINOR: tidy import\n- VERDICT: APPROVE");
+    const r = reviewPassMinorOnly(dir, "implement", 1, 1);
+    expect(r.minorOnly).toBe(true);
+    expect(r.optionalComments).toBe(1);
+  });
+
+  it("counts a `### MINOR` header whose finding text is on following lines", () => {
+    const rd = join(dir, "code-reviews");
+    mkdirSync(rd, { recursive: true });
+    writeFileSync(join(rd, "1_a_round-1.md"), "### MINOR\nprefer const over let here\n\n- VERDICT: APPROVE");
     const r = reviewPassMinorOnly(dir, "implement", 1, 1);
     expect(r.minorOnly).toBe(true);
     expect(r.optionalComments).toBe(1);
