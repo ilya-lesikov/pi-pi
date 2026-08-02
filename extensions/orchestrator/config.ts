@@ -83,6 +83,13 @@ export interface PiPiConfig {
     projectAgents: boolean;
     projectClaude: boolean;
   };
+  // Skills manifest injection (item 11). loadProject/loadGlobal gate discovery
+  // per scope; `disabled` lists per-skill ids ("<scope>:<name>") to exclude.
+  skills: {
+    loadProject: boolean;
+    loadGlobal: boolean;
+    disabled: string[];
+  };
   compaction: CompactionConfig;
   agents: {
     maxConcurrentSubagents: number;
@@ -158,6 +165,11 @@ const DEFAULT_CONFIG: PiPiConfig = {
     ancestorClaude: false,
     projectAgents: true,
     projectClaude: false,
+  },
+  skills: {
+    loadProject: false,
+    loadGlobal: false,
+    disabled: [],
   },
   compaction: {
     enabled: true,
@@ -476,6 +488,17 @@ export function validateConfig(config: Record<string, any>): void {
     const ci = requireObject(config.contextInjection, "config.contextInjection");
     for (const k of ["globalAgents", "globalClaude", "ancestorAgents", "ancestorClaude", "projectAgents", "projectClaude"]) {
       ensureBool(ci[k], `config.contextInjection.${k}`);
+    }
+  }
+
+  if (config.skills !== undefined) {
+    const sk = requireObject(config.skills, "config.skills");
+    ensureBool(sk.loadProject, "config.skills.loadProject");
+    ensureBool(sk.loadGlobal, "config.skills.loadGlobal");
+    if (sk.disabled !== undefined) {
+      if (!Array.isArray(sk.disabled) || !sk.disabled.every((x) => typeof x === "string")) {
+        throw new Error("config.skills.disabled must be an array of strings");
+      }
     }
   }
 

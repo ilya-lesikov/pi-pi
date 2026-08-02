@@ -3112,6 +3112,7 @@ async function showSettingsMenu(orchestrator: Orchestrator, ctx: any): Promise<t
       opt("Performance", "Per-operation timeout limits"),
       opt("LSP", "Language server controls"),
       opt("Context", "AGENTS.md / CLAUDE.md injection (global/ancestor/project)"),
+      opt("Skills", "Project/global skill discovery and per-skill enablement"),
       opt("Compaction", "In-phase context compaction trigger"),
       opt("Copilot", "GitHub Copilot model provider (highest precedence)"),
       opt("Flant", "Configure corporate AI model provider"),
@@ -3128,6 +3129,7 @@ async function showSettingsMenu(orchestrator: Orchestrator, ctx: any): Promise<t
     else if (choice === "Performance") await showPerformanceSettings(orchestrator, ctx);
     else if (choice === "LSP") await showLspSettings(ctx);
     else if (choice === "Context") await showContextSettings(orchestrator, ctx);
+    else if (choice === "Skills") await showSkillsSettings(orchestrator, ctx);
     else if (choice === "Compaction") await showCompactionSettings(orchestrator, ctx);
     else if (choice === "Copilot") await showCopilotMenu(orchestrator, ctx);
     else if (choice === "Flant") await showFlantInfraMenu(orchestrator, ctx);
@@ -3156,6 +3158,67 @@ async function showContextSettings(orchestrator: Orchestrator, ctx: any): Promis
     const row = rows.find((r) => choice.startsWith(`${r.label}:`));
     if (row) {
       await showBooleanSetting(orchestrator, ctx, row.label, ["contextInjection", row.key], row.desc, `Do not inject ${row.label}`);
+    }
+  }
+}
+
+// Settings > Skills (item 11): toggle project/global skill discovery and
+// individually enable/disable each discovered skill. Only enabled skills appear
+// in the injected manifest.
+async function showSkillsSettings(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
+  while (true) {
+    const sk = orchestrator.config.skills;
+    const options: OptionInput[] = [
+      opt(`Load project skills: ${sk.loadProject ? "ON" : "OFF"}`, "Discover skills under <project>/.pi/skills"),
+      opt(`Load global skills: ${sk.loadGlobal ? "ON" : "OFF"}`, "Discover skills under ~/.pi/agent/skills"),
+      opt("List skills", "Enable or disable individual discovered skills"),
+      opt("Back", "Return to the previous menu"),
+    ];
+    const choice = await selectOption(ctx, "Skills", options);
+    if (!choice || choice === "Back") return BACK;
+    if (choice.startsWith("Load project skills:")) {
+      await showBooleanSetting(orchestrator, ctx, "Load project skills", ["skills", "loadProject"], "Discover skills under <project>/.pi/skills", "Do not load project skills");
+      continue;
+    }
+    if (choice.startsWith("Load global skills:")) {
+      await showBooleanSetting(orchestrator, ctx, "Load global skills", ["skills", "loadGlobal"], "Discover skills under ~/.pi/agent/skills", "Do not load global skills");
+      continue;
+    }
+    if (choice === "List skills") {
+      await showSkillsListMenu(orchestrator, ctx);
+      continue;
+    }
+  }
+}
+
+// Per-skill enable/disable submenu. Each discovered skill is a toggle whose
+// description shows its scope, purpose, and file PATH.
+async function showSkillsListMenu(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
+  const { discoverSkills } = await import("./skills-manifest.js");
+  while (true) {
+    const sk = orchestrator.config.skills;
+    const discovered = discoverSkills(orchestrator.cwd, sk);
+    if (discovered.length === 0) {
+      ctx.ui.notify("No skills discovered in the enabled scopes.", "info");
+      return BACK;
+    }
+    const disabled = new Set(sk.disabled);
+    const options: OptionInput[] = discovered.map((s) =>
+      opt(`${s.name}: ${disabled.has(s.id) ? "OFF" : "ON"}`, `[${s.scope}] ${s.description} — ${s.filePath}`),
+    );
+    options.push(opt("Back", "Return to the previous menu"));
+    const choice = await selectOption(ctx, "List skills", options);
+    if (!choice || choice === "Back") return BACK;
+    const picked = discovered.find((s) => choice.startsWith(`${s.name}:`));
+    if (picked) {
+      const nextDisabled = new Set(sk.disabled);
+      if (nextDisabled.has(picked.id)) nextDisabled.delete(picked.id);
+      else nextDisabled.add(picked.id);
+      const res = tryApplyConfigChange(orchestrator, "project", ["skills", "disabled"], [...nextDisabled]);
+      ctx.ui.notify(
+        res.ok ? `${picked.name}: ${nextDisabled.has(picked.id) ? "disabled" : "enabled"}` : `Failed: ${res.error}`,
+        res.ok ? "info" : "error",
+      );
     }
   }
 }

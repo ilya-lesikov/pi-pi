@@ -43,6 +43,7 @@ import { askUser, isCancel } from "../../3p/pi-ask-user/index.js";
 import { registerRecallTool, compile as vccCompile } from "../../3p/pi-vcc/index.js";
 import { computeVccMessageRange, buildVccDetails } from "./compaction-dispatch.js";
 import { collectContextFiles, renderContextInjection } from "./context-injection.js";
+import { enabledSkills, renderSkillsManifest } from "./skills-manifest.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { findRootRepo, normalizeRepoPath, resolveRepoForFile, type RepoInfo } from "./repo-utils.js";
 
@@ -2457,6 +2458,11 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     const agentsMd = renderContextInjection(
       collectContextFiles(orchestrator.cwd, orchestrator.config.contextInjection),
     );
+    // item 11: inject the enabled-skills manifest (name/description/path only;
+    // bodies loaded on demand by the agent).
+    const skillsManifest = renderSkillsManifest(
+      enabledSkills(orchestrator.cwd, orchestrator.config.skills),
+    );
     const checklistLine =
       phase === "implement" ? "Keep the plan checklist current: mark each item done (- [ ] → - [x]) as you complete it." : "";
     const taskBlock = [
@@ -2494,6 +2500,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       delegation,
       projectContext,
       agentsMd,
+      skillsManifest,
       taskBlock,
     ]
       .filter(Boolean)

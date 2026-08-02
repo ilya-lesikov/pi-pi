@@ -151,6 +151,14 @@ describe("validateConfig", () => {
     expect(() => validateConfig({ contextInjection: { globalClaude: "yes" } as any })).toThrow("config.contextInjection.globalClaude");
   });
 
+  it("defaults skills to discovery-off and validates its shape", () => {
+    const d = getDefaultConfig();
+    expect(d.skills).toEqual({ loadProject: false, loadGlobal: false, disabled: [] });
+    expect(() => validateConfig({ skills: { loadProject: true, loadGlobal: false, disabled: ["project:x"] } })).not.toThrow();
+    expect(() => validateConfig({ skills: { loadProject: "yes" } as any })).toThrow("config.skills.loadProject");
+    expect(() => validateConfig({ skills: { disabled: [1] } as any })).toThrow("config.skills.disabled");
+  });
+
   it("round-trips the compaction section through loadConfig deep-merge", () => {
     const merged = deepMerge(getDefaultConfig() as any, { compaction: { fraction: 0.25 } });
     expect(merged.compaction.fraction).toBe(0.25);

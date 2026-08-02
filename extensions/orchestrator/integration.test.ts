@@ -70,6 +70,7 @@ vi.mock("./config.js", async (importOriginal) => {
       projectAgents: true,
       projectClaude: false,
     },
+    skills: { loadProject: false, loadGlobal: false, disabled: [] },
     compaction: { enabled: true, fraction: 0.3, floorTokens: 250000, perModel: {} },
     agents: {
       maxConcurrentSubagents: 7,
@@ -234,6 +235,13 @@ function makeConfig() {
       loadExtraRepoConfigs: true,
       logLevel: "info",
     },
+    contextInjection: {
+      globalAgents: false, globalClaude: false,
+      ancestorAgents: false, ancestorClaude: false,
+      projectAgents: true, projectClaude: false,
+    },
+    skills: { loadProject: false, loadGlobal: false, disabled: [] },
+    compaction: { enabled: true, fraction: 0.3, floorTokens: 250000, perModel: {} },
     agents: {
       maxConcurrentSubagents: 7,
       orchestrators: {
@@ -4349,7 +4357,7 @@ describe("menu contracts", () => {
 
     menu
       .expect({ question: "/pp", options: { include: ["Settings"] }, choose: "Settings" })
-      .expect({ question: "Settings", options: { exact: ["General", "Agents", "Commands", "Performance", "LSP", "Context", "Compaction", "Copilot", "Flant", "Info", "Back"] }, choose: "Back" })
+      .expect({ question: "Settings", options: { exact: ["General", "Agents", "Commands", "Performance", "LSP", "Context", "Skills", "Compaction", "Copilot", "Flant", "Info", "Back"] }, choose: "Back" })
       .expect({ question: "/pp", options: { include: ["Back to prompt"] }, choose: "Back to prompt" });
 
     const pp = getCommand(pi, "pp");
