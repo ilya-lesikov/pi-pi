@@ -81,3 +81,61 @@ export function reviewPassUnanimousApprove(
   }
   return true;
 }
+
+// Count MINOR/NIT (non-actionable) findings across all reviewer outputs for a
+// round. Used to describe a minor-only pass ("passed with N optional comments").
+// Mirrors hasActionableFindings' line/header scan but for the MINOR|NIT tokens.
+export function countOptionalComments(reviewContent: string): number {
+  const lines = reviewContent.split("\n");
+  let count = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i].trim();
+    const inline = raw.replace(/^[-*]\s*/, "").match(/^(MINOR|NIT)\b\s*:?(.*)$/i);
+    if (inline && !raw.startsWith("#")) {
+      if (!isNoneBody(inline[2])) count++;
+      continue;
+    }
+    const header = raw.match(/^#{1,4}\s*(MINOR|NIT)\b\s*:?(.*)$/i);
+    if (header && header[2].trim() !== "" && !isNoneBody(header[2])) count++;
+  }
+  return count;
+}
+
+// A review pass is MINOR-ONLY when every expected reviewer produced output, NONE
+// has an actionable (CRITICAL/MAJOR) finding, but it is NOT the fully-clean
+// unanimous-approve case (there ARE optional MINOR/NIT comments or a non-approve
+// verdict that carries no actionable finding). This is the item-7 "review
+// broadly passed, here are optional comments" state. Returns the optional-comment
+// count (0 means "not minor-only" — either clean-approve or actionable/incomplete).
+export function reviewPassMinorOnly(
+  taskDir: string,
+  phase: Phase,
+  round: number,
+  expectedReviewerCount: number,
+): { minorOnly: boolean; optionalComments: number } {
+  const notMinor = { minorOnly: false, optionalComments: 0 };
+  if (expectedReviewerCount <= 0) return notMinor;
+  const dir = reviewsDirForPhase(taskDir, phase);
+  if (!existsSync(dir)) return notMinor;
+  const files = readdirSync(dir).filter((f) => isReviewFileForRound(f, round));
+  if (files.length < expectedReviewerCount) return notMinor;
+  let optionalComments = 0;
+  let allApproveClean = true;
+  for (const f of files) {
+    let content: string;
+    try {
+      content = readFileSync(join(dir, f), "utf-8");
+    } catch {
+      return notMinor;
+    }
+    // Any actionable finding disqualifies minor-only (that's a real re-review).
+    if (hasActionableFindings(content)) return notMinor;
+    if (parseVerdict(content) !== "approve") allApproveClean = false;
+    optionalComments += countOptionalComments(content);
+  }
+  // Fully clean unanimous approve with zero optional comments is NOT minor-only
+  // (it's the clean-pass path); minor-only is "no blockers, but there's optional
+  // feedback or a non-clean-approve verdict".
+  if (allApproveClean && optionalComments === 0) return notMinor;
+  return { minorOnly: true, optionalComments };
+}

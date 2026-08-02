@@ -31,7 +31,7 @@ import { resolveModel, getModelInfo, updateRegistryFromAvailableModels } from ".
 import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
 import { spawnCodeReviewers } from "./phases/review.js";
 import { spawnBrainstormReviewers } from "./phases/brainstorm.js";
-import { reviewPassUnanimousApprove } from "./phases/verdict.js";
+import { reviewPassUnanimousApprove, reviewPassMinorOnly } from "./phases/verdict.js";
 import { nextPhase, validateExitCriteria } from "./phases/machine.js";
 import { openPlannotator, waitForPlannotatorResult, cancelPendingPlannotatorWait } from "./plannotator.js";
 import { advanceBanner } from "./messages.js";
@@ -529,6 +529,11 @@ async function runReviewCyclePass(
 ): Promise<{ handled: PhaseCompleteResult } | { done: true }> {
   const active = orchestrator.active!;
   let justFinalizedReviewCycle = false;
+  // item 7: a minor-only pass (no CRITICAL/MAJOR, but not a fully-clean approve)
+  // is treated as a PASS with optional comments — the agent fixes worthwhile
+  // minors once (autonomous) or is shown the optional feedback (guided), then
+  // advances with NO extra review round. Captured here to shape the message.
+  let minorOnlyComments = 0;
   if (active.state.reviewCycle?.step === "apply_feedback") {
     const completedRound = active.state.reviewCycle.pass;
     const completedPreset = normalizeStoredReviewPresetName(orchestrator, phase);
@@ -538,10 +543,33 @@ async function runReviewCyclePass(
     if (reviewPassUnanimousApprove(active.dir, phase, completedRound, enabledReviewerCount)) {
       active.state.reviewApprovedClean = true;
       saveTask(active.dir, active.state);
+    } else {
+      const minor = reviewPassMinorOnly(active.dir, phase, completedRound, enabledReviewerCount);
+      if (minor.minorOnly) {
+        // No blockers — advance without another review round, exactly like a
+        // clean approve, but remember the optional-comment count for messaging.
+        active.state.reviewApprovedClean = true;
+        minorOnlyComments = minor.optionalComments;
+        saveTask(active.dir, active.state);
+      }
     }
   }
   const completedAutoPasses = active.state.reviewPassByKind?.[phase]?.auto ?? 0;
   const capLabel = maxReviewPasses >= 999 ? "∞" : `${maxReviewPasses}`;
+
+  // A minor-only pass advances (reviewApprovedClean set above) but with a
+  // "passed — N optional comment(s)" directive instead of "found changes to
+  // make": autonomous fixes only genuinely worthwhile minors (skipping pure
+  // style) then proceeds; no re-review round is armed.
+  if (justFinalizedReviewCycle && minorOnlyComments > 0) {
+    const plural = minorOnlyComments === 1 ? "" : "s";
+    return {
+      handled: {
+        content: [{ type: "text", text: `Review passed — ${minorOnlyComments} optional comment${plural} and no blocking (critical/major) findings. Using your judgment, apply only the optional comments genuinely worth fixing and skip pure style/opinion; do NOT run another review round. Then call pp_phase_complete again to advance the phase.` }],
+        details: {},
+      },
+    };
+  }
 
   if (justFinalizedReviewCycle && !active.state.reviewApprovedClean && reviewPreset && maxReviewPasses > 0 && completedAutoPasses < maxReviewPasses) {
     return {

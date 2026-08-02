@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { parseVerdict, hasActionableFindings, reviewPassUnanimousApprove } from "./verdict.js";
+import { parseVerdict, hasActionableFindings, reviewPassUnanimousApprove, reviewPassMinorOnly, countOptionalComments } from "./verdict.js";
 
 describe("parseVerdict", () => {
   it("parses inline colon form", () => {
@@ -135,5 +135,60 @@ describe("reviewPassUnanimousApprove", () => {
     mkdirSync(rd, { recursive: true });
     writeFileSync(join(rd, "1_a_round-1.md"), "- VERDICT: APPROVE");
     expect(reviewPassUnanimousApprove(dir, "plan", 1, 1)).toBe(true);
+  });
+});
+
+describe("countOptionalComments", () => {
+  it("counts MINOR and NIT findings, ignoring none-bodies", () => {
+    expect(countOptionalComments("- MINOR: rename x\n- NIT: trailing space\n- MINOR: (none)")).toBe(2);
+    expect(countOptionalComments("### MINOR\nNone.\n")).toBe(0);
+    expect(countOptionalComments("- CRITICAL: bug")).toBe(0);
+  });
+});
+
+describe("reviewPassMinorOnly (item 7)", () => {
+  let dir: string;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "verdict-minor-")); });
+  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+  it("is minor-only when there are optional comments but no actionable findings", () => {
+    const rd = join(dir, "code-reviews");
+    mkdirSync(rd, { recursive: true });
+    writeFileSync(join(rd, "1_a_round-1.md"), "- CRITICAL: none\n- MINOR: rename x\n- VERDICT: APPROVE");
+    writeFileSync(join(rd, "1_b_round-1.md"), "- MAJOR: none\n- NIT: spacing\n- VERDICT: APPROVE");
+    const r = reviewPassMinorOnly(dir, "implement", 1, 2);
+    expect(r.minorOnly).toBe(true);
+    expect(r.optionalComments).toBe(2);
+  });
+
+  it("is minor-only for a non-approve verdict that carries no actionable finding", () => {
+    const rd = join(dir, "code-reviews");
+    mkdirSync(rd, { recursive: true });
+    // NEEDS_CHANGES but only a MINOR note -> no blocker, treat as minor-only.
+    writeFileSync(join(rd, "1_a_round-1.md"), "- CRITICAL: none\n- MINOR: tidy import\n- VERDICT: NEEDS_CHANGES");
+    const r = reviewPassMinorOnly(dir, "implement", 1, 1);
+    expect(r.minorOnly).toBe(true);
+    expect(r.optionalComments).toBe(1);
+  });
+
+  it("is NOT minor-only when any reviewer has an actionable finding", () => {
+    const rd = join(dir, "code-reviews");
+    mkdirSync(rd, { recursive: true });
+    writeFileSync(join(rd, "1_a_round-1.md"), "- CRITICAL: null deref at x.ts:1\n- VERDICT: NEEDS_CHANGES");
+    expect(reviewPassMinorOnly(dir, "implement", 1, 1).minorOnly).toBe(false);
+  });
+
+  it("is NOT minor-only for a fully-clean unanimous approve (that's the clean path)", () => {
+    const rd = join(dir, "code-reviews");
+    mkdirSync(rd, { recursive: true });
+    writeFileSync(join(rd, "1_a_round-1.md"), "- CRITICAL: none\n- VERDICT: APPROVE");
+    expect(reviewPassMinorOnly(dir, "implement", 1, 1).minorOnly).toBe(false);
+  });
+
+  it("is NOT minor-only when fewer files than expected reviewers (incomplete)", () => {
+    const rd = join(dir, "code-reviews");
+    mkdirSync(rd, { recursive: true });
+    writeFileSync(join(rd, "1_a_round-1.md"), "- MINOR: x\n- VERDICT: APPROVE");
+    expect(reviewPassMinorOnly(dir, "implement", 1, 2).minorOnly).toBe(false);
   });
 });
