@@ -229,13 +229,50 @@ describe("flant-infra", () => {
 
     const groups = config.agents.subagents.presetGroups;
     for (const group of ["planners", "planReviewers", "codeReviewers", "brainstormReviewers"]) {
-      for (const preset of Object.values(groups[group].presets) as any[]) {
+      for (const [presetName, preset] of Object.entries(groups[group].presets) as [string, any][]) {
+        // The gpt-only "quick" code-review preset intentionally enables ONLY
+        // gpt (a single lightweight reviewer); the shared fable+gpt invariant
+        // applies to every other preset.
+        if (presetName === "quick") continue;
         expect(preset.agents.fable.enabled).toBe(true);
         expect(preset.agents.opus.enabled).toBe(false);
         expect(preset.agents.gemini.enabled).toBe(false);
         expect(preset.agents.gpt.enabled).toBe(true);
       }
     }
+  });
+
+  it("adds a gpt-only 'quick' preset (gpt-terra) to codeReviewers only", async () => {
+    const dir = makeTempDir();
+    const mod = await loadFlantInfraModule(dir);
+
+    const config = mod.generateFlantConfig(
+      ["claude-fable-5", "claude-opus-4-8", "gpt-5.6-sol", "gpt-5.6-sol-pro", "gpt-5.6-terra", "gpt-5.6-luna"],
+      false,
+    ) as any;
+    const groups = config.agents.subagents.presetGroups;
+
+    // quick exists ONLY on codeReviewers.
+    expect(groups.codeReviewers.presets.quick).toBeDefined();
+    expect(groups.planners.presets.quick).toBeUndefined();
+    expect(groups.planReviewers.presets.quick).toBeUndefined();
+    expect(groups.brainstormReviewers.presets.quick).toBeUndefined();
+
+    // Roster: only gpt enabled, and it is the balanced gpt-terra tier.
+    const q = groups.codeReviewers.presets.quick.agents;
+    expect(q.gpt.enabled).toBe(true);
+    expect(q.gpt.model).toBe("pp-flant-openai/gpt-5.6-terra");
+    expect(q.fable.enabled).toBe(false);
+    expect(q.opus.enabled).toBe(false);
+    expect(q.gemini.enabled).toBe(false);
+
+    // Tier mapping for the high-effort pools/presets: advisors + deepDebuggers
+    // + deep review presets get gpt-sol-pro; everyday reviewers get gpt-sol.
+    expect(config.agents.subagents.pools.advisors[1].model).toBe("pp-flant-openai/gpt-5.6-sol-pro");
+    expect(config.agents.subagents.pools.deepDebuggers[0].model).toBe("pp-flant-openai/gpt-5.6-sol-pro");
+    expect(config.agents.subagents.pools.reviewers[0].model).toBe("pp-flant-openai/gpt-5.6-sol");
+    expect(groups.codeReviewers.presets.regular.agents.gpt.model).toBe("pp-flant-openai/gpt-5.6-sol");
+    expect(groups.codeReviewers.presets.deep.agents.gpt.model).toBe("pp-flant-openai/gpt-5.6-sol-pro");
   });
 
   it("routes fable exactly like opus (flant + subscription specs) and points advisor at fable", async () => {

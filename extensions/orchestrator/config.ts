@@ -189,6 +189,15 @@ const DEFAULT_CONFIG: PiPiConfig = {
                 gemini: { enabled: false, model: "google/gemini-pro-latest", thinking: "xhigh" },
               },
             },
+            // GPT-only lightweight review roster (codeReviewers only).
+            quick: {
+              agents: {
+                fable: { enabled: false, model: "anthropic/claude-fable-latest", thinking: "high" },
+                opus: { enabled: false, model: "anthropic/claude-opus-latest", thinking: "high" },
+                gpt: { enabled: true, model: "openai/gpt-terra-latest", thinking: "high" },
+                gemini: { enabled: false, model: "google/gemini-pro-latest", thinking: "high" },
+              },
+            },
           },
         },
         planReviewers: {

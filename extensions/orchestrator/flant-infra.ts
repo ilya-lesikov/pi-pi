@@ -768,8 +768,24 @@ export function generateFlantConfig(models: string[], subscriptionActive = false
   const latestOpus = pickLatest(uniqueModels.filter((m) => /^claude-opus-/.test(m)));
   const latestFable = pickLatest(uniqueModels.filter((m) => /^claude-fable-/.test(m)));
   const latestClaude = pickLatest(uniqueModels.filter((m) => /^claude-/.test(m)));
+  // gpt-5.6 tier pickers. Base and -pro are distinct SKUs within a tier: the
+  // `-pro` regexes are end-anchored on `-pro`, the base regexes negative-look
+  // ahead to exclude `-pro`, so gpt-5.6-sol and gpt-5.6-sol-pro never collide.
+  const gptSol = pickLatest(uniqueModels.filter((m) => /^gpt-[0-9.]+-sol$/.test(m)));
+  const gptSolPro = pickLatest(uniqueModels.filter((m) => /^gpt-[0-9.]+-sol-pro$/.test(m)));
+  const gptTerra = pickLatest(uniqueModels.filter((m) => /^gpt-[0-9.]+-terra$/.test(m)));
+  const gptLuna = pickLatest(uniqueModels.filter((m) => /^gpt-[0-9.]+-luna$/.test(m)));
+  // Legacy fallback for pre-5.6 gateways that expose a single gpt SKU: keep the
+  // old "latest gpt-5, else any gpt" behavior so tier pickers degrade to it.
   const latestGpt5 = pickLatest(uniqueModels.filter((m) => /^gpt-5/.test(m) && !m.endsWith("-mini") && !m.endsWith("-codex")));
-  const latestGpt = latestGpt5 ?? pickLatest(uniqueModels.filter((m) => /^gpt-/.test(m) && !m.endsWith("-mini") && !m.endsWith("-codex")));
+  const latestGptLegacy = latestGpt5 ?? pickLatest(uniqueModels.filter((m) => /^gpt-/.test(m) && !m.endsWith("-mini") && !m.endsWith("-codex")));
+  // Per-role gpt selections with graceful degradation to the legacy single SKU
+  // when the split tiers are absent (older catalogs / non-flant gateways).
+  const gptSmartPro = gptSolPro ?? gptSol ?? latestGptLegacy;
+  const gptSmart = gptSol ?? latestGptLegacy;
+  const gptBalanced = gptTerra ?? gptSmart;
+  const gptFast = gptLuna ?? gptBalanced;
+  const latestGpt = gptSmart;
   const latestGeminiPro = pickLatest(uniqueModels.filter((m) => /^gemini-.*-pro$/.test(m)));
   const latestDeepseek = pickLatest(uniqueModels.filter((m) => /^deepseek-/.test(m)));
   const latestGrok = pickLatest(uniqueModels.filter((m) => /^grok-/.test(m)));
@@ -777,10 +793,13 @@ export function generateFlantConfig(models: string[], subscriptionActive = false
 
   const fallback = latestOpus ?? latestClaude ?? latestGpt ?? latestGeminiPro ?? latestDeepseek ?? latestGrok ?? uniqueModels[0];
   const implementModel = latestOpus ?? latestClaude ?? fallback;
-  const debugModel = latestGpt ?? latestGeminiPro ?? latestDeepseek ?? fallback;
+  // Orchestrator gpt-fallback uses the smart tier (gpt-sol).
+  const debugModel = gptSmart ?? latestGeminiPro ?? latestDeepseek ?? fallback;
   const brainstormModel = latestOpus ?? latestClaude ?? fallback;
   const taskModel = latestOpus ?? latestClaude ?? fallback;
-  const fastModel = fastest ?? debugModel;
+  // Fast simple-subagents (explore/librarian) prefer a cheap gemini/haiku, then
+  // the fast gpt tier (gpt-luna), before the smart gpt fallback.
+  const fastModel = fastest ?? gptFast ?? debugModel;
 
   return {
     agents: {
@@ -799,18 +818,20 @@ export function generateFlantConfig(models: string[], subscriptionActive = false
           task: { model: modelSpec(taskModel, sub(taskModel)), thinking: "medium" },
         },
         pools: {
+          // High-effort pools get the -pro reasoning tier (gpt-sol-pro).
           advisors: [
             makeVariant(latestFable, fallback, sub),
-            makeVariant(latestGpt, fallback, sub),
+            makeVariant(gptSmartPro, fallback, sub),
             disabledByDefault(makeVariant(latestGeminiPro, fallback, sub)),
           ],
+          // Everyday reviewers use the plain smart tier (gpt-sol).
           reviewers: [
-            makeVariant(latestGpt, fallback, sub),
+            makeVariant(gptSmart, fallback, sub),
             makeVariant(latestFable, fallback, sub),
             disabledByDefault(makeVariant(latestGeminiPro, fallback, sub)),
           ],
           deepDebuggers: [
-            makeVariant(latestGpt, fallback, sub),
+            makeVariant(gptSmartPro, fallback, sub),
             makeVariant(latestFable, fallback, sub),
             disabledByDefault(makeVariant(latestGeminiPro, fallback, sub)),
           ],
@@ -821,7 +842,7 @@ export function generateFlantConfig(models: string[], subscriptionActive = false
               agents: {
                 fable: makeVariant(latestFable, fallback, sub),
                 opus: disabledByDefault(makeVariant(latestOpus, fallback, sub)),
-                gpt: makeVariant(latestGpt, fallback, sub),
+                gpt: makeVariant(gptSmart, fallback, sub),
                 gemini: disabledByDefault(makeVariant(latestGeminiPro, fallback, sub)),
               },
             },
@@ -831,7 +852,7 @@ export function generateFlantConfig(models: string[], subscriptionActive = false
               agents: {
                 fable: makeVariant(latestFable, fallback, sub),
                 opus: disabledByDefault(makeVariant(latestOpus, fallback, sub)),
-                gpt: makeVariant(latestGpt, fallback, sub),
+                gpt: makeVariant(gptSmart, fallback, sub),
                 gemini: disabledByDefault(makeVariantWithThinking(latestGeminiPro, fallback, "xhigh", sub)),
               },
             },
@@ -839,7 +860,7 @@ export function generateFlantConfig(models: string[], subscriptionActive = false
               agents: {
                 fable: makeVariantWithThinking(latestFable, fallback, "xhigh", sub),
                 opus: disabledByDefault(makeVariantWithThinking(latestOpus, fallback, "xhigh", sub)),
-                gpt: makeVariantWithThinking(latestGpt, fallback, "xhigh", sub),
+                gpt: makeVariantWithThinking(gptSmartPro, fallback, "xhigh", sub),
                 gemini: disabledByDefault(makeVariantWithThinking(latestGeminiPro, fallback, "xhigh", sub)),
               },
             },
@@ -849,7 +870,7 @@ export function generateFlantConfig(models: string[], subscriptionActive = false
               agents: {
                 fable: makeVariant(latestFable, fallback, sub),
                 opus: disabledByDefault(makeVariant(latestOpus, fallback, sub)),
-                gpt: makeVariant(latestGpt, fallback, sub),
+                gpt: makeVariant(gptSmart, fallback, sub),
                 gemini: disabledByDefault(makeVariantWithThinking(latestGeminiPro, fallback, "xhigh", sub)),
               },
             },
@@ -857,8 +878,19 @@ export function generateFlantConfig(models: string[], subscriptionActive = false
               agents: {
                 fable: makeVariantWithThinking(latestFable, fallback, "xhigh", sub),
                 opus: disabledByDefault(makeVariantWithThinking(latestOpus, fallback, "xhigh", sub)),
-                gpt: makeVariantWithThinking(latestGpt, fallback, "xhigh", sub),
+                gpt: makeVariantWithThinking(gptSmartPro, fallback, "xhigh", sub),
                 gemini: disabledByDefault(makeVariantWithThinking(latestGeminiPro, fallback, "xhigh", sub)),
+              },
+            },
+            // GPT-only lightweight review roster: a single balanced gpt-terra
+            // reviewer for cheap/fast passes. codeReviewers ONLY (not planners/
+            // planReviewers/brainstormReviewers).
+            quick: {
+              agents: {
+                fable: disabledByDefault(makeVariant(latestFable, fallback, sub)),
+                opus: disabledByDefault(makeVariant(latestOpus, fallback, sub)),
+                gpt: makeVariant(gptBalanced, fallback, sub),
+                gemini: disabledByDefault(makeVariant(latestGeminiPro, fallback, sub)),
               },
             },
           }),
@@ -867,7 +899,7 @@ export function generateFlantConfig(models: string[], subscriptionActive = false
               agents: {
                 fable: makeVariant(latestFable, fallback, sub),
                 opus: disabledByDefault(makeVariant(latestOpus, fallback, sub)),
-                gpt: makeVariant(latestGpt, fallback, sub),
+                gpt: makeVariant(gptSmart, fallback, sub),
                 gemini: disabledByDefault(makeVariantWithThinking(latestGeminiPro, fallback, "xhigh", sub)),
               },
             },
@@ -875,7 +907,7 @@ export function generateFlantConfig(models: string[], subscriptionActive = false
               agents: {
                 fable: makeVariantWithThinking(latestFable, fallback, "xhigh", sub),
                 opus: disabledByDefault(makeVariantWithThinking(latestOpus, fallback, "xhigh", sub)),
-                gpt: makeVariantWithThinking(latestGpt, fallback, "xhigh", sub),
+                gpt: makeVariantWithThinking(gptSmartPro, fallback, "xhigh", sub),
                 gemini: disabledByDefault(makeVariantWithThinking(latestGeminiPro, fallback, "xhigh", sub)),
               },
             },
