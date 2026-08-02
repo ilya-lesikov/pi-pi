@@ -102,15 +102,18 @@ async function offerFallback(
   const log = getLogger();
   // subFallbackPendingDecision is set SYNCHRONOUSLY at the dispatch site (the
   // subagents:failed / main turn_end handler) to suppress autonomous
-  // planner/reviewer auto-retry until this dispatch RESOLVES the decision. Every
-  // exit path of offerFallback resolves it, so it must be cleared here — not
-  // only in the dialogue's finally — or the auto path (the default) and the
-  // early returns would leak it true for the rest of the task, permanently
-  // suppressing failed-variant auto-retry.
-  if (orchestrator.subFallbackDialogPending) {
-    orchestrator.subFallbackPendingDecision = false;
-    return;
-  }
+  // planner/reviewer auto-retry until this dispatch RESOLVES the decision. Most
+  // exit paths (the auto branch and the !hasUI early return below) resolve it
+  // here, since the dialogue's finally would never run for them.
+  //
+  // EXCEPTION: when a dialogue is ALREADY open (a concurrent second sub-429
+  // dispatch), we must NOT clear the flag — the open dialogue's finally still
+  // owns the clear and runs after this concurrent dispatch. Clearing it here
+  // (synchronously, before this handler's trailing completion checks) would
+  // briefly drop the suppression and let the autonomous failed-variant
+  // auto-retry respawn on the STILL-sub-routed model, re-hitting the limit and
+  // burning its once-only retry budget. Just return.
+  if (orchestrator.subFallbackDialogPending) return;
   // Automatic mode (default): skip the permission dialogue and switch straight
   // to the next tier, surfacing a non-blocking notification instead. Checked
   // BEFORE the hasUI guard so a headless autonomous run still auto-switches.

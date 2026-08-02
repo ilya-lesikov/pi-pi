@@ -178,6 +178,18 @@ describe("handleMainRateLimit", () => {
     expect(mocks.askUser).not.toHaveBeenCalled();
   });
 
+  it("a concurrent dispatch while a dialogue is open does NOT clear subFallbackPendingDecision (round-3 MINOR-1)", async () => {
+    // Manual mode: dialogue #1 is open; a second sub-429 dispatch re-sets the
+    // flag. The concurrent dispatch must NOT clear it — the open dialogue's
+    // finally owns the clear. Clearing here would let the autonomous auto-retry
+    // respawn on the still-sub-routed model and burn its once-only budget.
+    const orch = makeOrchestrator({ subFallbackDialogPending: true, subFallbackPendingDecision: true });
+    const ctx = makeCtx();
+    await handleMainRateLimit(orch, ctx, "sub/claude", "sub");
+    expect(mocks.askUser).not.toHaveBeenCalled();
+    expect(orch.subFallbackPendingDecision).toBe(true);
+  });
+
   it("aborts activation when the task token changes mid-dialog", async () => {
     const orch = makeOrchestrator();
     mocks.askUser.mockImplementation(async () => {
