@@ -28,7 +28,7 @@ import {
   loadPhaseReviewOutputs,
   hasFinalPassAnchors,
 } from "./context.js";
-import { detectDefaultBranch, enterReviewCycle, finalizeReviewCycle, isReviewCycleLive, registerFeatureToolsAndAgents } from "./event-handlers.js";
+import { detectDefaultBranch, enterReviewCycle, finalizeReviewCycle, isReviewCycleLive, reconcileWedgedReviewCycle, registerFeatureToolsAndAgents } from "./event-handlers.js";
 import { Orchestrator } from "./orchestrator.js";
 import { cancelPendingPlannotatorWait, openPlannotator, openAnnotateReview, waitForPlannotatorResult } from "./plannotator.js";
 import { advanceBanner } from "./messages.js";
@@ -4105,6 +4105,12 @@ export async function showActiveTaskMenu(
       const resumeText = await runPlannotatorCursor(orchestrator, ctx);
       if (resumeText) return resumeText;
     }
+    // Bug B defensive net: before drawing the menu, self-heal a review cycle
+    // that is wedged in await_reviewers with zero genuinely-live reviewers
+    // (a crashed reviewer that never finalized). This finalizes from on-disk
+    // outputs so Review/Next reappear instead of a dead Complete/Pause-only menu.
+    reconcileWedgedReviewCycle(orchestrator);
+
     const phase = task.state.phase;
     const step = task.state.step;
     const effectiveMode = getEffectivePhaseMode(task.state);
@@ -4131,13 +4137,25 @@ export async function showActiveTaskMenu(
     const opt = (title: string, description: string): OptionInput => ({ title, description });
 
     if (effectiveMode === "autonomous" && !forceGuided) {
-      const { choice: autoChoice, cancelReason } = await selectOptionCancelable(ctx, `/pp\n\nTask: ${task.type}\nPhase: ${phase}${summary !== "/pp" ? `\n\n${summary}` : ""}`, [
-        opt("Complete task", "Mark task as done and clean up"),
-        opt("Pause task", "Suspend task to resume later"),
-        opt("Subagents", "View and manage running subagents"),
-        opt("Settings", "Models, agents, commands, and other configuration"),
-        opt("Back to prompt", "Return to the prompt and keep working"),
-      ]);
+      // Bug A: the autonomous /pp menu previously offered ONLY Complete/Pause/
+      // Subagents/Settings/Back, so after an "Auto review until" loop the user
+      // had no way to Review or advance from here. Surface the SAME guided-style
+      // Review + Next intervention actions (gated on the controller being idle,
+      // i.e. !waiting) WITHOUT persisting a mode change — mirroring the existing
+      // forceGuided display-only pattern. These route into the shared Next/
+      // Review handlers below, identical to guided mode.
+      const autoOptions: OptionInput[] = [];
+      if (!waiting) {
+        autoOptions.push(opt("Next", "Continue to next phase, complete, or pause"));
+        autoOptions.push(opt("Review", `Review ${reviewTarget}: automated reviewers${hasPlannotator ? ", Plannotator, or" : " or"} your own editor pass`));
+      }
+      autoOptions.push(opt("Complete task", "Mark task as done and clean up"));
+      autoOptions.push(opt("Pause task", "Suspend task to resume later"));
+      autoOptions.push(opt("Subagents", "View and manage running subagents"));
+      autoOptions.push(opt("Settings", "Models, agents, commands, and other configuration"));
+      autoOptions.push(opt("Back to prompt", "Return to the prompt and keep working"));
+
+      const { choice: autoChoice, cancelReason } = await selectOptionCancelable(ctx, `/pp\n\nTask: ${task.type}\nPhase: ${phase}${summary !== "/pp" ? `\n\n${summary}` : ""}`, autoOptions);
       // A deliberate ESC only needs distinct handling in tool mode (so
       // pp_phase_complete can stop the turn); in command mode ESC just closes
       // the menu like "Back".
@@ -4150,6 +4168,12 @@ export async function showActiveTaskMenu(
       if (autoChoice === "Settings") {
         await showSettingsMenu(orchestrator, ctx);
         continue;
+      }
+      // Next/Review re-enter the SAME menu in forceGuided mode so the identical
+      // guided submenu logic (advance/auto-review/publish/manual review) runs
+      // for this one interaction — display-only, never persisting the mode.
+      if (autoChoice === "Next" || autoChoice === "Review") {
+        return showActiveTaskMenu(orchestrator, ctx, summary, mode, true);
       }
       if (autoChoice === "Complete task") {
         const text = await finishTask(orchestrator, ctx);

@@ -768,3 +768,50 @@ describe("isReviewCycleLive (#3b re-entrancy guard)", () => {
     rmSync(task.dir, { recursive: true, force: true });
   });
 });
+
+describe("reconcileWedgedReviewCycle (bug B: crashed reviewer no longer wedges the cycle)", () => {
+  it("finalizes a wedged await_reviewers cycle when no reviewer is live but counters are stuck", async () => {
+    const { reconcileWedgedReviewCycle } = await import("./event-handlers.js");
+    orchestrator.active = makeActiveTask();
+    orchestrator.active.dir = mkdtempSync(join(tmpdir(), "pp-review-wedge-"));
+    orchestrator.active.state.reviewCycle = { kind: "auto", step: "await_reviewers", pass: 1 };
+    orchestrator.active.state.step = "await_reviewers";
+    // Simulate the wedge: a reviewer that crashed without decrementing the
+    // counters. No pi-subagents manager is registered in tests, so
+    // countLiveReviewerSubagents sees zero live reviewers.
+    orchestrator.spawnedAgentIds.add("dead-reviewer-1");
+    orchestrator.pendingSubagentSpawns = 1;
+
+    const acted = reconcileWedgedReviewCycle(orchestrator);
+
+    expect(acted).toBe(true);
+    // Stale bookkeeping cleared.
+    expect(orchestrator.spawnedAgentIds.size).toBe(0);
+    expect(orchestrator.pendingSubagentSpawns).toBe(0);
+    // The cycle is unwedged: step is no longer await_reviewers, so the menu's
+    // Review/Next options reappear. (With partial/absent outputs it moves to
+    // apply_feedback so the agent reviews the surviving output itself.)
+    expect(orchestrator.active.state.reviewCycle?.step).not.toBe("await_reviewers");
+    expect(orchestrator.active.state.step).not.toBe("await_reviewers");
+    rmSync(orchestrator.active.dir, { recursive: true, force: true });
+  });
+
+  it("is a no-op when the cycle is not in await_reviewers", async () => {
+    const { reconcileWedgedReviewCycle } = await import("./event-handlers.js");
+    orchestrator.active = makeActiveTask();
+    orchestrator.active.state.reviewCycle = { kind: "auto", step: "apply_feedback", pass: 1 };
+    orchestrator.spawnedAgentIds.add("x");
+    expect(reconcileWedgedReviewCycle(orchestrator)).toBe(false);
+    // Counters untouched.
+    expect(orchestrator.spawnedAgentIds.size).toBe(1);
+  });
+
+  it("is a no-op when counters are already clean (clean completion path owns it)", async () => {
+    const { reconcileWedgedReviewCycle } = await import("./event-handlers.js");
+    orchestrator.active = makeActiveTask();
+    orchestrator.active.state.reviewCycle = { kind: "auto", step: "await_reviewers", pass: 1 };
+    orchestrator.spawnedAgentIds.clear();
+    orchestrator.pendingSubagentSpawns = 0;
+    expect(reconcileWedgedReviewCycle(orchestrator)).toBe(false);
+  });
+});

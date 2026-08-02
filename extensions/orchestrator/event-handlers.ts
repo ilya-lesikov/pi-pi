@@ -193,6 +193,52 @@ function normalizeStoredReviewPresetName(orchestrator: Orchestrator, phase: stri
   return resolvedName;
 }
 
+// Count reviewer subagents that are GENUINELY still live according to the
+// pi-subagents manager (status running/queued). A spawn that crashed before
+// emitting a terminal event leaves stale entries in spawnedAgentIds and/or a
+// stuck pendingSubagentSpawns counter, but the manager no longer reports it as
+// live — that mismatch is the bug-B wedge signal.
+function countLiveReviewerSubagents(orchestrator: Orchestrator): number {
+  const mgr = (globalThis as any)[Symbol.for("pi-subagents:manager")];
+  let live = 0;
+  for (const id of orchestrator.spawnedAgentIds) {
+    const record = mgr?.getRecord?.(id);
+    // No manager record => can't confirm it's alive; treat as NOT live so a
+    // vanished subagent can't wedge the cycle. running/queued => live.
+    if (record?.status === "running" || record?.status === "queued") live++;
+  }
+  return live;
+}
+
+// Bug B (root cause + defensive net): reconcile a review cycle that is stuck in
+// await_reviewers because a crashed/vanished reviewer never decremented
+// spawnedAgentIds / pendingSubagentSpawns. When NO reviewer subagent is actually
+// live per the manager, clear the stale counters and finalize the cycle from the
+// on-disk reviewer outputs (tryCompleteReviewCycle). Returns true when it acted.
+// Safe to call speculatively: no-ops unless the cycle is genuinely wedged.
+export function reconcileWedgedReviewCycle(orchestrator: Orchestrator): boolean {
+  const state = orchestrator.active?.state;
+  if (!state?.reviewCycle || state.reviewCycle.step !== "await_reviewers") return false;
+  if (orchestrator.transitionController.isTransitioning?.()) return false;
+  // Only reconcile when the counters CLAIM work is pending (otherwise
+  // tryCompleteReviewCycle already handles the clean path).
+  const spawnedCount = orchestrator.spawnedAgentIds?.size ?? 0;
+  const claimsPending = spawnedCount > 0 || (orchestrator.pendingSubagentSpawns ?? 0) > 0;
+  if (!claimsPending) return false;
+  // If any reviewer is genuinely live, it's not wedged — leave it alone.
+  if (countLiveReviewerSubagents(orchestrator) > 0) return false;
+
+  getLogger().warn(
+    { s: "review", spawned: orchestrator.spawnedAgentIds.size, pending: orchestrator.pendingSubagentSpawns },
+    "reconciling wedged review cycle: no live reviewers but counters non-zero; clearing and finalizing",
+  );
+  // Drop the stale bookkeeping so tryCompleteReviewCycle's guard passes.
+  orchestrator.spawnedAgentIds.clear();
+  orchestrator.pendingSubagentSpawns = 0;
+  tryCompleteReviewCycle(orchestrator);
+  return true;
+}
+
 function tryCompleteReviewCycle(orchestrator: Orchestrator, spawnedReviewers?: number): void {
   if (
     !orchestrator.active?.state.reviewCycle ||
@@ -1495,6 +1541,10 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
         clearInterval(orchestrator.staleAgentTimer!);
         orchestrator.staleAgentTimer = null;
       }
+      // Bug B root cause: after aborting stale agents, a review cycle can be left
+      // wedged in await_reviewers with counters that never reached zero. Finalize
+      // it from on-disk outputs instead of hanging forever.
+      reconcileWedgedReviewCycle(orchestrator);
     }, 30000);
   }
 

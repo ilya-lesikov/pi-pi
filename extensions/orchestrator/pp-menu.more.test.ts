@@ -391,6 +391,40 @@ describe("showActiveTaskMenu phase branches", () => {
     expect(askQuestions).toHaveLength(1);
   });
 
+  it("bug A: autonomous menu offers Next + Review when the controller is idle/running", async () => {
+    const orchestrator = makeMenuOrchestrator("implement");
+    orchestrator.active.state.mode = "autonomous";
+    orchestrator.transitionController.isRunning = () => true; // idle -> !waiting
+    let optionTitles: string[] = [];
+    const askMock = (await import("../../3p/pi-ask-user/index.js")).askUser as any;
+    askMock.mockImplementationOnce(async (_c: any, opts: any) => {
+      askQuestions.push(opts.question);
+      optionTitles = opts.options.map((o: any) => o.title);
+      return { __cancel: true, reason: "user" };
+    });
+    await showActiveTaskMenu(orchestrator, makeMenuCtx(), "/pp", "command");
+    expect(optionTitles).toContain("Next");
+    expect(optionTitles).toContain("Review");
+    expect(optionTitles).toContain("Complete task");
+  });
+
+  it("bug A: autonomous menu hides Next + Review while a transition is in flight", async () => {
+    const orchestrator = makeMenuOrchestrator("implement");
+    orchestrator.active.state.mode = "autonomous";
+    orchestrator.transitionController.isRunning = () => false; // waiting -> hide
+    let optionTitles: string[] = [];
+    const askMock = (await import("../../3p/pi-ask-user/index.js")).askUser as any;
+    askMock.mockImplementationOnce(async (_c: any, opts: any) => {
+      askQuestions.push(opts.question);
+      optionTitles = opts.options.map((o: any) => o.title);
+      return { __cancel: true, reason: "user" };
+    });
+    await showActiveTaskMenu(orchestrator, makeMenuCtx(), "/pp", "command");
+    expect(optionTitles).not.toContain("Next");
+    expect(optionTitles).not.toContain("Review");
+    expect(optionTitles).toContain("Complete task");
+  });
+
   it("autonomous ESC in tool mode returns the USER_CANCELLED sentinel", async () => {
     const orchestrator = makeMenuOrchestrator("implement");
     orchestrator.active.state.mode = "autonomous";
