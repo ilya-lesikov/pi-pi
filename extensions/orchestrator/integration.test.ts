@@ -3750,25 +3750,32 @@ describe("error retry", () => {
     vi.useRealTimers();
   });
 
-  it("turn_end stops retrying after max retries (non-SDK-retryable)", async () => {
+  it("turn_end retries near-indefinitely then halts past the ~24h wall-clock ceiling", async () => {
     vi.useFakeTimers();
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);
     const ctx = makeCtx();
 
-    await orchestrator.startTask(ctx as any, "implement", "retry max test");
+    await orchestrator.startTask(ctx as any, "implement", "retry ceiling test");
     const turnEnd = pi._handlers.get("turn_end")!;
 
-    // 8 retries then a 9th error turn that trips the halt.
-    for (let i = 0; i < 9; i++) {
+    // Many consecutive error turns well past the old 8-attempt cap: with the
+    // new time-based ceiling these all still schedule a retry (never halt),
+    // because ~no wall-clock time has elapsed under fake timers.
+    for (let i = 0; i < 20; i++) {
       await turnEnd({ message: { stopReason: "error", errorMessage: "invalid tool arguments", content: [] } }, ctx);
     }
+    expect(orchestrator.errorNudgeHalted).toBe(false);
+    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Retrying in"), expect.anything());
 
+    // Advance the clock past the 24h ceiling; the next error turn halts.
+    ctx.ui.notify.mockClear();
+    vi.setSystemTime(Date.now() + 25 * 60 * 60 * 1000);
+    await turnEnd({ message: { stopReason: "error", errorMessage: "invalid tool arguments", content: [] } }, ctx);
     expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Stopping auto-retry"), "error");
     expect(orchestrator.errorNudgeHalted).toBe(true);
 
-    // Once halted, further error turns must NOT arm another retry (this is the
-    // guard against the unbounded-nudge bug).
+    // Once halted, further error turns must NOT arm another retry.
     ctx.ui.notify.mockClear();
     await turnEnd({ message: { stopReason: "error", errorMessage: "invalid tool arguments", content: [] } }, ctx);
     expect(ctx.ui.notify).not.toHaveBeenCalledWith(expect.stringContaining("Retrying in"), "warning");

@@ -25,7 +25,7 @@ import { SUBAGENT_SESSION_KEY } from "./index.js";
 import { registerCommandHandlers, runAfterImplementForActive } from "./command-handlers.js";
 import { registerStateFileTools } from "./pp-state-tools.js";
 import { isAiCommentOnlyChange } from "./ai-comment-cleanup.js";
-import { handleMainRateLimit, handleSubagentRateLimit, isRateLimitError, isExtraUsageError, isMalformedToolHistoryError, isSdkRetryableError } from "./rate-limit-fallback.js";
+import { handleMainRateLimit, handleMonthlyCap, handleSubagentRateLimit, isRateLimitError, isExtraUsageError, isMalformedToolHistoryError, isMonthlyCapError, isSdkRetryableError } from "./rate-limit-fallback.js";
 import { getAgentConfigSnapshot, setExtensionOnlyMode, unregisterAgentDefinitions, registeredAgentNames, buildPoolRoster, baseRoleForName } from "./agents/registry.js";
 import { resolveModel, getModelInfo, updateRegistryFromAvailableModels } from "./model-registry.js";
 import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
@@ -2256,9 +2256,11 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       orchestrator.nudgeHalted = false;
       orchestrator.consecutiveNudges = 0;
       // Genuine user re-engagement also clears the API-error retry halt, so a
-      // fresh request can auto-retry again from a clean counter.
+      // fresh request can auto-retry again from a clean counter and a fresh 24h
+      // wall-clock window.
       orchestrator.errorNudgeHalted = false;
       orchestrator.errorRetryCount = 0;
+      orchestrator.errorRetryFirstAt = null;
       // Capture a real task name (#7): review/quick tasks (and any task started
       // without an explicit description) carry a generic type-string as their
       // description and never produce a USER_REQUEST.md to fall back to. Take the
@@ -2742,6 +2744,14 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
         void handleMainRateLimit(orchestrator, ctx, activeModelId, activeProvider);
         return;
       }
+      // OpenRouter/LiteLLM MONTHLY-CAP 403: an account-level cap, not transient.
+      // Retrying cannot succeed, so demote the failing model's provider tier for
+      // its family (the resolver drops to the next enabled tier) instead of the
+      // generic retry backoff.
+      if (isMonthlyCapError(errorMsg)) {
+        handleMonthlyCap(orchestrator, ctx, activeModelId, activeProvider);
+        return;
+      }
       // The SDK ALSO auto-retries this class of error, but only with its own
       // short budget (getRetrySettings default: maxRetries=3, baseDelayMs=2000 →
       // ~14s of backoff) that runs INSIDE the prompt call. By the time this
@@ -2769,21 +2779,25 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
         return;
       }
       orchestrator.errorRetryCount = (orchestrator.errorRetryCount ?? 0) + 1;
-      // 8 attempts with exponential backoff clamped at 60s: 2,4,8,16,32,60,60,60
-      // ≈ 242s (~4min) total window. A gateway 503 can persist for minutes, and
-      // an autonomous run has no human to "send any message to resume", so the
-      // window is sized to outlast a transient upstream outage rather than the
-      // SDK's ~14s in-prompt budget. The 60s clamp keeps late attempts from
-      // ballooning to 256s+ while still spacing out probes.
-      const maxRetries = 8;
-      const maxDelayMs = 60_000;
-      if (orchestrator.errorRetryCount <= maxRetries) {
+      // Near-indefinite retry for TRANSIENT errors: exponential backoff clamped
+      // at 180s (3 min), bounded by a ~24h WALL-CLOCK ceiling measured from the
+      // first failing attempt (self-terminating so an autonomous run can't wedge
+      // forever on a persistent outage, but effectively indefinite for real
+      // transient blips). The old 8-attempt/60s-clamp/~4min window killed long
+      // autonomous runs on outages that persist for tens of minutes. ESC/abort
+      // cancels at any point. Elapsed time — not an attempt count — is the cap,
+      // so it's immune to the clamp value changing.
+      const maxDelayMs = 180_000;
+      const ceilingMs = 24 * 60 * 60 * 1000;
+      if (orchestrator.errorRetryFirstAt == null) orchestrator.errorRetryFirstAt = Date.now();
+      const elapsedMs = Date.now() - orchestrator.errorRetryFirstAt;
+      if (elapsedMs <= ceilingMs) {
         const delay = Math.min(2000 * Math.pow(2, orchestrator.errorRetryCount - 1), maxDelayMs);
         // The first transient error is expected noise (the SDK just exhausted its
         // own budget); surface it quietly as info and escalate to a warning only
         // once it recurs, so a single flaky response doesn't alarm the user.
         const severity = orchestrator.errorRetryCount === 1 ? "info" : "warning";
-        ctx.ui.notify(`API error (pi-pi retry ${orchestrator.errorRetryCount}/${maxRetries}): ${errorMsg}. Retrying in ${delay / 1000}s...`, severity);
+        ctx.ui.notify(`API error (pi-pi retry ${orchestrator.errorRetryCount}, elapsed ${Math.round(elapsedMs / 1000)}s): ${errorMsg}. Retrying in ${delay / 1000}s...`, severity);
         const taskToken = orchestrator.activeTaskToken;
         if (orchestrator.pendingRetryTimer) clearTimeout(orchestrator.pendingRetryTimer);
         // Arm a direct ESC interrupt for this retry window — no SDK/interactive
@@ -2806,7 +2820,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
           );
         }, delay);
       } else {
-        ctx.ui.notify(`API error persisted after ${maxRetries} retries: ${errorMsg}. Stopping auto-retry — send any message to resume.`, "error");
+        ctx.ui.notify(`API error persisted for over 24h: ${errorMsg}. Stopping auto-retry — send any message to resume.`, "error");
         // Halt (do NOT reset the counter) so no further error turn re-arms a retry
         // until the user re-engages. cancelPendingRetry would reset the count and
         // re-open the floodgate, so only clear the live timer/ESC hook here.

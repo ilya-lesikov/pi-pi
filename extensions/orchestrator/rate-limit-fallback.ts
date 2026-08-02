@@ -1,7 +1,7 @@
 import type { Orchestrator } from "./orchestrator.js";
 import { getLogger } from "./log.js";
 import { isSubscriptionRouted } from "./usage-tracker.js";
-import { setSubscriptionFallbackActive, toNonSubSpec } from "./model-registry.js";
+import { setSubscriptionFallbackActive, toNonSubSpec, demoteTierForFamily, getModelInfo, type ProviderTierName } from "./model-registry.js";
 import { loadFlantSettings, probeSubscriptionCleared } from "./flant-infra.js";
 import { askUser, isCancel } from "../../3p/pi-ask-user/index.js";
 
@@ -21,6 +21,16 @@ export function isRateLimitError(message?: string): boolean {
 export function isExtraUsageError(message?: string): boolean {
   if (typeof message !== "string" || !message) return false;
   return /extra usage|draw from[\s\S]{0,40}plan limits/i.test(message);
+}
+
+// Recognise the OpenRouter/LiteLLM MONTHLY-CAP 403, e.g.
+// "litellm.APIError ... Key limit exceeded (monthly limit)". This is an
+// account-level cap, NOT a transient rate-limit: retrying is futile, so it must
+// trigger a provider-tier FALLBACK rather than the backoff retry. Anchored on
+// the specific phrasing to avoid over-matching generic 403s.
+export function isMonthlyCapError(message?: string): boolean {
+  if (typeof message !== "string" || !message) return false;
+  return /key limit exceeded[\s\S]{0,40}monthly limit|monthly limit[\s\S]{0,40}exceeded/i.test(message);
 }
 
 export function isMalformedToolHistoryError(message?: string): boolean {
@@ -165,6 +175,47 @@ async function activateFallback(
   const phase = orchestrator.active?.state.phase ?? "current";
   orchestrator.sendUserMessageWhenIdle(
     `[PI-PI] Switched to regular (non-subscription) flant Claude after a rate limit. Continue working on the current phase (${phase}).`,
+    orchestrator.activeTaskToken,
+  );
+}
+
+// Determine which provider tier a model spec currently routes through, for
+// per-family demotion on a non-transient cap.
+function tierOfModelSpec(spec: string | undefined, provider: string | undefined): ProviderTierName | null {
+  const s = spec ?? "";
+  if (provider === "github-copilot" || s.startsWith("github-copilot/")) return "copilot";
+  if (isSubscriptionRouted(s, provider)) return "flant-sub";
+  if (s.startsWith("pp-flant-anthropic/") || s.startsWith("pp-flant-openai/")) return "flant-api";
+  return null;
+}
+
+// Handle a non-transient MONTHLY-CAP 403 (OpenRouter/LiteLLM "Key limit exceeded
+// (monthly limit)"). Retrying is futile; demote the failing model's CURRENT
+// tier for its family so the resolver drops future resolutions to the next
+// enabled tier, then nudge to continue. Notifies (no dialogue) since this is
+// never a transient blip.
+export function handleMonthlyCap(
+  orchestrator: Orchestrator,
+  ctx: any,
+  modelId: string | undefined,
+  provider: string | undefined,
+): void {
+  const log = getLogger();
+  ctx?.abort?.();
+  orchestrator.cancelPendingRetry();
+  const tier = tierOfModelSpec(modelId, provider);
+  const family = getModelInfo(modelId ?? "").family;
+  if (!tier || family === "unknown") {
+    log.warn({ s: "ratelimit", modelId, provider }, "monthly cap on an unclassifiable model; cannot demote tier");
+    ctx?.ui?.notify?.("A monthly usage cap was hit but the model's provider tier could not be identified; auto-continuation paused.", "warning");
+    return;
+  }
+  demoteTierForFamily(tier, family);
+  log.debug({ s: "ratelimit", tier, family }, "monthly cap: demoted tier for family");
+  ctx?.ui?.notify?.(`Monthly usage cap hit on the ${tier} tier for ${family}; falling back to the next provider tier.`, "info");
+  const phase = orchestrator.active?.state.phase ?? "current";
+  orchestrator.sendUserMessageWhenIdle(
+    `[PI-PI] Hit a monthly usage cap on the ${tier} provider tier; switched to the next tier. Continue working on the current phase (${phase}).`,
     orchestrator.activeTaskToken,
   );
 }

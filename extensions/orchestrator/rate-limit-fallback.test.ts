@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isRateLimitError, isExtraUsageError, isMalformedToolHistoryError, isSdkRetryableError } from "./rate-limit-fallback.js";
+import { isRateLimitError, isExtraUsageError, isMalformedToolHistoryError, isMonthlyCapError, isSdkRetryableError } from "./rate-limit-fallback.js";
 import { isSubscriptionRouted } from "./usage-tracker.js";
 import { SUB_MODEL_PREFIX, SUB_PROVIDER, subProbeModelId } from "./flant-infra.js";
 
@@ -36,6 +36,22 @@ describe("isExtraUsageError", () => {
     expect(isExtraUsageError("500 internal server error")).toBe(false);
     expect(isExtraUsageError("")).toBe(false);
     expect(isExtraUsageError(undefined)).toBe(false);
+  });
+});
+
+describe("isMonthlyCapError", () => {
+  it("matches the OpenRouter/LiteLLM monthly-cap 403 phrasing", () => {
+    expect(isMonthlyCapError("litellm.APIError: ... Key limit exceeded (monthly limit)")).toBe(true);
+    expect(isMonthlyCapError("Error: Key limit exceeded (monthly limit)")).toBe(true);
+    expect(isMonthlyCapError("monthly limit exceeded for this key")).toBe(true);
+  });
+
+  it("does not match transient 429/rate-limit or unrelated errors", () => {
+    expect(isMonthlyCapError("Error 429: too many requests")).toBe(false);
+    expect(isMonthlyCapError("rate_limit_error")).toBe(false);
+    expect(isMonthlyCapError("500 internal server error")).toBe(false);
+    expect(isMonthlyCapError("")).toBe(false);
+    expect(isMonthlyCapError(undefined)).toBe(false);
   });
 });
 

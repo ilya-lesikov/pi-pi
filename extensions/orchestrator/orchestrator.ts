@@ -95,6 +95,11 @@ export class Orchestrator {
   nudgeHalted = false;
   pendingSubagentSpawns = 0;
   errorRetryCount = 0;
+  // Wall-clock timestamp (ms) of the first transient-error retry in the current
+  // retry streak. The near-indefinite retry is bounded by a ~24h ceiling from
+  // this instant (not an attempt count). Reset (null) whenever a turn succeeds
+  // or the user re-engages, so a fresh outage starts a new 24h window.
+  errorRetryFirstAt: number | null = null;
   // Halts the API-error auto-retry once errorRetryCount exceeds its cap, mirroring
   // nudgeHalted. Without this, a benign intervening turn (e.g. the retried turn
   // ends as a text-only "I'll wait") reset errorRetryCount to 0, so the 5-retry
@@ -229,6 +234,7 @@ export class Orchestrator {
   // Cancel a pending post-error retry (timer + ESC interrupt) and reset the retry
   // counter. Used by the ESC interrupt handler and by abort paths.
   cancelPendingRetry(): void {
+    this.errorRetryFirstAt = null;
     if (this.pendingRetryTimer) {
       clearTimeout(this.pendingRetryTimer);
       this.pendingRetryTimer = null;
@@ -676,6 +682,7 @@ export class Orchestrator {
     this.agentLifecycle.clear();
     this.pendingSubagentSpawns = 0;
     this.errorRetryCount = 0;
+    this.errorRetryFirstAt = null;
     this.errorNudgeHalted = false;
     this.commitReminderSent = false;
     this.consecutiveNudges = 0;
