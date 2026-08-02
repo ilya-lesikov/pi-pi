@@ -189,11 +189,18 @@ describe("automatic fallback (no dialogue) when autoRateLimitFallback is ON", ()
     // Main on a different (paid, non-sub) model -> not switched.
     const ctx = makeCtx({ provider: "pp-flant-anthropic", id: "claude-opus-4-8" });
 
+    // R2-M1: the dispatch site sets this SYNCHRONOUSLY to suppress autonomous
+    // failed-variant auto-retry until the decision resolves; the auto path must
+    // clear it (else it leaks true for the rest of the task).
+    orch.subFallbackPendingDecision = true;
+
     await handleSubagentRateLimit(orch, ctx, "pp-flant-anthropic-sub/sub/claude-opus-4-8");
 
     expect(askUserMock).not.toHaveBeenCalled();
     expect(setSubscriptionFallbackActiveMock).toHaveBeenCalledWith(true);
     expect(orch.switchModel).not.toHaveBeenCalled();
+    // The pending-decision flag was cleared by the auto path (no leak).
+    expect(orch.subFallbackPendingDecision).toBe(false);
   });
 });
 

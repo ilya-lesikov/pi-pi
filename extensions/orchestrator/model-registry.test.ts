@@ -508,5 +508,27 @@ describe("model-registry", () => {
       expect(out.startsWith("github-copilot/")).toBe(false);
       expect(out).toBe("pp-flant-openai/gpt-5.6-sol");
     });
+
+    it("does not fabricate a flant spec for a family flant does not serve (fable MINOR-2)", () => {
+      // Catalog: copilot has gemini, flant does NOT. A copilot-pinned gemini with
+      // copilot disabled has no real flant twin -> must NOT become
+      // pp-flant-openai/<gemini-copilot-id>; the spec is returned unchanged.
+      updateRegistryFromAvailableModels([
+        "github-copilot/gemini-3-flash-preview",
+        "pp-flant-openai/gpt-5.6-sol",
+      ]);
+      const out = resolveModel("github-copilot/gemini-3-flash-preview");
+      expect(out.startsWith("pp-flant-openai/")).toBe(false);
+      expect(out).toBe("github-copilot/gemini-3-flash-preview");
+    });
+
+    it("classifies a github-copilot gpt pin (gpt family includes github-copilot)", () => {
+      updateRegistryFromAvailableModels(["github-copilot/gpt-4.1", "pp-flant-openai/gpt-4.1"]);
+      // Family classifies (not unknown) so the pin resolves rather than passing
+      // through blind; with copilot disabled it demotes to the real flant gpt.
+      expect(getModelInfo("github-copilot/gpt-4.1").family).toBe("gpt");
+      const out = resolveModel("github-copilot/gpt-4.1");
+      expect(out).toBe("pp-flant-openai/gpt-4.1");
+    });
   });
 });

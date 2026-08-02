@@ -815,19 +815,20 @@ describe("reconcileWedgedReviewCycle (bug B: crashed reviewer no longer wedges t
       orchestrator.active.dir = mkdtempSync(join(tmpdir(), "pp-review-wedge-"));
       orchestrator.active.state.reviewCycle = { kind: "auto", step: "await_reviewers", pass: 1 };
       orchestrator.active.state.step = "await_reviewers";
-      orchestrator.reviewWedgeObservedAt = null;
+      // Last reviewer activity was JUST now (fresh spawn).
+      orchestrator.reviewReconcileActivityAt = Date.now();
       // Simulate the wedge: a reviewer that crashed without decrementing the
       // counters. No pi-subagents manager is registered in tests, so
       // countLiveReviewerSubagents sees zero live reviewers. Spawn RECORDS exist.
       orchestrator.spawnedAgentIds.add("dead-reviewer-1");
       orchestrator.pendingSubagentSpawns = 1;
 
-      // First observation: only records the wedge timestamp, does NOT act (a
-      // transiently-missing record could recover before the grace window).
+      // Activity was recent -> within the grace window, does NOT act (a
+      // transiently-missing record could recover).
       expect(reconcileWedgedReviewCycle(orchestrator)).toBe(false);
       expect(orchestrator.active.state.reviewCycle?.step).toBe("await_reviewers");
 
-      // After the grace window a continuous wedge is finalized.
+      // After the grace window elapses since the last activity, finalize.
       vi.advanceTimersByTime(61_000);
       const acted = reconcileWedgedReviewCycle(orchestrator);
 
@@ -849,7 +850,7 @@ describe("reconcileWedgedReviewCycle (bug B: crashed reviewer no longer wedges t
       orchestrator.active = makeActiveTask();
       orchestrator.active.state.reviewCycle = { kind: "auto", step: "await_reviewers", pass: 1 };
       orchestrator.active.state.step = "await_reviewers";
-      orchestrator.reviewWedgeObservedAt = null;
+      orchestrator.reviewReconcileActivityAt = Date.now();
       // Spawn window: counter set BEFORE subagents:created populates the ids.
       orchestrator.spawnedAgentIds.clear();
       orchestrator.pendingSubagentSpawns = 2;
@@ -864,29 +865,49 @@ describe("reconcileWedgedReviewCycle (bug B: crashed reviewer no longer wedges t
     }
   });
 
-  it("recovers (does not finalize) when the wedge clears within the grace window", async () => {
+  it("recovers (does not finalize) when the reviewer completes within the grace window", async () => {
     vi.useFakeTimers();
     try {
       const { reconcileWedgedReviewCycle } = await import("./event-handlers.js");
       orchestrator.active = makeActiveTask();
       orchestrator.active.state.reviewCycle = { kind: "auto", step: "await_reviewers", pass: 1 };
       orchestrator.active.state.step = "await_reviewers";
-      orchestrator.reviewWedgeObservedAt = null;
+      orchestrator.reviewReconcileActivityAt = Date.now();
       orchestrator.spawnedAgentIds.add("reviewer-1");
       orchestrator.pendingSubagentSpawns = 1;
 
-      // Looks wedged (no manager in tests) -> records timestamp, no action.
+      // Looks wedged (no manager in tests) but activity is recent -> no action.
       expect(reconcileWedgedReviewCycle(orchestrator)).toBe(false);
-      const observed = orchestrator.reviewWedgeObservedAt;
-      expect(observed).not.toBeNull();
 
-      // The reviewer decrements its own counters (completed normally): no longer
-      // looks wedged -> the wedge timestamp is cleared, nothing is finalized.
+      // The reviewer completes normally (counters cleared): no spawn records ->
+      // not a wedge, nothing is finalized even past the grace window.
       orchestrator.spawnedAgentIds.clear();
       orchestrator.pendingSubagentSpawns = 0;
-      vi.advanceTimersByTime(30_000);
+      vi.advanceTimersByTime(120_000);
       expect(reconcileWedgedReviewCycle(orchestrator)).toBe(false);
-      expect(orchestrator.reviewWedgeObservedAt).toBeNull();
+      expect(orchestrator.active.state.reviewCycle?.step).toBe("await_reviewers");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("self-heals on the FIRST /pp open when the reviewer has been dead past the grace window", async () => {
+    vi.useFakeTimers();
+    try {
+      const { reconcileWedgedReviewCycle } = await import("./event-handlers.js");
+      orchestrator.active = makeActiveTask();
+      orchestrator.active.dir = mkdtempSync(join(tmpdir(), "pp-review-wedge-"));
+      orchestrator.active.state.reviewCycle = { kind: "auto", step: "await_reviewers", pass: 1 };
+      orchestrator.active.state.step = "await_reviewers";
+      // Reviewer spawned, then died; the LAST activity was 90s ago (past grace).
+      orchestrator.spawnedAgentIds.add("dead-reviewer");
+      orchestrator.pendingSubagentSpawns = 1;
+      orchestrator.reviewReconcileActivityAt = Date.now() - 90_000;
+
+      // A SINGLE call (mirrors one /pp open) finalizes — no second poll needed.
+      expect(reconcileWedgedReviewCycle(orchestrator)).toBe(true);
+      expect(orchestrator.active.state.reviewCycle?.step).not.toBe("await_reviewers");
+      rmSync(orchestrator.active.dir, { recursive: true, force: true });
     } finally {
       vi.useRealTimers();
     }

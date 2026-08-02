@@ -109,13 +109,13 @@ export class Orchestrator {
   consecutiveNudges = 0;
   nudgeHalted = false;
   pendingSubagentSpawns = 0;
-  // Wall-clock timestamp (ms) when the review cycle FIRST looked wedged
-  // (await_reviewers with spawn records present but none live). Only a
-  // CONTINUOUS wedge past a grace window is reconciled, so a transiently
-  // missing manager record (session switch / compaction) or the spawn window
-  // does not finalize a healthy cycle. Reset (null) whenever it no longer
-  // looks wedged.
-  reviewWedgeObservedAt: number | null = null;
+  // Wall-clock timestamp (ms) of the LAST reviewer-lifecycle activity for the
+  // current review cycle (set at cycle entry, refreshed on each
+  // subagents:created and whenever a reviewer is still live). The wedge
+  // reconciler finalizes only after a grace window has elapsed since this
+  // instant, so a long-dead reviewer heals on the first /pp open while a
+  // transiently-missing manager record (recent activity) does not.
+  reviewReconcileActivityAt: number | null = null;
   errorRetryCount = 0;
   // Wall-clock timestamp (ms) of the first transient-error retry in the current
   // retry streak. The near-indefinite retry is bounded by a ~24h ceiling from

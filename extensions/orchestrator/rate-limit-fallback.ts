@@ -100,17 +100,32 @@ async function offerFallback(
   origin: "main" | "subagent",
 ): Promise<void> {
   const log = getLogger();
-  if (orchestrator.subFallbackDialogPending) return;
+  // subFallbackPendingDecision is set SYNCHRONOUSLY at the dispatch site (the
+  // subagents:failed / main turn_end handler) to suppress autonomous
+  // planner/reviewer auto-retry until this dispatch RESOLVES the decision. Every
+  // exit path of offerFallback resolves it, so it must be cleared here — not
+  // only in the dialogue's finally — or the auto path (the default) and the
+  // early returns would leak it true for the rest of the task, permanently
+  // suppressing failed-variant auto-retry.
+  if (orchestrator.subFallbackDialogPending) {
+    orchestrator.subFallbackPendingDecision = false;
+    return;
+  }
   // Automatic mode (default): skip the permission dialogue and switch straight
   // to the next tier, surfacing a non-blocking notification instead. Checked
   // BEFORE the hasUI guard so a headless autonomous run still auto-switches.
   if (loadFlantSettings().autoRateLimitFallback) {
-    await activateFallback(orchestrator, ctx, subModelId, origin);
+    try {
+      await activateFallback(orchestrator, ctx, subModelId, origin);
+    } finally {
+      orchestrator.subFallbackPendingDecision = false;
+    }
     return;
   }
   if (!ctx?.hasUI) {
     // No UI to ask (and auto mode off) — leave sub routing in place; the error
     // is surfaced elsewhere.
+    orchestrator.subFallbackPendingDecision = false;
     log.debug({ s: "ratelimit" }, "no UI available to offer subscription fallback");
     return;
   }

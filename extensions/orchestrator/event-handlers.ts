@@ -227,14 +227,19 @@ const REVIEW_WEDGE_GRACE_MS = 60_000;
 // await_reviewers because a crashed/vanished reviewer never decremented
 // spawnedAgentIds / pendingSubagentSpawns. Finalizes ONLY when the cycle has
 // spawn RECORDS (spawnedAgentIds non-empty — never during the pre-spawn window
-// where only pendingSubagentSpawns is set) AND none has been live for a
-// continuous grace window (so a transiently-missing manager record does not
-// finalize a healthy cycle). Returns true when it acted. Safe to call
-// speculatively: no-ops unless the cycle is genuinely, persistently wedged.
+// where only pendingSubagentSpawns is set) AND no reviewer has been live for a
+// grace window measured from the LAST reviewer-lifecycle activity
+// (reviewReconcileActivityAt, set at cycle entry + refreshed on every
+// subagents:created). Measuring from last activity — not from the first wedge
+// OBSERVATION — means opening /pp after a reviewer has been dead past the grace
+// window self-heals on that FIRST open (no second poll needed), while a
+// transiently-missing manager record (compaction/session churn) still can't
+// finalize a healthy cycle because activity was recent. Returns true when it
+// acted. Safe to call speculatively.
 export function reconcileWedgedReviewCycle(orchestrator: Orchestrator): boolean {
   const state = orchestrator.active?.state;
   if (!state?.reviewCycle || state.reviewCycle.step !== "await_reviewers") {
-    orchestrator.reviewWedgeObservedAt = null;
+    orchestrator.reviewReconcileActivityAt = null;
     return false;
   }
   if (orchestrator.transitionController.isTransitioning?.()) return false;
@@ -242,24 +247,25 @@ export function reconcileWedgedReviewCycle(orchestrator: Orchestrator): boolean 
   // is set but spawnedAgentIds is still empty — the reviewers are about to
   // appear, so this is NOT a wedge. (pendingSubagentSpawns alone never triggers.)
   const spawnedCount = orchestrator.spawnedAgentIds?.size ?? 0;
-  if (spawnedCount === 0) {
-    orchestrator.reviewWedgeObservedAt = null;
-    return false;
-  }
-  // If any reviewer is genuinely live, it's not wedged — leave it alone.
+  if (spawnedCount === 0) return false;
+  // If any reviewer is genuinely live, it's not wedged — refresh the activity
+  // timestamp and leave it alone.
   if (countLiveReviewerSubagents(orchestrator) > 0) {
-    orchestrator.reviewWedgeObservedAt = null;
+    orchestrator.reviewReconcileActivityAt = Date.now();
     return false;
   }
-  // Looks wedged. Require the wedge to PERSIST past the grace window before
-  // acting, so a transiently-missing manager record (compaction/session churn)
-  // recovers on a later poll instead of finalizing a healthy cycle.
+  // Looks wedged. Require the grace window to have elapsed since the last
+  // reviewer-lifecycle activity, so a transiently-missing manager record
+  // (recent activity) recovers instead of finalizing a healthy cycle, but a
+  // long-dead reviewer heals on the first /pp open.
   const now = Date.now();
-  if (orchestrator.reviewWedgeObservedAt === null) {
-    orchestrator.reviewWedgeObservedAt = now;
+  if (orchestrator.reviewReconcileActivityAt === null) {
+    // No recorded activity (counters restored without lifecycle events): start
+    // the clock now rather than acting blind.
+    orchestrator.reviewReconcileActivityAt = now;
     return false;
   }
-  if (now - orchestrator.reviewWedgeObservedAt < REVIEW_WEDGE_GRACE_MS) return false;
+  if (now - orchestrator.reviewReconcileActivityAt < REVIEW_WEDGE_GRACE_MS) return false;
 
   getLogger().warn(
     { s: "review", spawned: orchestrator.spawnedAgentIds.size, pending: orchestrator.pendingSubagentSpawns },
@@ -268,7 +274,7 @@ export function reconcileWedgedReviewCycle(orchestrator: Orchestrator): boolean 
   // Drop the stale bookkeeping so tryCompleteReviewCycle's guard passes.
   orchestrator.spawnedAgentIds.clear();
   orchestrator.pendingSubagentSpawns = 0;
-  orchestrator.reviewWedgeObservedAt = null;
+  orchestrator.reviewReconcileActivityAt = null;
   tryCompleteReviewCycle(orchestrator);
   return true;
 }
@@ -428,6 +434,10 @@ export async function enterReviewCycle(
   }
 
   orchestrator.pendingSubagentSpawns = enabledCount;
+  // Anchor the wedge-reconciler grace window at cycle entry (refreshed on each
+  // subagents:created); the reconciler only acts once a grace window has
+  // elapsed since the last reviewer activity.
+  orchestrator.reviewReconcileActivityAt = Date.now();
     const spawnFn = reviewPresetGroupForPhase(phase) === "brainstormReviewers"
       ? () => spawnBrainstormReviewers(
         pi,
@@ -1685,6 +1695,11 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (!orchestrator.active || !data?.id) return;
     orchestrator.spawnedAgentIds.add(data.id);
     orchestrator.agentSpawnTimes.set(data.id, Date.now());
+    // Reviewer-lifecycle activity: refresh the wedge-reconciler grace anchor so
+    // the grace window is measured from the most recent spawn.
+    if (orchestrator.active?.state.reviewCycle?.step === "await_reviewers") {
+      orchestrator.reviewReconcileActivityAt = Date.now();
+    }
     if (orchestrator.pendingSubagentSpawns > 0) orchestrator.pendingSubagentSpawns--;
     if (data.description) {
       orchestrator.agentDescriptions.set(data.id, data.description);
@@ -2987,9 +3002,22 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       // original "Agent is already processing" race the old comment worried about
       // cannot occur: sendUserMessageWhenIdle PRE-CHECKS isIdle() and defers on a
       // bounded poll, so the followUp is never delivered while a run is active.
-      if (isSdkRetryableError(errorMsg)) {
-        getLogger().debug({ s: "turn", err: errorMsg }, "SDK retry budget exhausted; pi-pi idle-gated retry taking over");
+      // Retry-vs-fallback split: ONLY transient classes (overloaded_error,
+      // 429/rate-limit on a paid/non-sub model, 5xx/503, network/stream/timeout)
+      // are eligible for pi-pi's near-indefinite backoff retry. A NON-transient
+      // terminal error (invalid request, authentication, unknown model, quota
+      // shapes not matched above) cannot succeed on retry — retrying it would
+      // spin the exponential backoff for up to 24h. Such errors halt with a
+      // clear message instead. (Subscription 429, monthly cap, and malformed
+      // tool history are already handled by the earlier branches.)
+      if (!isSdkRetryableError(errorMsg)) {
+        getLogger().warn({ s: "turn", err: errorMsg }, "non-transient terminal error; not retrying");
+        orchestrator.cancelPendingRetry();
+        orchestrator.errorNudgeHalted = true;
+        ctx.ui.notify(`The model turn failed with a non-transient error that retrying cannot fix: ${errorMsg}. Auto-retry is paused — address the cause (e.g. model/auth/request), then send any message to resume.`, "error");
+        return;
       }
+      getLogger().debug({ s: "turn", err: errorMsg }, "SDK retry budget exhausted; pi-pi idle-gated retry taking over");
       // Halt guard: once the consecutive-error cap is exceeded we stop auto-
       // retrying until the user re-engages. errorRetryCount is NO LONGER reset on
       // benign intervening turns (see below) — otherwise a retried turn that ends

@@ -3363,9 +3363,13 @@ async function showCompactionSettings(orchestrator: Orchestrator, ctx: any): Pro
   }
 }
 
-// Copilot provider tier settings. Sits ABOVE Flant in precedence: when enabled
-// (and COPILOT_GITHUB_TOKEN is present) Copilot-capable roles resolve to the
-// built-in github-copilot provider before falling to Flant sub/api.
+// Copilot provider tier settings. Enabling the tier lets an explicitly-pinned
+// `github-copilot/<model>` resolve (via the built-in github-copilot provider,
+// keyed off COPILOT_GITHUB_TOKEN) and be restored after a rate-limit fallback,
+// and prevents such a pin from being demoted to Flant. NOTE: it does NOT yet
+// auto-route generated roles to Copilot — that auto-prefer routing is deferred
+// (Copilot's catalog uses different ids than Flant and lacks GPT, so it needs a
+// catalog-aware id-mapping the resolver doesn't do; the resolver is demote-only).
 async function showCopilotMenu(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
   while (true) {
     const settings = loadFlantSettings();
@@ -3373,11 +3377,11 @@ async function showCopilotMenu(orchestrator: Orchestrator, ctx: any): Promise<ty
     const enableLabel = `Enable Copilot tier: ${settings.copilotEnabled ? "ON" : "OFF"}`;
     const statusLine = settings.copilotEnabled
       ? tokenPresent
-        ? "Active — Copilot sits above Flant for roles Copilot can serve."
+        ? "Active — explicit github-copilot/<model> picks resolve (and are restored after a fallback). Generated roles still use Flant."
         : "Enabled but COPILOT_GITHUB_TOKEN is missing — tier is skipped until the token is set."
-      : "Disabled — all roles route through Flant.";
+      : "Disabled — an explicit github-copilot/<model> pick is demoted to Flant.";
     const options: OptionInput[] = [
-      { title: enableLabel, description: "Prefer the GitHub Copilot provider (highest precedence) for roles it can serve" },
+      { title: enableLabel, description: "Allow explicit github-copilot/<model> picks to resolve (does not auto-route generated roles)" },
       { title: "Current status", description: statusLine },
       { title: "Back", description: "Return to the previous menu" },
     ];
@@ -3395,8 +3399,8 @@ async function showCopilotMenu(orchestrator: Orchestrator, ctx: any): Promise<ty
       syncProviderTiers();
       ctx.ui.notify(
         turningOn
-          ? "Copilot tier ON — now the highest-precedence provider for roles it can serve."
-          : "Copilot tier OFF — roles route through Flant sub/api.",
+          ? "Copilot tier ON — explicit github-copilot/<model> picks now resolve (generated roles still use Flant)."
+          : "Copilot tier OFF — an explicit github-copilot/<model> pick is demoted to Flant.",
         "info",
       );
       continue;

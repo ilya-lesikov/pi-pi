@@ -88,27 +88,27 @@ export const MODEL_FAMILIES: ModelFamilyDefinition[] = [
     family: "gpt-sol",
     tier: "smart",
     displayName: "GPT Sol",
-    patterns: [/^(openai|pp-flant-openai)\/gpt-[0-9.]+-sol(?:-pro)?$/],
+    patterns: [/^(openai|pp-flant-openai|github-copilot)\/gpt-[0-9.]+-sol(?:-pro)?$/],
     aliasTemplate: "gpt-sol-latest",
-    providers: ["openai", "pp-flant-openai"],
+    providers: ["openai", "pp-flant-openai", "github-copilot"],
   },
   {
     vendor: "openai",
     family: "gpt-terra",
     tier: "regular",
     displayName: "GPT Terra",
-    patterns: [/^(openai|pp-flant-openai)\/gpt-[0-9.]+-terra(?:-pro)?$/],
+    patterns: [/^(openai|pp-flant-openai|github-copilot)\/gpt-[0-9.]+-terra(?:-pro)?$/],
     aliasTemplate: "gpt-terra-latest",
-    providers: ["openai", "pp-flant-openai"],
+    providers: ["openai", "pp-flant-openai", "github-copilot"],
   },
   {
     vendor: "openai",
     family: "gpt-luna",
     tier: "stupid",
     displayName: "GPT Luna",
-    patterns: [/^(openai|pp-flant-openai)\/gpt-[0-9.]+-luna(?:-pro)?$/],
+    patterns: [/^(openai|pp-flant-openai|github-copilot)\/gpt-[0-9.]+-luna(?:-pro)?$/],
     aliasTemplate: "gpt-luna-latest",
-    providers: ["openai", "pp-flant-openai"],
+    providers: ["openai", "pp-flant-openai", "github-copilot"],
   },
   {
     vendor: "openai",
@@ -117,9 +117,10 @@ export const MODEL_FAMILIES: ModelFamilyDefinition[] = [
     displayName: "GPT",
     // Excludes -mini (handled below) AND the sol/terra/luna tier suffixes
     // (handled above) so pre-5.6 gpt ids still resolve to this legacy family.
-    patterns: [/^(openai|pp-flant-openai)\/gpt-(?!mini-)(?!.*-mini(?:$|[-.]))(?!.*-(?:sol|terra|luna)(?:-pro)?$)[a-z0-9.-]+$/],
+    // github-copilot included so a copilot gpt pin (e.g. gpt-4.1) classifies.
+    patterns: [/^(openai|pp-flant-openai|github-copilot)\/gpt-(?!mini-)(?!.*-mini(?:$|[-.]))(?!.*-(?:sol|terra|luna)(?:-pro)?$)[a-z0-9.-]+$/],
     aliasTemplate: "gpt-latest",
-    providers: ["openai", "pp-flant-openai"],
+    providers: ["openai", "pp-flant-openai", "github-copilot"],
   },
   {
     vendor: "openai",
@@ -127,11 +128,11 @@ export const MODEL_FAMILIES: ModelFamilyDefinition[] = [
     tier: "stupid",
     displayName: "GPT Mini",
     patterns: [
-      /^(openai|pp-flant-openai)\/gpt-mini-[a-z0-9.-]+$/,
-      /^(openai|pp-flant-openai)\/gpt-[a-z0-9.]+-mini(?:-[a-z0-9.-]+)?$/,
+      /^(openai|pp-flant-openai|github-copilot)\/gpt-mini-[a-z0-9.-]+$/,
+      /^(openai|pp-flant-openai|github-copilot)\/gpt-[a-z0-9.]+-mini(?:-[a-z0-9.-]+)?$/,
     ],
     aliasTemplate: "gpt-mini-latest",
-    providers: ["openai", "pp-flant-openai"],
+    providers: ["openai", "pp-flant-openai", "github-copilot"],
   },
   {
     vendor: "google",
@@ -432,13 +433,26 @@ function applyTierResolution(spec: string): string {
       if (real) return real;
       continue;
     }
-    if (haveCatalog) {
-      const real = registeredSpecForTier(tier, family);
-      if (real) return real;
-    }
-    return specForTier(tier, family, bareId);
+    // flant tier: prefer an exact family match from the catalog; else the
+    // prefix-swap form. flant-sub and flant-api share the SAME underlying model
+    // ids, so a swap between them is valid whenever flant serves the family AT
+    // ALL (on either provider) — even if only the OTHER flant provider has the
+    // exact id registered. But never fabricate a flant spec for a family flant
+    // does not serve at all (e.g. a copilot-only gemini id demoting to flant).
+    const real = haveCatalog ? registeredSpecForTier(tier, family) : null;
+    if (real) return real;
+    if (!haveCatalog || flantServesFamily(family)) return specForTier(tier, family, bareId);
+    // Catalog present and flant does not serve this family — skip this tier.
   }
   return spec;
+}
+
+// True when EITHER flant provider (sub or api) has a registered spec for the
+// family. Used to decide whether a flant prefix-swap targets a real model:
+// flant-sub/flant-api share ids, so serving the family on one implies the swap
+// to the other resolves to the same underlying model.
+function flantServesFamily(family: Family): boolean {
+  return registeredSpecForTier("flant-api", family) !== null || registeredSpecForTier("flant-sub", family) !== null;
 }
 
 // ── Backward-compatible sub-fallback shims ──────────────────────────────────

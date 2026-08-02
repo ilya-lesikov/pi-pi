@@ -3701,11 +3701,11 @@ describe("tool blocking", () => {
 });
 
 describe("error retry", () => {
-  // Both SDK-retryable and non-SDK-retryable errors now exercise pi-pi's OWN
-  // idle-gated retry. By the time turn_end fires, the SDK's short in-prompt
-  // retry budget is already exhausted, so pi-pi's longer retry (8×, up to ~4min)
-  // takes over instead of the session silently dying after the SDK's ~14s budget.
-  it("turn_end with a non-SDK-retryable error uses pi-pi's idle-gated retry", async () => {
+  // ONLY transient classes (overloaded, paid 429, 5xx, network/stream/timeout)
+  // exercise pi-pi's near-indefinite idle-gated retry. A NON-transient terminal
+  // error (invalid request / auth / unknown model) cannot succeed on retry, so
+  // it HALTS instead of spinning the backoff for up to 24h.
+  it("turn_end HALTS (does not retry) a non-transient error", async () => {
     vi.useFakeTimers();
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);
@@ -3714,13 +3714,16 @@ describe("error retry", () => {
     await orchestrator.startTask(ctx as any, "implement", "retry test");
     const turnEnd = pi._handlers.get("turn_end")!;
 
+    // "invalid tool arguments" is NOT in the transient classifier.
     await turnEnd({ message: { stopReason: "error", errorMessage: "invalid tool arguments", content: [] } }, ctx);
 
-    expect(orchestrator.errorRetryCount).toBe(1);
-    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Retrying in 2s"), "info");
+    // No retry armed; halted with a clear non-transient message.
+    expect(orchestrator.errorRetryCount ?? 0).toBe(0);
+    expect(orchestrator.errorNudgeHalted).toBe(true);
+    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("non-transient error"), "error");
 
-    await vi.advanceTimersByTimeAsync(2000);
-    expect(pi.sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("Transient API error"), { deliverAs: "followUp" });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(pi.sendUserMessage).not.toHaveBeenCalledWith(expect.stringContaining("Transient API error"), expect.anything());
     vi.useRealTimers();
   });
 
@@ -3783,7 +3786,7 @@ describe("error retry", () => {
     // new time-based ceiling these all still schedule a retry (never halt),
     // because ~no wall-clock time has elapsed under fake timers.
     for (let i = 0; i < 20; i++) {
-      await turnEnd({ message: { stopReason: "error", errorMessage: "invalid tool arguments", content: [] } }, ctx);
+      await turnEnd({ message: { stopReason: "error", errorMessage: "503 service unavailable", content: [] } }, ctx);
     }
     expect(orchestrator.errorNudgeHalted).toBe(false);
     expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Retrying in"), expect.anything());
@@ -3791,13 +3794,13 @@ describe("error retry", () => {
     // Advance the clock past the 24h ceiling; the next error turn halts.
     ctx.ui.notify.mockClear();
     vi.setSystemTime(Date.now() + 25 * 60 * 60 * 1000);
-    await turnEnd({ message: { stopReason: "error", errorMessage: "invalid tool arguments", content: [] } }, ctx);
+    await turnEnd({ message: { stopReason: "error", errorMessage: "503 service unavailable", content: [] } }, ctx);
     expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Stopping auto-retry"), "error");
     expect(orchestrator.errorNudgeHalted).toBe(true);
 
     // Once halted, further error turns must NOT arm another retry.
     ctx.ui.notify.mockClear();
-    await turnEnd({ message: { stopReason: "error", errorMessage: "invalid tool arguments", content: [] } }, ctx);
+    await turnEnd({ message: { stopReason: "error", errorMessage: "503 service unavailable", content: [] } }, ctx);
     expect(ctx.ui.notify).not.toHaveBeenCalledWith(expect.stringContaining("Retrying in"), "warning");
     vi.useRealTimers();
   });
@@ -3810,7 +3813,7 @@ describe("error retry", () => {
     await orchestrator.startTask(ctx as any, "implement", "retry no-reset test");
     const turnEnd = pi._handlers.get("turn_end")!;
 
-    await turnEnd({ message: { stopReason: "error", errorMessage: "invalid tool arguments", content: [] } }, ctx);
+    await turnEnd({ message: { stopReason: "error", errorMessage: "503 service unavailable", content: [] } }, ctx);
     expect(orchestrator.errorRetryCount).toBe(1);
 
     // A benign (non-error) turn must NOT zero the counter — otherwise a harmless
@@ -3827,7 +3830,7 @@ describe("error retry", () => {
     await orchestrator.startTask(ctx as any, "implement", "retry reengage test");
     const turnEnd = pi._handlers.get("turn_end")!;
 
-    await turnEnd({ message: { stopReason: "error", errorMessage: "invalid tool arguments", content: [] } }, ctx);
+    await turnEnd({ message: { stopReason: "error", errorMessage: "503 service unavailable", content: [] } }, ctx);
     orchestrator.errorNudgeHalted = true;
 
     const beforeStart = pi._handlers.get("before_agent_start");
