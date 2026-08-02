@@ -16,14 +16,14 @@ export interface ReportFile {
 
 function walkFiles(dir: string): string[] {
   const out: string[] = [];
-  let entries: ReturnType<typeof readdirSync>;
+  let entries: import("node:fs").Dirent[];
   try {
     entries = readdirSync(dir, { withFileTypes: true });
   } catch {
     return out;
   }
   for (const e of entries) {
-    const full = join(dir, e.name);
+    const full = join(dir, String(e.name));
     if (e.isDirectory()) out.push(...walkFiles(full));
     else if (e.isFile()) out.push(full);
   }

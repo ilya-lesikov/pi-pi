@@ -60,6 +60,19 @@ if [ ! -f "$GEN_MARKER" ]; then
 fi
 echo "  ✓ generated/checklist.ts present in installed tree"
 
+# Assert the vendored pi-vcc engine + recall tool ship in the installed tree (item 1). pi-pi's
+# compaction dispatcher and vcc_recall tool statically import from here, so a missing vendor set
+# would break in-phase compaction and recall.
+echo "▶ asserting vendored pi-vcc engine ships"
+for VCC_FILE in "3p/pi-vcc/index.ts" "3p/pi-vcc/src/core/summarize.ts" "3p/pi-vcc/src/tools/recall.ts"; do
+  if [ ! -f "$PKG_DIR/$VCC_FILE" ]; then
+    echo "ERROR: vendored pi-vcc source missing from the package: $VCC_FILE" >&2
+    echo "  (pi-pi's compaction dispatcher and vcc_recall tool import from 3p/pi-vcc)" >&2
+    exit 1
+  fi
+done
+echo "  ✓ vendored pi-vcc engine present in installed tree"
+
 # Run the resolution check from a helper placed INSIDE the installed package, so bare-specifier
 # resolution provably walks the artifact's own node_modules hierarchy (not this checkout's).
 CHECK="$PKG_DIR/__smoke-resolve.mjs"
