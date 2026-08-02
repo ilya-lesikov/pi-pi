@@ -254,18 +254,143 @@ function findFamily(modelId: string): ModelFamilyDefinition | null {
 import { getLogger } from "./log.js";
 import { SUB_MODEL_PREFIX, SUB_PROVIDER } from "./flant-infra.js";
 
-// Session-scoped subscription fallback. When active (set after the user accepts
-// a sub-429 fallback), every model spec resolved through resolveModel that is
-// subscription-routed (`pp-flant-anthropic-sub/sub/<m>` or a bare `sub/<m>`) is
-// rewritten to the regular per-token form `pp-flant-anthropic/<m>`. This is the
-// single lever every resolution site funnels through (main phase switchModel,
-// subagent tool_call input.model, planner/reviewer specs, registerAgents), so a
-// one-shot switch cannot be undone by a later phase/subagent re-resolving a
-// `sub/` spec. Cleared when the user switches back or the task ends.
+// ─────────────────────────────────────────────────────────────────────────────
+// Provider-tier resolution (item 3). Ordered, highest-precedence-first:
+//   copilot  → the built-in github-copilot provider (flat-rate, COPILOT_GITHUB_TOKEN)
+//   flant-sub → pp-flant-anthropic-sub (personal Claude subscription; CLAUDE-ONLY)
+//   flant-api → pp-flant-anthropic / pp-flant-openai (paid per token)
+// Each role's model spec is stored already pointing at its PREFERRED tier; the
+// resolver rewrites DOWN to the highest still-usable tier when the preferred one
+// is disabled (settings) or demoted (a live rate-limit). This is the single
+// choke point every resolution site funnels through (main switchModel, subagent
+// tool_call input.model, planner/reviewer specs, registerAgents), replacing the
+// old single sub→api boolean.
+export type ProviderTierName = "copilot" | "flant-sub" | "flant-api";
+
+// Fixed precedence order.
+export const PROVIDER_TIER_ORDER: readonly ProviderTierName[] = ["copilot", "flant-sub", "flant-api"] as const;
+
+const COPILOT_PROVIDER = "github-copilot";
+
+// Which tiers are ENABLED (user settings). flant-api is effectively always on
+// (the paid floor); copilot/flant-sub are opt-in. Defaults keep pre-tier
+// behavior: only flant-api + flant-sub (when the sub provider is registered).
+let tierEnabled: Record<ProviderTierName, boolean> = {
+  "copilot": false,
+  "flant-sub": true,
+  "flant-api": true,
+};
+
+// Per-family live demotions (a rate limit on that family's current tier). A
+// demoted (tier,family) pair is skipped during resolution until restored by the
+// switch-back probe. Keyed by `${tier}:${family}`.
+const demotedTierFamily = new Set<string>();
+
+export function setTierEnabled(flags: Partial<Record<ProviderTierName, boolean>>): void {
+  tierEnabled = { ...tierEnabled, ...flags };
+}
+
+export function getTierEnabled(): Record<ProviderTierName, boolean> {
+  return { ...tierEnabled };
+}
+
+export function demoteTierForFamily(tier: ProviderTierName, family: Family): void {
+  demotedTierFamily.add(`${tier}:${family}`);
+}
+
+export function restoreTierForFamily(tier: ProviderTierName, family: Family): void {
+  demotedTierFamily.delete(`${tier}:${family}`);
+}
+
+export function clearAllTierDemotions(): void {
+  demotedTierFamily.clear();
+}
+
+function isTierUsable(tier: ProviderTierName, family: Family): boolean {
+  if (!tierEnabled[tier]) return false;
+  if (demotedTierFamily.has(`${tier}:${family}`)) return false;
+  // flant-sub is Claude-only: it never serves gpt/gemini/etc families.
+  if (tier === "flant-sub" && !isClaudeFamily(family)) return false;
+  return true;
+}
+
+function isClaudeFamily(family: Family): boolean {
+  return family === "opus" || family === "fable" || family === "sonnet" || family === "haiku";
+}
+
+// Identify which tier a resolved spec currently points at.
+function tierOfSpec(spec: string): ProviderTierName | null {
+  if (spec.startsWith(`${COPILOT_PROVIDER}/`)) return "copilot";
+  if (spec.startsWith(`${SUB_PROVIDER}/`) || spec.startsWith(SUB_MODEL_PREFIX)) return "flant-sub";
+  if (spec.startsWith("pp-flant-anthropic/") || spec.startsWith("pp-flant-openai/")) return "flant-api";
+  return null;
+}
+
+// Extract the bare model id (no provider/sub prefix) from a resolved spec.
+function bareModelId(spec: string): string {
+  let s = spec;
+  const slash = s.indexOf("/");
+  if (slash >= 0) s = s.slice(slash + 1);
+  if (s.startsWith(SUB_MODEL_PREFIX)) s = s.slice(SUB_MODEL_PREFIX.length);
+  return s;
+}
+
+// Rewrite a spec onto a target tier for a given family.
+function specForTier(tier: ProviderTierName, family: Family, bareId: string): string {
+  const claude = isClaudeFamily(family);
+  switch (tier) {
+    case "copilot":
+      return `${COPILOT_PROVIDER}/${bareId}`;
+    case "flant-sub":
+      return `${SUB_PROVIDER}/${SUB_MODEL_PREFIX}${bareId}`;
+    case "flant-api":
+      return claude ? `pp-flant-anthropic/${bareId}` : `pp-flant-openai/${bareId}`;
+  }
+}
+
+// Given a resolved spec, return it on the highest still-usable tier AT OR BELOW
+// its current preferred tier (demote-only). Role specs are generated already
+// pointing at their preferred tier (copilot precedence is a GENERATION concern),
+// so the resolver's job is purely to drop DOWN when the current tier is disabled
+// (settings) or demoted (a live rate-limit) — never to promote a spec upward,
+// which would e.g. reroute a paid flant-api spec onto the subscription. Only
+// tier-routed specs (copilot / flant-sub / flant-api) are considered; native
+// anthropic/openai specs and unresolved aliases pass through unchanged.
+function applyTierResolution(spec: string): string {
+  const currentTier = tierOfSpec(spec);
+  if (!currentTier) return spec;
+  const bareId = bareModelId(spec);
+  // Resolve the family from a canonical provider-prefixed form so a bare
+  // `sub/<claude-*>` id (no provider prefix) still classifies. Claude bare ids
+  // map onto the anthropic provider; other bare ids onto the openai provider.
+  const canonical = findFamily(spec)
+    ? spec
+    : bareId.startsWith("claude-")
+      ? `pp-flant-anthropic/${bareId}`
+      : `pp-flant-openai/${bareId}`;
+  const family = findFamily(canonical)?.family ?? "unknown";
+  if (family === "unknown") return spec;
+  // If the current tier is still usable, keep the spec as-is (no promotion).
+  if (isTierUsable(currentTier, family)) return specForTier(currentTier, family, bareId);
+  // Otherwise walk DOWN to the first usable lower-precedence tier.
+  const startIdx = PROVIDER_TIER_ORDER.indexOf(currentTier);
+  for (let i = startIdx + 1; i < PROVIDER_TIER_ORDER.length; i++) {
+    const tier = PROVIDER_TIER_ORDER[i];
+    if (isTierUsable(tier, family)) return specForTier(tier, family, bareId);
+  }
+  return spec;
+}
+
+// ── Backward-compatible sub-fallback shims ──────────────────────────────────
+// The rate-limit-fallback module still calls setSubscriptionFallbackActive to
+// force sub→api. Model it as: disable the flant-sub tier globally (active) /
+// re-enable it (inactive). This preserves the exact old observable behavior
+// while routing through the unified tier resolver.
 let subscriptionFallbackActive = false;
 
 export function setSubscriptionFallbackActive(active: boolean): void {
   subscriptionFallbackActive = active;
+  tierEnabled["flant-sub"] = !active;
 }
 
 export function isSubscriptionFallbackActive(): boolean {
@@ -293,12 +418,10 @@ export function resolveModel(aliasOrId: string): string {
   if (resolved !== aliasOrId) {
     getLogger().debug({ s: "model", alias: aliasOrId, resolved }, "resolved model alias");
   }
-  if (subscriptionFallbackActive) {
-    const rewritten = toNonSubSpec(resolved);
-    if (rewritten !== resolved) {
-      getLogger().debug({ s: "model", from: resolved, to: rewritten }, "subscription fallback rewrite");
-      resolved = rewritten;
-    }
+  const tiered = applyTierResolution(resolved);
+  if (tiered !== resolved) {
+    getLogger().debug({ s: "model", from: resolved, to: tiered }, "provider-tier resolution");
+    resolved = tiered;
   }
   return resolved;
 }

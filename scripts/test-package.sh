@@ -46,6 +46,20 @@ if [ ! -d "$PKG_DIR" ]; then
   exit 1
 fi
 
+# Fresh-install repro for install issue 8a: the plannotator extension statically imports
+# ./generated/*, which is gitignored and produced ONLY by the postinstall vendoring step
+# (scripts/postinstall.mjs). A clean install must therefore leave generated/ populated, or the
+# extension fails to load with "Cannot find module './generated/checklist.js'". Asserting this
+# here guards against the postinstall silently skipping/failing to vendor on a consumer machine.
+GEN_MARKER="$PKG_DIR/3p/pi-plannotator/apps/pi-extension/generated/checklist.ts"
+echo "▶ asserting postinstall vendored plannotator generated/ sources"
+if [ ! -f "$GEN_MARKER" ]; then
+  echo "ERROR: postinstall did not vendor plannotator generated sources; missing $GEN_MARKER" >&2
+  echo "  (the pi-extension would fail to load: Cannot find module './generated/checklist.js')" >&2
+  exit 1
+fi
+echo "  ✓ generated/checklist.ts present in installed tree"
+
 # Run the resolution check from a helper placed INSIDE the installed package, so bare-specifier
 # resolution provably walks the artifact's own node_modules hierarchy (not this checkout's).
 CHECK="$PKG_DIR/__smoke-resolve.mjs"

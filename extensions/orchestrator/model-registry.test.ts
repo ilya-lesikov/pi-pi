@@ -7,13 +7,19 @@ vi.mock("./log.js", () => ({
 }));
 
 import {
+  clearAllTierDemotions,
+  demoteTierForFamily,
   findLatestFamilyMatch,
   getAllAliases,
   getModelFamilies,
   getModelInfo,
+  getTierEnabled,
   isSubscriptionFallbackActive,
+  PROVIDER_TIER_ORDER,
   resolveModel,
+  restoreTierForFamily,
   setSubscriptionFallbackActive,
+  setTierEnabled,
   toNonSubSpec,
   updateRegistryFromAvailableModels,
 } from "./model-registry.js";
@@ -364,6 +370,81 @@ describe("model-registry", () => {
       ]);
       setSubscriptionFallbackActive(true);
       expect(resolveModel("pp-flant-anthropic-sub/claude-opus-latest")).toBe("pp-flant-anthropic/claude-opus-4-8");
+    });
+  });
+
+  describe("provider-tier resolver", () => {
+    beforeEach(() => {
+      setSubscriptionFallbackActive(false);
+      clearAllTierDemotions();
+      // Reset to the pre-tier defaults: copilot off, sub on, api on.
+      setTierEnabled({ "copilot": false, "flant-sub": true, "flant-api": true });
+    });
+    afterEach(() => {
+      setSubscriptionFallbackActive(false);
+      clearAllTierDemotions();
+      setTierEnabled({ "copilot": false, "flant-sub": true, "flant-api": true });
+    });
+
+    it("exposes the fixed precedence order copilot > flant-sub > flant-api", () => {
+      expect([...PROVIDER_TIER_ORDER]).toEqual(["copilot", "flant-sub", "flant-api"]);
+    });
+
+    it("keeps a copilot-generated spec on copilot when enabled (no demotion)", () => {
+      setTierEnabled({ "copilot": true });
+      expect(resolveModel("github-copilot/claude-opus-4-8")).toBe("github-copilot/claude-opus-4-8");
+    });
+
+    it("demotes a copilot spec down when copilot is disabled", () => {
+      // copilot disabled (default) -> a copilot-generated Claude spec falls to
+      // the next usable tier (sub, which is Claude-capable + enabled).
+      expect(resolveModel("github-copilot/claude-opus-4-8")).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
+    });
+
+    it("is demote-only: never promotes a flant-api spec up to sub/copilot", () => {
+      setTierEnabled({ "copilot": true });
+      // A paid flant-api Claude spec stays on flant-api even though higher tiers
+      // are enabled — promotion would silently reroute billing.
+      expect(resolveModel("pp-flant-anthropic/claude-opus-4-8")).toBe("pp-flant-anthropic/claude-opus-4-8");
+    });
+
+    it("flant-sub is Claude-only: a demoted-copilot gpt spec skips sub to flant-api", () => {
+      // A copilot gpt spec, with copilot disabled, cannot use the Claude-only
+      // sub tier and lands on flant-api.
+      expect(resolveModel("github-copilot/gpt-5.6-sol")).toBe("pp-flant-openai/gpt-5.6-sol");
+    });
+
+    it("demoting copilot for a family falls that family to the next usable tier", () => {
+      setTierEnabled({ "copilot": true });
+      // opus prefers copilot; demote copilot for opus -> falls to sub.
+      demoteTierForFamily("copilot", "opus");
+      expect(resolveModel("github-copilot/claude-opus-4-8")).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
+      // A gpt on copilot, demoted, skips Claude-only sub and lands on flant-api.
+      demoteTierForFamily("copilot", "gpt-sol");
+      expect(resolveModel("github-copilot/gpt-5.6-sol")).toBe("pp-flant-openai/gpt-5.6-sol");
+    });
+
+    it("demotions are per-family: demoting opus on sub does not affect haiku", () => {
+      demoteTierForFamily("flant-sub", "opus");
+      // opus sub demoted -> falls to flant-api.
+      expect(resolveModel("pp-flant-anthropic-sub/sub/claude-opus-4-8")).toBe("pp-flant-anthropic/claude-opus-4-8");
+      // haiku sub still usable.
+      expect(resolveModel("pp-flant-anthropic-sub/sub/claude-haiku-4-5")).toBe("pp-flant-anthropic-sub/sub/claude-haiku-4-5");
+    });
+
+    it("restoring a demoted tier brings the family back up", () => {
+      setTierEnabled({ "copilot": true });
+      demoteTierForFamily("copilot", "opus");
+      expect(resolveModel("github-copilot/claude-opus-4-8")).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
+      restoreTierForFamily("copilot", "opus");
+      expect(resolveModel("github-copilot/claude-opus-4-8")).toBe("github-copilot/claude-opus-4-8");
+    });
+
+    it("setSubscriptionFallbackActive toggles the flant-sub tier enable flag", () => {
+      setSubscriptionFallbackActive(true);
+      expect(getTierEnabled()["flant-sub"]).toBe(false);
+      setSubscriptionFallbackActive(false);
+      expect(getTierEnabled()["flant-sub"]).toBe(true);
     });
   });
 });

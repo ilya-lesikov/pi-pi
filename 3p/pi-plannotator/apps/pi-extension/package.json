@@ -20,6 +20,7 @@
   },
   "files": [
     "index.ts",
+    "plannotator-impl.ts",
     "assistant-message.ts",
     "current-pi-session.ts",
     "plannotator-browser.ts",
