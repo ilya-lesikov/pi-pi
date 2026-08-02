@@ -96,6 +96,13 @@ async function offerFallback(
     log.debug({ s: "ratelimit" }, "no UI available to offer subscription fallback");
     return;
   }
+  // Automatic mode (default): skip the permission dialogue and switch straight
+  // to the next tier, surfacing a non-blocking notification instead.
+  if (loadFlantSettings().autoRateLimitFallback) {
+    await activateFallback(orchestrator, ctx, subModelId, origin);
+    return;
+  }
+
   orchestrator.subFallbackDialogPending = true;
   const taskToken = orchestrator.activeTaskToken;
   try {
@@ -174,7 +181,7 @@ function currentThinking(orchestrator: Orchestrator): string {
 // opens the switch-back dialogue. Only one timer runs at a time.
 export function armSwitchBackProbe(orchestrator: Orchestrator): void {
   if (orchestrator.subSwitchBackTimer) clearTimeout(orchestrator.subSwitchBackTimer);
-  const minutes = Math.max(1, loadFlantSettings().switchBackIntervalMinutes || 30);
+  const minutes = Math.max(1, loadFlantSettings().switchBackIntervalMinutes || 10);
   const taskToken = orchestrator.activeTaskToken;
   orchestrator.subSwitchBackTimer = setTimeout(() => {
     orchestrator.subSwitchBackTimer = null;

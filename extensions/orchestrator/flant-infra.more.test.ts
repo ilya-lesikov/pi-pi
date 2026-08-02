@@ -9,8 +9,10 @@ vi.mock("@earendil-works/pi-ai/oauth", () => ({
 }));
 
 const updateRegistryMock = vi.fn();
+const setTierEnabledMock = vi.fn();
 vi.mock("./model-registry.js", () => ({
   updateRegistryFromAvailableModels: (...args: unknown[]) => updateRegistryMock(...args),
+  setTierEnabled: (...args: unknown[]) => setTierEnabledMock(...args),
 }));
 
 const tempDirs: string[] = [];

@@ -67,6 +67,7 @@ import {
   readClaudeOAuthToken,
   readGatewayApiKey,
   saveFlantSettings,
+  syncProviderTiers,
   unregisterFlantProviders,
   updateFlantInfra,
   type FlantSettings,
@@ -1067,6 +1068,7 @@ async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise
         { title: `Auto-update on startup: ${settings.autoUpdate ? "ON" : "OFF"}`, description: "Refresh the available model list automatically each time pi starts" },
         { title: `Cache period: ${settings.cacheTTLDays} ${settings.cacheTTLDays === 1 ? "day" : "days"}`, description: "How long the fetched model list is reused before it is refreshed" },
       );
+      options.push({ title: `Automatic fallback on rate limit: ${settings.autoRateLimitFallback ? "ON" : "OFF"}`, description: "On a rate limit, switch to the next provider tier automatically (ON) or ask for permission each time (OFF)" });
       if (settings.subscription) {
         options.push({ title: `Rate-limit switch-back check: every ${settings.switchBackIntervalMinutes} min`, description: "How often to retry your subscription after it was rate-limited and traffic fell back to the gateway" });
       }
@@ -1107,6 +1109,18 @@ async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise
       continue;
     }
 
+    if (choice.startsWith("Automatic fallback on rate limit:")) {
+      const next = !settings.autoRateLimitFallback;
+      saveFlantSettings({ ...settings, autoRateLimitFallback: next });
+      ctx.ui.notify(
+        next
+          ? "Automatic fallback ON — rate limits switch provider tier without asking (a notification is shown each time)."
+          : "Automatic fallback OFF — you'll be asked for permission before each rate-limit switch.",
+        "info",
+      );
+      continue;
+    }
+
     if (choice === subscriptionLabel) {
       const turningOn = !settings.subscription;
       if (turningOn) {
@@ -1137,8 +1151,9 @@ async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise
 
     if (choice.startsWith("Rate-limit switch-back check:")) {
       const selected = await selectOption(ctx, "Switch-back check interval", [
-        { title: "15 min", description: "Probe the subscription limit every 15 minutes" },
-        { title: "30 min", description: "Default — probe every 30 minutes" },
+        { title: "10 min", description: "Default — probe the subscription limit every 10 minutes" },
+        { title: "15 min", description: "Probe every 15 minutes" },
+        { title: "30 min", description: "Probe every 30 minutes" },
         { title: "60 min", description: "Probe hourly" },
         { title: "120 min", description: "Probe every two hours" },
         { title: "Back", description: "Return to the previous menu" },
@@ -3101,6 +3116,7 @@ async function showSettingsMenu(orchestrator: Orchestrator, ctx: any): Promise<t
       opt("Commands", "After file edit and after implementation"),
       opt("Performance", "Per-operation timeout limits"),
       opt("LSP", "Language server controls"),
+      opt("Copilot", "GitHub Copilot model provider (highest precedence)"),
       opt("Flant", "Configure corporate AI model provider"),
       opt("Info", "Usage and task status"),
       opt("Back", "Return to the previous menu"),
@@ -3114,8 +3130,55 @@ async function showSettingsMenu(orchestrator: Orchestrator, ctx: any): Promise<t
     else if (choice === "Commands") await showCommandsSettings(orchestrator, ctx);
     else if (choice === "Performance") await showPerformanceSettings(orchestrator, ctx);
     else if (choice === "LSP") await showLspSettings(ctx);
+    else if (choice === "Copilot") await showCopilotMenu(orchestrator, ctx);
     else if (choice === "Flant") await showFlantInfraMenu(orchestrator, ctx);
     else if (choice === "Info") await showInfoMenu(orchestrator, ctx);
+  }
+}
+
+// Copilot provider tier settings. Sits ABOVE Flant in precedence: when enabled
+// (and COPILOT_GITHUB_TOKEN is present) Copilot-capable roles resolve to the
+// built-in github-copilot provider before falling to Flant sub/api.
+async function showCopilotMenu(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
+  while (true) {
+    const settings = loadFlantSettings();
+    const tokenPresent = !!process.env.COPILOT_GITHUB_TOKEN;
+    const enableLabel = `Enable Copilot tier: ${settings.copilotEnabled ? "ON" : "OFF"}`;
+    const statusLine = settings.copilotEnabled
+      ? tokenPresent
+        ? "Active — Copilot sits above Flant for roles Copilot can serve."
+        : "Enabled but COPILOT_GITHUB_TOKEN is missing — tier is skipped until the token is set."
+      : "Disabled — all roles route through Flant.";
+    const options: OptionInput[] = [
+      { title: enableLabel, description: "Prefer the GitHub Copilot provider (highest precedence) for roles it can serve" },
+      { title: "Current status", description: statusLine },
+      { title: "Back", description: "Return to the previous menu" },
+    ];
+
+    const choice = await selectOption(ctx, "Copilot", options);
+    if (!choice || choice === "Back") return BACK;
+
+    if (choice === enableLabel) {
+      const turningOn = !settings.copilotEnabled;
+      if (turningOn && !tokenPresent) {
+        ctx.ui.notify("Set COPILOT_GITHUB_TOKEN first (the built-in github-copilot provider authenticates off it).", "warning");
+        continue;
+      }
+      saveFlantSettings({ ...settings, copilotEnabled: turningOn });
+      syncProviderTiers();
+      ctx.ui.notify(
+        turningOn
+          ? "Copilot tier ON — now the highest-precedence provider for roles it can serve."
+          : "Copilot tier OFF — roles route through Flant sub/api.",
+        "info",
+      );
+      continue;
+    }
+
+    if (choice === "Current status") {
+      ctx.ui.notify(statusLine, "info");
+      continue;
+    }
   }
 }
 

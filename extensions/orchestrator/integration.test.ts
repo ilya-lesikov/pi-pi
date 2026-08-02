@@ -4331,7 +4331,7 @@ describe("menu contracts", () => {
 
     menu
       .expect({ question: "/pp", options: { include: ["Settings"] }, choose: "Settings" })
-      .expect({ question: "Settings", options: { exact: ["General", "Agents", "Commands", "Performance", "LSP", "Flant", "Info", "Back"] }, choose: "Back" })
+      .expect({ question: "Settings", options: { exact: ["General", "Agents", "Commands", "Performance", "LSP", "Copilot", "Flant", "Info", "Back"] }, choose: "Back" })
       .expect({ question: "/pp", options: { include: ["Back to prompt"] }, choose: "Back to prompt" });
 
     const pp = getCommand(pi, "pp");

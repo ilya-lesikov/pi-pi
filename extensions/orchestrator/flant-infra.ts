@@ -5,7 +5,7 @@ import lockfile from "proper-lockfile";
 import { refreshAnthropicToken } from "@earendil-works/pi-ai/oauth";
 import type { ExtensionAPI, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 import { getDefaultConfig, type PiPiConfig } from "./config.js";
-import { updateRegistryFromAvailableModels } from "./model-registry.js";
+import { updateRegistryFromAvailableModels, setTierEnabled } from "./model-registry.js";
 import { compareModelVersion } from "./model-version.js";
 import { getLogger } from "./log.js";
 import { buildUserAgent } from "./billing-spoof.js";
@@ -40,9 +40,22 @@ export interface FlantSettings {
    * Minutes between out-of-band "is the subscription limit cleared yet?" probes
    * while the sub→non-sub rate-limit fallback is active. On each interval a
    * cheap probe hits the sub model; on success the user is asked to switch back.
-   * Default 30.
+   * Default 10.
    */
   switchBackIntervalMinutes: number;
+  /**
+   * When true, automatically fall back to the next provider tier on a rate
+   * limit WITHOUT a confirmation dialogue (a non-blocking notification is shown
+   * on every switch). When false, the legacy manual permission dialogue is
+   * shown instead. Default true.
+   */
+  autoRateLimitFallback: boolean;
+  /**
+   * Enable the Copilot provider tier (built-in `github-copilot` provider, keyed
+   * off COPILOT_GITHUB_TOKEN). When enabled it sits ABOVE both Flant tiers in
+   * precedence. Default false.
+   */
+  copilotEnabled: boolean;
 }
 
 const GEMINI_MAP: Record<string, string> = {
@@ -72,7 +85,9 @@ const DEFAULT_SETTINGS: FlantSettings = {
   cachedFlantModels: null,
   cachedOpenRouterData: null,
   subscription: false,
-  switchBackIntervalMinutes: 30,
+  switchBackIntervalMinutes: 10,
+  autoRateLimitFallback: true,
+  copilotEnabled: false,
 };
 
 /** Provider name for the personal-subscription Claude routing. */
@@ -263,6 +278,8 @@ function normalizeSettings(raw: unknown): FlantSettings {
     autoUpdate: value.autoUpdate === undefined ? true : !!value.autoUpdate,
     cacheTTLDays,
     switchBackIntervalMinutes,
+    autoRateLimitFallback: value.autoRateLimitFallback === undefined ? true : !!value.autoRateLimitFallback,
+    copilotEnabled: !!value.copilotEnabled,
     subscription: !!value.subscription,
     lastUpdated: typeof value.lastUpdated === "string" ? value.lastUpdated : null,
     cachedFlantModels: Array.isArray(value.cachedFlantModels)
@@ -1009,10 +1026,36 @@ export async function updateFlantInfra(
   }
 }
 
+/**
+ * Whether the Copilot provider tier is usable: enabled in settings AND the
+ * COPILOT_GITHUB_TOKEN env var is present (the built-in `github-copilot`
+ * provider authenticates off it). When the token is absent the tier is treated
+ * as disabled so resolution silently skips it.
+ */
+export function isCopilotTierActive(settings?: FlantSettings): boolean {
+  const s = settings ?? loadFlantSettings();
+  return s.copilotEnabled && !!process.env.COPILOT_GITHUB_TOKEN;
+}
+
+/**
+ * Push the current provider-tier enable flags from settings into the model
+ * registry's resolver. flant-api is the always-on paid floor; flant-sub follows
+ * the subscription toggle + credentials; copilot follows its toggle + token.
+ */
+export function syncProviderTiers(settings?: FlantSettings): void {
+  const s = settings ?? loadFlantSettings();
+  setTierEnabled({
+    "copilot": isCopilotTierActive(s),
+    "flant-sub": isSubscriptionActive(s),
+    "flant-api": true,
+  });
+}
+
 export function initFlantSync(pi: ExtensionAPI): void {
   setPI(pi);
   const settings = loadFlantSettings();
   const log = getLogger();
+  syncProviderTiers(settings);
   if (!settings.enabled) {
     log.debug({ s: "flant" }, "flant disabled");
     generatedFlantConfig = null;

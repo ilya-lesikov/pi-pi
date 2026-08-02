@@ -12,8 +12,12 @@ vi.mock("../../3p/pi-ask-user/index.js", () => ({
   isCancel: (v: any) => !!v && v.__cancel === true,
 }));
 
+const flantSettings: { switchBackIntervalMinutes: number; autoRateLimitFallback: boolean } = {
+  switchBackIntervalMinutes: 30,
+  autoRateLimitFallback: false,
+};
 vi.mock("./flant-infra.js", () => ({
-  loadFlantSettings: () => ({ switchBackIntervalMinutes: 30 }),
+  loadFlantSettings: () => ({ ...flantSettings }),
   probeSubscriptionCleared: vi.fn(),
   SUB_PROVIDER: "pp-flant-anthropic-sub",
   SUB_MODEL_PREFIX: "sub/",
@@ -52,6 +56,8 @@ function makeCtx() {
 beforeEach(() => {
   askUserMock.mockReset();
   setSubscriptionFallbackActiveMock.mockReset();
+  flantSettings.switchBackIntervalMinutes = 30;
+  flantSettings.autoRateLimitFallback = false;
 });
 afterEach(() => {
   vi.clearAllTimers();
@@ -124,5 +130,38 @@ describe("handleMainRateLimit (main-origin switches the main model)", () => {
     orch.subFallbackActive = true;
     await handleMainRateLimit(orch, makeCtx(), "pp-flant-anthropic-sub/sub/claude-opus-4-8", "pp-flant-anthropic-sub");
     expect(askUserMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("automatic fallback (no dialogue) when autoRateLimitFallback is ON", () => {
+  it("main-origin: switches without asking and notifies", async () => {
+    vi.useFakeTimers();
+    flantSettings.autoRateLimitFallback = true;
+    const orch = makeOrchestrator();
+    const ctx = makeCtx();
+
+    await handleMainRateLimit(orch, ctx, "pp-flant-anthropic-sub/sub/claude-opus-4-8", "pp-flant-anthropic-sub");
+
+    // No permission dialogue was shown.
+    expect(askUserMock).not.toHaveBeenCalled();
+    // Switch still happened: override on + main model switched + notification.
+    expect(setSubscriptionFallbackActiveMock).toHaveBeenCalledWith(true);
+    expect(orch.switchModel).toHaveBeenCalledWith(ctx, "pp-flant-anthropic/claude-opus-4-8", "high");
+    expect(ctx.ui.notify).toHaveBeenCalled();
+    expect(orch.subFallbackActive).toBe(true);
+  });
+
+  it("subagent-origin: activates override without asking, does NOT switch main model", async () => {
+    vi.useFakeTimers();
+    flantSettings.autoRateLimitFallback = true;
+    const orch = makeOrchestrator();
+    const ctx = makeCtx();
+
+    await handleSubagentRateLimit(orch, ctx, "pp-flant-anthropic-sub/sub/claude-opus-4-8");
+
+    expect(askUserMock).not.toHaveBeenCalled();
+    expect(setSubscriptionFallbackActiveMock).toHaveBeenCalledWith(true);
+    // subagent origin never switches the main model.
+    expect(orch.switchModel).not.toHaveBeenCalled();
   });
 });

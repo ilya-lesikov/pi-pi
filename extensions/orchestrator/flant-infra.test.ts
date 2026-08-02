@@ -614,7 +614,9 @@ describe("flant-infra", () => {
       enabled: false,
       autoUpdate: true,
       cacheTTLDays: 7,
-      switchBackIntervalMinutes: 30,
+      switchBackIntervalMinutes: 10,
+      autoRateLimitFallback: true,
+      copilotEnabled: false,
       subscription: false,
       lastUpdated: null,
       cachedFlantModels: null,
@@ -653,7 +655,9 @@ describe("flant-infra", () => {
       enabled: true,
       autoUpdate: false,
       cacheTTLDays: 3,
-      switchBackIntervalMinutes: 30,
+      switchBackIntervalMinutes: 10,
+      autoRateLimitFallback: true,
+      copilotEnabled: false,
       subscription: false,
       lastUpdated: "2026-01-02T03:04:05.000Z",
       cachedFlantModels: ["gpt-5-4", "claude-opus-4-6"],
@@ -678,6 +682,8 @@ describe("flant-infra", () => {
       autoUpdate: true,
       cacheTTLDays: 14,
       switchBackIntervalMinutes: 30,
+      autoRateLimitFallback: false,
+      copilotEnabled: true,
       subscription: true,
       lastUpdated: "2026-02-01T00:00:00.000Z",
       cachedFlantModels: ["claude-opus-4-6", "gpt-5-4"],
@@ -706,9 +712,9 @@ describe("flant-infra", () => {
     const settingsPath = join(settingsDir, "flant-models.json");
     mkdirSync(settingsDir, { recursive: true });
 
-    // Missing -> default 30.
+    // Missing -> default 10.
     writeFileSync(settingsPath, JSON.stringify({ enabled: true }), "utf-8");
-    expect(mod.loadFlantSettings().switchBackIntervalMinutes).toBe(30);
+    expect(mod.loadFlantSettings().switchBackIntervalMinutes).toBe(10);
 
     // String numeric -> parsed and rounded.
     writeFileSync(settingsPath, JSON.stringify({ enabled: true, switchBackIntervalMinutes: "45" }), "utf-8");
@@ -718,6 +724,6 @@ describe("flant-infra", () => {
     writeFileSync(settingsPath, JSON.stringify({ enabled: true, switchBackIntervalMinutes: 0 }), "utf-8");
     expect(mod.loadFlantSettings().switchBackIntervalMinutes).toBe(1);
     writeFileSync(settingsPath, JSON.stringify({ enabled: true, switchBackIntervalMinutes: "nonsense" }), "utf-8");
-    expect(mod.loadFlantSettings().switchBackIntervalMinutes).toBe(30);
+    expect(mod.loadFlantSettings().switchBackIntervalMinutes).toBe(10);
   });
 });
