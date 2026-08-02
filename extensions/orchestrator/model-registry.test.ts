@@ -447,4 +447,66 @@ describe("model-registry", () => {
       expect(getTierEnabled()["flant-sub"]).toBe(true);
     });
   });
+
+  // C1 fix: catalog-safe resolution. Copilot's real catalog uses DIFFERENT ids
+  // than flant (claude-opus-4.5 vs claude-opus-4-8) and has NO gpt models, so
+  // the resolver must consult the registered catalog and never emit an
+  // unregistered id.
+  describe("provider-tier resolver — catalog-safe copilot", () => {
+    beforeEach(() => {
+      setSubscriptionFallbackActive(false);
+      clearAllTierDemotions();
+      setTierEnabled({ "copilot": false, "flant-sub": true, "flant-api": true });
+      // Realistic mixed catalog: copilot Claude ids DIFFER from flant's; copilot
+      // has no gpt; flant has both claude + gpt (per-token and sub).
+      updateRegistryFromAvailableModels([
+        "github-copilot/claude-opus-4.5",
+        "github-copilot/claude-opus-4.6",
+        "pp-flant-anthropic/claude-opus-4-8",
+        "pp-flant-anthropic-sub/sub/claude-opus-4-8",
+        "pp-flant-openai/gpt-5.6-sol",
+      ]);
+    });
+    afterEach(() => {
+      setSubscriptionFallbackActive(false);
+      clearAllTierDemotions();
+      setTierEnabled({ "copilot": false, "flant-sub": true, "flant-api": true });
+      updateRegistryFromAvailableModels([]);
+    });
+
+    it("is demote-only: a generated flant spec is NOT auto-promoted to copilot", () => {
+      // Auto-prefer-copilot routing is deferred (Option B); a generated flant
+      // spec stays on flant even when copilot is enabled + has the family.
+      setTierEnabled({ "copilot": true });
+      expect(resolveModel("pp-flant-anthropic-sub/sub/claude-opus-4-8")).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
+      expect(resolveModel("pp-flant-openai/gpt-5.6-sol")).toBe("pp-flant-openai/gpt-5.6-sol");
+    });
+
+    it("respects an explicit copilot pin against the real catalog (no rewrite to flant)", () => {
+      setTierEnabled({ "copilot": true });
+      expect(resolveModel("github-copilot/claude-opus-4.5")).toBe("github-copilot/claude-opus-4.5");
+    });
+
+    it("resolves a copilot alias to the REAL latest copilot id, not a prefix-swapped flant id", () => {
+      setTierEnabled({ "copilot": true });
+      // An explicit copilot pin using a stale/aliasable id resolves to copilot's
+      // OWN latest registered opus, never github-copilot/<flant-id>.
+      const out = resolveModel("github-copilot/claude-opus-4.5");
+      expect(out.startsWith("github-copilot/")).toBe(true);
+    });
+
+    it("demotes an explicit copilot pin to a real flant id when copilot is disabled", () => {
+      // copilot off (default) -> the pin can't be honored, routes to the highest
+      // usable flant tier with a REAL id (not github-copilot/<flant-id>).
+      expect(resolveModel("github-copilot/claude-opus-4.5")).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
+    });
+
+    it("never emits an unregistered copilot id when demoting a copilot spec whose family copilot lacks", () => {
+      // A copilot-pinned gpt (copilot has NO gpt) with copilot disabled must land
+      // on a real flant gpt id, never github-copilot/gpt-….
+      const out = resolveModel("github-copilot/gpt-5.6-sol");
+      expect(out.startsWith("github-copilot/")).toBe(false);
+      expect(out).toBe("pp-flant-openai/gpt-5.6-sol");
+    });
+  });
 });

@@ -42,9 +42,9 @@ export const MODEL_FAMILIES: ModelFamilyDefinition[] = [
     family: "opus",
     tier: "smart",
     displayName: "Claude Opus",
-    patterns: [/^(anthropic|pp-flant-anthropic)\/claude-opus-[a-z0-9.-]+$/, /^pp-flant-anthropic-sub\/sub\/claude-opus-[a-z0-9.-]+$/],
+    patterns: [/^(anthropic|pp-flant-anthropic|github-copilot)\/claude-opus-[a-z0-9.-]+$/, /^pp-flant-anthropic-sub\/sub\/claude-opus-[a-z0-9.-]+$/],
     aliasTemplate: "claude-opus-latest",
-    providers: ["anthropic", "pp-flant-anthropic", "pp-flant-anthropic-sub"],
+    providers: ["anthropic", "pp-flant-anthropic", "pp-flant-anthropic-sub", "github-copilot"],
     nativeLatestProviders: ["anthropic"],
   },
   {
@@ -52,9 +52,9 @@ export const MODEL_FAMILIES: ModelFamilyDefinition[] = [
     family: "fable",
     tier: "xsmart",
     displayName: "Claude Fable",
-    patterns: [/^(anthropic|pp-flant-anthropic)\/claude-fable-[a-z0-9.-]+$/, /^pp-flant-anthropic-sub\/sub\/claude-fable-[a-z0-9.-]+$/],
+    patterns: [/^(anthropic|pp-flant-anthropic|github-copilot)\/claude-fable-[a-z0-9.-]+$/, /^pp-flant-anthropic-sub\/sub\/claude-fable-[a-z0-9.-]+$/],
     aliasTemplate: "claude-fable-latest",
-    providers: ["anthropic", "pp-flant-anthropic", "pp-flant-anthropic-sub"],
+    providers: ["anthropic", "pp-flant-anthropic", "pp-flant-anthropic-sub", "github-copilot"],
     nativeLatestProviders: ["anthropic"],
   },
   {
@@ -62,9 +62,9 @@ export const MODEL_FAMILIES: ModelFamilyDefinition[] = [
     family: "sonnet",
     tier: "regular",
     displayName: "Claude Sonnet",
-    patterns: [/^(anthropic|pp-flant-anthropic)\/claude-sonnet-[a-z0-9.-]+$/, /^pp-flant-anthropic-sub\/sub\/claude-sonnet-[a-z0-9.-]+$/],
+    patterns: [/^(anthropic|pp-flant-anthropic|github-copilot)\/claude-sonnet-[a-z0-9.-]+$/, /^pp-flant-anthropic-sub\/sub\/claude-sonnet-[a-z0-9.-]+$/],
     aliasTemplate: "claude-sonnet-latest",
-    providers: ["anthropic", "pp-flant-anthropic", "pp-flant-anthropic-sub"],
+    providers: ["anthropic", "pp-flant-anthropic", "pp-flant-anthropic-sub", "github-copilot"],
     nativeLatestProviders: ["anthropic"],
   },
   {
@@ -72,9 +72,9 @@ export const MODEL_FAMILIES: ModelFamilyDefinition[] = [
     family: "haiku",
     tier: "stupid",
     displayName: "Claude Haiku",
-    patterns: [/^(anthropic|pp-flant-anthropic)\/claude-haiku-[a-z0-9.-]+$/, /^pp-flant-anthropic-sub\/sub\/claude-haiku-[a-z0-9.-]+$/],
+    patterns: [/^(anthropic|pp-flant-anthropic|github-copilot)\/claude-haiku-[a-z0-9.-]+$/, /^pp-flant-anthropic-sub\/sub\/claude-haiku-[a-z0-9.-]+$/],
     aliasTemplate: "claude-haiku-latest",
-    providers: ["anthropic", "pp-flant-anthropic", "pp-flant-anthropic-sub"],
+    providers: ["anthropic", "pp-flant-anthropic", "pp-flant-anthropic-sub", "github-copilot"],
     nativeLatestProviders: ["anthropic"],
   },
   // gpt-5.6 tier families. These MUST precede the legacy `gpt` family below,
@@ -139,11 +139,11 @@ export const MODEL_FAMILIES: ModelFamilyDefinition[] = [
     tier: "regular",
     displayName: "Gemini Pro",
     patterns: [
-      /^(google|pp-flant-openai)\/gemini-pro-[a-z0-9.-]+$/,
-      /^(google|pp-flant-openai)\/gemini-[a-z0-9.-]+-pro(?:-[a-z0-9.-]+)?$/,
+      /^(google|pp-flant-openai|github-copilot)\/gemini-pro-[a-z0-9.-]+$/,
+      /^(google|pp-flant-openai|github-copilot)\/gemini-[a-z0-9.-]+-pro(?:-[a-z0-9.-]+)?$/,
     ],
     aliasTemplate: "gemini-pro-latest",
-    providers: ["google", "pp-flant-openai"],
+    providers: ["google", "pp-flant-openai", "github-copilot"],
   },
   {
     vendor: "google",
@@ -151,11 +151,11 @@ export const MODEL_FAMILIES: ModelFamilyDefinition[] = [
     tier: "stupid",
     displayName: "Gemini Flash",
     patterns: [
-      /^(google|pp-flant-openai)\/gemini-flash-[a-z0-9.-]+$/,
-      /^(google|pp-flant-openai)\/gemini-[a-z0-9.-]+-flash(?:-[a-z0-9.-]+)?$/,
+      /^(google|pp-flant-openai|github-copilot)\/gemini-flash-[a-z0-9.-]+$/,
+      /^(google|pp-flant-openai|github-copilot)\/gemini-[a-z0-9.-]+-flash(?:-[a-z0-9.-]+)?$/,
     ],
     aliasTemplate: "gemini-flash-latest",
-    providers: ["google", "pp-flant-openai"],
+    providers: ["google", "pp-flant-openai", "github-copilot"],
   },
   {
     vendor: "deepseek",
@@ -286,6 +286,35 @@ let tierEnabled: Record<ProviderTierName, boolean> = {
 // switch-back probe. Keyed by `${tier}:${family}`.
 const demotedTierFamily = new Set<string>();
 
+// The set of model specs actually registered/available (normalized, e.g.
+// `github-copilot/claude-opus-4.5`, `pp-flant-anthropic/claude-opus-4-8`),
+// captured from updateRegistryFromAvailableModels. The resolver consults this
+// so it NEVER rewrites a spec onto a tier that has no real model for the
+// family — critical because provider catalogs use DIFFERENT ids (Copilot ships
+// `claude-opus-4.5` and NO gpt models; Flant ships `claude-opus-4-8`), so a
+// naive prefix-swap would produce an unregistered id.
+let registeredSpecs = new Set<string>();
+
+// Return the registered spec for a (tier, family), or null when that tier has no
+// real model for the family. Prefers an exact prefix+family match from the live
+// catalog; falls back to the family's latest alias target when present.
+function registeredSpecForTier(tier: ProviderTierName, family: Family): string | null {
+  const familyDef = MODEL_FAMILIES.find((f) => f.family === family);
+  if (!familyDef) return null;
+  const prefixes: string[] =
+    tier === "copilot"
+      ? [`${COPILOT_PROVIDER}/`]
+      : tier === "flant-sub"
+        ? [`${SUB_PROVIDER}/`]
+        : ["pp-flant-anthropic/", "pp-flant-openai/"];
+  const candidates: string[] = [];
+  for (const spec of registeredSpecs) {
+    if (!prefixes.some((p) => spec.startsWith(p))) continue;
+    if (familyDef.patterns.some((pat) => pat.test(spec))) candidates.push(spec);
+  }
+  return pickLatest(candidates);
+}
+
 export function setTierEnabled(flags: Partial<Record<ProviderTierName, boolean>>): void {
   tierEnabled = { ...tierEnabled, ...flags };
 }
@@ -349,13 +378,21 @@ function specForTier(tier: ProviderTierName, family: Family, bareId: string): st
 }
 
 // Given a resolved spec, return it on the highest still-usable tier AT OR BELOW
-// its current preferred tier (demote-only). Role specs are generated already
-// pointing at their preferred tier (copilot precedence is a GENERATION concern),
-// so the resolver's job is purely to drop DOWN when the current tier is disabled
-// (settings) or demoted (a live rate-limit) — never to promote a spec upward,
-// which would e.g. reroute a paid flant-api spec onto the subscription. Only
-// tier-routed specs (copilot / flant-sub / flant-api) are considered; native
-// anthropic/openai specs and unresolved aliases pass through unchanged.
+// its current tier (DEMOTE-ONLY), never emitting an id that isn't a real
+// registered model. Role specs are generated already pointing at their tier;
+// the resolver's job is to drop DOWN when the current tier is disabled
+// (settings) or demoted (a live rate-limit) — never to promote a spec upward
+// (which would e.g. reroute a paid flant-api spec onto the subscription, or
+// auto-prefer copilot, a routing policy deferred pending catalog-aware id
+// mapping since copilot's ids differ from flant's and it lacks gpt entirely).
+//
+// Catalog-safety: for the copilot tier, whose catalog uses DIFFERENT ids than
+// flant, a rewrite is only performed to a REAL registered copilot model for the
+// family — never a prefix-swapped `github-copilot/<flant-id>`. An explicit
+// copilot pin with no registered twin is respected as-is (a user's explicit
+// provider choice is never silently rerouted to flant). flant-sub/flant-api
+// share bare ids, so prefix-swap between them is always a valid registered spec.
+// Native anthropic/openai specs and unresolved aliases pass through unchanged.
 function applyTierResolution(spec: string): string {
   const currentTier = tierOfSpec(spec);
   if (!currentTier) return spec;
@@ -370,13 +407,36 @@ function applyTierResolution(spec: string): string {
       : `pp-flant-openai/${bareId}`;
   const family = findFamily(canonical)?.family ?? "unknown";
   if (family === "unknown") return spec;
-  // If the current tier is still usable, keep the spec as-is (no promotion).
-  if (isTierUsable(currentTier, family)) return specForTier(currentTier, family, bareId);
-  // Otherwise walk DOWN to the first usable lower-precedence tier.
+
+  // If the current tier is still usable, keep the spec (catalog-safe): for
+  // copilot resolve to the real registered id; for flant keep as-is.
+  const haveCatalog = registeredSpecs.size > 0;
+  if (isTierUsable(currentTier, family)) {
+    if (currentTier === "copilot") {
+      // Keep an exact registered pin as-is; otherwise resolve to the real
+      // latest copilot id for the family (never a prefix-swapped flant id).
+      if (registeredSpecs.has(spec)) return spec;
+      const real = registeredSpecForTier("copilot", family);
+      return real ?? spec;
+    }
+    return specForTier(currentTier, family, bareId);
+  }
+  // Otherwise walk DOWN to the first usable lower-precedence tier that has a
+  // real registered model.
   const startIdx = PROVIDER_TIER_ORDER.indexOf(currentTier);
   for (let i = startIdx + 1; i < PROVIDER_TIER_ORDER.length; i++) {
     const tier = PROVIDER_TIER_ORDER[i];
-    if (isTierUsable(tier, family)) return specForTier(tier, family, bareId);
+    if (!isTierUsable(tier, family)) continue;
+    if (tier === "copilot") {
+      const real = registeredSpecForTier("copilot", family);
+      if (real) return real;
+      continue;
+    }
+    if (haveCatalog) {
+      const real = registeredSpecForTier(tier, family);
+      if (real) return real;
+    }
+    return specForTier(tier, family, bareId);
   }
   return spec;
 }
@@ -448,6 +508,7 @@ export function getModelInfo(modelId: string): ModelInfo {
 export function updateRegistryFromAvailableModels(availableModels: string[]): void {
   const log = getLogger();
   const normalizedModels = collectNormalizedModels(availableModels).filter((modelId) => !modelId.endsWith("-latest"));
+  registeredSpecs = new Set(normalizedModels);
   const nextAliasMap: Record<string, string> = buildNativeLatestAliases();
 
   let updatedCount = 0;
