@@ -2291,6 +2291,23 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       finalizeTracer();
     }
 
+    // Install 8b: post-bind duplicate-bundled-extension guard. If the user also
+    // installed a standalone copy of something pi-pi vendors (pi-lsp, pi-tasks,
+    // pi-vcc, ...), HARD-FAIL: notify AND skip registering pi-pi's feature tools/
+    // agents so it refuses to operate (rather than colliding silently). The
+    // subagent session is exempt (it shares the parent's already-vetted set).
+    if (!(globalThis as any)[SUBAGENT_SESSION_KEY]) {
+      try {
+        const { checkDuplicateExtensions } = await import("./duplicate-extension-guard.js");
+        if (checkDuplicateExtensions(pi, ctx)) {
+          orchestrator.duplicateExtensionError = true;
+          return;
+        }
+      } catch (err: any) {
+        getLogger().error({ s: "duplicate-extension", err: err?.message }, "duplicate-extension guard failed to run");
+      }
+    }
+
     registerFeatureToolsAndAgents(orchestrator);
   });
 

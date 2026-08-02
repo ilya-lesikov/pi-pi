@@ -62,6 +62,10 @@ export class Orchestrator {
   // read-only /pp path is available and `config` holds a rendering-only default
   // fallback (NOT the user's config, which is invalid).
   configError: string | null = null;
+  // True when a standalone duplicate of a pi-pi-bundled extension was detected at
+  // session_start (install 8b). While set, pi-pi refused to register its feature
+  // tools/agents and does not operate until the standalone copy is removed.
+  duplicateExtensionError = false;
   cwd = "";
   spawnedAgentIds = new Set<string>();
   agentDescriptions = new Map<string, string>();
