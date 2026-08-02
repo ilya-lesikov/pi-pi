@@ -409,9 +409,26 @@ function applyTierResolution(spec: string): string {
   const family = findFamily(canonical)?.family ?? "unknown";
   if (family === "unknown") return spec;
 
+  const haveCatalog = registeredSpecs.size > 0;
+
+  // Copilot precedence (the user's explicit request: "Copilot models should have
+  // higher precedence than flant-api or flant-subscription"). When the current
+  // tier is a FLANT tier and copilot is enabled + usable + has a REAL registered
+  // model for the family, PROMOTE up to copilot. This is safe because
+  // registeredSpecForTier returns copilot's own catalog id (never a fabricated
+  // github-copilot/<flant-id>), and a family copilot lacks (e.g. gpt) yields
+  // null so the spec stays on flant. Copilot is flat-rate (cost 0), so this only
+  // lowers cost, and the copilot tier is OFF by default — promotion happens only
+  // after the user explicitly enables it. Flant↔flant stays demote-only below
+  // (never promote a paid api spec onto the subscription). An explicit copilot
+  // pin is handled by the current-tier branch, not here.
+  if (currentTier !== "copilot" && isTierUsable("copilot", family)) {
+    const copilotSpec = registeredSpecForTier("copilot", family);
+    if (copilotSpec) return copilotSpec;
+  }
+
   // If the current tier is still usable, keep the spec (catalog-safe): for
   // copilot resolve to the real registered id; for flant keep as-is.
-  const haveCatalog = registeredSpecs.size > 0;
   if (isTierUsable(currentTier, family)) {
     if (currentTier === "copilot") {
       // Keep an exact registered pin as-is; otherwise resolve to the real

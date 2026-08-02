@@ -401,10 +401,11 @@ describe("model-registry", () => {
       expect(resolveModel("github-copilot/claude-opus-4-8")).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
     });
 
-    it("is demote-only: never promotes a flant-api spec up to sub/copilot", () => {
+    it("flant↔flant stays demote-only: a paid flant-api spec is never promoted to the subscription", () => {
       setTierEnabled({ "copilot": true });
-      // A paid flant-api Claude spec stays on flant-api even though higher tiers
-      // are enabled — promotion would silently reroute billing.
+      // No catalog registered here, so copilot promotion no-ops (needs a real
+      // copilot model); the point is flant-api never routes UP to flant-sub
+      // (that would reroute a paid pin onto the subscription).
       expect(resolveModel("pp-flant-anthropic/claude-opus-4-8")).toBe("pp-flant-anthropic/claude-opus-4-8");
     });
 
@@ -474,12 +475,29 @@ describe("model-registry", () => {
       updateRegistryFromAvailableModels([]);
     });
 
-    it("is demote-only: a generated flant spec is NOT auto-promoted to copilot", () => {
-      // Auto-prefer-copilot routing is deferred (Option B); a generated flant
-      // spec stays on flant even when copilot is enabled + has the family.
+    it("PROMOTES a generated flant Claude spec to the real latest copilot id when copilot is enabled", () => {
+      // Copilot precedence (user's explicit request): a generated flant claude
+      // spec routes UP to copilot's OWN latest registered opus id (4.6), not a
+      // prefix-swap. copilot is OFF by default so this only happens on opt-in.
       setTierEnabled({ "copilot": true });
-      expect(resolveModel("pp-flant-anthropic-sub/sub/claude-opus-4-8")).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
+      expect(resolveModel("pp-flant-anthropic-sub/sub/claude-opus-4-8")).toBe("github-copilot/claude-opus-4.6");
+    });
+
+    it("does NOT promote a gpt flant spec to copilot (copilot has no gpt) — stays on flant", () => {
+      setTierEnabled({ "copilot": true });
       expect(resolveModel("pp-flant-openai/gpt-5.6-sol")).toBe("pp-flant-openai/gpt-5.6-sol");
+    });
+
+    it("does NOT promote to copilot when the copilot tier is disabled (default)", () => {
+      // copilot OFF (default): a generated flant claude spec stays on flant.
+      expect(resolveModel("pp-flant-anthropic-sub/sub/claude-opus-4-8")).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
+    });
+
+    it("does NOT promote to copilot when that family is demoted for copilot (live rate-limit)", () => {
+      setTierEnabled({ "copilot": true });
+      demoteTierForFamily("copilot", "opus");
+      // opus copilot demoted -> the generated flant spec stays on flant.
+      expect(resolveModel("pp-flant-anthropic-sub/sub/claude-opus-4-8")).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
     });
 
     it("respects an explicit copilot pin against the real catalog (no rewrite to flant)", () => {
