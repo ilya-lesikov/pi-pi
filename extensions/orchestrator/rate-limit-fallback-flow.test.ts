@@ -24,13 +24,28 @@ vi.mock("./flant-infra.js", () => ({
 }));
 
 const setSubscriptionFallbackActiveMock = vi.fn();
+const demoteTierForFamilyMock = vi.fn();
+// Minimal family classifier for the mock: derive from the model id substring.
+function fakeFamily(spec: string): string {
+  if (/claude-opus/.test(spec)) return "opus";
+  if (/claude-sonnet/.test(spec)) return "sonnet";
+  if (/claude-haiku/.test(spec)) return "haiku";
+  if (/gpt/.test(spec)) return "gpt-sol";
+  return "unknown";
+}
 vi.mock("./model-registry.js", () => ({
   setSubscriptionFallbackActive: (v: boolean) => setSubscriptionFallbackActiveMock(v),
   toNonSubSpec: (spec: string) =>
     spec.replace(/^pp-flant-anthropic-sub\/sub\//, "pp-flant-anthropic/").replace(/^sub\//, "pp-flant-anthropic/"),
+  getModelInfo: (spec: string) => ({ family: fakeFamily(spec ?? "") }),
+  // Simulate the resolver DROPPING a sub-routed spec to flant-api after the
+  // monthly-cap demotion so handleMonthlyCap sees a real tier change.
+  resolveModel: (spec: string) =>
+    spec.replace(/^pp-flant-anthropic-sub\/sub\//, "pp-flant-anthropic/").replace(/^sub\//, "pp-flant-anthropic/"),
+  demoteTierForFamily: (...a: any[]) => demoteTierForFamilyMock(...a),
 }));
 
-import { handleMainRateLimit, handleSubagentRateLimit } from "./rate-limit-fallback.js";
+import { handleMainRateLimit, handleSubagentRateLimit, handleMonthlyCap } from "./rate-limit-fallback.js";
 
 function makeOrchestrator() {
   return {
@@ -49,8 +64,8 @@ function makeOrchestrator() {
   } as any;
 }
 
-function makeCtx() {
-  return { hasUI: true, abort: vi.fn(), ui: { notify: vi.fn() } };
+function makeCtx(model?: { provider: string; id: string }) {
+  return { hasUI: true, abort: vi.fn(), ui: { notify: vi.fn() }, model };
 }
 
 beforeEach(() => {
@@ -64,21 +79,37 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("handleSubagentRateLimit (M1: does not switch the main model)", () => {
-  it("activates the session override + nudges but does NOT switch the main model", async () => {
+describe("handleSubagentRateLimit (M2: same-family main switch)", () => {
+  it("switches the main model when main is on the SAME subscription-routed family", async () => {
     vi.useFakeTimers();
     askUserMock.mockResolvedValue({ kind: "selection", selections: ["Switch to non-sub Claude"] });
     const orch = makeOrchestrator();
+    // Main is on the sub-routed opus family that got limited.
+    const ctx = makeCtx({ provider: "pp-flant-anthropic-sub", id: "sub/claude-opus-4-8" });
 
-    await handleSubagentRateLimit(orch, makeCtx(), "pp-flant-anthropic-sub/sub/claude-opus-4-8");
+    await handleSubagentRateLimit(orch, ctx, "pp-flant-anthropic-sub/sub/claude-opus-4-8");
 
     expect(setSubscriptionFallbackActiveMock).toHaveBeenCalledWith(true);
     expect(orch.subFallbackActive).toBe(true);
-    // Main model must NOT change for a subagent-origin 429.
-    expect(orch.switchModel).not.toHaveBeenCalled();
-    // Continuation nudge is idle-gated (not a bare safeSendUserMessage).
+    // Same family -> main IS switched off the limited subscription.
+    expect(orch.switchModel).toHaveBeenCalledWith(ctx, "pp-flant-anthropic/claude-opus-4-8", "high");
     expect(orch.sendUserMessageWhenIdle).toHaveBeenCalledTimes(1);
     expect(orch.safeSendUserMessage).not.toHaveBeenCalled();
+  });
+
+  it("leaves the main model alone when main is a DIFFERENT family (subagent gpt limit, claude main)", async () => {
+    vi.useFakeTimers();
+    askUserMock.mockResolvedValue({ kind: "selection", selections: ["Switch to non-sub Claude"] });
+    const orch = makeOrchestrator();
+    // Main is a Claude opus; the limited subagent is a sub-routed... opus too,
+    // but main is NOT sub-routed here (paid), so it must not switch.
+    const ctx = makeCtx({ provider: "pp-flant-anthropic", id: "claude-opus-4-8" });
+
+    await handleSubagentRateLimit(orch, ctx, "pp-flant-anthropic-sub/sub/claude-opus-4-8");
+
+    expect(setSubscriptionFallbackActiveMock).toHaveBeenCalledWith(true);
+    // Main is not subscription-routed -> not switched.
+    expect(orch.switchModel).not.toHaveBeenCalled();
   });
 
   it("does nothing for a non-subscription subagent model", async () => {
@@ -151,17 +182,47 @@ describe("automatic fallback (no dialogue) when autoRateLimitFallback is ON", ()
     expect(orch.subFallbackActive).toBe(true);
   });
 
-  it("subagent-origin: activates override without asking, does NOT switch main model", async () => {
+  it("subagent-origin auto: no dialogue; switches main only when same sub-routed family", async () => {
     vi.useFakeTimers();
     flantSettings.autoRateLimitFallback = true;
     const orch = makeOrchestrator();
-    const ctx = makeCtx();
+    // Main on a different (paid, non-sub) model -> not switched.
+    const ctx = makeCtx({ provider: "pp-flant-anthropic", id: "claude-opus-4-8" });
 
     await handleSubagentRateLimit(orch, ctx, "pp-flant-anthropic-sub/sub/claude-opus-4-8");
 
     expect(askUserMock).not.toHaveBeenCalled();
     expect(setSubscriptionFallbackActiveMock).toHaveBeenCalledWith(true);
-    // subagent origin never switches the main model.
     expect(orch.switchModel).not.toHaveBeenCalled();
+  });
+});
+
+describe("handleMonthlyCap (C2: bare-id classification + live main switch)", () => {
+  beforeEach(() => demoteTierForFamilyMock.mockReset());
+
+  it("classifies a BARE model id + provider, demotes the tier, and switches the live main model", () => {
+    const orch = makeOrchestrator();
+    const ctx = makeCtx({ provider: "pp-flant-anthropic-sub", id: "sub/claude-opus-4-8" });
+    // turn_end reports model as a BARE id + separate provider (the C2 bug).
+    handleMonthlyCap(orch, ctx, "sub/claude-opus-4-8", "pp-flant-anthropic-sub");
+
+    // Tier was classified (flant-sub) and demoted for the opus family — NOT the
+    // old "unclassifiable" dead-end.
+    expect(demoteTierForFamilyMock).toHaveBeenCalledWith("flant-sub", "opus");
+    // Live main model switched to the resolver's next-tier spec.
+    expect(orch.switchModel).toHaveBeenCalledWith(ctx, "pp-flant-anthropic/claude-opus-4-8", "high");
+    expect(orch.sendUserMessageWhenIdle).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not loop when already on the floor tier (resolver can't move it)", () => {
+    const orch = makeOrchestrator();
+    const ctx = makeCtx({ provider: "pp-flant-anthropic", id: "claude-opus-4-8" });
+    // Already flant-api (floor): resolveModel returns it unchanged, so no lower
+    // tier -> terminal message, no switch, no nudge (no notify/nudge loop).
+    handleMonthlyCap(orch, ctx, "claude-opus-4-8", "pp-flant-anthropic");
+
+    expect(demoteTierForFamilyMock).toHaveBeenCalledWith("flant-api", "opus");
+    expect(orch.switchModel).not.toHaveBeenCalled();
+    expect(orch.sendUserMessageWhenIdle).not.toHaveBeenCalled();
   });
 });

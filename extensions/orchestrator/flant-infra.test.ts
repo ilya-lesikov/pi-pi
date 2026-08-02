@@ -545,6 +545,42 @@ describe("flant-infra", () => {
     }
   });
 
+  it("syncProviderTiers respects an active sub-fallback and does not re-enable flant-sub", async () => {
+    const dir = makeTempDir();
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "auth.json"),
+      JSON.stringify({ anthropic: { access: "sk-ant-oat01-test", expires: Date.now() + 3_600_000 } }),
+      "utf-8",
+    );
+    const settingsDir = join(dir, "extensions", "pp", "cache");
+    mkdirSync(settingsDir, { recursive: true });
+    writeFileSync(join(settingsDir, "flant-models.json"), JSON.stringify({ enabled: true, subscription: true }), "utf-8");
+    const prevKey = process.env.LLM_API_KEY;
+    process.env.LLM_API_KEY = "sk-gateway-test";
+    try {
+      const mod = await loadFlantInfraModule(dir);
+      const reg = await import("./model-registry.js");
+      // Subscription is active -> sync enables flant-sub.
+      mod.syncProviderTiers();
+      expect(reg.getTierEnabled()["flant-sub"]).toBe(true);
+      // A live rate-limit fallback disables flant-sub; a subsequent sync (e.g.
+      // from toggling Copilot) must NOT clobber it back on.
+      reg.setSubscriptionFallbackActive(true);
+      mod.syncProviderTiers();
+      expect(reg.getTierEnabled()["flant-sub"]).toBe(false);
+      // Clearing the fallback lets sync re-enable it.
+      reg.setSubscriptionFallbackActive(false);
+      mod.syncProviderTiers();
+      expect(reg.getTierEnabled()["flant-sub"]).toBe(true);
+    } finally {
+      const reg = await import("./model-registry.js");
+      reg.setSubscriptionFallbackActive(false);
+      if (prevKey === undefined) delete process.env.LLM_API_KEY;
+      else process.env.LLM_API_KEY = prevKey;
+    }
+  });
+
   it("isSubscriptionActive is false without a gateway key", async () => {
     const dir = makeTempDir();
     mkdirSync(dir, { recursive: true });

@@ -1,7 +1,7 @@
 import type { Orchestrator } from "./orchestrator.js";
 import { getLogger } from "./log.js";
 import { isSubscriptionRouted } from "./usage-tracker.js";
-import { setSubscriptionFallbackActive, toNonSubSpec, demoteTierForFamily, getModelInfo, type ProviderTierName } from "./model-registry.js";
+import { setSubscriptionFallbackActive, toNonSubSpec, demoteTierForFamily, getModelInfo, resolveModel, type ProviderTierName } from "./model-registry.js";
 import { loadFlantSettings, probeSubscriptionCleared } from "./flant-infra.js";
 import { askUser, isCancel } from "../../3p/pi-ask-user/index.js";
 
@@ -101,15 +101,17 @@ async function offerFallback(
 ): Promise<void> {
   const log = getLogger();
   if (orchestrator.subFallbackDialogPending) return;
-  if (!ctx?.hasUI) {
-    // No UI to ask — leave sub routing in place; the error is surfaced elsewhere.
-    log.debug({ s: "ratelimit" }, "no UI available to offer subscription fallback");
-    return;
-  }
   // Automatic mode (default): skip the permission dialogue and switch straight
-  // to the next tier, surfacing a non-blocking notification instead.
+  // to the next tier, surfacing a non-blocking notification instead. Checked
+  // BEFORE the hasUI guard so a headless autonomous run still auto-switches.
   if (loadFlantSettings().autoRateLimitFallback) {
     await activateFallback(orchestrator, ctx, subModelId, origin);
+    return;
+  }
+  if (!ctx?.hasUI) {
+    // No UI to ask (and auto mode off) — leave sub routing in place; the error
+    // is surfaced elsewhere.
+    log.debug({ s: "ratelimit" }, "no UI available to offer subscription fallback");
     return;
   }
 
@@ -154,13 +156,20 @@ async function activateFallback(
   // This is what actually re-routes future subagent spawns, regardless of origin.
   setSubscriptionFallbackActive(true);
 
-  // Switch the CURRENT main model to the non-sub equivalent ONLY when the 429 was
-  // on the main turn. For a SUBAGENT 429 the failing model is the subagent's, not
-  // the main session's — switching the main model here would change the active
-  // orchestrator model the user never touched (e.g. debug's GPT -> Claude). The
-  // session override above already re-routes the retried/next subagent.
-  if (origin === "main" && subModelId) {
-    const nonSub = toNonSubSpec(subModelId);
+  // Switch the CURRENT main model to the non-sub equivalent when the failing
+  // model belongs to the main session. That's ALWAYS true for a main-origin
+  // limit; for a SUBAGENT-origin limit it's true only when the main model is on
+  // the SAME subscription-routed family that got limited (per the plan: a
+  // sub-Claude subagent limit switches a sub-Claude main; a subagent gpt limit
+  // leaves a Claude main alone). The session override above re-routes future
+  // subagent spawns regardless.
+  const mainSpec = ctx?.model ? `${ctx.model.provider}/${ctx.model.id}` : "";
+  const mainIsSubRouted = isSubscriptionRouted(mainSpec, ctx?.model?.provider);
+  const sameFamily =
+    !!subModelId && getModelInfo(subModelId).family === getModelInfo(mainSpec).family;
+  const switchMain = subModelId && (origin === "main" || (mainIsSubRouted && sameFamily));
+  if (switchMain) {
+    const nonSub = toNonSubSpec(origin === "main" ? subModelId : mainSpec);
     const ok = await orchestrator.switchModel(ctx, nonSub, currentThinking(orchestrator));
     if (!ok) log.warn({ s: "ratelimit", nonSub }, "failed to switch main model to non-sub");
   }
@@ -189,6 +198,18 @@ function tierOfModelSpec(spec: string | undefined, provider: string | undefined)
   return null;
 }
 
+// Build a canonical provider-prefixed spec from a turn_end error's SEPARATE
+// `model` (bare id, e.g. `claude-opus-4-8`) and `provider` (e.g.
+// `pp-flant-anthropic`) fields, so model-registry classifiers (which require a
+// provider prefix) can resolve the family. Already-prefixed specs pass through.
+function canonicalSpec(modelId: string | undefined, provider: string | undefined): string {
+  const id = modelId ?? "";
+  if (!id) return "";
+  if (id.includes("/")) return id;
+  if (provider) return `${provider}/${id}`;
+  return id.startsWith("claude-") ? `pp-flant-anthropic/${id}` : `pp-flant-openai/${id}`;
+}
+
 // Handle a non-transient MONTHLY-CAP 403 (OpenRouter/LiteLLM "Key limit exceeded
 // (monthly limit)"). Retrying is futile; demote the failing model's CURRENT
 // tier for its family so the resolver drops future resolutions to the next
@@ -203,16 +224,33 @@ export function handleMonthlyCap(
   const log = getLogger();
   ctx?.abort?.();
   orchestrator.cancelPendingRetry();
-  const tier = tierOfModelSpec(modelId, provider);
-  const family = getModelInfo(modelId ?? "").family;
+  const canonical = canonicalSpec(modelId, provider);
+  const tier = tierOfModelSpec(canonical, provider);
+  const family = getModelInfo(canonical).family;
   if (!tier || family === "unknown") {
-    log.warn({ s: "ratelimit", modelId, provider }, "monthly cap on an unclassifiable model; cannot demote tier");
+    log.warn({ s: "ratelimit", modelId, provider, canonical }, "monthly cap on an unclassifiable model; cannot demote tier");
     ctx?.ui?.notify?.("A monthly usage cap was hit but the model's provider tier could not be identified; auto-continuation paused.", "warning");
     return;
   }
   demoteTierForFamily(tier, family);
   log.debug({ s: "ratelimit", tier, family }, "monthly cap: demoted tier for family");
-  ctx?.ui?.notify?.(`Monthly usage cap hit on the ${tier} tier for ${family}; falling back to the next provider tier.`, "info");
+
+  // Switch the LIVE main model to whatever the resolver now yields for this
+  // model after the demotion. If the resolver can't move it off the capped tier
+  // (already the floor tier, or no lower tier serves the family), there is no
+  // usable fallback: surface a clear terminal message and do NOT nudge (nudging
+  // would just re-hit the cap in an endless notify/nudge loop).
+  const nextSpec = resolveModel(canonical);
+  const stillCapped = tierOfModelSpec(nextSpec, undefined) === tier;
+  if (stillCapped) {
+    log.warn({ s: "ratelimit", tier, family, nextSpec }, "monthly cap: no lower provider tier available");
+    ctx?.ui?.notify?.(`Monthly usage cap hit on the ${tier} tier for ${family}, and no lower provider tier is available. Enable another tier (Settings > Copilot/Flant) to continue.`, "error");
+    return;
+  }
+  void orchestrator.switchModel(ctx, nextSpec, currentThinking(orchestrator)).then((ok) => {
+    if (!ok) log.warn({ s: "ratelimit", nextSpec }, "failed to switch main model after monthly cap");
+  });
+  ctx?.ui?.notify?.(`Monthly usage cap hit on the ${tier} tier for ${family}; switched to the next provider tier.`, "info");
   const phase = orchestrator.active?.state.phase ?? "current";
   orchestrator.sendUserMessageWhenIdle(
     `[PI-PI] Hit a monthly usage cap on the ${tier} provider tier; switched to the next tier. Continue working on the current phase (${phase}).`,
@@ -266,6 +304,14 @@ async function runSwitchBackProbe(orchestrator: Orchestrator, taskToken: number)
 async function offerSwitchBack(orchestrator: Orchestrator, subModelId: string): Promise<void> {
   const log = getLogger();
   const ctx = orchestrator.lastCtx;
+  // Automatic mode (default): switch back with NO dialogue in either direction,
+  // surfacing a non-blocking notification. Mirrors offerFallback's auto path.
+  // A missing UI does NOT block auto switch-back (headless autonomous runs still
+  // switch back); notifications are best-effort.
+  if (loadFlantSettings().autoRateLimitFallback) {
+    await switchBackToSub(orchestrator, ctx, subModelId);
+    return;
+  }
   if (orchestrator.subFallbackDialogPending || !ctx?.hasUI) {
     armSwitchBackProbe(orchestrator);
     return;

@@ -5,7 +5,7 @@ import lockfile from "proper-lockfile";
 import { refreshAnthropicToken } from "@earendil-works/pi-ai/oauth";
 import type { ExtensionAPI, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 import { getDefaultConfig, type PiPiConfig } from "./config.js";
-import { updateRegistryFromAvailableModels, setTierEnabled } from "./model-registry.js";
+import { updateRegistryFromAvailableModels, setTierEnabled, isSubscriptionFallbackActive } from "./model-registry.js";
 import { compareModelVersion } from "./model-version.js";
 import { getLogger } from "./log.js";
 import { buildUserAgent } from "./billing-spoof.js";
@@ -1044,9 +1044,15 @@ export function isCopilotTierActive(settings?: FlantSettings): boolean {
  */
 export function syncProviderTiers(settings?: FlantSettings): void {
   const s = settings ?? loadFlantSettings();
+  // Respect a LIVE rate-limit sub-fallback: setSubscriptionFallbackActive(true)
+  // disables flant-sub, and syncProviderTiers must NOT clobber that back on
+  // (e.g. when the Copilot toggle triggers a resync) or resolutions would route
+  // onto the still-limited subscription while the fallback timers believe it's
+  // off. flant-sub is enabled only when the subscription is active AND no live
+  // fallback is in effect.
   setTierEnabled({
     "copilot": isCopilotTierActive(s),
-    "flant-sub": isSubscriptionActive(s),
+    "flant-sub": isSubscriptionActive(s) && !isSubscriptionFallbackActive(),
     "flant-api": true,
   });
 }
