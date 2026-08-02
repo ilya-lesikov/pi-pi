@@ -109,6 +109,13 @@ export class Orchestrator {
   consecutiveNudges = 0;
   nudgeHalted = false;
   pendingSubagentSpawns = 0;
+  // Wall-clock timestamp (ms) when the review cycle FIRST looked wedged
+  // (await_reviewers with spawn records present but none live). Only a
+  // CONTINUOUS wedge past a grace window is reconciled, so a transiently
+  // missing manager record (session switch / compaction) or the spawn window
+  // does not finalize a healthy cycle. Reset (null) whenever it no longer
+  // looks wedged.
+  reviewWedgeObservedAt: number | null = null;
   errorRetryCount = 0;
   // Wall-clock timestamp (ms) of the first transient-error retry in the current
   // retry streak. The near-indefinite retry is bounded by a ~24h ceiling from

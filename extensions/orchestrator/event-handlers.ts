@@ -214,31 +214,61 @@ function countLiveReviewerSubagents(orchestrator: Orchestrator): number {
   return live;
 }
 
+// Continuous-wedge grace window before a review cycle is force-finalized. A
+// review cycle can transiently look wedged (zero live reviewers) WITHOUT being
+// dead: (a) the manager record goes missing during a session switch /
+// compaction / extension re-activation (the same case registry.ts guards with
+// MISSING_RECORD_GRACE_MS), or (b) the spawn window — enterReviewCycle sets
+// pendingSubagentSpawns BEFORE the async subagents:created events populate
+// spawnedAgentIds. Only a wedge that persists past this window is reconciled.
+const REVIEW_WEDGE_GRACE_MS = 60_000;
+
 // Bug B (root cause + defensive net): reconcile a review cycle that is stuck in
 // await_reviewers because a crashed/vanished reviewer never decremented
-// spawnedAgentIds / pendingSubagentSpawns. When NO reviewer subagent is actually
-// live per the manager, clear the stale counters and finalize the cycle from the
-// on-disk reviewer outputs (tryCompleteReviewCycle). Returns true when it acted.
-// Safe to call speculatively: no-ops unless the cycle is genuinely wedged.
+// spawnedAgentIds / pendingSubagentSpawns. Finalizes ONLY when the cycle has
+// spawn RECORDS (spawnedAgentIds non-empty — never during the pre-spawn window
+// where only pendingSubagentSpawns is set) AND none has been live for a
+// continuous grace window (so a transiently-missing manager record does not
+// finalize a healthy cycle). Returns true when it acted. Safe to call
+// speculatively: no-ops unless the cycle is genuinely, persistently wedged.
 export function reconcileWedgedReviewCycle(orchestrator: Orchestrator): boolean {
   const state = orchestrator.active?.state;
-  if (!state?.reviewCycle || state.reviewCycle.step !== "await_reviewers") return false;
+  if (!state?.reviewCycle || state.reviewCycle.step !== "await_reviewers") {
+    orchestrator.reviewWedgeObservedAt = null;
+    return false;
+  }
   if (orchestrator.transitionController.isTransitioning?.()) return false;
-  // Only reconcile when the counters CLAIM work is pending (otherwise
-  // tryCompleteReviewCycle already handles the clean path).
+  // Require actual spawn RECORDS. During the spawn window pendingSubagentSpawns
+  // is set but spawnedAgentIds is still empty — the reviewers are about to
+  // appear, so this is NOT a wedge. (pendingSubagentSpawns alone never triggers.)
   const spawnedCount = orchestrator.spawnedAgentIds?.size ?? 0;
-  const claimsPending = spawnedCount > 0 || (orchestrator.pendingSubagentSpawns ?? 0) > 0;
-  if (!claimsPending) return false;
+  if (spawnedCount === 0) {
+    orchestrator.reviewWedgeObservedAt = null;
+    return false;
+  }
   // If any reviewer is genuinely live, it's not wedged — leave it alone.
-  if (countLiveReviewerSubagents(orchestrator) > 0) return false;
+  if (countLiveReviewerSubagents(orchestrator) > 0) {
+    orchestrator.reviewWedgeObservedAt = null;
+    return false;
+  }
+  // Looks wedged. Require the wedge to PERSIST past the grace window before
+  // acting, so a transiently-missing manager record (compaction/session churn)
+  // recovers on a later poll instead of finalizing a healthy cycle.
+  const now = Date.now();
+  if (orchestrator.reviewWedgeObservedAt === null) {
+    orchestrator.reviewWedgeObservedAt = now;
+    return false;
+  }
+  if (now - orchestrator.reviewWedgeObservedAt < REVIEW_WEDGE_GRACE_MS) return false;
 
   getLogger().warn(
     { s: "review", spawned: orchestrator.spawnedAgentIds.size, pending: orchestrator.pendingSubagentSpawns },
-    "reconciling wedged review cycle: no live reviewers but counters non-zero; clearing and finalizing",
+    "reconciling wedged review cycle: no live reviewers past the grace window; clearing and finalizing",
   );
   // Drop the stale bookkeeping so tryCompleteReviewCycle's guard passes.
   orchestrator.spawnedAgentIds.clear();
   orchestrator.pendingSubagentSpawns = 0;
+  orchestrator.reviewWedgeObservedAt = null;
   tryCompleteReviewCycle(orchestrator);
   return true;
 }
