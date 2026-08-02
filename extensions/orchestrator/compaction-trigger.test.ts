@@ -35,6 +35,22 @@ describe("compactionThresholdTokens", () => {
     // 400K window * 0.5 = 200K > 100K floor.
     expect(compactionThresholdTokens({ contextWindow: 400_000, modelId: "pp-flant-openai/gpt-5.6-sol", config: c })).toBe(200_000);
   });
+
+  // M6 (4): after a provider-tier switch to a github-copilot model, the trigger
+  // recomputes against THAT model's (smaller) context window. Copilot opus
+  // ships a 160K window; with the default 250K floor a 160K window is below the
+  // floor, so the threshold clamps to window - reserve (NOT the 250K floor and
+  // NOT the prior larger-window threshold).
+  it("recomputes for a switched-to github-copilot model's smaller window", () => {
+    // Before the switch: a 1M flant window -> 300K threshold.
+    expect(compactionThresholdTokens({ contextWindow: 1_000_000, modelId: "pp-flant-anthropic/claude-opus-4-8", config: cfg() })).toBe(300_000);
+    // After switching to github-copilot/claude-opus-4.5 (160K window): the new
+    // window drives the threshold, clamped to window - reserve.
+    const copilotWindow = 160_000;
+    expect(
+      compactionThresholdTokens({ contextWindow: copilotWindow, modelId: "github-copilot/claude-opus-4.5", config: cfg() }),
+    ).toBe(copilotWindow - CONTEXT_RESERVE_TOKENS);
+  });
 });
 
 describe("effectiveCompactionParams", () => {

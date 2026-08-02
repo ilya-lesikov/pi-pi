@@ -4220,6 +4220,77 @@ describe("compaction", () => {
       { deliverAs: "steer" },
     );
   });
+
+  // M6 (2): an in-phase (non-transition) compaction with messages to summarize
+  // runs the vendored pi-vcc compile() and returns a result carrying the recall
+  // metadata (details.compactor:"pi-vcc" + messageRange), while a transition
+  // compaction does NOT invoke the vcc path (returns the phase summary above).
+  it("in-phase compaction runs vendored pi-vcc and returns recall-resolvable metadata", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    await orchestrator.startTask(makeCtx() as any, "implement", "in-phase vcc compaction");
+    // Not transitioning -> the in-phase deterministic path.
+    expect(orchestrator.transitionController.isTransitioning()).toBe(false);
+
+    const beforeCompact = pi._handlers.get("session_before_compact")!;
+    const result = await beforeCompact(
+      {
+        preparation: {
+          firstKeptEntryId: "m3",
+          tokensBefore: 5000,
+          messagesToSummarize: [
+            { role: "user", content: [{ type: "text", text: "do the thing in file a.ts" }] },
+            { role: "assistant", content: [{ type: "text", text: "edited a.ts and ran tests" }] },
+          ],
+          previousSummary: undefined,
+        },
+        branchEntries: [
+          { id: "m0", type: "message", message: { role: "user" } },
+          { id: "m1", type: "message", message: { role: "assistant" } },
+          { id: "m2", type: "message", message: { role: "user" } },
+          { id: "m3", type: "message", message: { role: "assistant" } },
+        ],
+      },
+      {},
+    );
+
+    expect(result).toBeTruthy();
+    expect(typeof result.compaction.summary).toBe("string");
+    expect(result.compaction.summary.length).toBeGreaterThan(0);
+    // Recall metadata persisted so vcc_recall scope:"compaction:*" resolves.
+    expect(result.compaction.details.compactor).toBe("pi-vcc");
+    expect(Array.isArray(result.compaction.details.messageRange)).toBe(true);
+    expect(result.compaction.details.messageRange).toHaveLength(2);
+    expect(result.compaction.firstKeptEntryId).toBe("m3");
+  });
+
+  it("a transition compaction does NOT invoke the vcc path (returns the phase summary)", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    await orchestrator.startTask(makeCtx() as any, "implement", "transition bypasses vcc");
+    orchestrator.lastCtx = makeCtx({ isIdle: vi.fn().mockReturnValue(false) });
+    void orchestrator.transitionController.requestTransition({ kind: "phase", summary: "Phase summary text" });
+    orchestrator.transitionController.onAgentEnd();
+    expect(orchestrator.transitionController.isTransitioning()).toBe(true);
+
+    const beforeCompact = pi._handlers.get("session_before_compact")!;
+    const result = await beforeCompact(
+      {
+        preparation: {
+          firstKeptEntryId: "e1",
+          tokensBefore: 123,
+          // Even with messages present, the transition path must win and NOT
+          // produce pi-vcc details.
+          messagesToSummarize: [{ role: "user", content: [{ type: "text", text: "x" }] }],
+        },
+        branchEntries: [{ id: "e1" }],
+      },
+      {},
+    );
+
+    expect(result.compaction.summary).toBe("Phase summary text");
+    expect((result.compaction as any).details).toBeUndefined();
+  });
 });
 
 describe("input blocking during await", () => {
@@ -4311,6 +4382,34 @@ describe("session lifecycle", () => {
     expect(toolNames).toContain("pp_phase_complete");
     expect(toolNames).toContain("pp_commit");
     expect(toolNames).toContain("pp_register_repo");
+  });
+
+  // M6 (3): the 8b duplicate-extension guard must actually GATE (skip
+  // registerFeatureToolsAndAgents), not merely notify.
+  it("session_start HARD-FAILS and skips feature-tool registration on a duplicate bundled extension", async () => {
+    const cwd = makeTempDir();
+    const pi = makePi();
+    // A standalone `lsp` tool owned by a DIFFERENT extension path (not pi-pi's
+    // vendored copy) — the exact 8b duplicate signal.
+    pi.getAllTools = vi.fn().mockReturnValue([
+      { name: "lsp", sourceInfo: { path: "/somewhere/else/pi-lsp/index.js" } },
+    ]);
+    pi.getCommands = vi.fn().mockReturnValue([]);
+    const orchestrator = new Orchestrator(pi as any);
+    registerEventHandlers(orchestrator);
+    registerCommandHandlers(orchestrator);
+    const ctx = makeCtx({ cwd });
+
+    const sessionStart = pi._handlers.get("session_start")!;
+    await sessionStart({}, ctx);
+
+    // Gate engaged: error flag set, HARD-FAIL notification, and feature tools
+    // were NOT registered (orchestrator refuses to operate).
+    expect(orchestrator.duplicateExtensionError).toBe(true);
+    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("refuses to operate"), "error");
+    const toolNames = [...pi._tools.keys()];
+    expect(toolNames).not.toContain("pp_phase_complete");
+    expect(toolNames).not.toContain("pp_commit");
   });
 
   it("session_start does not notify about paused tasks (#1: all hints removed)", async () => {
