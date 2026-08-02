@@ -570,6 +570,43 @@ describe("main-turn stall watchdog (BUG-2)", () => {
     expect(sendSpy).not.toHaveBeenCalled();
     orchestrator.subFallbackDialogPending = false;
   });
+
+  it("item 12: does NOT fire while a foreground tool call exceeds the stale window", async () => {
+    orchestrator.active = makeActiveTask();
+    orchestrator.config.performance.internals.mainTurnStale = 60000;
+    const sendSpy = vi.spyOn(orchestrator, "sendUserMessageWhenIdle").mockImplementation(() => {});
+    orchestrator.lastCtx = { isIdle: () => true } as any;
+
+    await getHandler("turn_start")({ type: "turn_start", turnIndex: 0 }, {});
+    // A long-running foreground tool (e.g. an Agent subagent invoked as a tool)
+    // starts and does NOT end for well over the stale window.
+    await getHandler("tool_execution_start")({ toolCallId: "c1", toolName: "Agent", args: {} }, {});
+    expect(orchestrator.mainTurnToolInFlight).toBe(1);
+    vi.advanceTimersByTime(600000);
+    expect(sendSpy).not.toHaveBeenCalled();
+
+    // Once the tool finishes, a genuinely idle turn recovers again.
+    await getHandler("tool_execution_end")({ toolCallId: "c1", toolName: "Agent", result: {}, isError: false }, {});
+    expect(orchestrator.mainTurnToolInFlight).toBe(0);
+    vi.advanceTimersByTime(120000);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("item 12: does NOT fire while a spawned subagent is live", async () => {
+    orchestrator.active = makeActiveTask();
+    orchestrator.config.performance.internals.mainTurnStale = 60000;
+    const sendSpy = vi.spyOn(orchestrator, "sendUserMessageWhenIdle").mockImplementation(() => {});
+    orchestrator.lastCtx = { isIdle: () => true } as any;
+
+    await getHandler("turn_start")({ type: "turn_start", turnIndex: 0 }, {});
+    orchestrator.spawnedAgentIds.add("sub-1");
+    vi.advanceTimersByTime(600000);
+    expect(sendSpy).not.toHaveBeenCalled();
+
+    orchestrator.spawnedAgentIds.delete("sub-1");
+    vi.advanceTimersByTime(61000);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("checkoutPrHead", () => {

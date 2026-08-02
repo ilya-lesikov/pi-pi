@@ -88,6 +88,13 @@ export class Orchestrator {
   mainTurnLastActivity = 0;
   mainTurnInFlight = false;
   mainTurnRecovering = false;
+  // Count of main-session tool executions currently in flight (item 12). A
+  // long-running FOREGROUND tool call (e.g. a >10m Agent subagent invoked as a
+  // tool) emits tool_execution_start but no further activity until it ends, so
+  // mainTurnLastActivity would go stale mid-call and the watchdog would wrongly
+  // abort a legitimately-busy turn. While this is > 0 (or a subagent is live)
+  // the watchdog treats the turn as active.
+  mainTurnToolInFlight = 0;
   // Single consecutive-nudge guard (replaces the old multi-tier throttle). Reset
   // to 0 on any productive turn; once it reaches the cap the nudges halt with one
   // user notification.

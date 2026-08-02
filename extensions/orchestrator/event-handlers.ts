@@ -1290,6 +1290,7 @@ function registerMainTraceHooks(orchestrator: Orchestrator): void {
   });
   pi.on("tool_execution_start", async (event) => {
     markMainTurnActivity(orchestrator);
+    orchestrator.mainTurnToolInFlight++;
     const tracer = getTracer();
     tracer?.traceMain("tool_execution_start", { turnIndex: tracer.turnIndex, toolCallId: event.toolCallId, toolName: event.toolName, args: event.args });
   });
@@ -1300,6 +1301,7 @@ function registerMainTraceHooks(orchestrator: Orchestrator): void {
   });
   pi.on("tool_execution_end", async (event) => {
     markMainTurnActivity(orchestrator);
+    if (orchestrator.mainTurnToolInFlight > 0) orchestrator.mainTurnToolInFlight--;
     const tracer = getTracer();
     tracer?.traceMain("tool_execution_end", { turnIndex: tracer.turnIndex, toolCallId: event.toolCallId, toolName: event.toolName, result: event.result, isError: event.isError });
   });
@@ -1310,6 +1312,24 @@ function registerMainTraceHooks(orchestrator: Orchestrator): void {
 // second handler per event.
 function markMainTurnActivity(orchestrator: Orchestrator): void {
   orchestrator.mainTurnLastActivity = Date.now();
+}
+
+// Pure predicate for the main-turn stall watchdog (item 12), exported for tests.
+// A turn is a stall target ONLY when: it's in flight, not already recovering,
+// not in a transition/await_* step, no user dialogue is open, NO tool execution
+// is in flight, NO subagent is live, and it has been idle past the stale window.
+// The tool-in-flight + live-subagent guards are the item-12 fix: a long-running
+// foreground Agent tool call or an out-of-band subagent must not look stalled.
+export function isMainTurnStalled(orchestrator: Orchestrator, now: number): boolean {
+  if (!orchestrator.active) return false;
+  if (!orchestrator.mainTurnInFlight || orchestrator.mainTurnRecovering) return false;
+  if (orchestrator.transitionController.isTransitioning?.()) return false;
+  const step = orchestrator.active.state.step;
+  if (step === "await_planners" || step === "await_reviewers") return false;
+  if (orchestrator.interactivePromptOpen || orchestrator.subFallbackDialogPending) return false;
+  if ((orchestrator.mainTurnToolInFlight ?? 0) > 0 || (orchestrator.spawnedAgentIds?.size ?? 0) > 0) return false;
+  const staleMs = orchestrator.config.performance.internals.mainTurnStale;
+  return now - orchestrator.mainTurnLastActivity > staleMs;
 }
 
 function endMainTurn(orchestrator: Orchestrator): void {
@@ -1390,18 +1410,11 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
         orchestrator.mainTurnTimer = null;
         return;
       }
-      if (!orchestrator.mainTurnInFlight || orchestrator.mainTurnRecovering) return;
-      // Only a genuinely stuck turn is a target: an idle session (turn already
-      // settled), an in-progress transition, or an await_* step is not a stall.
-      if (orchestrator.transitionController.isTransitioning()) return;
-      const step = orchestrator.active.state.step;
-      if (step === "await_planners" || step === "await_reviewers") return;
-      // A turn parked on an open user-facing dialogue (ask_user / the /pp menu /
-      // any interactive selectOption / the rate-limit fallback switch) is
-      // user-gated, not wedged — do not abort it out from under the user.
-      if (orchestrator.interactivePromptOpen || orchestrator.subFallbackDialogPending) return;
+      // All the stall conditions (in-flight, not recovering, not transitioning/
+      // await_*, no dialogue, NO tool in flight, NO live subagent, past the stale
+      // window) are captured in the pure predicate so they can be unit-tested.
+      if (!isMainTurnStalled(orchestrator, Date.now())) return;
       const staleMs = orchestrator.config.performance.internals.mainTurnStale;
-      if (Date.now() - orchestrator.mainTurnLastActivity <= staleMs) return;
 
       orchestrator.mainTurnRecovering = true;
       const taskToken = orchestrator.activeTaskToken;
@@ -1426,6 +1439,9 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (ctx) orchestrator.lastCtx = ctx;
     orchestrator.mainTurnInFlight = true;
     orchestrator.mainTurnRecovering = false;
+    // A fresh turn starts with no tool executions in flight; reset defensively so
+    // a leaked start/end pair from a prior turn can't wedge the watchdog guard on.
+    orchestrator.mainTurnToolInFlight = 0;
     markMainTurnActivity(orchestrator);
     startMainTurnWatchdog();
   });
