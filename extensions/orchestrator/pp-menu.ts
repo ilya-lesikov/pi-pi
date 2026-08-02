@@ -3116,6 +3116,7 @@ async function showSettingsMenu(orchestrator: Orchestrator, ctx: any): Promise<t
       opt("Compaction", "In-phase context compaction trigger"),
       opt("Copilot", "GitHub Copilot model provider (highest precedence)"),
       opt("Flant", "Configure corporate AI model provider"),
+      opt("Report", "Bundle a local feedback report (note + logs + state)"),
       opt("Info", "Usage and task status"),
       opt("Back", "Return to the previous menu"),
     ];
@@ -3133,8 +3134,81 @@ async function showSettingsMenu(orchestrator: Orchestrator, ctx: any): Promise<t
     else if (choice === "Compaction") await showCompactionSettings(orchestrator, ctx);
     else if (choice === "Copilot") await showCopilotMenu(orchestrator, ctx);
     else if (choice === "Flant") await showFlantInfraMenu(orchestrator, ctx);
+    else if (choice === "Report") await showReportMenu(orchestrator, ctx);
     else if (choice === "Info") await showInfoMenu(orchestrator, ctx);
   }
+}
+
+// Settings > Report (item 13): local-only feedback bundle. Collects a user note,
+// shows exactly what will be captured, writes it under <cwd>/.pp/reports/, then
+// offers to enable debug logging / tracing for future sessions. ZERO network.
+async function showReportMenu(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
+  const { collectReportFiles, writeReportBundle } = await import("./report.js");
+  const { getActiveTask } = await import("./state.js");
+
+  // 1. Gather the user's feedback note (freeform text only — no auto-scrape).
+  orchestrator.interactivePromptOpen = true;
+  let note: string | undefined;
+  try {
+    const res = await askUser(ctx, {
+      question: "Describe the issue or feedback (this stays local — nothing is sent anywhere):",
+      options: [],
+      allowFreeform: true,
+      allowComment: false,
+      allowMultiple: false,
+    });
+    if (res && !isCancel(res) && res.kind === "freeform") note = res.text;
+  } finally {
+    orchestrator.interactivePromptOpen = false;
+  }
+  if (!note || !note.trim()) {
+    ctx.ui.notify("Report cancelled — no note entered.", "info");
+    return BACK;
+  }
+
+  // 2. Resolve the current/most-recent task dir and preview the capture set.
+  const task = getActiveTask(orchestrator.cwd);
+  const taskDir = task?.dir ?? null;
+  const files = collectReportFiles(orchestrator.cwd, taskDir);
+  const previewList = ["note.md", ...files.map((f) => f.archivePath)];
+  ctx.ui.notify(`This report will bundle ${previewList.length} file(s):\n${previewList.map((p) => `  • ${p}`).join("\n")}`, "info");
+
+  // 3. Write the bundle.
+  const { reportDir, captured } = writeReportBundle(orchestrator.cwd, note, files);
+  ctx.ui.notify(`Report saved to ${reportDir}\nCaptured ${captured.length} file(s). Nothing was sent over the network.`, "info");
+
+  // 4. If diagnostics are off, offer to enable them for future sessions.
+  const tracingOff = !orchestrator.config.general.tracing;
+  const debugOff = orchestrator.config.general.logLevel !== "debug";
+  if (tracingOff || debugOff) {
+    orchestrator.interactivePromptOpen = true;
+    try {
+      const opts: OptionInput[] = [];
+      if (debugOff) opts.push(opt("Enable debug logging", "Set log level to debug for richer future reports"));
+      if (tracingOff) opts.push(opt("Enable tracing", "Capture full session traces to .pp/logs/traces/ in future sessions"));
+      if (debugOff && tracingOff) opts.push(opt("Enable both", "Turn on debug logging AND tracing"));
+      opts.push(opt("No thanks", "Leave diagnostics as they are"));
+      const res = await askUser(ctx, {
+        question: "Enable extra diagnostics for future sessions? (helps future reports)",
+        options: opts,
+        allowFreeform: false,
+        allowComment: false,
+        allowMultiple: false,
+      });
+      const pick = res && !isCancel(res) && res.kind === "selection" ? res.selections[0] : undefined;
+      if (pick === "Enable debug logging" || pick === "Enable both") {
+        const r = tryApplyConfigChange(orchestrator, "project", ["general", "logLevel"], "debug");
+        if (r.ok) setLogLevel("debug");
+      }
+      if (pick === "Enable tracing" || pick === "Enable both") {
+        tryApplyConfigChange(orchestrator, "project", ["general", "tracing"], true);
+      }
+      if (pick && pick !== "No thanks") ctx.ui.notify("Diagnostics updated for future sessions.", "info");
+    } finally {
+      orchestrator.interactivePromptOpen = false;
+    }
+  }
+  return BACK;
 }
 
 // Settings > Context (item 10): six independent toggles for injecting AGENTS.md
