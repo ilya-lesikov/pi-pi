@@ -212,6 +212,7 @@ function makePi() {
       tools.set(tool.name, tool);
     }),
     getAllTools: vi.fn().mockReturnValue([]),
+    getCommands: vi.fn().mockReturnValue([]),
     sendMessage: vi.fn(),
     sendUserMessage: vi.fn(),
     setModel: vi.fn().mockResolvedValue(true),

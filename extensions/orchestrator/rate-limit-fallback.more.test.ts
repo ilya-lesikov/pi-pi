@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   probeSubscriptionCleared: vi.fn(),
   askUser: vi.fn(),
   isCancel: vi.fn(() => false),
+  getModelInfo: vi.fn((spec: string) => ({ family: /haiku/.test(spec) ? "haiku" : /opus/.test(spec) ? "opus" : "unknown" })),
 }));
 
 vi.mock("./usage-tracker.js", () => ({
@@ -16,6 +17,9 @@ vi.mock("./usage-tracker.js", () => ({
 vi.mock("./model-registry.js", () => ({
   setSubscriptionFallbackActive: mocks.setSubscriptionFallbackActive,
   toNonSubSpec: mocks.toNonSubSpec,
+  getModelInfo: mocks.getModelInfo,
+  resolveModel: (s: string) => s,
+  demoteTierForFamily: vi.fn(),
 }));
 vi.mock("./flant-infra.js", () => ({
   loadFlantSettings: mocks.loadFlantSettings,
@@ -201,13 +205,26 @@ describe("handleSubagentRateLimit", () => {
     expect(mocks.askUser).not.toHaveBeenCalled();
   });
 
-  it("activates fallback WITHOUT switching the main model for a subagent 429", async () => {
+  it("does not switch the main model for a subagent 429 when main is a DIFFERENT family", async () => {
     mocks.askUser.mockResolvedValue({ kind: "selection", selections: ["Switch to non-sub Claude"] });
     vi.useFakeTimers();
     const orch = makeOrchestrator();
-    await handleSubagentRateLimit(orch, makeCtx(), "sub/claude-haiku");
+    // Main is a sub-routed OPUS; the limited subagent is HAIKU -> different
+    // family -> main is left alone.
+    const ctx = makeCtx({ model: { provider: "pp-flant-anthropic-sub", id: "sub/claude-opus" } });
+    await handleSubagentRateLimit(orch, ctx, "sub/claude-haiku");
     expect(mocks.setSubscriptionFallbackActive).toHaveBeenCalledWith(true);
     expect(orch.switchModel).not.toHaveBeenCalled();
+    expect(orch.subFallbackActive).toBe(true);
+  });
+
+  it("switches the main model for a subagent 429 when main is the SAME sub-routed family", async () => {
+    mocks.askUser.mockResolvedValue({ kind: "selection", selections: ["Switch to non-sub Claude"] });
+    vi.useFakeTimers();
+    const orch = makeOrchestrator();
+    const ctx = makeCtx({ model: { provider: "pp-flant-anthropic-sub", id: "sub/claude-haiku" } });
+    await handleSubagentRateLimit(orch, ctx, "sub/claude-haiku");
+    expect(orch.switchModel).toHaveBeenCalled();
     expect(orch.subFallbackActive).toBe(true);
   });
 });
