@@ -141,6 +141,16 @@ describe("validateConfig", () => {
     expect(() => validateConfig({ compaction: { floorTokens: 10 } })).toThrow("config.compaction.floorTokens");
   });
 
+  it("defaults contextInjection with only projectAgents on and validates toggles", () => {
+    const d = getDefaultConfig();
+    expect(d.contextInjection).toEqual({
+      globalAgents: false, globalClaude: false,
+      ancestorAgents: false, ancestorClaude: false,
+      projectAgents: true, projectClaude: false,
+    });
+    expect(() => validateConfig({ contextInjection: { globalClaude: "yes" } as any })).toThrow("config.contextInjection.globalClaude");
+  });
+
   it("round-trips the compaction section through loadConfig deep-merge", () => {
     const merged = deepMerge(getDefaultConfig() as any, { compaction: { fraction: 0.25 } });
     expect(merged.compaction.fraction).toBe(0.25);
@@ -245,6 +255,30 @@ describe("loadConfig", () => {
     writeFileSync(join(ppDir, "config.json"), JSON.stringify({ general: { injectAgentsMd: false } }), "utf-8");
     const overridden = loadConfig(cwd2, "/nonexistent/global/config.json");
     expect(overridden.general.injectAgentsMd).toBe(false);
+  });
+
+  it("migrates legacy injectAgentsMd into contextInjection.projectAgents", () => {
+    // A user config that set the OLD injectAgentsMd:false and never touched the
+    // new toggle should have projectAgents migrated to false.
+    const cwd = makeTempDir();
+    const ppDir = join(cwd, ".pp");
+    mkdirSync(ppDir, { recursive: true });
+    writeFileSync(join(ppDir, "config.json"), JSON.stringify({ general: { injectAgentsMd: false } }), "utf-8");
+    const migrated = loadConfig(cwd, "/nonexistent/global/config.json");
+    expect(migrated.contextInjection.projectAgents).toBe(false);
+
+    // An explicit contextInjection.projectAgents wins over the legacy field.
+    const cwd2 = makeTempDir();
+    const ppDir2 = join(cwd2, ".pp");
+    mkdirSync(ppDir2, { recursive: true });
+    writeFileSync(join(ppDir2, "config.json"), JSON.stringify({ general: { injectAgentsMd: false }, contextInjection: { projectAgents: true } }), "utf-8");
+    const explicit = loadConfig(cwd2, "/nonexistent/global/config.json");
+    expect(explicit.contextInjection.projectAgents).toBe(true);
+
+    // A fresh config (no legacy field) keeps the default projectAgents:true.
+    const cwd3 = makeTempDir();
+    const fresh = loadConfig(cwd3, "/nonexistent/global/config.json");
+    expect(fresh.contextInjection.projectAgents).toBe(true);
   });
 
   it("defaults mainTurnStale to 10m and normalizes an override to ms", () => {

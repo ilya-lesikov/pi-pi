@@ -72,6 +72,17 @@ export interface PiPiConfig {
     logLevel: LogLevel;
     tracing: boolean;
   };
+  // Global/ancestor/project AGENTS.md + CLAUDE.md injection (item 10). Six
+  // independent toggles = 3 scopes × 2 file types. Supersedes the single
+  // cwd-only general.injectAgentsMd (which is migrated into projectAgents).
+  contextInjection: {
+    globalAgents: boolean;
+    globalClaude: boolean;
+    ancestorAgents: boolean;
+    ancestorClaude: boolean;
+    projectAgents: boolean;
+    projectClaude: boolean;
+  };
   compaction: CompactionConfig;
   agents: {
     maxConcurrentSubagents: number;
@@ -137,6 +148,16 @@ const DEFAULT_CONFIG: PiPiConfig = {
     loadExtraRepoConfigs: true,
     logLevel: "info",
     tracing: false,
+  },
+  contextInjection: {
+    // Default preserves the old behavior (cwd AGENTS.md on) plus the newly
+    // available scopes OFF by default to avoid surprising prompt growth.
+    globalAgents: false,
+    globalClaude: false,
+    ancestorAgents: false,
+    ancestorClaude: false,
+    projectAgents: true,
+    projectClaude: false,
   },
   compaction: {
     enabled: true,
@@ -451,6 +472,13 @@ export function validateConfig(config: Record<string, any>): void {
     }
   }
 
+  if (config.contextInjection !== undefined) {
+    const ci = requireObject(config.contextInjection, "config.contextInjection");
+    for (const k of ["globalAgents", "globalClaude", "ancestorAgents", "ancestorClaude", "projectAgents", "projectClaude"]) {
+      ensureBool(ci[k], `config.contextInjection.${k}`);
+    }
+  }
+
   if (config.compaction !== undefined) validateCompaction(config.compaction);
 
   if (config.agents !== undefined) {
@@ -746,6 +774,22 @@ export function mergeConfigLayers(
     validateConfig(projectConfig);
     merged = deepMerge(merged, projectConfig);
     log.debug({ s: "config", layer: "project" }, "merged project config layer");
+  }
+
+  // Migrate the legacy cwd-only general.injectAgentsMd (item 10): when a user
+  // layer set injectAgentsMd but did NOT explicitly configure the new
+  // contextInjection.projectAgents toggle, carry the old value into
+  // projectAgents so an existing config keeps its AGENTS.md behavior. Explicit
+  // contextInjection settings always win.
+  const userSetInjectAgentsMd =
+    (globalConfig?.general && Object.prototype.hasOwnProperty.call(globalConfig.general, "injectAgentsMd")) ||
+    (projectConfig?.general && Object.prototype.hasOwnProperty.call(projectConfig.general, "injectAgentsMd"));
+  const userSetProjectAgents =
+    (globalConfig?.contextInjection && Object.prototype.hasOwnProperty.call(globalConfig.contextInjection, "projectAgents")) ||
+    (projectConfig?.contextInjection && Object.prototype.hasOwnProperty.call(projectConfig.contextInjection, "projectAgents"));
+  if (userSetInjectAgentsMd && !userSetProjectAgents) {
+    merged.contextInjection.projectAgents = !!merged.general.injectAgentsMd;
+    log.debug({ s: "config", projectAgents: merged.contextInjection.projectAgents }, "migrated injectAgentsMd -> contextInjection.projectAgents");
   }
 
   validateMergedConfig(merged);

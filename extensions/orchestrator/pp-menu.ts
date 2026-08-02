@@ -2946,7 +2946,6 @@ async function showGeneralSettings(orchestrator: Orchestrator, ctx: any): Promis
   while (true) {
     const choice = await selectOption(ctx, "General", [
       opt(`Commit automatically: ${orchestrator.config.general.autoCommit ? "Yes" : "No"}`, "Enable or disable auto commits"),
-      opt(`Inject root AGENTS.md: ${orchestrator.config.general.injectAgentsMd ? "Yes" : "No"}`, "Inject the working repo's root AGENTS.md into the agent system prompt"),
       opt(`Ignore configs from other repos: ${orchestrator.config.general.loadExtraRepoConfigs ? "No" : "Yes"}`, "Load only root repo config"),
       opt(`Log level: ${logLevelLabel(orchestrator.config.general.logLevel)}`, "Logging verbosity"),
       opt(`Tracing: ${orchestrator.config.general.tracing ? "Yes" : "No"}`, "Capture full session traces to .pp/logs/traces/"),
@@ -2955,10 +2954,6 @@ async function showGeneralSettings(orchestrator: Orchestrator, ctx: any): Promis
     if (!choice || choice === "Back") return BACK;
     if (choice.startsWith("Commit automatically:")) {
       await showBooleanSetting(orchestrator, ctx, "Commit automatically", ["general", "autoCommit"], "Commit changes automatically as work progresses", "Leave committing to you");
-      continue;
-    }
-    if (choice.startsWith("Inject root AGENTS.md:")) {
-      await showBooleanSetting(orchestrator, ctx, "Inject root AGENTS.md", ["general", "injectAgentsMd"], "Inject the working repo's root AGENTS.md into the agent system prompt", "Do not inject AGENTS.md");
       continue;
     }
     if (choice.startsWith("Ignore configs from other repos:")) {
@@ -3116,6 +3111,7 @@ async function showSettingsMenu(orchestrator: Orchestrator, ctx: any): Promise<t
       opt("Commands", "After file edit and after implementation"),
       opt("Performance", "Per-operation timeout limits"),
       opt("LSP", "Language server controls"),
+      opt("Context", "AGENTS.md / CLAUDE.md injection (global/ancestor/project)"),
       opt("Compaction", "In-phase context compaction trigger"),
       opt("Copilot", "GitHub Copilot model provider (highest precedence)"),
       opt("Flant", "Configure corporate AI model provider"),
@@ -3131,10 +3127,36 @@ async function showSettingsMenu(orchestrator: Orchestrator, ctx: any): Promise<t
     else if (choice === "Commands") await showCommandsSettings(orchestrator, ctx);
     else if (choice === "Performance") await showPerformanceSettings(orchestrator, ctx);
     else if (choice === "LSP") await showLspSettings(ctx);
+    else if (choice === "Context") await showContextSettings(orchestrator, ctx);
     else if (choice === "Compaction") await showCompactionSettings(orchestrator, ctx);
     else if (choice === "Copilot") await showCopilotMenu(orchestrator, ctx);
     else if (choice === "Flant") await showFlantInfraMenu(orchestrator, ctx);
     else if (choice === "Info") await showInfoMenu(orchestrator, ctx);
+  }
+}
+
+// Settings > Context (item 10): six independent toggles for injecting AGENTS.md
+// and CLAUDE.md from the global (~/.pi/agent), ancestor, and project (cwd) scopes
+// into the agent system prompt.
+async function showContextSettings(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
+  const rows: Array<{ key: keyof PiPiConfig["contextInjection"]; label: string; desc: string }> = [
+    { key: "globalAgents", label: "Global AGENTS.md (~/.pi/agent)", desc: "Inject the global ~/.pi/agent/AGENTS.md" },
+    { key: "globalClaude", label: "Global CLAUDE.md (~/.pi/agent)", desc: "Inject the global ~/.pi/agent/CLAUDE.md" },
+    { key: "ancestorAgents", label: "Ancestor AGENTS.md", desc: "Inject AGENTS.md from every ancestor directory above the project" },
+    { key: "ancestorClaude", label: "Ancestor CLAUDE.md", desc: "Inject CLAUDE.md from every ancestor directory above the project" },
+    { key: "projectAgents", label: "Project AGENTS.md (cwd)", desc: "Inject the working repo's root AGENTS.md" },
+    { key: "projectClaude", label: "Project CLAUDE.md (cwd)", desc: "Inject the working repo's root CLAUDE.md" },
+  ];
+  while (true) {
+    const ci = orchestrator.config.contextInjection;
+    const options: OptionInput[] = rows.map((r) => opt(`${r.label}: ${ci[r.key] ? "ON" : "OFF"}`, r.desc));
+    options.push(opt("Back", "Return to the previous menu"));
+    const choice = await selectOption(ctx, "Context", options);
+    if (!choice || choice === "Back") return BACK;
+    const row = rows.find((r) => choice.startsWith(`${r.label}:`));
+    if (row) {
+      await showBooleanSetting(orchestrator, ctx, row.label, ["contextInjection", row.key], row.desc, `Do not inject ${row.label}`);
+    }
   }
 }
 

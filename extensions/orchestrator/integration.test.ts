@@ -62,6 +62,15 @@ vi.mock("./config.js", async (importOriginal) => {
       loadExtraRepoConfigs: true,
       logLevel: "info",
     },
+    contextInjection: {
+      globalAgents: false,
+      globalClaude: false,
+      ancestorAgents: false,
+      ancestorClaude: false,
+      projectAgents: true,
+      projectClaude: false,
+    },
+    compaction: { enabled: true, fraction: 0.3, floorTokens: 250000, perModel: {} },
     agents: {
       maxConcurrentSubagents: 7,
       orchestrators: {
@@ -2482,8 +2491,10 @@ describe("task modes and quick task", () => {
 
     const beforeStart = pi._handlers.get("before_agent_start")!;
     const prompt = (await beforeStart({ systemPrompt: "base" }, ctx))?.systemPrompt ?? "";
-    expect(prompt).toContain(`<agents_md source="${join(cwd, "AGENTS.md")}">`);
+    // New six-toggle injector wraps files in <context_file> with provenance.
+    expect(prompt).toContain(`<context_file scope="project" type="agents" source="${join(cwd, "AGENTS.md")}">`);
     expect(prompt).toContain("ROOT_AGENTS_CONTENT");
+    // Nested (non-ancestor) subdir files are never read.
     expect(prompt).not.toContain("NESTED_AGENTS_CONTENT");
   });
 
@@ -2498,12 +2509,12 @@ describe("task modes and quick task", () => {
 
     const beforeStart = pi._handlers.get("before_agent_start")!;
     const absent = (await beforeStart({ systemPrompt: "base" }, ctx))?.systemPrompt ?? "";
-    expect(absent).not.toContain("<agents_md");
+    expect(absent).not.toContain("<context_file");
 
     writeFileSync(join(cwd, "AGENTS.md"), "ROOT_AGENTS_CONTENT", "utf-8");
-    orchestrator.config.general.injectAgentsMd = false;
+    orchestrator.config.contextInjection.projectAgents = false;
     const disabled = (await beforeStart({ systemPrompt: "base" }, ctx))?.systemPrompt ?? "";
-    expect(disabled).not.toContain("<agents_md");
+    expect(disabled).not.toContain("<context_file");
     expect(disabled).not.toContain("ROOT_AGENTS_CONTENT");
   });
 
@@ -4338,7 +4349,7 @@ describe("menu contracts", () => {
 
     menu
       .expect({ question: "/pp", options: { include: ["Settings"] }, choose: "Settings" })
-      .expect({ question: "Settings", options: { exact: ["General", "Agents", "Commands", "Performance", "LSP", "Compaction", "Copilot", "Flant", "Info", "Back"] }, choose: "Back" })
+      .expect({ question: "Settings", options: { exact: ["General", "Agents", "Commands", "Performance", "LSP", "Context", "Compaction", "Copilot", "Flant", "Info", "Back"] }, choose: "Back" })
       .expect({ question: "/pp", options: { include: ["Back to prompt"] }, choose: "Back to prompt" });
 
     const pp = getCommand(pi, "pp");

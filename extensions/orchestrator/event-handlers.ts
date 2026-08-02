@@ -42,6 +42,7 @@ import { createUsageTracker, dumpUsageSummary, loadUsageSummary, isSubscriptionR
 import { askUser, isCancel } from "../../3p/pi-ask-user/index.js";
 import { registerRecallTool, compile as vccCompile } from "../../3p/pi-vcc/index.js";
 import { computeVccMessageRange, buildVccDetails } from "./compaction-dispatch.js";
+import { collectContextFiles, renderContextInjection } from "./context-injection.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { findRootRepo, normalizeRepoPath, resolveRepoForFile, type RepoInfo } from "./repo-utils.js";
 
@@ -2449,11 +2450,13 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     const projectContext = systemSnippets
       ? ["<project_context>", systemSnippets, "</project_context>"].join("\n")
       : "";
-    const agentsMdPath = join(orchestrator.cwd, "AGENTS.md");
-    const agentsMd =
-      orchestrator.config.general.injectAgentsMd && existsSync(agentsMdPath)
-        ? [`<agents_md source="${agentsMdPath}">`, readFileSync(agentsMdPath, "utf-8"), "</agents_md>"].join("\n")
-        : "";
+    // item 10: global/ancestor/project AGENTS.md + CLAUDE.md injection via the
+    // six-toggle enumerator (reads both file types per scope, unlike the
+    // framework's first-match-per-dir loader). Replaces the old cwd-only
+    // injectAgentsMd path.
+    const agentsMd = renderContextInjection(
+      collectContextFiles(orchestrator.cwd, orchestrator.config.contextInjection),
+    );
     const checklistLine =
       phase === "implement" ? "Keep the plan checklist current: mark each item done (- [ ] → - [x]) as you complete it." : "";
     const taskBlock = [
