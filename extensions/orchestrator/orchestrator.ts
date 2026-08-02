@@ -99,6 +99,10 @@ export class Orchestrator {
   // abort a legitimately-busy turn. While this is > 0 (or a subagent is live)
   // the watchdog treats the turn as active.
   mainTurnToolInFlight = 0;
+  // Hysteresis arm state for proactive in-phase compaction (item 1). Armed =
+  // eligible to fire on the next threshold crossing; disarmed after firing until
+  // context drops back below the re-arm band.
+  compactionArm: { armed: boolean } = { armed: true };
   // Single consecutive-nudge guard (replaces the old multi-tier throttle). Reset
   // to 0 on any productive turn; once it reaches the cap the nudges halt with one
   // user notification.

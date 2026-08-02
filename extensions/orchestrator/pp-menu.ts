@@ -3116,6 +3116,7 @@ async function showSettingsMenu(orchestrator: Orchestrator, ctx: any): Promise<t
       opt("Commands", "After file edit and after implementation"),
       opt("Performance", "Per-operation timeout limits"),
       opt("LSP", "Language server controls"),
+      opt("Compaction", "In-phase context compaction trigger"),
       opt("Copilot", "GitHub Copilot model provider (highest precedence)"),
       opt("Flant", "Configure corporate AI model provider"),
       opt("Info", "Usage and task status"),
@@ -3130,9 +3131,74 @@ async function showSettingsMenu(orchestrator: Orchestrator, ctx: any): Promise<t
     else if (choice === "Commands") await showCommandsSettings(orchestrator, ctx);
     else if (choice === "Performance") await showPerformanceSettings(orchestrator, ctx);
     else if (choice === "LSP") await showLspSettings(ctx);
+    else if (choice === "Compaction") await showCompactionSettings(orchestrator, ctx);
     else if (choice === "Copilot") await showCopilotMenu(orchestrator, ctx);
     else if (choice === "Flant") await showFlantInfraMenu(orchestrator, ctx);
     else if (choice === "Info") await showInfoMenu(orchestrator, ctx);
+  }
+}
+
+// Settings > Compaction (item 1): controls the proactive in-phase compaction
+// trigger. Persists into PiPiConfig.compaction via the project config file.
+async function showCompactionSettings(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
+  while (true) {
+    const c = orchestrator.config.compaction;
+    const pct = Math.round(c.fraction * 100);
+    const floorK = Math.round(c.floorTokens / 1000);
+    const enableLabel = `Enable in-phase compaction: ${c.enabled ? "ON" : "OFF"}`;
+    const options: OptionInput[] = [
+      { title: enableLabel, description: "Proactively compact context within a phase when it grows past the threshold" },
+    ];
+    if (c.enabled) {
+      options.push(
+        { title: `Trigger fraction: ${pct}% of context window`, description: "Compact once estimated context exceeds this fraction of the model's window" },
+        { title: `Floor: ${floorK}K tokens`, description: "Never trigger below this token count even if the fraction is smaller" },
+      );
+    }
+    options.push({ title: "Back", description: "Return to the previous menu" });
+
+    const choice = await selectOption(ctx, "Compaction", options);
+    if (!choice || choice === "Back") return BACK;
+
+    if (choice === enableLabel) {
+      await showBooleanSetting(
+        orchestrator, ctx, "Enable in-phase compaction", ["compaction", "enabled"],
+        "Proactively compact context within a phase when it grows past the threshold",
+        "Never auto-compact within a phase",
+      );
+      continue;
+    }
+    if (choice.startsWith("Trigger fraction:")) {
+      const sel = await selectOption(ctx, "Trigger fraction", [
+        { title: "20%", description: "Compact earlier (smaller working context)" },
+        { title: "30%", description: "Default" },
+        { title: "40%", description: "Compact later" },
+        { title: "50%", description: "Compact much later" },
+        { title: "Back", description: "Return to the previous menu" },
+      ]);
+      if (!sel || sel === "Back") continue;
+      const frac = Number(sel.replace("%", "")) / 100;
+      if (Number.isFinite(frac) && frac > 0) {
+        const res = tryApplyConfigChange(orchestrator, "project", ["compaction", "fraction"], frac);
+        ctx.ui.notify(res.ok ? `Trigger fraction set to ${sel}.` : `Failed: ${res.error}`, res.ok ? "info" : "error");
+      }
+      continue;
+    }
+    if (choice.startsWith("Floor:")) {
+      const sel = await selectOption(ctx, "Floor (tokens)", [
+        { title: "150K", description: "Lower floor" },
+        { title: "250K", description: "Default" },
+        { title: "400K", description: "Higher floor" },
+        { title: "Back", description: "Return to the previous menu" },
+      ]);
+      if (!sel || sel === "Back") continue;
+      const floor = Number(sel.replace("K", "")) * 1000;
+      if (Number.isFinite(floor) && floor > 0) {
+        const res = tryApplyConfigChange(orchestrator, "project", ["compaction", "floorTokens"], floor);
+        ctx.ui.notify(res.ok ? `Floor set to ${sel} tokens.` : `Failed: ${res.error}`, res.ok ? "info" : "error");
+      }
+      continue;
+    }
   }
 }
 

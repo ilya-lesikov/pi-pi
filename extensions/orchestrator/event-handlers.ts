@@ -40,6 +40,8 @@ import { Orchestrator, type ActiveTask } from "./orchestrator.js";
 import { createCustomFooter, setFooterContext, setFooterTracker, setFooterOrchestrator } from "./custom-footer.js";
 import { createUsageTracker, dumpUsageSummary, loadUsageSummary, isSubscriptionRouted, type UsageTracker } from "./usage-tracker.js";
 import { askUser, isCancel } from "../../3p/pi-ask-user/index.js";
+import { registerRecallTool, compile as vccCompile } from "../../3p/pi-vcc/index.js";
+import { computeVccMessageRange, buildVccDetails } from "./compaction-dispatch.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { findRootRepo, normalizeRepoPath, resolveRepoForFile, type RepoInfo } from "./repo-utils.js";
 
@@ -623,6 +625,15 @@ export function registerFeatureToolsAndAgents(orchestrator: Orchestrator): void 
   registerExaTools(pi);
   registerAstSearchTool(pi, orchestrator.cwd);
   registerOrchestratorTools(orchestrator);
+  // item 1: pi-pi OWNS the vendored pi-vcc recall tool (vcc's own index/hooks are
+  // never registered). Registered here so the in-phase compaction metadata the
+  // dispatcher persists (details.compactor:"pi-vcc" + messageRange) is queryable
+  // via `vcc_recall scope:"compaction:N"`.
+  try {
+    registerRecallTool(pi);
+  } catch (err: any) {
+    getLogger().error({ s: "compaction", err: err?.message }, "failed to register vcc_recall tool");
+  }
   setExtensionOnlyMode(pi);
   orchestrator.registerAgents();
 }
@@ -1413,6 +1424,35 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (ctx) orchestrator.lastCtx = ctx;
     endMainTurn(orchestrator);
     orchestrator.transitionController.onAgentEnd();
+    // Proactive in-phase compaction (item 1): fire at agent_end when the
+    // estimated context crosses the configured threshold (30%/250K floor by
+    // default), NEVER during a controller transition, with hysteresis so one
+    // crossing arms exactly one compaction. Between-phase transition compaction
+    // is owned by the controller and untouched here.
+    try {
+      const cfg = orchestrator.config?.compaction;
+      if (
+        cfg?.enabled &&
+        orchestrator.active &&
+        orchestrator.active.state.phase !== "done" &&
+        !orchestrator.transitionController.isTransitioning?.() &&
+        typeof ctx?.getContextUsage === "function" &&
+        typeof ctx?.compact === "function"
+      ) {
+        const usage = ctx.getContextUsage();
+        if (usage && typeof usage.contextWindow === "number" && usage.contextWindow > 0) {
+          const { compactionThresholdTokens, shouldFireCompaction } = await import("./compaction-trigger.js");
+          const modelId = (typeof ctx.model?.id === "string" && ctx.model.id) || undefined;
+          const threshold = compactionThresholdTokens({ contextWindow: usage.contextWindow, modelId, config: cfg });
+          if (shouldFireCompaction(usage.tokens, threshold, orchestrator.compactionArm)) {
+            getLogger().info({ s: "compaction", tokens: usage.tokens, threshold, window: usage.contextWindow }, "proactive in-phase compaction triggered");
+            ctx.compact();
+          }
+        }
+      }
+    } catch (err: any) {
+      getLogger().error({ s: "compaction", err: err?.message }, "proactive compaction trigger failed");
+    }
   });
   pi.on("session_compact", async (_event, ctx) => {
     if (ctx) orchestrator.lastCtx = ctx;
@@ -2744,26 +2784,56 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       };
     }
 
-    // Natural (user-triggered) compaction: re-inject phase artifacts so context
-    // survives.
+    // Natural / in-phase compaction (item 1): deterministically summarize the
+    // discarded messages with the vendored pi-vcc engine instead of the host's
+    // LLM summarizer, and persist pi-vcc metadata so `vcc_recall scope:
+    // "compaction:N"` can resolve the summarized range. Also re-inject phase
+    // artifacts so the task's own context survives.
     if (!orchestrator.active || orchestrator.active.state.phase === "done") return;
 
+    const prep: any = (event as any).preparation;
+    const branchEntries = (event as any).branchEntries as Array<{ id: string; type?: string; message?: unknown }> | undefined;
+    let compactionResult: { summary: string; details: unknown; firstKeptEntryId: string; tokensBefore: number } | undefined;
+    try {
+      if (prep && Array.isArray(prep.messagesToSummarize) && prep.messagesToSummarize.length > 0) {
+        const messageRange = computeVccMessageRange(branchEntries ?? [], prep.firstKeptEntryId);
+        const summary = vccCompile({
+          messages: prep.messagesToSummarize,
+          previousSummary: prep.previousSummary,
+          fileOps: prep.fileOps
+            ? {
+              readFiles: [...(prep.fileOps.read ?? [])],
+              modifiedFiles: [...(prep.fileOps.written ?? []), ...(prep.fileOps.edited ?? [])],
+            }
+            : undefined,
+        });
+        const details = buildVccDetails(summary, prep.messagesToSummarize.length, !!prep.previousSummary, prep.tokensBefore ?? 0, messageRange);
+        compactionResult = { summary, details, firstKeptEntryId: prep.firstKeptEntryId, tokensBefore: prep.tokensBefore ?? 0 };
+      }
+    } catch (err: any) {
+      getLogger().error({ s: "compaction", err: err?.message }, "in-phase vcc compaction failed; falling back to host summarizer");
+    }
+
     const artifacts = getPhaseArtifacts(orchestrator.active.dir, orchestrator.active.state.phase);
-    if (artifacts.length === 0) return;
+    if (artifacts.length > 0) {
+      const artifactText = artifacts
+        .map((a) => `=== ${a.name} ===\n${a.content}`)
+        .join("\n\n");
+      orchestrator.transitionController.sendCustom(
+        {
+          customType: "pp-artifact-reinject",
+          content: `[PI-PI ARTIFACTS — re-injected after compaction]\n\n${artifactText}`,
+          display: false,
+        },
+        "context",
+      );
+    }
 
-    const artifactText = artifacts
-      .map((a) => `=== ${a.name} ===\n${a.content}`)
-      .join("\n\n");
-
-    orchestrator.transitionController.sendCustom(
-      {
-        customType: "pp-artifact-reinject",
-        content: `[PI-PI ARTIFACTS — re-injected after compaction]\n\n${artifactText}`,
-        display: false,
-      },
-      "context",
-    );
-
+    // Return the deterministic compaction result (with recall metadata) when we
+    // produced one; otherwise fall through to the host's default summarizer.
+    if (compactionResult) {
+      return { compaction: compactionResult };
+    }
     return;
   });
 

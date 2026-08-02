@@ -51,6 +51,19 @@ export interface AfterImplementCommandConfig {
   enabled?: boolean;
 }
 
+export interface CompactionConfig {
+  /** Enable proactive in-phase compaction (item 1). Off = never auto-compact. */
+  enabled: boolean;
+  /** Trigger fraction of the model's context window (default 0.30 = 30%). */
+  fraction: number;
+  /** Floor in tokens: never trigger below this even if the fraction is smaller
+   *  (default 250000 → 1M window ~300K, 500K window uses the 250K floor). */
+  floorTokens: number;
+  /** Per-model overrides keyed by model id (bare or provider-prefixed). Each may
+   *  set any subset of { fraction, floorTokens }. */
+  perModel: Record<string, { fraction?: number; floorTokens?: number }>;
+}
+
 export interface PiPiConfig {
   general: {
     autoCommit: boolean;
@@ -59,6 +72,7 @@ export interface PiPiConfig {
     logLevel: LogLevel;
     tracing: boolean;
   };
+  compaction: CompactionConfig;
   agents: {
     maxConcurrentSubagents: number;
     orchestrators: Record<OrchestratorRole, AgentConfig>;
@@ -123,6 +137,12 @@ const DEFAULT_CONFIG: PiPiConfig = {
     loadExtraRepoConfigs: true,
     logLevel: "info",
     tracing: false,
+  },
+  compaction: {
+    enabled: true,
+    fraction: 0.30,
+    floorTokens: 250000,
+    perModel: {},
   },
   agents: {
     maxConcurrentSubagents: 7,
@@ -287,6 +307,28 @@ function ensureString(value: unknown, path: string): void {
   }
 }
 
+function ensureNumberInRange(value: unknown, path: string, min: number, max: number): void {
+  if (value === undefined) return;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < min || value > max) {
+    throw new Error(`${path} must be a number between ${min} and ${max}`);
+  }
+}
+
+function validateCompaction(value: unknown): void {
+  const c = requireObject(value, "config.compaction");
+  ensureBool(c.enabled, "config.compaction.enabled");
+  ensureNumberInRange(c.fraction, "config.compaction.fraction", 0.01, 1);
+  ensureNumberInRange(c.floorTokens, "config.compaction.floorTokens", 1000, 100_000_000);
+  if (c.perModel !== undefined) {
+    const perModel = requireObject(c.perModel, "config.compaction.perModel");
+    for (const [modelId, override] of Object.entries(perModel)) {
+      const o = requireObject(override, `config.compaction.perModel.${modelId}`);
+      ensureNumberInRange(o.fraction, `config.compaction.perModel.${modelId}.fraction`, 0.01, 1);
+      ensureNumberInRange(o.floorTokens, `config.compaction.perModel.${modelId}.floorTokens`, 1000, 100_000_000);
+    }
+  }
+}
+
 function ensureDuration(value: unknown, path: string): void {
   if (value === undefined) return;
   if (parseDuration(value as DurationValue) === null) {
@@ -408,6 +450,8 @@ export function validateConfig(config: Record<string, any>): void {
       throw new Error("config.general.logLevel must be one of: debug, info, warn, error");
     }
   }
+
+  if (config.compaction !== undefined) validateCompaction(config.compaction);
 
   if (config.agents !== undefined) {
     const agents = requireObject(config.agents, "config.agents");

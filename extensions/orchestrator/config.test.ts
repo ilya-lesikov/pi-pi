@@ -128,6 +128,26 @@ describe("validateConfig", () => {
     );
   });
 
+  it("defaults compaction to enabled 30%/250K and accepts a valid override", () => {
+    const d = getDefaultConfig();
+    expect(d.compaction).toEqual({ enabled: true, fraction: 0.3, floorTokens: 250000, perModel: {} });
+    expect(() =>
+      validateConfig({ compaction: { enabled: false, fraction: 0.4, floorTokens: 300000, perModel: { "gpt-5.6-sol": { fraction: 0.5 } } } }),
+    ).not.toThrow();
+  });
+
+  it("rejects an out-of-range compaction fraction", () => {
+    expect(() => validateConfig({ compaction: { fraction: 2 } })).toThrow("config.compaction.fraction");
+    expect(() => validateConfig({ compaction: { floorTokens: 10 } })).toThrow("config.compaction.floorTokens");
+  });
+
+  it("round-trips the compaction section through loadConfig deep-merge", () => {
+    const merged = deepMerge(getDefaultConfig() as any, { compaction: { fraction: 0.25 } });
+    expect(merged.compaction.fraction).toBe(0.25);
+    expect(merged.compaction.floorTokens).toBe(250000);
+    expect(merged.compaction.enabled).toBe(true);
+  });
+
   it("accepts valid partial config", () => {
     expect(() =>
       validateConfig({
