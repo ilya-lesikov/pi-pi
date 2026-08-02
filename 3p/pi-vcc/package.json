@@ -1,0 +1,40 @@
+{
+  "name": "@monotykamary/pi-vcc",
+  "version": "0.7.1",
+  "description": "Vendored pi-vcc deterministic compaction engine + recall tool. Retained closure only — pi-pi owns the session_before_compact hook and trigger; vcc's own hooks/commands are NOT vendored.",
+  "keywords": [
+    "vcc",
+    "compact",
+    "compaction"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/monotykamary/pi-vcc.git"
+  },
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-ai": {
+      "optional": true
+    },
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "typebox": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "typescript": "^6.0.0",
+    "vitest": "^4.0.18"
+  }
+}

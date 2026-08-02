@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { callExa, registerExaTools } from "./exa.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { __resetWebToolStateForTest, callExa, registerExaTools } from "./exa.js";
 
 function mockFetchText(text: string, init: { ok?: boolean; status?: number } = {}) {
   const fn = vi.fn(async () => ({
@@ -10,6 +10,10 @@ function mockFetchText(text: string, init: { ok?: boolean; status?: number } = {
   vi.stubGlobal("fetch", fn);
   return fn;
 }
+
+beforeEach(() => {
+  __resetWebToolStateForTest();
+});
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -87,14 +91,13 @@ describe("registerExaTools", () => {
     expect(args).toEqual({ query: "cats", numResults: 5 });
   });
 
-  it("exa_search returns an error result when callExa throws", async () => {
+  it("exa_search falls through to Tavily when Exa throws", async () => {
     mockFetchText(JSON.stringify({ error: { message: "boom" } }));
     const pi = makePi();
     registerExaTools(pi as any);
     const res = await pi.tools.get("exa_search").execute("id", { query: "cats" });
-    expect(res.isError).toBe(true);
-    expect(res.content[0].text).toContain("exa_search error");
-    expect(res.content[0].text).toContain("boom");
+    expect(res.isError).toBeUndefined();
+    expect(res.content[0].text).toBe("No results found.");
   });
 
   it("exa_fetch passes urls and default maxCharacters, returns ok content", async () => {

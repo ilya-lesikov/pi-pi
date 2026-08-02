@@ -29,6 +29,9 @@
     "3p/pi-plannotator/packages/server/",
     "3p/pi-plannotator/packages/ai/",
     "3p/pi-plannotator/package.json",
+    "3p/pi-vcc/index.ts",
+    "3p/pi-vcc/src/",
+    "3p/pi-vcc/package.json",
     "scripts/",
     "AGENTS.md"
   ],

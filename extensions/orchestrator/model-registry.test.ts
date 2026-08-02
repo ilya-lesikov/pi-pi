@@ -248,14 +248,17 @@ describe("model-registry", () => {
 
   it("getModelFamilies returns all family definitions", () => {
     const families = getModelFamilies();
-    expect(families).toHaveLength(11);
+    expect(families).toHaveLength(14);
     expect(families.map((f) => f.family).sort()).toEqual([
       "deepseek",
       "fable",
       "gemini-flash",
       "gemini-pro",
       "gpt",
+      "gpt-luna",
       "gpt-mini",
+      "gpt-sol",
+      "gpt-terra",
       "grok",
       "haiku",
       "opus",
@@ -264,6 +267,22 @@ describe("model-registry", () => {
     ]);
     expect(families.find((f) => f.family === "opus")?.aliases).toContain("pp-flant-anthropic/claude-opus-latest");
     expect(families.find((f) => f.family === "gpt")?.aliases).toContain("pp-flant-openai/gpt-latest");
+  });
+
+  it("splits gpt-5.6 into sol/terra/luna tier families and distinguishes -pro", () => {
+    // base and -pro resolve to the SAME family (pro is a reasoning mode), but
+    // the tier suffixes never bleed into each other or the legacy gpt family.
+    expect(getModelInfo("pp-flant-openai/gpt-5.6-sol")).toMatchObject({ family: "gpt-sol", tier: "smart" });
+    expect(getModelInfo("pp-flant-openai/gpt-5.6-sol-pro")).toMatchObject({ family: "gpt-sol", tier: "smart" });
+    expect(getModelInfo("pp-flant-openai/gpt-5.6-terra")).toMatchObject({ family: "gpt-terra", tier: "regular" });
+    expect(getModelInfo("pp-flant-openai/gpt-5.6-terra-pro")).toMatchObject({ family: "gpt-terra", tier: "regular" });
+    expect(getModelInfo("pp-flant-openai/gpt-5.6-luna")).toMatchObject({ family: "gpt-luna", tier: "stupid" });
+    expect(getModelInfo("pp-flant-openai/gpt-5.6-luna-pro")).toMatchObject({ family: "gpt-luna", tier: "stupid" });
+    // no prefix bleed: sol pattern must NOT match sol-pro-ish longer ids, and
+    // legacy/plain gpt-5.6 stays on the backward-compat gpt family.
+    expect(getModelInfo("openai/gpt-5.6")).toMatchObject({ family: "gpt", tier: "regular" });
+    expect(getModelInfo("openai/gpt-5.4")).toMatchObject({ family: "gpt", tier: "regular" });
+    expect(getModelInfo("openai/gpt-5.6-mini")).toMatchObject({ family: "gpt-mini", tier: "stupid" });
   });
 
   it("getModelFamilies exposes vendor and tier per family", () => {

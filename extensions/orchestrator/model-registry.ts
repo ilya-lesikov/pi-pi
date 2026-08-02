@@ -1,7 +1,7 @@
 import { compareModelVersion } from "./model-version.js";
 
 export type Vendor = "anthropic" | "openai" | "google" | "deepseek" | "xai" | "qwen" | "unknown";
-export type Family = "opus" | "fable" | "sonnet" | "haiku" | "gpt" | "gpt-mini" | "gemini-pro" | "gemini-flash" | "deepseek" | "grok" | "qwen" | "unknown";
+export type Family = "opus" | "fable" | "sonnet" | "haiku" | "gpt-sol" | "gpt-terra" | "gpt-luna" | "gpt" | "gpt-mini" | "gemini-pro" | "gemini-flash" | "deepseek" | "grok" | "qwen" | "unknown";
 export type Tier = "stupid" | "regular" | "smart" | "xsmart" | "unknown";
 
 export interface ModelInfo {
@@ -13,7 +13,7 @@ export interface ModelInfo {
 
 type ProviderPrefix = "anthropic" | "openai" | "google" | "deepseek" | "x-ai" | "qwen" | "pp-flant-anthropic" | "pp-flant-anthropic-sub" | "pp-flant-openai";
 type KnownVendor = "anthropic" | "openai" | "google" | "deepseek" | "xai" | "qwen";
-type KnownFamily = "opus" | "fable" | "sonnet" | "haiku" | "gpt" | "gpt-mini" | "gemini-pro" | "gemini-flash" | "deepseek" | "grok" | "qwen";
+type KnownFamily = "opus" | "fable" | "sonnet" | "haiku" | "gpt-sol" | "gpt-terra" | "gpt-luna" | "gpt" | "gpt-mini" | "gemini-pro" | "gemini-flash" | "deepseek" | "grok" | "qwen";
 type KnownTier = "stupid" | "regular" | "smart" | "xsmart";
 
 export interface ModelFamilyDefinition {
@@ -77,12 +77,47 @@ export const MODEL_FAMILIES: ModelFamilyDefinition[] = [
     providers: ["anthropic", "pp-flant-anthropic", "pp-flant-anthropic-sub"],
     nativeLatestProviders: ["anthropic"],
   },
+  // gpt-5.6 tier families. These MUST precede the legacy `gpt` family below,
+  // since findFamily returns the first matching entry and the legacy pattern
+  // would otherwise swallow `gpt-5.6-sol` etc. Each tier folds its `-pro`
+  // higher-effort variant into the SAME family (a costlier reasoning MODE, not
+  // a distinct tier); the base/-pro disambiguation that matters for role
+  // selection lives in flant-infra's gptSol/gptSolPro pickers, not here.
+  {
+    vendor: "openai",
+    family: "gpt-sol",
+    tier: "smart",
+    displayName: "GPT Sol",
+    patterns: [/^(openai|pp-flant-openai)\/gpt-[0-9.]+-sol(?:-pro)?$/],
+    aliasTemplate: "gpt-sol-latest",
+    providers: ["openai", "pp-flant-openai"],
+  },
+  {
+    vendor: "openai",
+    family: "gpt-terra",
+    tier: "regular",
+    displayName: "GPT Terra",
+    patterns: [/^(openai|pp-flant-openai)\/gpt-[0-9.]+-terra(?:-pro)?$/],
+    aliasTemplate: "gpt-terra-latest",
+    providers: ["openai", "pp-flant-openai"],
+  },
+  {
+    vendor: "openai",
+    family: "gpt-luna",
+    tier: "stupid",
+    displayName: "GPT Luna",
+    patterns: [/^(openai|pp-flant-openai)\/gpt-[0-9.]+-luna(?:-pro)?$/],
+    aliasTemplate: "gpt-luna-latest",
+    providers: ["openai", "pp-flant-openai"],
+  },
   {
     vendor: "openai",
     family: "gpt",
     tier: "regular",
     displayName: "GPT",
-    patterns: [/^(openai|pp-flant-openai)\/gpt-(?!mini-)(?!.*-mini(?:$|[-.]))[a-z0-9.-]+$/],
+    // Excludes -mini (handled below) AND the sol/terra/luna tier suffixes
+    // (handled above) so pre-5.6 gpt ids still resolve to this legacy family.
+    patterns: [/^(openai|pp-flant-openai)\/gpt-(?!mini-)(?!.*-mini(?:$|[-.]))(?!.*-(?:sol|terra|luna)(?:-pro)?$)[a-z0-9.-]+$/],
     aliasTemplate: "gpt-latest",
     providers: ["openai", "pp-flant-openai"],
   },
