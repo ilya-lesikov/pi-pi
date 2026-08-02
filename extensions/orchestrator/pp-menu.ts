@@ -3144,7 +3144,7 @@ async function showSettingsMenu(orchestrator: Orchestrator, ctx: any): Promise<t
 // offers to enable debug logging / tracing for future sessions. ZERO network.
 async function showReportMenu(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
   const { collectReportFiles, writeReportBundle } = await import("./report.js");
-  const { getActiveTask } = await import("./state.js");
+  const { getActiveTask, listTasks } = await import("./state.js");
 
   // 1. Gather the user's feedback note (freeform text only — no auto-scrape).
   orchestrator.interactivePromptOpen = true;
@@ -3166,9 +3166,11 @@ async function showReportMenu(orchestrator: Orchestrator, ctx: any): Promise<typ
     return BACK;
   }
 
-  // 2. Resolve the current/most-recent task dir and preview the capture set.
-  const task = getActiveTask(orchestrator.cwd);
-  const taskDir = task?.dir ?? null;
+  // 2. Resolve the current task dir, falling back to the MOST-RECENT task
+  // (listTasks is sorted most-recent-first) when none is active, so a report
+  // filed after a task completes still bundles that task's state/logs.
+  const active = getActiveTask(orchestrator.cwd);
+  const taskDir = active?.dir ?? listTasks(orchestrator.cwd, { includeDone: true })[0]?.dir ?? null;
   const files = collectReportFiles(orchestrator.cwd, taskDir);
   const previewList = ["note.md", ...files.map((f) => f.archivePath)];
   ctx.ui.notify(`This report will bundle ${previewList.length} file(s):\n${previewList.map((p) => `  • ${p}`).join("\n")}`, "info");
@@ -4311,8 +4313,14 @@ export async function showActiveTaskMenu(
   // mutating task.state.mode. Never persisted; does not affect the footer indicator
   // or getEffectivePhaseMode.
   forceGuided = false,
+  // When set, the guided menu jumps STRAIGHT into the named submenu on its first
+  // iteration instead of showing the top-level list. Used by the autonomous
+  // Next/Review entries so the user doesn't have to pick the identical option a
+  // second time (bug A UX). Cleared after the first iteration.
+  autoOpen?: "Next" | "Review",
 ): Promise<string> {
   const continueMessage = advanceBanner("[PI-PI] User wants to continue. Run /pp when ready to advance.");
+  let pendingAutoOpen = autoOpen;
 
   while (true) {
     if (!orchestrator.active) return "No active task.";
@@ -4398,7 +4406,7 @@ export async function showActiveTaskMenu(
       // guided submenu logic (advance/auto-review/publish/manual review) runs
       // for this one interaction — display-only, never persisting the mode.
       if (autoChoice === "Next" || autoChoice === "Review") {
-        return showActiveTaskMenu(orchestrator, ctx, summary, mode, true);
+        return showActiveTaskMenu(orchestrator, ctx, summary, mode, true, autoChoice);
       }
       if (autoChoice === "Complete task") {
         const text = await finishTask(orchestrator, ctx);
@@ -4425,7 +4433,18 @@ export async function showActiveTaskMenu(
     if (assumptionsBanner) headerLines.push(`\n\n${assumptionsBanner}`);
     if (summary !== "/pp") headerLines.push(`\n\n${summary}`);
     const menuTitle = headerLines.join("");
-    const { choice, cancelReason } = await selectOptionCancelable(ctx, menuTitle, options);
+    // Jump straight into the requested submenu on the first iteration (autonomous
+    // Next/Review handoff), then fall back to normal top-level selection so a
+    // submenu "Back" returns to the full menu rather than re-jumping.
+    let choice: string | undefined;
+    let cancelReason: CancelReason | undefined;
+    if (pendingAutoOpen && (pendingAutoOpen === "Next" || (pendingAutoOpen === "Review" && !waiting))) {
+      choice = pendingAutoOpen;
+      pendingAutoOpen = undefined;
+    } else {
+      pendingAutoOpen = undefined;
+      ({ choice, cancelReason } = await selectOptionCancelable(ctx, menuTitle, options));
+    }
     if (cancelReason === "user" && mode === "tool") return USER_CANCELLED;
     if (!choice || choice === "Back to prompt") {
       return "";

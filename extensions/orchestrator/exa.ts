@@ -32,6 +32,18 @@ function shouldTry(provider: Provider, now: number): boolean {
   return now - at >= PROBE_COOLDOWN_MS;
 }
 
+function exaHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Accept: "application/json, text/event-stream",
+  };
+  // Keyed Exa (EXA_API_KEY) has a much higher ceiling than the keyless free MCP
+  // endpoint; prefer it when present.
+  const key = process.env.EXA_API_KEY;
+  if (key) headers.Authorization = `Bearer ${key}`;
+  return headers;
+}
+
 export async function callExa(toolName: string, args: Record<string, unknown>): Promise<string> {
   const body = JSON.stringify({
     jsonrpc: "2.0",
@@ -42,14 +54,12 @@ export async function callExa(toolName: string, args: Record<string, unknown>): 
 
   const res = await fetch(EXA_MCP_URL, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json, text/event-stream",
-    },
+    headers: exaHeaders(),
     body,
     signal: AbortSignal.timeout(30000),
   });
 
+  if (res.status === 429) throw new RateLimitError(`Exa HTTP 429`);
   const raw = await res.text();
 
   for (const line of raw.split("\n")) {
@@ -192,8 +202,11 @@ async function runSearch(query: string, numResults: number): Promise<string> {
       const result = await callExa("web_search_exa", { query, numResults });
       if (!isExaRateLimited(result)) return result;
       markLimited("exa", now);
-    } catch {
-      markLimited("exa", now);
+    } catch (e) {
+      // Only a rate limit marks Exa limited (sticky 10-min lockout). Any other
+      // failure (network blip, 5xx, malformed SSE) just falls through to the
+      // next tier WITHOUT the sticky penalty.
+      if (e instanceof RateLimitError) markLimited("exa", now);
     }
   }
 
@@ -201,8 +214,9 @@ async function runSearch(query: string, numResults: number): Promise<string> {
     try {
       return await callTavilySearch(query, numResults);
     } catch (e) {
+      // Rate limit -> sticky; any other Tavily error just falls through to the
+      // terminal unavailable result rather than aborting the chain.
       if (e instanceof RateLimitError) markLimited("tavily", now);
-      else throw e;
     }
   }
 
@@ -217,8 +231,9 @@ async function runFetch(urls: string[], maxCharacters: number): Promise<string> 
       const result = await callExa("web_fetch_exa", { urls, maxCharacters });
       if (!isExaRateLimited(result)) return result;
       markLimited("exa", now);
-    } catch {
-      markLimited("exa", now);
+    } catch (e) {
+      // Only a rate limit marks Exa limited; other errors fall through.
+      if (e instanceof RateLimitError) markLimited("exa", now);
     }
   }
 
@@ -226,8 +241,9 @@ async function runFetch(urls: string[], maxCharacters: number): Promise<string> 
     try {
       return await callTavilyExtract(urls);
     } catch (e) {
+      // Rate limit -> sticky; any other Tavily error falls through to Jina
+      // rather than aborting the Exa->Tavily->Jina chain.
       if (e instanceof RateLimitError) markLimited("tavily", now);
-      else throw e;
     }
   }
 
@@ -236,7 +252,6 @@ async function runFetch(urls: string[], maxCharacters: number): Promise<string> 
       return await callJina(urls);
     } catch (e) {
       if (e instanceof RateLimitError) markLimited("jina", now);
-      else throw e;
     }
   }
 

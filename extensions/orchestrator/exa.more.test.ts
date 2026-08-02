@@ -110,12 +110,34 @@ describe("registerExaTools", () => {
     expect(args).toEqual({ urls: ["http://x"], maxCharacters: 3000 });
   });
 
-  it("exa_fetch returns an error result when callExa throws", async () => {
+  it("exa_fetch falls through a non-rate-limit Exa error to the rest of the chain (no sticky lockout)", async () => {
+    // A 500 on every hop: Exa 500 (not a rate limit) falls through WITHOUT
+    // marking Exa limited; Tavily 500 throws a non-rate-limit error and falls
+    // through; Jina 500 yields a per-url "Failed to fetch" result string. The
+    // chain does NOT abort with an error result on a plain 500.
     mockFetchText("nope", { ok: false, status: 500 });
     const pi = makePi();
     registerExaTools(pi as any);
     const res = await pi.tools.get("exa_fetch").execute("id", { urls: ["http://x"], maxCharacters: 10 });
-    expect(res.isError).toBe(true);
-    expect(res.content[0].text).toContain("exa_fetch error");
+    expect(res.isError).toBeUndefined();
+    expect(res.content[0].text).toContain("Failed to fetch");
+  });
+
+  it("exa_fetch keyed-Exa: sends Authorization when EXA_API_KEY is set", async () => {
+    const prev = process.env.EXA_API_KEY;
+    process.env.EXA_API_KEY = "exa-key-xyz";
+    try {
+      const fn = mockFetchText(JSON.stringify({ result: { content: [{ text: "keyed ok" }] } }));
+      const pi = makePi();
+      registerExaTools(pi as any);
+      const res = await pi.tools.get("exa_fetch").execute("id", { urls: ["http://x"], maxCharacters: 10 });
+      expect(res.content[0].text).toBe("keyed ok");
+      // First fetch call is Exa; assert the Authorization header was attached.
+      const firstCallInit = fn.mock.calls[0][1];
+      expect(firstCallInit.headers.Authorization).toBe("Bearer exa-key-xyz");
+    } finally {
+      if (prev === undefined) delete process.env.EXA_API_KEY;
+      else process.env.EXA_API_KEY = prev;
+    }
   });
 });
