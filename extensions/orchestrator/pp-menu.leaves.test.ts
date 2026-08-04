@@ -41,7 +41,16 @@ const { flantSettings, flantMock } = vi.hoisted(() => {
   const flantMock = {
     clearFlantGeneratedConfig: vi.fn(),
     getFlantGeneratedConfig: vi.fn(() => null),
-    loadFlantSettings: vi.fn(() => ({ ...flantSettings })),
+    // Reflect the in-memory config stores so a scoped write is visible to the
+    // menu's post-write reconciliation re-read (mirrors production, where
+    // loadFlantSettings reads the config files). Falls back to the static
+    // defaults before installConfigStore runs.
+    loadFlantSettings: vi.fn(() => {
+      const stores = (globalThis as any).__ppLeavesStores;
+      if (!stores) return { ...flantSettings };
+      const merged = (stores.merge() as any)?.flant ?? {};
+      return { ...flantSettings, ...merged };
+    }),
     readClaudeOAuthToken: vi.fn(() => null),
     readGatewayApiKey: vi.fn(() => null),
     saveFlantSettings: vi.fn((s: any) => { Object.assign(flantSettings, s); }),
@@ -100,6 +109,11 @@ function delNested(obj: Record<string, any>, keyPath: string[]): void {
 function installConfigStore(cwd: string): void {
   globalStore = {};
   projectStore = {};
+  // Bridge the stores to the hoisted loadFlantSettings mock so its re-read
+  // reflects scoped writes (the merge stays the real mergeConfigLayers).
+  (globalThis as any).__ppLeavesStores = {
+    merge: () => mergeConfigLayers(structuredClone(globalStore), structuredClone(projectStore)),
+  };
   vi.spyOn(configModule, "readRawConfig").mockImplementation((path: string) => {
     if (path === GLOBAL_CONFIG_PATH) return structuredClone(globalStore);
     if (path === projectPath(cwd)) return structuredClone(projectStore);
@@ -128,6 +142,7 @@ afterEach(() => {
     subscription: false, lastUpdated: null, cachedFlantModels: null, cachedOpenRouterData: null,
   });
   for (const fn of Object.values(flantMock)) if (typeof fn === "function" && "mockClear" in fn) (fn as any).mockClear();
+  delete (globalThis as any).__ppLeavesStores;
   delete (globalThis as any)[USAGE_TRACKER_SYMBOL];
   delete (globalThis as any)[TASKS_STORE_SYMBOL];
   delete (globalThis as any)[LSP_API_SYMBOL];
@@ -261,7 +276,9 @@ describe("Flant submenu", () => {
 
   it("toggles auto-update into the global config scope (not the cache)", async () => {
     const orchestrator = makeOrchestrator(cwd);
-    flantSettings.enabled = true;
+    // Enable flant via the config store so the post-write effective re-read
+    // (loadFlantSettings) sees it, mirroring production.
+    globalStore.flant = { enabled: true };
     const notes: string[] = [];
     const ctx = makeCtx((t) => notes.push(t));
     orchestrator.lastCtx = ctx;
@@ -280,7 +297,9 @@ describe("Flant submenu", () => {
 
   it("disables Flant into the global config scope and clears generated config", async () => {
     const orchestrator = makeOrchestrator(cwd);
-    flantSettings.enabled = true;
+    // Enabled via a GLOBAL override, so disabling to global clears it and the
+    // effective value truly becomes false (default) — side-effects then run.
+    globalStore.flant = { enabled: true };
     orchestrator.lastCtx = makeCtx();
     askQueue.push(
       "Settings", "Flant",
@@ -291,8 +310,8 @@ describe("Flant submenu", () => {
     await navigate(orchestrator, orchestrator.lastCtx);
     // Disabling writes `false`, which equals the flant.enabled DEFAULT, so
     // applyScopeChoice clears the global override rather than pinning `false`.
-    // Effective enabled is still off (default false) and the disable side-effects
-    // ran; durable policy never goes through the cache (saveFlantSettings).
+    // Effective enabled is now off and the disable side-effects ran; durable
+    // policy never goes through the cache (saveFlantSettings).
     expect(globalStore.flant?.enabled ?? false).toBe(false);
     expect(flantMock.saveFlantSettings).not.toHaveBeenCalled();
     expect(flantMock.unregisterFlantProviders).toHaveBeenCalled();
@@ -301,7 +320,7 @@ describe("Flant submenu", () => {
 
   it("sets the cache period into the global config scope", async () => {
     const orchestrator = makeOrchestrator(cwd);
-    flantSettings.enabled = true;
+    globalStore.flant = { enabled: true };
     orchestrator.lastCtx = makeCtx();
     askQueue.push(
       "Settings", "Flant",
@@ -332,6 +351,25 @@ describe("Flant submenu", () => {
     if (prev !== undefined) process.env.FLANT_API_KEY = prev;
   });
 
+  it("warns and skips side-effects when a global edit is masked by a project override", async () => {
+    const orchestrator = makeOrchestrator(cwd);
+    // Project keeps flant ON; a GLOBAL disable is masked (project wins), so no
+    // unregister must run and the user is warned the change had no effect.
+    projectStore.flant = { enabled: true };
+    const notes: Array<{ t: string; kind?: string }> = [];
+    orchestrator.lastCtx = makeCtx((t, kind) => notes.push({ t, kind }));
+    askQueue.push(
+      "Settings", "Flant",
+      "Enable: ON",
+      "Set globally",
+      "Back", "Back", "Back", "Back",
+    );
+    await navigate(orchestrator, orchestrator.lastCtx);
+    expect(notes.some((n) => n.kind === "warning" && /higher-precedence \(project\) override/.test(n.t))).toBe(true);
+    expect(flantMock.unregisterFlantProviders).not.toHaveBeenCalled();
+    expect(notes.some((n) => n.t === "Flant disabled.")).toBe(false);
+  });
+
   it("offers 'Clear provider tier demotions' even when flant is disabled (finding 8)", async () => {
     clearAllTierDemotions();
     // A Copilot-origin demotion with flant OFF must still be reachable.
@@ -349,7 +387,7 @@ describe("Flant submenu", () => {
 
   it("shows current status without mutating settings", async () => {
     const orchestrator = makeOrchestrator(cwd);
-    flantSettings.enabled = true;
+    globalStore.flant = { enabled: true };
     const notes: string[] = [];
     orchestrator.lastCtx = makeCtx((t) => notes.push(t));
     askQueue.push(

@@ -79,10 +79,15 @@ export function extractActionableHeadings(content: string): string[] {
     if (!isHeader) continue;
     const severity = m[0].toUpperCase();
     for (let j = i + 1; j < lines.length; j++) {
-      if (/^#{1,4}\s/.test(lines[j].trim())) break;
-      const bodyLine = lines[j].trim().replace(/^[-*]\s*/, "");
+      const rawBody = lines[j].trim();
+      if (/^#{1,4}\s/.test(rawBody)) break;
+      // Only LIST ITEMS (`-`/`*`/`N.`) under the header are findings; free prose
+      // is explanatory text, not a distinct finding, so it is not captured.
+      const bulletMatch = rawBody.match(/^(?:[-*]|\d+\.)\s+(.*)$/);
+      if (!bulletMatch) continue;
+      const bodyLine = bulletMatch[1].trim();
       if (bodyLine.length === 0 || isNoneBody(bodyLine)) continue;
-      // A line that itself carries a severity/section token (actionable or the
+      // A bullet that itself carries a severity/section token (actionable or the
       // non-actionable MINOR/NIT) belongs to its OWN classification, not this
       // section's body — leave it for its own iteration / skip it.
       if (ACTIONABLE_RE.test(bodyLine) || /^(?:MINOR|NIT)\b/i.test(bodyLine)) continue;

@@ -1231,7 +1231,9 @@ export function initFlantSync(pi: ExtensionAPI, cwd?: string): void {
     return;
   }
   if (settings.cachedFlantModels && settings.cachedOpenRouterData) {
-    registerFlantProviders(pi, settings.cachedFlantModels, settings.cachedOpenRouterData);
+    // Forward the EFFECTIVE (cwd-scoped) subscription — registerFlantProviders
+    // otherwise falls back to a GLOBAL-only read, missing a project override.
+    registerFlantProviders(pi, settings.cachedFlantModels, settings.cachedOpenRouterData, { subscription: settings.subscription });
     generatedFlantConfig = generateFlantConfig(settings.cachedFlantModels, isSubscriptionActive(settings));
   }
 }

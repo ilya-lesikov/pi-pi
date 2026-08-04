@@ -112,6 +112,14 @@ describe("buildCrossPassSummary", () => {
     expect(out).toContain("MAJOR: src/y.ts:9 null deref");
   });
 
+  it("captures only LIST ITEMS under a severity header, not explanatory prose", () => {
+    const prose = "This paragraph explains the section but is not itself a finding.";
+    const content = ["## MAJOR", prose, "- real.ts:1 the actual finding"].join("\n");
+    const h = extractActionableHeadings(content);
+    expect(h).toEqual(["MAJOR: real.ts:1 the actual finding"]);
+    expect(h.some((x) => x.includes("paragraph explains"))).toBe(false);
+  });
+
   it("handles a 3-pass fixture with per-pass verdict lines", () => {
     const dir = makeTaskDir();
     writeReview(dir, 1, "gpt", 1, "VERDICT: NEEDS_CHANGES\n## MAJOR: a.ts:1 x");

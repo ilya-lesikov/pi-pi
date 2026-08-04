@@ -1142,35 +1142,47 @@ async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise
     }
 
     if (choice === enableLabel) {
-      if (settings.enabled) {
-        if (!(await setFlantConfigValue(orchestrator, ctx, "enabled", false))) continue;
-        unregisterFlantProviders(orchestrator.pi);
-        clearFlantGeneratedConfig();
-        ctx.ui.notify("Flant disabled.", "info");
-      } else {
-        if (!process.env.FLANT_API_KEY) {
-          ctx.ui.notify("Set FLANT_API_KEY environment variable first.", "warning");
-          continue;
-        }
-        if (!(await setFlantConfigValue(orchestrator, ctx, "enabled", true))) continue;
+      const intended = !settings.enabled;
+      if (intended && !process.env.FLANT_API_KEY) {
+        ctx.ui.notify("Set FLANT_API_KEY environment variable first.", "warning");
+        continue;
+      }
+      const scope = await setFlantConfigValue(orchestrator, ctx, "enabled", intended);
+      if (!scope) continue;
+      // Reconcile runtime to the EFFECTIVE post-write value (a project override
+      // may keep flant on/off despite a global edit), not the clicked value.
+      const eff = loadFlantSettings(orchestrator.cwd);
+      if (warnIfFlantEditMasked(ctx, "Enable", scope, intended, eff.enabled)) continue;
+      if (eff.enabled) {
         const result = await updateFlantInfra(orchestrator.pi, { cwd: orchestrator.cwd });
         const message = describeUpdateResult(result);
         ctx.ui.notify(message.text, message.kind);
+      } else {
+        unregisterFlantProviders(orchestrator.pi);
+        clearFlantGeneratedConfig();
+        ctx.ui.notify("Flant disabled.", "info");
       }
       continue;
     }
 
     if (choice.startsWith("Auto-update on startup:")) {
-      if (!(await setFlantConfigValue(orchestrator, ctx, "autoUpdate", !settings.autoUpdate))) continue;
-      ctx.ui.notify(`Auto-update on startup: ${!settings.autoUpdate ? "ON" : "OFF"}`, "info");
+      const intended = !settings.autoUpdate;
+      const scope = await setFlantConfigValue(orchestrator, ctx, "autoUpdate", intended);
+      if (!scope) continue;
+      const eff = loadFlantSettings(orchestrator.cwd);
+      if (warnIfFlantEditMasked(ctx, "Auto-update on startup", scope, intended, eff.autoUpdate)) continue;
+      ctx.ui.notify(`Auto-update on startup: ${eff.autoUpdate ? "ON" : "OFF"}`, "info");
       continue;
     }
 
     if (choice.startsWith("Automatic fallback on rate limit:")) {
-      const next = !settings.autoRateLimitFallback;
-      if (!(await setFlantConfigValue(orchestrator, ctx, "autoRateLimitFallback", next))) continue;
+      const intended = !settings.autoRateLimitFallback;
+      const scope = await setFlantConfigValue(orchestrator, ctx, "autoRateLimitFallback", intended);
+      if (!scope) continue;
+      const eff = loadFlantSettings(orchestrator.cwd);
+      if (warnIfFlantEditMasked(ctx, "Automatic fallback on rate limit", scope, intended, eff.autoRateLimitFallback)) continue;
       ctx.ui.notify(
-        next
+        eff.autoRateLimitFallback
           ? "Automatic fallback ON — rate limits switch provider tier without asking (a notification is shown each time)."
           : "Automatic fallback OFF — you'll be asked for permission before each rate-limit switch.",
         "info",
@@ -1190,13 +1202,17 @@ async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise
           continue;
         }
       }
-      if (!(await setFlantConfigValue(orchestrator, ctx, "subscription", turningOn))) continue;
+      const subScope = await setFlantConfigValue(orchestrator, ctx, "subscription", turningOn);
+      if (!subScope) continue;
+      const effSub = loadFlantSettings(orchestrator.cwd);
+      if (warnIfFlantEditMasked(ctx, "Personal Claude subscription", subScope, turningOn, effSub.subscription)) continue;
+      // updateFlantInfra reads effective subscription (via cwd) and re-registers.
       const result = await updateFlantInfra(orchestrator.pi, { cwd: orchestrator.cwd });
       if (!result.ok) {
-        ctx.ui.notify(`Personal subscription ${turningOn ? "enable" : "disable"} failed: ${result.error ?? "unknown error"}`, "error");
+        ctx.ui.notify(`Personal subscription ${effSub.subscription ? "enable" : "disable"} failed: ${result.error ?? "unknown error"}`, "error");
       } else {
         ctx.ui.notify(
-          turningOn
+          effSub.subscription
             ? "Personal Claude subscription ON — Claude roles now route through sub/claude-* (billed to your subscription); non-Claude roles stay on llm-api.flant.ru."
             : "Personal Claude subscription OFF — Claude roles reverted to pp-flant-anthropic.",
           "info",
@@ -1217,8 +1233,11 @@ async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise
       if (!selected || selected === "Back") continue;
       const mins = Number(selected.split(" ")[0]);
       if (!Number.isFinite(mins) || mins <= 0) continue;
-      if (!(await setFlantConfigValue(orchestrator, ctx, "switchBackIntervalMinutes", mins))) continue;
-      ctx.ui.notify(`Switch-back check interval set to ${mins} min.`, "info");
+      const scope = await setFlantConfigValue(orchestrator, ctx, "switchBackIntervalMinutes", mins);
+      if (!scope) continue;
+      const eff = loadFlantSettings(orchestrator.cwd);
+      if (warnIfFlantEditMasked(ctx, "Switch-back check interval", scope, mins, eff.switchBackIntervalMinutes)) continue;
+      ctx.ui.notify(`Switch-back check interval set to ${eff.switchBackIntervalMinutes} min.`, "info");
       continue;
     }
 
@@ -1234,8 +1253,11 @@ async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise
       if (!selected || selected === "Back") continue;
       const days = Number(selected.split(" ")[0]);
       if (!Number.isFinite(days) || days <= 0) continue;
-      if (!(await setFlantConfigValue(orchestrator, ctx, "cacheTTLDays", days))) continue;
-      ctx.ui.notify(`Cache period set to ${days} ${days === 1 ? "day" : "days"}.`, "info");
+      const scope = await setFlantConfigValue(orchestrator, ctx, "cacheTTLDays", days);
+      if (!scope) continue;
+      const eff = loadFlantSettings(orchestrator.cwd);
+      if (warnIfFlantEditMasked(ctx, "Cache period", scope, days, eff.cacheTTLDays)) continue;
+      ctx.ui.notify(`Cache period set to ${eff.cacheTTLDays} ${eff.cacheTTLDays === 1 ? "day" : "days"}.`, "info");
       continue;
     }
 
@@ -1950,14 +1972,24 @@ function applyConfigChange(orchestrator: Orchestrator, scope: Scope, keyPath: st
 
 // Durable flant policy is scoped like every other PiPiConfig setting: prompt for
 // the scope and route through applyScopeChoice (so a value equal to the effective
-// default clears the override rather than pinning it). Returns false if the user
-// cancels scope selection — callers must then skip their provider side-effects.
+// default clears the override rather than pinning it). Returns the chosen scope,
+// or null if the user cancels — callers must then skip their provider side-effects.
 // (The legacy single-global cache file is still the item-8 MIGRATION destination;
 // that is unrelated to interactive edits.)
-async function setFlantConfigValue(orchestrator: Orchestrator, ctx: any, key: string, value: any): Promise<boolean> {
+async function setFlantConfigValue(orchestrator: Orchestrator, ctx: any, key: string, value: any): Promise<Scope | null> {
   const scope = await pickScope(ctx, orchestrator);
-  if (!scope) return false;
+  if (!scope) return null;
   applyScopeChoice(orchestrator, ["flant", key], value, scope);
+  return scope;
+}
+
+// Warn when an edit's effective value differs from what the user intended,
+// because a higher-precedence scope (a project override vs. a global edit) still
+// governs — so the click appears to do nothing. Returns true when masked.
+function warnIfFlantEditMasked(ctx: any, label: string, scope: Scope, intended: unknown, effective: unknown): boolean {
+  if (intended === effective) return false;
+  const other = scope === "global" ? "project" : "global";
+  ctx.ui.notify(`A higher-precedence (${other}) override still governs "${label}"; your ${scope} change had no effect on the active value.`, "warning");
   return true;
 }
 
@@ -3464,8 +3496,13 @@ async function showCopilotMenu(orchestrator: Orchestrator, ctx: any): Promise<ty
         ctx.ui.notify("Set COPILOT_GITHUB_TOKEN first (the built-in github-copilot provider authenticates off it).", "warning");
         continue;
       }
-      if (!(await setFlantConfigValue(orchestrator, ctx, "copilotEnabled", turningOn))) continue;
-      syncProviderTiers();
+      const copScope = await setFlantConfigValue(orchestrator, ctx, "copilotEnabled", turningOn);
+      if (!copScope) continue;
+      // Resync from the EFFECTIVE (cwd-scoped) settings, else a project-scoped
+      // copilot toggle would resync against global-only state and no-op.
+      const effCop = loadFlantSettings(orchestrator.cwd);
+      syncProviderTiers(effCop);
+      if (warnIfFlantEditMasked(ctx, "Copilot", copScope, turningOn, effCop.copilotEnabled)) continue;
       ctx.ui.notify(
         turningOn
           ? "Copilot tier ON — explicit github-copilot/<model> picks now resolve (generated roles still use Flant)."

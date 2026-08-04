@@ -410,7 +410,7 @@ describe("initFlantSync / initFlantOnStartup", () => {
     expect(mod.getFlantGeneratedConfig()).not.toBeNull();
   });
 
-  it("initFlantSync honors a project override via the shared root cwd", async () => {
+  it("initFlantSync honors a project enable via the shared root cwd", async () => {
     const dir = makeTempDir();
     const cfgDir = join(dir, "extensions", "pp");
     mkdirSync(cfgDir, { recursive: true });
@@ -431,7 +431,7 @@ describe("initFlantSync / initFlantOnStartup", () => {
     const pi = makePi();
     // Global-only read would register nothing; the shared root cwd must bind.
     mod.initFlantSync(pi, projCwd);
-    expect(pi.registerProvider).toHaveBeenCalled();
+    expect(pi.registerProvider).toHaveBeenCalledWith("pp-flant-anthropic", expect.anything());
   });
 
   it("a project override disabling flant unregisters providers at session_start", async () => {
