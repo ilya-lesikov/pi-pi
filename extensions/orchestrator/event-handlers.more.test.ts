@@ -14,7 +14,7 @@ vi.mock("../../3p/pi-ask-user/index.js", () => ({
   }),
 }));
 
-const showActiveTaskMenuMock = vi.fn(async () => "MENU_RESULT");
+const showActiveTaskMenuMock = vi.fn(async (..._args: any[]) => "MENU_RESULT");
 vi.mock("./pp-menu.js", () => ({
   USER_CANCELLED: Symbol.for("pi-pi:test:user-cancelled"),
   showActiveTaskMenu: showActiveTaskMenuMock,
