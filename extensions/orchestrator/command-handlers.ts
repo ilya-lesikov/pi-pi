@@ -135,7 +135,13 @@ export async function transitionToNextPhase(
   }
 
   orchestrator.updateStatus(ctx);
-  const phaseSummary = `Phase "${currentPhase}" completed. Now entering "${next}" phase.`;
+  // Item 1: fold the deterministic cross-pass review summary (stashed at
+  // review-loop termination) into the transition handoff, then clear it.
+  const crossPass = orchestrator.active.state.pendingCrossPassSummary;
+  orchestrator.active.state.pendingCrossPassSummary = undefined;
+  const phaseSummary = crossPass
+    ? `Phase "${currentPhase}" completed. Now entering "${next}" phase.\n\n${crossPass}`
+    : `Phase "${currentPhase}" completed. Now entering "${next}" phase.`;
 
   if (next === "plan") {
     orchestrator.active.state.step = "await_planners";

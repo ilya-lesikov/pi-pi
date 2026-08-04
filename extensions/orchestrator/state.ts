@@ -44,6 +44,10 @@ export interface TaskState {
   reviewPass: number;
   reviewPassByKind?: Record<string, Record<string, number>>;
   reviewApprovedClean?: boolean;
+  // Item 1: the deterministic cross-pass review summary, stashed at review-loop
+  // termination so transitionToNextPhase can fold it into the phase-transition
+  // handoff summary. Transient — read once by the transition, then cleared.
+  pendingCrossPassSummary?: string;
   modifiedFiles?: string[];
   committedFiles?: string[];
   repos?: RepoInfo[];

@@ -14,9 +14,10 @@ vi.mock("../../3p/pi-ask-user/index.js", () => ({
   }),
 }));
 
+const showActiveTaskMenuMock = vi.fn(async () => "MENU_RESULT");
 vi.mock("./pp-menu.js", () => ({
   USER_CANCELLED: Symbol.for("pi-pi:test:user-cancelled"),
-  showActiveTaskMenu: vi.fn(async () => "MENU_RESULT"),
+  showActiveTaskMenu: showActiveTaskMenuMock,
 }));
 
 import {
@@ -742,6 +743,107 @@ describe("pp_phase_complete tool", () => {
     const result = await tool.execute("id", { summary: "s" }, undefined, undefined, ctxWithUi());
     expect(result.content[0].text).not.toContain("reconcile the task's state files");
     expect(result.content[0].text).toBe("MENU_RESULT");
+  });
+
+  // Item 1: cross-pass review summary wired into the terminal paths.
+  function writeRounds(dir: string) {
+    const rdir = join(dir, "code-reviews");
+    mkdirSync(rdir, { recursive: true });
+    writeFileSync(join(rdir, "001_gpt_round-1.md"), "VERDICT: NEEDS_CHANGES\n## MAJOR: src/a.ts:12 leak", "utf-8");
+    writeFileSync(join(rdir, "001_gpt_round-2.md"), "VERDICT: APPROVE", "utf-8");
+  }
+
+  it("guided menu path shows the cross-pass summary when >1 pass ran", async () => {
+    showActiveTaskMenuMock.mockClear();
+    orchestrator.active = makeActiveTask();
+    orchestrator.active.state.phase = "implement";
+    orchestrator.active.state.step = "llm_work";
+    orchestrator.active.state.reconciledPhase = "implement";
+    orchestrator.active.state.reviewPassByKind = { implement: { auto: 2 } };
+    orchestrator.active.state.reviewApprovedClean = true;
+    writeRounds(orchestrator.active.dir);
+    registerOrchestratorToolsForTest(orchestrator);
+    const tool = getTool("pp_phase_complete");
+    await tool.execute("id", { summary: "agent summary" }, undefined, undefined, ctxWithUi());
+    const passedSummary = showActiveTaskMenuMock.mock.calls.at(-1)?.[2] as string;
+    expect(passedSummary).toContain("agent summary");
+    expect(passedSummary).toContain("Cross-pass review summary (implement, 2 passes");
+    expect(passedSummary).toContain("[addressed (not re-reported)] (gpt, pass 1) MAJOR: src/a.ts:12 leak");
+  });
+
+  it("guided menu path keeps the single-pass summary unchanged (no cross-pass)", async () => {
+    showActiveTaskMenuMock.mockClear();
+    orchestrator.active = makeActiveTask();
+    orchestrator.active.state.phase = "implement";
+    orchestrator.active.state.step = "llm_work";
+    orchestrator.active.state.reconciledPhase = "implement";
+    orchestrator.active.state.reviewPassByKind = { implement: { auto: 1 } };
+    registerOrchestratorToolsForTest(orchestrator);
+    const tool = getTool("pp_phase_complete");
+    await tool.execute("id", { summary: "agent summary" }, undefined, undefined, ctxWithUi());
+    const passedSummary = showActiveTaskMenuMock.mock.calls.at(-1)?.[2] as string;
+    expect(passedSummary).toBe("agent summary");
+  });
+
+  it("autonomous non-terminal transition stashes the cross-pass summary for the handoff", async () => {
+    orchestrator.active = makeActiveTask();
+    orchestrator.active.state.phase = "plan";
+    orchestrator.active.state.step = "llm_work";
+    orchestrator.active.state.mode = "autonomous";
+    orchestrator.active.state.reconciledPhase = "plan";
+    orchestrator.active.state.reviewApprovedClean = true;
+    orchestrator.active.state.reviewPassByKind = { plan: { auto: 2 } };
+    // plan phase reads plan-reviews/.
+    const rdir = join(orchestrator.active.dir, "plan-reviews");
+    mkdirSync(rdir, { recursive: true });
+    writeFileSync(join(rdir, "001_gpt_round-1.md"), "VERDICT: NEEDS_CHANGES\n## BLOCKERS: plan.md:3 gap", "utf-8");
+    writeFileSync(join(rdir, "001_gpt_round-2.md"), "VERDICT: APPROVE", "utf-8");
+    const transitionSpy = vi.fn(async () => ({ ok: true as const }));
+    orchestrator.transitionToNextPhase = transitionSpy;
+    registerOrchestratorToolsForTest(orchestrator);
+    const tool = getTool("pp_phase_complete");
+    await tool.execute("id", { summary: "s" }, undefined, undefined, ctxWithUi());
+    expect(transitionSpy).toHaveBeenCalled();
+    expect(orchestrator.active!.state.pendingCrossPassSummary).toContain("Cross-pass review summary (plan, 2 passes");
+    expect(orchestrator.active!.state.pendingCrossPassSummary).toContain("BLOCKERS: plan.md:3 gap");
+  });
+
+  it("manual stop-in-phase appends the cross-pass summary to the tool text", async () => {
+    orchestrator.active = makeActiveTask();
+    orchestrator.active.state.phase = "implement";
+    orchestrator.active.state.step = "llm_work";
+    orchestrator.active.state.reconciledPhase = "implement";
+    orchestrator.active.state.reviewApprovedClean = true;
+    orchestrator.active.state.reviewPassByKind = { implement: { auto: 2 } };
+    orchestrator.active.state.manualAutoReview = { phase: "implement", preset: "regular", maxPasses: 3, advanceOnComplete: false };
+    writeRounds(orchestrator.active.dir);
+    registerOrchestratorToolsForTest(orchestrator);
+    const tool = getTool("pp_phase_complete");
+    const result = await tool.execute("id", { summary: "s" }, undefined, undefined, ctxWithUi());
+    expect(result.content[0].text).toContain("Auto-review complete.");
+    expect(result.content[0].text).toContain("Cross-pass review summary (implement, 2 passes");
+  });
+
+  it("manual advance stashes the cross-pass summary for the transition handoff", async () => {
+    orchestrator.active = makeActiveTask();
+    orchestrator.active.state.phase = "implement";
+    orchestrator.active.state.step = "llm_work";
+    orchestrator.active.state.reconciledPhase = "implement";
+    orchestrator.active.state.reviewApprovedClean = true;
+    orchestrator.active.state.reviewPassByKind = { implement: { auto: 2 } };
+    orchestrator.active.state.manualAutoReview = { phase: "implement", preset: "regular", maxPasses: 3, advanceOnComplete: true, deferredAdvance: {} };
+    writeRounds(orchestrator.active.dir);
+    // Capture the stashed summary at transition time (transitionToNextPhase would
+    // otherwise consume/clear it in the real path — here it is spied).
+    let stashed: string | undefined;
+    orchestrator.transitionToNextPhase = vi.fn(async () => {
+      stashed = orchestrator.active!.state.pendingCrossPassSummary;
+      return { ok: true as const };
+    });
+    registerOrchestratorToolsForTest(orchestrator);
+    const tool = getTool("pp_phase_complete");
+    await tool.execute("id", { summary: "s" }, undefined, undefined, ctxWithUi());
+    expect(stashed).toContain("Cross-pass review summary (implement, 2 passes");
   });
 });
 
