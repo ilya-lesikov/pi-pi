@@ -4,6 +4,9 @@ import {
   effectiveCompactionParams,
   shouldFireCompaction,
   makeCompactionArmState,
+  compactionHeadroom,
+  adaptiveNextThreshold,
+  wouldThrash,
   CONTEXT_RESERVE_TOKENS,
 } from "./compaction-trigger.js";
 import type { CompactionConfig } from "./config.js";
@@ -12,6 +15,8 @@ const cfg = (over: Partial<CompactionConfig> = {}): CompactionConfig => ({
   enabled: true,
   fraction: 0.3,
   floorTokens: 250000,
+  headroomFraction: 0.12,
+  headroomFloorTokens: 40000,
   perModel: {},
   ...over,
 });
@@ -59,7 +64,7 @@ describe("effectiveCompactionParams", () => {
     expect(effectiveCompactionParams(c, "pp-flant-anthropic/claude-opus-4-8").fraction).toBe(0.25);
   });
   it("falls back to global defaults with no override", () => {
-    expect(effectiveCompactionParams(cfg(), "unknown/model")).toEqual({ fraction: 0.3, floorTokens: 250000 });
+    expect(effectiveCompactionParams(cfg(), "unknown/model")).toEqual({ fraction: 0.3, floorTokens: 250000, headroomFraction: 0.12, headroomFloorTokens: 40000 });
   });
 });
 
@@ -91,5 +96,57 @@ describe("shouldFireCompaction (hysteresis)", () => {
     // 295K is above the 270K re-arm band -> stays disarmed.
     expect(shouldFireCompaction(295_000, 300_000, state)).toBe(false);
     expect(state.armed).toBe(false);
+  });
+});
+
+describe("compactionHeadroom", () => {
+  it("uses the 12% fraction for large windows", () => {
+    expect(compactionHeadroom({ contextWindow: 1_000_000, config: cfg() })).toBe(120_000);
+    expect(compactionHeadroom({ contextWindow: 500_000, config: cfg() })).toBe(60_000);
+  });
+  it("floors at 40K for small windows where 12% is below the floor", () => {
+    expect(compactionHeadroom({ contextWindow: 333_333, config: cfg() })).toBe(40_000); // 12% ≈ 40K crossover
+    expect(compactionHeadroom({ contextWindow: 200_000, config: cfg() })).toBe(40_000); // 12% = 24K -> floored
+    expect(compactionHeadroom({ contextWindow: 128_000, config: cfg() })).toBe(40_000);
+  });
+  it("honors per-model headroom overrides", () => {
+    const c = cfg({ perModel: { "gpt-5.6-sol": { headroomFraction: 0.2, headroomFloorTokens: 10_000 } } });
+    expect(compactionHeadroom({ contextWindow: 500_000, modelId: "pp-flant-openai/gpt-5.6-sol", config: c })).toBe(100_000);
+  });
+});
+
+describe("adaptiveNextThreshold (worked tables from the design direction)", () => {
+  it("1M window: threshold climbs 300K -> 320K -> 360K -> 400K as the baseline grows", () => {
+    const input = { contextWindow: 1_000_000, config: cfg() }; // base 300K, headroom 120K
+    expect(adaptiveNextThreshold(input, 200_000)).toBe(320_000);
+    expect(adaptiveNextThreshold(input, 240_000)).toBe(360_000);
+    expect(adaptiveNextThreshold(input, 280_000)).toBe(400_000);
+  });
+
+  it("never drops below the fixed base threshold", () => {
+    const input = { contextWindow: 1_000_000, config: cfg() };
+    // A tiny baseline keeps the base 300K threshold (300K > 50K+120K).
+    expect(adaptiveNextThreshold(input, 50_000)).toBe(300_000);
+  });
+
+  it("200K window: pinned at the 168K ceiling until the baseline forces a thrash", () => {
+    const input = { contextWindow: 200_000, config: cfg() }; // base = ceiling = 168K, headroom 40K
+    expect(adaptiveNextThreshold(input, 110_000)).toBe(168_000); // 110K+40K=150K < base 168K -> 168K
+    expect(adaptiveNextThreshold(input, 125_000)).toBe(168_000); // 165K < 168K -> 168K
+    // baseline 135K: 135K+40K=175K > 168K ceiling -> clamped to ceiling (and thrash guard fires).
+    expect(adaptiveNextThreshold(input, 135_000)).toBe(168_000);
+  });
+});
+
+describe("wouldThrash (strict greater-than boundary)", () => {
+  const input = { contextWindow: 200_000, config: cfg() }; // ceiling 168K, headroom 40K
+  it("is false when baseline+headroom fits under the ceiling", () => {
+    expect(wouldThrash(input, 120_000)).toBe(false); // 160K < 168K
+  });
+  it("is false at EXACT equality (headroom fits exactly)", () => {
+    expect(wouldThrash(input, 128_000)).toBe(false); // 128K+40K = 168K == ceiling -> still valid
+  });
+  it("is true when baseline+headroom exceeds the ceiling", () => {
+    expect(wouldThrash(input, 135_000)).toBe(true); // 175K > 168K
   });
 });

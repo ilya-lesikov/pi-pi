@@ -59,9 +59,16 @@ export interface CompactionConfig {
   /** Floor in tokens: never trigger below this even if the fraction is smaller
    *  (default 250000 → 1M window ~300K, 500K window uses the 250K floor). */
   floorTokens: number;
+  /** Adaptive headroom as a fraction of the context window (default 0.12).
+   *  The adaptive next-threshold keeps at least max(headroomFloorTokens,
+   *  headroomFraction*window) of working room above the post-compaction size,
+   *  so triggers don't creep down as the baseline grows. */
+  headroomFraction: number;
+  /** Adaptive headroom floor in tokens (default 40000). */
+  headroomFloorTokens: number;
   /** Per-model overrides keyed by model id (bare or provider-prefixed). Each may
-   *  set any subset of { fraction, floorTokens }. */
-  perModel: Record<string, { fraction?: number; floorTokens?: number }>;
+   *  set any subset of { fraction, floorTokens, headroomFraction, headroomFloorTokens }. */
+  perModel: Record<string, { fraction?: number; floorTokens?: number; headroomFraction?: number; headroomFloorTokens?: number }>;
 }
 
 export interface PiPiConfig {
@@ -176,6 +183,8 @@ const DEFAULT_CONFIG: PiPiConfig = {
     enabled: true,
     fraction: 0.30,
     floorTokens: 250000,
+    headroomFraction: 0.12,
+    headroomFloorTokens: 40000,
     perModel: {},
   },
   agents: {
@@ -388,12 +397,16 @@ function validateCompaction(value: unknown): void {
   ensureBool(c.enabled, "config.compaction.enabled");
   ensureNumberInRange(c.fraction, "config.compaction.fraction", 0.01, 1);
   ensureNumberInRange(c.floorTokens, "config.compaction.floorTokens", 1000, 100_000_000);
+  ensureNumberInRange(c.headroomFraction, "config.compaction.headroomFraction", 0.01, 1);
+  ensureNumberInRange(c.headroomFloorTokens, "config.compaction.headroomFloorTokens", 1000, 100_000_000);
   if (c.perModel !== undefined) {
     const perModel = requireObject(c.perModel, "config.compaction.perModel");
     for (const [modelId, override] of Object.entries(perModel)) {
       const o = requireObject(override, `config.compaction.perModel.${modelId}`);
       ensureNumberInRange(o.fraction, `config.compaction.perModel.${modelId}.fraction`, 0.01, 1);
       ensureNumberInRange(o.floorTokens, `config.compaction.perModel.${modelId}.floorTokens`, 1000, 100_000_000);
+      ensureNumberInRange(o.headroomFraction, `config.compaction.perModel.${modelId}.headroomFraction`, 0.01, 1);
+      ensureNumberInRange(o.headroomFloorTokens, `config.compaction.perModel.${modelId}.headroomFloorTokens`, 1000, 100_000_000);
     }
   }
 }

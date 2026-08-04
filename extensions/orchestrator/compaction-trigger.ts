@@ -24,9 +24,11 @@ export interface ThresholdInput {
 export function effectiveCompactionParams(
   config: CompactionConfig,
   modelId: string | undefined,
-): { fraction: number; floorTokens: number } {
+): { fraction: number; floorTokens: number; headroomFraction: number; headroomFloorTokens: number } {
   let fraction = config.fraction;
   let floorTokens = config.floorTokens;
+  let headroomFraction = config.headroomFraction;
+  let headroomFloorTokens = config.headroomFloorTokens;
   if (modelId) {
     // Match either the exact spec or the bare id (drop provider prefix / sub/).
     const bare = modelId.includes("/") ? modelId.slice(modelId.lastIndexOf("/") + 1) : modelId;
@@ -34,9 +36,48 @@ export function effectiveCompactionParams(
     if (override) {
       if (typeof override.fraction === "number") fraction = override.fraction;
       if (typeof override.floorTokens === "number") floorTokens = override.floorTokens;
+      if (typeof override.headroomFraction === "number") headroomFraction = override.headroomFraction;
+      if (typeof override.headroomFloorTokens === "number") headroomFloorTokens = override.headroomFloorTokens;
     }
   }
-  return { fraction, floorTokens };
+  return { fraction, floorTokens, headroomFraction, headroomFloorTokens };
+}
+
+/**
+ * Adaptive headroom for a model: max(headroomFloorTokens, headroomFraction*window).
+ * Additive (not multiplicative) so the useful-work budget doesn't shrink as the
+ * post-compaction baseline grows.
+ */
+export function compactionHeadroom(input: ThresholdInput): number {
+  const { headroomFraction, headroomFloorTokens } = effectiveCompactionParams(input.config, input.modelId);
+  return Math.max(headroomFloorTokens, Math.floor(input.contextWindow * headroomFraction));
+}
+
+/**
+ * The adaptive next threshold after a proactive compaction left
+ * `postCompactionTokens` in context:
+ *   nextThreshold = min(window - RESERVE, max(baseThreshold, postCompactionTokens + headroom))
+ * so the trigger CLIMBS with the growing baseline (keeping a fixed working-room
+ * budget) but never exceeds the hard ceiling and never drops below the fixed
+ * base threshold.
+ */
+export function adaptiveNextThreshold(input: ThresholdInput, postCompactionTokens: number): number {
+  const base = compactionThresholdTokens(input);
+  const headroom = compactionHeadroom(input);
+  const ceiling = Math.max(1, input.contextWindow - CONTEXT_RESERVE_TOKENS);
+  return Math.min(ceiling, Math.max(base, postCompactionTokens + headroom));
+}
+
+/**
+ * Thrash guard: proactive compaction should be DISABLED when the post-compaction
+ * baseline plus the requested headroom cannot fit under the (window - RESERVE)
+ * ceiling. STRICT greater-than: at equality the full headroom fits exactly and
+ * the adaptive threshold is still valid, so equality does NOT disable.
+ */
+export function wouldThrash(input: ThresholdInput, postCompactionTokens: number): boolean {
+  const headroom = compactionHeadroom(input);
+  const ceiling = Math.max(1, input.contextWindow - CONTEXT_RESERVE_TOKENS);
+  return postCompactionTokens + headroom > ceiling;
 }
 
 /**

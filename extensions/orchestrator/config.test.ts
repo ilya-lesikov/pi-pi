@@ -130,7 +130,7 @@ describe("validateConfig", () => {
 
   it("defaults compaction to enabled 30%/250K and accepts a valid override", () => {
     const d = getDefaultConfig();
-    expect(d.compaction).toEqual({ enabled: true, fraction: 0.3, floorTokens: 250000, perModel: {} });
+    expect(d.compaction).toEqual({ enabled: true, fraction: 0.3, floorTokens: 250000, headroomFraction: 0.12, headroomFloorTokens: 40000, perModel: {} });
     expect(() =>
       validateConfig({ compaction: { enabled: false, fraction: 0.4, floorTokens: 300000, perModel: { "gpt-5.6-sol": { fraction: 0.5 } } } }),
     ).not.toThrow();
