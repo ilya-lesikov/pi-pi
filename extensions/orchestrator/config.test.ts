@@ -159,6 +159,16 @@ describe("validateConfig", () => {
     expect(() => validateConfig({ skills: { disabled: [1] } as any })).toThrow("config.skills.disabled");
   });
 
+  it("ships quick, regular and deep presets in every preset group", () => {
+    const groups = getDefaultConfig().agents.subagents.presetGroups as Record<string, any>;
+    for (const name of ["planners", "planReviewers", "codeReviewers", "brainstormReviewers"]) {
+      const g = groups[name];
+      expect(g, name).toBeDefined();
+      expect(g.default).toBe("regular");
+      expect(Object.keys(g.presets).sort()).toEqual(["deep", "quick", "regular"]);
+    }
+  });
+
   it("round-trips the compaction section through loadConfig deep-merge", () => {
     const merged = deepMerge(getDefaultConfig() as any, { compaction: { fraction: 0.25 } });
     expect(merged.compaction.fraction).toBe(0.25);

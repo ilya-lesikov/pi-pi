@@ -221,6 +221,23 @@ const DEFAULT_CONFIG: PiPiConfig = {
                 gemini: { enabled: false, model: "google/gemini-pro-latest", thinking: "high" },
               },
             },
+            deep: {
+              agents: {
+                fable: { enabled: true, model: "anthropic/claude-fable-latest", thinking: "xhigh" },
+                opus: { enabled: false, model: "anthropic/claude-opus-latest", thinking: "xhigh" },
+                gpt: { enabled: true, model: "openai/gpt-latest", thinking: "xhigh" },
+                gemini: { enabled: false, model: "google/gemini-pro-latest", thinking: "xhigh" },
+              },
+            },
+            // GPT-only lightweight planner roster.
+            quick: {
+              agents: {
+                fable: { enabled: false, model: "anthropic/claude-fable-latest", thinking: "high" },
+                opus: { enabled: false, model: "anthropic/claude-opus-latest", thinking: "high" },
+                gpt: { enabled: true, model: "openai/gpt-terra-latest", thinking: "high" },
+                gemini: { enabled: false, model: "google/gemini-pro-latest", thinking: "high" },
+              },
+            },
           },
         },
         codeReviewers: {
@@ -272,6 +289,15 @@ const DEFAULT_CONFIG: PiPiConfig = {
                 gemini: { enabled: false, model: "google/gemini-pro-latest", thinking: "xhigh" },
               },
             },
+            // GPT-only lightweight plan-review roster.
+            quick: {
+              agents: {
+                fable: { enabled: false, model: "anthropic/claude-fable-latest", thinking: "high" },
+                opus: { enabled: false, model: "anthropic/claude-opus-latest", thinking: "high" },
+                gpt: { enabled: true, model: "openai/gpt-terra-latest", thinking: "high" },
+                gemini: { enabled: false, model: "google/gemini-pro-latest", thinking: "high" },
+              },
+            },
           },
         },
         brainstormReviewers: {
@@ -291,6 +317,15 @@ const DEFAULT_CONFIG: PiPiConfig = {
                 opus: { enabled: false, model: "anthropic/claude-opus-latest", thinking: "xhigh" },
                 gpt: { enabled: true, model: "openai/gpt-latest", thinking: "xhigh" },
                 gemini: { enabled: false, model: "google/gemini-pro-latest", thinking: "xhigh" },
+              },
+            },
+            // GPT-only lightweight brainstorm-review roster.
+            quick: {
+              agents: {
+                fable: { enabled: false, model: "anthropic/claude-fable-latest", thinking: "high" },
+                opus: { enabled: false, model: "anthropic/claude-opus-latest", thinking: "high" },
+                gpt: { enabled: true, model: "openai/gpt-terra-latest", thinking: "high" },
+                gemini: { enabled: false, model: "google/gemini-pro-latest", thinking: "high" },
               },
             },
           },

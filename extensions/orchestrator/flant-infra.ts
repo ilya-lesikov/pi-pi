@@ -863,6 +863,23 @@ export function generateFlantConfig(models: string[], subscriptionActive = false
                 gemini: disabledByDefault(makeVariant(latestGeminiPro, fallback, sub)),
               },
             },
+            deep: {
+              agents: {
+                fable: makeVariantWithThinking(latestFable, fallback, "xhigh", sub),
+                opus: disabledByDefault(makeVariantWithThinking(latestOpus, fallback, "xhigh", sub)),
+                gpt: makeVariantWithThinking(gptSmartPro, fallback, "xhigh", sub),
+                gemini: disabledByDefault(makeVariantWithThinking(latestGeminiPro, fallback, "xhigh", sub)),
+              },
+            },
+            // GPT-only lightweight planner roster (balanced gpt-terra tier).
+            quick: {
+              agents: {
+                fable: disabledByDefault(makeVariant(latestFable, fallback, sub)),
+                opus: disabledByDefault(makeVariant(latestOpus, fallback, sub)),
+                gpt: makeVariant(gptBalanced, fallback, sub),
+                gemini: disabledByDefault(makeVariant(latestGeminiPro, fallback, sub)),
+              },
+            },
           }),
           planReviewers: buildPresetGroup({
             regular: {
@@ -879,6 +896,15 @@ export function generateFlantConfig(models: string[], subscriptionActive = false
                 opus: disabledByDefault(makeVariantWithThinking(latestOpus, fallback, "xhigh", sub)),
                 gpt: makeVariantWithThinking(gptSmartPro, fallback, "xhigh", sub),
                 gemini: disabledByDefault(makeVariantWithThinking(latestGeminiPro, fallback, "xhigh", sub)),
+              },
+            },
+            // GPT-only lightweight plan-review roster (balanced gpt-terra tier).
+            quick: {
+              agents: {
+                fable: disabledByDefault(makeVariant(latestFable, fallback, sub)),
+                opus: disabledByDefault(makeVariant(latestOpus, fallback, sub)),
+                gpt: makeVariant(gptBalanced, fallback, sub),
+                gemini: disabledByDefault(makeVariant(latestGeminiPro, fallback, sub)),
               },
             },
           }),
@@ -926,6 +952,15 @@ export function generateFlantConfig(models: string[], subscriptionActive = false
                 opus: disabledByDefault(makeVariantWithThinking(latestOpus, fallback, "xhigh", sub)),
                 gpt: makeVariantWithThinking(gptSmartPro, fallback, "xhigh", sub),
                 gemini: disabledByDefault(makeVariantWithThinking(latestGeminiPro, fallback, "xhigh", sub)),
+              },
+            },
+            // GPT-only lightweight brainstorm-review roster (balanced gpt-terra tier).
+            quick: {
+              agents: {
+                fable: disabledByDefault(makeVariant(latestFable, fallback, sub)),
+                opus: disabledByDefault(makeVariant(latestOpus, fallback, sub)),
+                gpt: makeVariant(gptBalanced, fallback, sub),
+                gemini: disabledByDefault(makeVariant(latestGeminiPro, fallback, sub)),
               },
             },
           }),

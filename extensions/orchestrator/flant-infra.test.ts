@@ -242,7 +242,7 @@ describe("flant-infra", () => {
     }
   });
 
-  it("adds a gpt-only 'quick' preset (gpt-terra) to codeReviewers only", async () => {
+  it("adds a gpt-only 'quick' preset (gpt-terra) to EVERY group and 'deep' to planners, with flant-mapped specs", async () => {
     const dir = makeTempDir();
     const mod = await loadFlantInfraModule(dir);
 
@@ -252,19 +252,31 @@ describe("flant-infra", () => {
     ) as any;
     const groups = config.agents.subagents.presetGroups;
 
-    // quick exists ONLY on codeReviewers.
-    expect(groups.codeReviewers.presets.quick).toBeDefined();
-    expect(groups.planners.presets.quick).toBeUndefined();
-    expect(groups.planReviewers.presets.quick).toBeUndefined();
-    expect(groups.brainstormReviewers.presets.quick).toBeUndefined();
+    // quick + regular + deep now exist in ALL four generated groups.
+    for (const g of ["planners", "planReviewers", "codeReviewers", "brainstormReviewers"] as const) {
+      expect(groups[g].presets.quick).toBeDefined();
+      expect(groups[g].presets.regular).toBeDefined();
+      expect(groups[g].presets.deep).toBeDefined();
+      // Regression for "quick leaks into a Flant session with default specs":
+      // the flant-generated quick roster must carry a flant-mapped (pp-flant-*)
+      // spec, never a bare DEFAULT_CONFIG model id.
+      expect(groups[g].presets.quick.agents.gpt.model).toMatch(/^pp-flant-openai\//);
+    }
 
-    // Roster: only gpt enabled, and it is the balanced gpt-terra tier.
-    const q = groups.codeReviewers.presets.quick.agents;
-    expect(q.gpt.enabled).toBe(true);
-    expect(q.gpt.model).toBe("pp-flant-openai/gpt-5.6-terra");
-    expect(q.fable.enabled).toBe(false);
-    expect(q.opus.enabled).toBe(false);
-    expect(q.gemini.enabled).toBe(false);
+    // Roster for each quick preset: only gpt enabled, balanced gpt-terra tier.
+    for (const g of ["planners", "planReviewers", "codeReviewers", "brainstormReviewers"] as const) {
+      const q = groups[g].presets.quick.agents;
+      expect(q.gpt.enabled).toBe(true);
+      expect(q.gpt.model).toBe("pp-flant-openai/gpt-5.6-terra");
+      expect(q.fable.enabled).toBe(false);
+      expect(q.opus.enabled).toBe(false);
+      expect(q.gemini.enabled).toBe(false);
+    }
+
+    // planners.deep mirrors the deep-review shape (gpt-sol-pro at xhigh).
+    expect(groups.planners.presets.deep.agents.gpt.model).toBe("pp-flant-openai/gpt-5.6-sol-pro");
+    expect(groups.planners.presets.deep.agents.gpt.thinking).toBe("xhigh");
+    expect(groups.planners.presets.deep.agents.fable.enabled).toBe(true);
 
     // Tier mapping for the high-effort pools/presets: advisors + deepDebuggers
     // + deep review presets get gpt-sol-pro; everyday reviewers get gpt-sol.
