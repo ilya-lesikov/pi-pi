@@ -4053,6 +4053,21 @@ function plannotatorFixBanner(repo: { path: string; isRoot: boolean }, feedback:
   );
 }
 
+// Batch variant: one instruction carrying every reviewed repo's feedback, each
+// section attributed to its repo so the model can tell them apart (repo paths
+// differ from cwd).
+function plannotatorBatchFixBanner(sections: Array<{ repo: { path: string; isRoot: boolean }; feedback: string }>): string {
+  const body = sections
+    .map(({ repo, feedback }) => `## ${formatRepoLabel(repo)}\n(${repo.path})\n\n${feedback}`)
+    .join("\n\n");
+  return advanceBanner(
+    `[PI-PI] Plannotator requested changes for ${sections.length} ${sections.length === 1 ? "repository" : "repositories"}.\n\n${body}\n\n` +
+    "Address the user's feedback for every repository above, attributing each item to the repository it " +
+    "came from. If the feedback contains questions, answer them. If it requests changes, make the changes. " +
+    "Then call pp_phase_complete when done.",
+  );
+}
+
 // Single-repo review keeps the streamlined behavior: review the one repo, and on
 // needs_changes return the fix instruction immediately (no picker). Multi-repo
 // review is user-directed via the status picker below.
@@ -4095,12 +4110,15 @@ async function runSingleRepoCursor(orchestrator: Orchestrator, ctx: any, repoPat
   }
 }
 
-// Multi-repo review is user-directed (#3): after each repo's review completes
-// (approved OR changes-requested) the loop does NOT auto-advance to the next repo
-// or auto-apply fixes. Instead a status picker lets the user explicitly pick the
-// next repo to review, start applying a changes-requested repo's fixes, or stop.
+// Multi-repo review accumulates (#3): reviewing a repo only RECORDS its feedback
+// and returns to the picker, so the user can go through every repo without the
+// agent starting work in between. Two explicit exits end the loop — Done batches
+// every accumulated repo's feedback into ONE handoff, Discard throws it all away.
+// ESC is neither: it leaves the cursor intact so an accidental keypress cannot
+// destroy the review work.
 async function runMultiRepoCursor(orchestrator: Orchestrator, ctx: any): Promise<string | null> {
   const task = orchestrator.active!;
+  const discardLabel = "Discard and exit without applying";
   while (task.state.plannotatorCursor) {
     const cur = task.state.plannotatorCursor;
     const status = cur.status ?? {};
@@ -4110,46 +4128,46 @@ async function runMultiRepoCursor(orchestrator: Orchestrator, ctx: any): Promise
       const repo = resolveRepo(orchestrator, repoPath);
       const st = status[repoPath];
       const label = st === "approved" ? "approved"
-        : st === "changes-requested" ? "changes requested — select to apply fixes"
-        : st === "fixes-applied" ? "fixes applied — select to re-review"
+        : st === "changes-requested" ? "changes requested — select to re-review"
         : "unreviewed — select to review";
       return opt(formatRepoLabel(repo), label);
     });
-    options.push(opt("Done (stop reviewing)", "Stop reviewing the remaining repositories"));
+    // Built inside the loop so the count re-renders as entries accumulate.
+    const pendingPaths = cur.repoPaths.filter((p) => typeof feedbackMap[p] === "string" && feedbackMap[p].length > 0);
+    const doneLabel = `Done — apply all feedback (${pendingPaths.length} ${pendingPaths.length === 1 ? "repo" : "repos"})`;
+    options.push(opt(doneLabel, "Stop reviewing and apply every repository's accumulated feedback in one batch"));
+    options.push(opt(discardLabel, "Stop reviewing and throw away all accumulated feedback"));
 
     const choice = await selectOption(ctx, "Plannotator review — pick a repository", options);
-    if (!choice || choice === "Done (stop reviewing)") {
+    // ESC: keep the cursor (and its accumulated feedback) so /pp re-offers the picker.
+    if (!choice) {
+      restoreMenuStepAfterReview(orchestrator, task);
+      saveTask(task.dir, task.state);
+      return null;
+    }
+    if (choice === discardLabel) {
       task.state.plannotatorCursor = undefined;
       restoreMenuStepAfterReview(orchestrator, task);
       saveTask(task.dir, task.state);
       return null;
+    }
+    if (choice === doneLabel) {
+      const sections = pendingPaths.map((p) => ({ repo: resolveRepo(orchestrator, p), feedback: feedbackMap[p] }));
+      task.state.plannotatorCursor = undefined;
+      if (sections.length === 0) {
+        restoreMenuStepAfterReview(orchestrator, task);
+        saveTask(task.dir, task.state);
+        return null;
+      }
+      setStep(orchestrator, "llm_work");
+      saveTask(task.dir, task.state);
+      return plannotatorBatchFixBanner(sections);
     }
 
     const repoPath = cur.repoPaths.find((p) => formatRepoLabel(resolveRepo(orchestrator, p)) === choice);
     if (!repoPath) continue;
     const repo = resolveRepo(orchestrator, repoPath);
 
-    // A changes-requested repo the user selects: hand off the fix instruction now
-    // (the user explicitly starts applying fixes). Clear its pending feedback and
-    // move it to "fixes-applied" so the picker next offers a re-review (reopening
-    // Plannotator) rather than repeating the fix handoff. The repo stays in the
-    // cursor so the user returns to the picker after the agent's turn.
-    if (status[repoPath] === "changes-requested") {
-      const feedback = feedbackMap[repoPath];
-      delete feedbackMap[repoPath];
-      cur.feedback = feedbackMap;
-      status[repoPath] = "fixes-applied";
-      cur.status = status;
-      setStep(orchestrator, "llm_work");
-      saveTask(task.dir, task.state);
-      return plannotatorFixBanner(
-        repo,
-        feedback,
-        "After you finish, run /pp to return to the Plannotator repository picker.",
-      );
-    }
-
-    // Otherwise (unreviewed or re-review of an approved repo): open Plannotator.
     const result = await reviewOneRepoInPlannotator(orchestrator, ctx, repo);
     if (!result) continue;
     if (result.status === "error") {
@@ -4159,13 +4177,15 @@ async function runMultiRepoCursor(orchestrator: Orchestrator, ctx: any): Promise
     cur.status = status;
     if (result.status === "needs_changes") {
       status[repoPath] = "changes-requested";
-      if (result.feedback) {
-        feedbackMap[repoPath] = result.feedback;
-        cur.feedback = feedbackMap;
-      }
-      ctx.ui.notify(`${formatRepoLabel(repo)}: CHANGES REQUESTED — select it again to apply fixes.`, "info");
+      feedbackMap[repoPath] = result.feedback ?? "";
+      cur.feedback = feedbackMap;
+      ctx.ui.notify(`${formatRepoLabel(repo)}: CHANGES REQUESTED — feedback saved, apply it all when you're done.`, "info");
     } else {
       status[repoPath] = "approved";
+      // Drop any feedback from an earlier round: the repo is approved now, so
+      // batching the stale request would re-ask for changes the user accepted.
+      delete feedbackMap[repoPath];
+      cur.feedback = feedbackMap;
       ctx.ui.notify(`${formatRepoLabel(repo)}: APPROVED`, "info");
     }
     saveTask(task.dir, task.state);

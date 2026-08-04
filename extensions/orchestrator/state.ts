@@ -89,8 +89,11 @@ export interface TaskState {
   // review; index is read only by the single-repo path (retained for
   // backward-compatible deserialization of older cursors). For multi-repo reviews
   // the user drives repo selection via a status picker; `status` records each
-  // repo's outcome (absent = unreviewed) and `feedback` holds pending
-  // changes-requested feedback not yet applied. Undefined = no active loop.
+  // repo's outcome (absent = unreviewed) and `feedback` accumulates every
+  // changes-requested repo's feedback until the user applies it all in one batch.
+  // Undefined = no active loop. `fixes-applied` is no longer written (the
+  // per-repo mid-loop fix handoff it marked is gone) but stays in the union so a
+  // cursor persisted by an older version still deserializes.
   plannotatorCursor?: {
     repoPaths: string[];
     index: number;
