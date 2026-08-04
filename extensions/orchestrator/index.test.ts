@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   registerExaTools: vi.fn(),
   registerAstSearchTool: vi.fn(),
   initFlantSync: vi.fn(),
+  migrateLegacyFlantSettings: vi.fn(),
   registerBillingHook: vi.fn(),
   suppressPierreThemeSpam: vi.fn(),
 }));
@@ -19,7 +20,7 @@ vi.mock("./cbm.js", () => ({ registerCbmTools: mocks.registerCbmTools }));
 vi.mock("./exa.js", () => ({ registerExaTools: mocks.registerExaTools }));
 vi.mock("./ast-search.js", () => ({ registerAstSearchTool: mocks.registerAstSearchTool }));
 vi.mock("./validate-artifacts.js", () => ({ validatePlan: vi.fn(), validateArtifact: vi.fn() }));
-vi.mock("./flant-infra.js", () => ({ initFlantSync: mocks.initFlantSync }));
+vi.mock("./flant-infra.js", () => ({ initFlantSync: mocks.initFlantSync, migrateLegacyFlantSettings: mocks.migrateLegacyFlantSettings }));
 vi.mock("./billing-spoof.js", () => ({ registerBillingHook: mocks.registerBillingHook }));
 vi.mock("./suppress-pierre-theme-spam.js", () => ({ suppressPierreThemeSpam: mocks.suppressPierreThemeSpam }));
 
@@ -50,6 +51,7 @@ describe("orchestrator extension entrypoint", () => {
     init(pi);
     expect(mocks.suppressPierreThemeSpam).toHaveBeenCalledTimes(1);
     expect(mocks.initFlantSync).toHaveBeenCalledWith(pi);
+    expect(mocks.migrateLegacyFlantSettings).toHaveBeenCalledTimes(1);
     expect(mocks.Orchestrator).toHaveBeenCalledTimes(1);
     expect(mocks.registerEventHandlers).toHaveBeenCalledTimes(1);
     expect(mocks.registerCommandHandlers).toHaveBeenCalledTimes(1);
@@ -63,6 +65,8 @@ describe("orchestrator extension entrypoint", () => {
     init(pi);
     expect((globalThis as any)[SUBAGENT_SESSION_KEY]).toEqual({ depth: 1 });
     expect(mocks.initFlantSync).toHaveBeenCalledWith(pi);
+    // Migration is root-only; the subagent branch must not touch config.
+    expect(mocks.migrateLegacyFlantSettings).not.toHaveBeenCalled();
     expect(mocks.registerCbmTools).toHaveBeenCalledTimes(1);
     expect(mocks.registerExaTools).toHaveBeenCalledWith(pi);
     expect(mocks.registerAstSearchTool).toHaveBeenCalledTimes(1);

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import lockfile from "proper-lockfile";
 import { refreshAnthropicToken } from "@earendil-works/pi-ai/oauth";
 import type { ExtensionAPI, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
-import { getDefaultConfig, type PiPiConfig } from "./config.js";
+import { getDefaultConfig, type PiPiConfig, readScopedFlantSettings, GLOBAL_CONFIG_PATH, writeConfigValue } from "./config.js";
 import { updateRegistryFromAvailableModels, setTierEnabled, isSubscriptionFallbackActive } from "./model-registry.js";
 import { compareModelVersion } from "./model-version.js";
 import { getLogger } from "./log.js";
@@ -291,25 +291,134 @@ function normalizeSettings(raw: unknown): FlantSettings {
   };
 }
 
-export function loadFlantSettings(): FlantSettings {
-  if (!existsSync(SETTINGS_PATH)) return { ...DEFAULT_SETTINGS };
+// Item 8: durable user policy now lives in scoped PiPiConfig (`flant` section);
+// only these regenerable fields remain in the cache file.
+export interface FlantCache {
+  lastUpdated: string | null;
+  cachedFlantModels: string[] | null;
+  cachedOpenRouterData: Record<string, OpenRouterModelData> | null;
+}
+
+const DURABLE_FLANT_KEYS = [
+  "enabled",
+  "subscription",
+  "switchBackIntervalMinutes",
+  "autoRateLimitFallback",
+  "copilotEnabled",
+  "autoUpdate",
+  "cacheTTLDays",
+] as const;
+
+function loadFlantCache(): FlantCache {
+  const empty: FlantCache = { lastUpdated: null, cachedFlantModels: null, cachedOpenRouterData: null };
+  if (!existsSync(SETTINGS_PATH)) return empty;
   try {
-    const raw = readFileSync(SETTINGS_PATH, "utf-8");
-    return normalizeSettings(JSON.parse(raw));
+    const value = JSON.parse(readFileSync(SETTINGS_PATH, "utf-8")) as Record<string, unknown>;
+    return {
+      lastUpdated: typeof value.lastUpdated === "string" ? value.lastUpdated : null,
+      cachedFlantModels: Array.isArray(value.cachedFlantModels)
+        ? value.cachedFlantModels.filter((m): m is string => typeof m === "string")
+        : null,
+      cachedOpenRouterData: value.cachedOpenRouterData && typeof value.cachedOpenRouterData === "object"
+        ? (value.cachedOpenRouterData as Record<string, OpenRouterModelData>)
+        : null,
+    };
   } catch {
-    return { ...DEFAULT_SETTINGS };
+    return empty;
   }
 }
 
-export function saveFlantSettings(settings: FlantSettings): void {
+function saveFlantCache(cache: FlantCache): void {
   ensureSettingsDir();
   if (!existsSync(SETTINGS_PATH)) writeFileSync(SETTINGS_PATH, "{}\n", "utf-8");
   const release = lockfile.lockSync(SETTINGS_PATH, { stale: 10000 });
   try {
-    writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2) + "\n", "utf-8");
+    const out: FlantCache = {
+      lastUpdated: cache.lastUpdated,
+      cachedFlantModels: cache.cachedFlantModels,
+      cachedOpenRouterData: cache.cachedOpenRouterData,
+    };
+    writeFileSync(SETTINGS_PATH, JSON.stringify(out, null, 2) + "\n", "utf-8");
   } finally {
     release();
   }
+}
+
+let migrationDone = false;
+
+// One-time migration (item 8): the legacy combined cache file mixed durable
+// user policy with cache. Copy each durable field that is an OWN-PROPERTY of
+// the RAW legacy JSON (so normalization-filled defaults are NOT migrated) into
+// the GLOBAL config scope, skipping any key GLOBAL already sets explicitly
+// (project scope is never consulted — writing global never overwrites an
+// explicit project value). Then rewrite the cache file with cache fields only.
+// Idempotent: after the rewrite no durable own-props remain, so re-runs no-op.
+export function migrateLegacyFlantSettings(globalConfigPath = GLOBAL_CONFIG_PATH): void {
+  if (migrationDone) return;
+  migrationDone = true;
+  if (!existsSync(SETTINGS_PATH)) return;
+  let raw: Record<string, unknown>;
+  try {
+    raw = JSON.parse(readFileSync(SETTINGS_PATH, "utf-8")) as Record<string, unknown>;
+  } catch {
+    return;
+  }
+  const hasDurableOwnProp = DURABLE_FLANT_KEYS.some((k) => Object.prototype.hasOwnProperty.call(raw, k));
+  if (!hasDurableOwnProp) return;
+
+  let globalRaw: Record<string, any> | null = null;
+  if (existsSync(globalConfigPath)) {
+    try {
+      globalRaw = JSON.parse(readFileSync(globalConfigPath, "utf-8")) as Record<string, any>;
+    } catch {
+      globalRaw = null;
+    }
+  }
+  const globalFlant = (globalRaw?.flant && typeof globalRaw.flant === "object") ? (globalRaw.flant as Record<string, unknown>) : {};
+
+  for (const key of DURABLE_FLANT_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(raw, key)) continue;
+    if (Object.prototype.hasOwnProperty.call(globalFlant, key)) continue;
+    // Normalize the single value through the settings normalizer so a legacy
+    // string/other type lands as the correct typed config value.
+    const normalized = normalizeSettings(raw) as unknown as Record<string, unknown>;
+    writeConfigValue(globalConfigPath, ["flant", key], normalized[key]);
+    getLogger().info({ s: "flant", key }, "migrated legacy flant setting into global config");
+  }
+
+  // Rewrite the cache file WITHOUT durable fields, only after the durable
+  // values above are safely persisted to global config.
+  saveFlantCache(loadFlantCache());
+}
+
+// Compose the runtime FlantSettings bundle from scoped config (durable policy)
+// + the reduced cache file. `cwd` binds project-scope overrides; omit it for
+// the side-effect-free global-only read used at init / in subagents.
+export function loadFlantSettings(cwd?: string): FlantSettings {
+  const durable = readScopedFlantSettings(cwd);
+  const cache = loadFlantCache();
+  return {
+    enabled: durable.enabled,
+    autoUpdate: durable.autoUpdate,
+    cacheTTLDays: durable.cacheTTLDays,
+    switchBackIntervalMinutes: durable.switchBackIntervalMinutes,
+    autoRateLimitFallback: durable.autoRateLimitFallback,
+    copilotEnabled: durable.copilotEnabled,
+    subscription: durable.subscription,
+    lastUpdated: cache.lastUpdated,
+    cachedFlantModels: cache.cachedFlantModels,
+    cachedOpenRouterData: cache.cachedOpenRouterData,
+  };
+}
+
+// Persist ONLY cache fields (item 8). Durable policy is written through the
+// scoped-config mechanism (applyConfigChange), never back to the cache file.
+export function saveFlantSettings(settings: FlantSettings): void {
+  saveFlantCache({
+    lastUpdated: settings.lastUpdated,
+    cachedFlantModels: settings.cachedFlantModels,
+    cachedOpenRouterData: settings.cachedOpenRouterData,
+  });
 }
 
 function toTitleCase(token: string): string {

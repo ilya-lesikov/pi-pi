@@ -349,11 +349,15 @@ describe("initFlantSync / initFlantOnStartup", () => {
 
   it("initFlantSync registers from cache when enabled", async () => {
     const dir = makeTempDir();
-    const cacheDir = join(dir, "extensions", "pp", "cache");
+    const cfgDir = join(dir, "extensions", "pp");
+    mkdirSync(cfgDir, { recursive: true });
+    // Durable `enabled` now lives in scoped config (item 8).
+    writeFileSync(join(cfgDir, "config.json"), JSON.stringify({ flant: { enabled: true } }), "utf-8");
+    const cacheDir = join(cfgDir, "cache");
     mkdirSync(cacheDir, { recursive: true });
     writeFileSync(
       join(cacheDir, "flant-models.json"),
-      JSON.stringify({ enabled: true, cachedFlantModels: ["claude-opus-4-8"], cachedOpenRouterData: {} }),
+      JSON.stringify({ cachedFlantModels: ["claude-opus-4-8"], cachedOpenRouterData: {} }),
       "utf-8",
     );
     const mod = await loadModule(dir);
@@ -372,13 +376,9 @@ describe("initFlantSync / initFlantOnStartup", () => {
 
   it("initFlantOnStartup skips update when autoUpdate is off", async () => {
     const dir = makeTempDir();
-    const cacheDir = join(dir, "extensions", "pp", "cache");
-    mkdirSync(cacheDir, { recursive: true });
-    writeFileSync(
-      join(cacheDir, "flant-models.json"),
-      JSON.stringify({ enabled: true, autoUpdate: false, subscription: false }),
-      "utf-8",
-    );
+    const cfgDir = join(dir, "extensions", "pp");
+    mkdirSync(cfgDir, { recursive: true });
+    writeFileSync(join(cfgDir, "config.json"), JSON.stringify({ flant: { enabled: true, autoUpdate: false, subscription: false } }), "utf-8");
     const mod = await loadModule(dir);
     const pi = makePi();
     await mod.initFlantOnStartup(pi);

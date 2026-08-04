@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import { tmpdir } from "os";
-import { deepMerge, getDefaultConfig, loadConfig, readRawConfig, removeConfigValue, resolvePreset, reviewPresetGroupForPhase, validateConfig, writeConfigValue } from "./config.js";
+import { deepMerge, getDefaultConfig, loadConfig, readRawConfig, readScopedFlantSettings, removeConfigValue, resolvePreset, reviewPresetGroupForPhase, validateConfig, writeConfigValue } from "./config.js";
 
 const tempDirs: string[] = [];
 
@@ -141,6 +141,22 @@ describe("validateConfig", () => {
     expect(() => validateConfig({ compaction: { floorTokens: 10 } })).toThrow("config.compaction.floorTokens");
   });
 
+  it("defaults the flant section to today's DEFAULT_SETTINGS and validates it", () => {
+    const d = getDefaultConfig();
+    expect(d.flant).toEqual({
+      enabled: false,
+      subscription: false,
+      switchBackIntervalMinutes: 10,
+      autoRateLimitFallback: true,
+      copilotEnabled: false,
+      autoUpdate: true,
+      cacheTTLDays: 7,
+    });
+    expect(() => validateConfig({ flant: { enabled: true, switchBackIntervalMinutes: 30 } })).not.toThrow();
+    expect(() => validateConfig({ flant: { switchBackIntervalMinutes: 0 } })).toThrow("config.flant.switchBackIntervalMinutes");
+    expect(() => validateConfig({ flant: { enabled: "yes" } })).toThrow("config.flant.enabled");
+  });
+
   it("defaults contextInjection with all six toggles on and validates toggles", () => {
     const d = getDefaultConfig();
     expect(d.contextInjection).toEqual({
@@ -201,6 +217,43 @@ describe("validateConfig", () => {
     for (const good of [1, 7, 1024]) {
       expect(() => validateConfig({ agents: { maxConcurrentSubagents: good } })).not.toThrow();
     }
+  });
+});
+
+describe("readScopedFlantSettings", () => {
+  it("returns defaults with no files and creates NO .pp directory", () => {
+    const cwd = makeTempDir();
+    const s = readScopedFlantSettings(cwd, "/nonexistent/global/config.json");
+    expect(s).toEqual(getDefaultConfig().flant);
+    expect(existsSync(join(cwd, ".pp"))).toBe(false);
+  });
+
+  it("folds global then project (project wins) without mkdir", () => {
+    const globalDir = makeTempDir();
+    const globalPath = join(globalDir, "global-config.json");
+    writeFileSync(globalPath, JSON.stringify({ flant: { enabled: true, switchBackIntervalMinutes: 30, subscription: true } }), "utf-8");
+
+    const cwd = makeTempDir();
+    // Global-only (no project file): global values resolve, no .pp created.
+    const globalOnly = readScopedFlantSettings(cwd, globalPath);
+    expect(globalOnly.enabled).toBe(true);
+    expect(globalOnly.switchBackIntervalMinutes).toBe(30);
+    expect(existsSync(join(cwd, ".pp"))).toBe(false);
+
+    // With an existing project file, project overrides global per-key.
+    const ppDir = join(cwd, ".pp");
+    mkdirSync(ppDir, { recursive: true });
+    writeFileSync(join(ppDir, "config.json"), JSON.stringify({ flant: { switchBackIntervalMinutes: 5 } }), "utf-8");
+    const merged = readScopedFlantSettings(cwd, globalPath);
+    expect(merged.enabled).toBe(true);
+    expect(merged.subscription).toBe(true);
+    expect(merged.switchBackIntervalMinutes).toBe(5);
+  });
+
+  it("reads a project file only if it already exists (never mkdirs)", () => {
+    const cwd = makeTempDir();
+    readScopedFlantSettings(cwd, "/nonexistent/global/config.json");
+    expect(existsSync(join(cwd, ".pp"))).toBe(false);
   });
 });
 

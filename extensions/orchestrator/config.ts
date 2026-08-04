@@ -98,6 +98,19 @@ export interface PiPiConfig {
     disabled: string[];
   };
   compaction: CompactionConfig;
+  // Durable Flant settings (item 8). These used to live in the regenerable
+  // model-metadata cache file (cache/flant-models.json); they are user policy
+  // and belong in scoped config. Only cachedFlantModels/cachedOpenRouterData/
+  // lastUpdated remain in the cache file.
+  flant: {
+    enabled: boolean;
+    subscription: boolean;
+    switchBackIntervalMinutes: number;
+    autoRateLimitFallback: boolean;
+    copilotEnabled: boolean;
+    autoUpdate: boolean;
+    cacheTTLDays: number;
+  };
   agents: {
     maxConcurrentSubagents: number;
     orchestrators: Record<OrchestratorRole, AgentConfig>;
@@ -186,6 +199,15 @@ const DEFAULT_CONFIG: PiPiConfig = {
     headroomFraction: 0.12,
     headroomFloorTokens: 40000,
     perModel: {},
+  },
+  flant: {
+    enabled: false,
+    subscription: false,
+    switchBackIntervalMinutes: 10,
+    autoRateLimitFallback: true,
+    copilotEnabled: false,
+    autoUpdate: true,
+    cacheTTLDays: 7,
   },
   agents: {
     maxConcurrentSubagents: 7,
@@ -418,6 +440,17 @@ function ensureDuration(value: unknown, path: string): void {
   }
 }
 
+function validateFlant(value: unknown): void {
+  const f = requireObject(value, "config.flant");
+  ensureBool(f.enabled, "config.flant.enabled");
+  ensureBool(f.subscription, "config.flant.subscription");
+  ensureBool(f.autoRateLimitFallback, "config.flant.autoRateLimitFallback");
+  ensureBool(f.copilotEnabled, "config.flant.copilotEnabled");
+  ensureBool(f.autoUpdate, "config.flant.autoUpdate");
+  ensureNumberInRange(f.switchBackIntervalMinutes, "config.flant.switchBackIntervalMinutes", 1, 1440);
+  ensureNumberInRange(f.cacheTTLDays, "config.flant.cacheTTLDays", 1, 365);
+}
+
 export function parseDuration(input: DurationValue): number | null {
   if (typeof input === "number") {
     if (!Number.isFinite(input) || input < 0) return null;
@@ -552,6 +585,7 @@ export function validateConfig(config: Record<string, any>): void {
   }
 
   if (config.compaction !== undefined) validateCompaction(config.compaction);
+  if (config.flant !== undefined) validateFlant(config.flant);
 
   if (config.agents !== undefined) {
     const agents = requireObject(config.agents, "config.agents");
@@ -876,6 +910,31 @@ export function mergeConfigLayers(
     "config merge complete",
   );
   return normalized;
+}
+
+export type FlantConfigSection = PiPiConfig["flant"];
+
+// Side-effect-free read of the scoped `flant` section (item 8). Unlike
+// loadConfig, this NEVER mkdirs: it reads the absolute global config JSON
+// always and <cwd>/.pp/config.json only if it already exists, then folds the
+// `flant` sections over the defaults (defaults -> global -> project). Used at
+// extension init and in subagents, where the real project cwd is not yet known
+// and creating a stray .pp in the launch dir must be avoided.
+export function readScopedFlantSettings(cwd?: string, globalConfigPath = GLOBAL_CONFIG_PATH): FlantConfigSection {
+  const result = { ...(getDefaultConfig().flant) };
+  const apply = (raw: Record<string, any> | null) => {
+    const f = raw?.flant;
+    if (f && typeof f === "object") {
+      validateFlant(f);
+      Object.assign(result, f);
+    }
+  };
+  apply(loadJsonFile(globalConfigPath));
+  if (cwd) {
+    const projectConfigPath = join(cwd, ".pp", "config.json");
+    if (existsSync(projectConfigPath)) apply(loadJsonFile(projectConfigPath));
+  }
+  return result;
 }
 
 export function resolvePreset(

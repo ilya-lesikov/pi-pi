@@ -8,7 +8,7 @@ import { registerCbmTools } from "./cbm.js";
 import { registerExaTools } from "./exa.js";
 import { registerAstSearchTool } from "./ast-search.js";
 import { validatePlan, validateArtifact } from "./validate-artifacts.js";
-import { initFlantSync } from "./flant-infra.js";
+import { initFlantSync, migrateLegacyFlantSettings } from "./flant-infra.js";
 import { registerBillingHook } from "./billing-spoof.js";
 import { suppressPierreThemeSpam } from "./suppress-pierre-theme-spam.js";
 
@@ -37,6 +37,9 @@ export default function (pi: ExtensionAPI) {
   (globalThis as any)[ORCHESTRATOR_KEY] = true;
   (globalThis as any)[ORCHESTRATOR_CWD_KEY] = process.cwd();
 
+  // One-time (root-only) migration of durable flant policy out of the legacy
+  // combined cache file into scoped config, before the first settings read.
+  migrateLegacyFlantSettings();
   initFlantSync(pi);
 
   const orchestrator = new Orchestrator(pi);

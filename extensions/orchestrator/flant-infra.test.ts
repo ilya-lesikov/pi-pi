@@ -17,6 +17,13 @@ function makeTempDir(): string {
   return dir;
 }
 
+// Item 8: durable flant policy now lives in scoped config, not the cache file.
+function writeGlobalFlantConfig(agentDir: string, flant: Record<string, unknown>) {
+  const cfgDir = join(agentDir, "extensions", "pp");
+  mkdirSync(cfgDir, { recursive: true });
+  writeFileSync(join(cfgDir, "config.json"), JSON.stringify({ flant }), "utf-8");
+}
+
 async function loadFlantInfraModule(agentDir: string) {
   process.env.PI_CODING_AGENT_DIR = agentDir;
   vi.resetModules();
@@ -542,9 +549,7 @@ describe("flant-infra", () => {
       JSON.stringify({ anthropic: { access: "sk-ant-oat01-test", expires: Date.now() + 3_600_000 } }),
       "utf-8",
     );
-    const settingsDir = join(dir, "extensions", "pp", "cache");
-    mkdirSync(settingsDir, { recursive: true });
-    writeFileSync(join(settingsDir, "flant-models.json"), JSON.stringify({ enabled: true, subscription: true }), "utf-8");
+    writeGlobalFlantConfig(dir, { enabled: true, subscription: true });
     const prevKey = process.env.LLM_API_KEY;
     process.env.LLM_API_KEY = "sk-gateway-test";
     try {
@@ -565,9 +570,7 @@ describe("flant-infra", () => {
       JSON.stringify({ anthropic: { access: "sk-ant-oat01-test", expires: Date.now() + 3_600_000 } }),
       "utf-8",
     );
-    const settingsDir = join(dir, "extensions", "pp", "cache");
-    mkdirSync(settingsDir, { recursive: true });
-    writeFileSync(join(settingsDir, "flant-models.json"), JSON.stringify({ enabled: true, subscription: true }), "utf-8");
+    writeGlobalFlantConfig(dir, { enabled: true, subscription: true });
     const prevKey = process.env.LLM_API_KEY;
     process.env.LLM_API_KEY = "sk-gateway-test";
     try {
@@ -672,18 +675,19 @@ describe("flant-infra", () => {
     });
   });
 
-  it("loadFlantSettings parses valid settings file", async () => {
+  it("loadFlantSettings composes durable config + cache fields", async () => {
     const dir = makeTempDir();
     const mod = await loadFlantInfraModule(dir);
-    const settingsDir = join(dir, "extensions", "pp", "cache");
-    const settingsPath = join(settingsDir, "flant-models.json");
+    // Durable policy lives in scoped config (item 8).
+    const cfgDir = join(dir, "extensions", "pp");
+    mkdirSync(cfgDir, { recursive: true });
+    writeFileSync(join(cfgDir, "config.json"), JSON.stringify({ flant: { enabled: true, autoUpdate: false, cacheTTLDays: 3 } }), "utf-8");
+    // Cache-only fields live in the cache file.
+    const settingsDir = join(cfgDir, "cache");
     mkdirSync(settingsDir, { recursive: true });
     writeFileSync(
-      settingsPath,
+      join(settingsDir, "flant-models.json"),
       JSON.stringify({
-        enabled: true,
-        autoUpdate: false,
-        cacheTTLDays: "3",
         lastUpdated: "2026-01-02T03:04:05.000Z",
         cachedFlantModels: ["gpt-5-4", 123, "claude-opus-4-6"],
         cachedOpenRouterData: {
@@ -721,11 +725,15 @@ describe("flant-infra", () => {
     });
   });
 
-  it("saveFlantSettings and loadFlantSettings round-trip", async () => {
+  it("saveFlantSettings writes ONLY cache fields; durable policy stays in config", async () => {
     const dir = makeTempDir();
     const mod = await loadFlantInfraModule(dir);
+    // Durable policy in scoped config.
+    const cfgDir = join(dir, "extensions", "pp");
+    mkdirSync(cfgDir, { recursive: true });
+    writeFileSync(join(cfgDir, "config.json"), JSON.stringify({ flant: { enabled: true, subscription: true, switchBackIntervalMinutes: 30, autoRateLimitFallback: false, copilotEnabled: true, autoUpdate: true, cacheTTLDays: 14 } }), "utf-8");
 
-    const settings = {
+    mod.saveFlantSettings({
       enabled: true,
       autoUpdate: true,
       cacheTTLDays: 14,
@@ -744,34 +752,125 @@ describe("flant-infra", () => {
           modality: "text",
         },
       },
-    };
+    });
 
-    mod.saveFlantSettings(settings);
+    // Cache file exists and holds ONLY cache fields (no durable policy).
+    const cachePath = join(cfgDir, "cache", "flant-models.json");
+    expect(existsSync(cachePath)).toBe(true);
+    const cacheRaw = JSON.parse(readFileSync(cachePath, "utf-8"));
+    expect(Object.keys(cacheRaw).sort()).toEqual(["cachedFlantModels", "cachedOpenRouterData", "lastUpdated"]);
 
+    // Durable fields are read back from config, cache fields from the cache file.
     const loaded = mod.loadFlantSettings();
-    expect(loaded).toEqual(settings);
-    expect(existsSync(join(dir, "extensions", "pp", "cache", "flant-models.json"))).toBe(true);
+    expect(loaded.subscription).toBe(true);
+    expect(loaded.switchBackIntervalMinutes).toBe(30);
+    expect(loaded.copilotEnabled).toBe(true);
+    expect(loaded.lastUpdated).toBe("2026-02-01T00:00:00.000Z");
+    expect(loaded.cachedFlantModels).toEqual(["claude-opus-4-6", "gpt-5-4"]);
   });
 
-  it("normalizes switchBackIntervalMinutes: default when missing, parsed, floored to >=1", async () => {
+  it("wiping the cache file does not change any durable setting", async () => {
     const dir = makeTempDir();
     const mod = await loadFlantInfraModule(dir);
-    const settingsDir = join(dir, "extensions", "pp", "cache");
-    const settingsPath = join(settingsDir, "flant-models.json");
-    mkdirSync(settingsDir, { recursive: true });
+    const cfgDir = join(dir, "extensions", "pp");
+    mkdirSync(cfgDir, { recursive: true });
+    writeFileSync(join(cfgDir, "config.json"), JSON.stringify({ flant: { enabled: true, subscription: true, switchBackIntervalMinutes: 30 } }), "utf-8");
+    const cacheDir = join(cfgDir, "cache");
+    mkdirSync(cacheDir, { recursive: true });
+    writeFileSync(join(cacheDir, "flant-models.json"), JSON.stringify({ cachedFlantModels: ["gpt-5-4"] }), "utf-8");
 
-    // Missing -> default 10.
-    writeFileSync(settingsPath, JSON.stringify({ enabled: true }), "utf-8");
+    rmSync(join(cacheDir, "flant-models.json"), { force: true });
+    const loaded = mod.loadFlantSettings();
+    expect(loaded.enabled).toBe(true);
+    expect(loaded.subscription).toBe(true);
+    expect(loaded.switchBackIntervalMinutes).toBe(30);
+    expect(loaded.cachedFlantModels).toBeNull();
+  });
+
+  it("switchBackIntervalMinutes comes from scoped config; defaults to 10 when unset", async () => {
+    const dir = makeTempDir();
+    const mod = await loadFlantInfraModule(dir);
+    const cfgDir = join(dir, "extensions", "pp");
+    mkdirSync(cfgDir, { recursive: true });
+    const cfgPath = join(cfgDir, "config.json");
+
+    // Unset -> default 10.
+    writeFileSync(cfgPath, JSON.stringify({ flant: { enabled: true } }), "utf-8");
     expect(mod.loadFlantSettings().switchBackIntervalMinutes).toBe(10);
 
-    // String numeric -> parsed and rounded.
-    writeFileSync(settingsPath, JSON.stringify({ enabled: true, switchBackIntervalMinutes: "45" }), "utf-8");
+    // Explicit value honored.
+    writeFileSync(cfgPath, JSON.stringify({ flant: { enabled: true, switchBackIntervalMinutes: 45 } }), "utf-8");
     expect(mod.loadFlantSettings().switchBackIntervalMinutes).toBe(45);
+  });
 
-    // Invalid / <1 -> floored to 1.
-    writeFileSync(settingsPath, JSON.stringify({ enabled: true, switchBackIntervalMinutes: 0 }), "utf-8");
-    expect(mod.loadFlantSettings().switchBackIntervalMinutes).toBe(1);
-    writeFileSync(settingsPath, JSON.stringify({ enabled: true, switchBackIntervalMinutes: "nonsense" }), "utf-8");
-    expect(mod.loadFlantSettings().switchBackIntervalMinutes).toBe(10);
+  describe("legacy flant-settings migration (item 8)", () => {
+    function writeLegacyCache(dir: string, obj: Record<string, unknown>) {
+      const cacheDir = join(dir, "extensions", "pp", "cache");
+      mkdirSync(cacheDir, { recursive: true });
+      writeFileSync(join(cacheDir, "flant-models.json"), JSON.stringify(obj), "utf-8");
+    }
+    function readGlobalFlant(dir: string): Record<string, unknown> {
+      const p = join(dir, "extensions", "pp", "config.json");
+      return existsSync(p) ? (JSON.parse(readFileSync(p, "utf-8")).flant ?? {}) : {};
+    }
+
+    it("preserves a legacy switchBackIntervalMinutes: 30 into global config, and strips it from cache", async () => {
+      const dir = makeTempDir();
+      const mod = await loadFlantInfraModule(dir);
+      writeLegacyCache(dir, { enabled: true, subscription: true, switchBackIntervalMinutes: 30, cachedFlantModels: ["gpt-5-4"] });
+
+      mod.migrateLegacyFlantSettings();
+
+      expect(readGlobalFlant(dir)).toMatchObject({ enabled: true, subscription: true, switchBackIntervalMinutes: 30 });
+      // Cache file no longer holds durable fields, but keeps cache data.
+      const cacheRaw = JSON.parse(readFileSync(join(dir, "extensions", "pp", "cache", "flant-models.json"), "utf-8"));
+      expect(cacheRaw).not.toHaveProperty("switchBackIntervalMinutes");
+      expect(cacheRaw.cachedFlantModels).toEqual(["gpt-5-4"]);
+      expect(mod.loadFlantSettings().switchBackIntervalMinutes).toBe(30);
+    });
+
+    it("skips a key already set explicitly in global config", async () => {
+      const dir = makeTempDir();
+      const mod = await loadFlantInfraModule(dir);
+      const cfgDir = join(dir, "extensions", "pp");
+      mkdirSync(cfgDir, { recursive: true });
+      writeFileSync(join(cfgDir, "config.json"), JSON.stringify({ flant: { switchBackIntervalMinutes: 15 } }), "utf-8");
+      writeLegacyCache(dir, { switchBackIntervalMinutes: 30 });
+
+      mod.migrateLegacyFlantSettings();
+      expect(readGlobalFlant(dir)).toMatchObject({ switchBackIntervalMinutes: 15 });
+    });
+
+    it("does not migrate normalization-filled defaults (only raw own-props)", async () => {
+      const dir = makeTempDir();
+      const mod = await loadFlantInfraModule(dir);
+      writeLegacyCache(dir, { subscription: true });
+
+      mod.migrateLegacyFlantSettings();
+      const g = readGlobalFlant(dir);
+      expect(g).toMatchObject({ subscription: true });
+      expect(g).not.toHaveProperty("switchBackIntervalMinutes");
+      expect(g).not.toHaveProperty("autoUpdate");
+    });
+
+    it("is idempotent (a second run makes no further change)", async () => {
+      const dir = makeTempDir();
+      const mod = await loadFlantInfraModule(dir);
+      writeLegacyCache(dir, { switchBackIntervalMinutes: 30 });
+      mod.migrateLegacyFlantSettings();
+      const afterFirst = JSON.stringify(readGlobalFlant(dir));
+      // Re-import to reset the module-level once-guard, then re-run: the cache
+      // no longer has durable own-props, so nothing new is migrated.
+      const mod2 = await loadFlantInfraModule(dir);
+      mod2.migrateLegacyFlantSettings();
+      expect(JSON.stringify(readGlobalFlant(dir))).toBe(afterFirst);
+    });
+
+    it("no-ops on a missing legacy file", async () => {
+      const dir = makeTempDir();
+      const mod = await loadFlantInfraModule(dir);
+      expect(() => mod.migrateLegacyFlantSettings()).not.toThrow();
+      expect(existsSync(join(dir, "extensions", "pp", "config.json"))).toBe(false);
+    });
   });
 });
