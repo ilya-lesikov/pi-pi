@@ -1115,6 +1115,18 @@ function registerRepoTool(orchestrator: Orchestrator): void {
   });
 }
 
+const BREAKING_SUBJECT_RE = /^(fix|feat|chore|refactor|docs|test|perf|build|ci|style)(\([^)]*\))?!:/;
+const BREAKING_TRAILER_RE = /^(BREAKING CHANGE|BREAKING-CHANGE):/;
+
+function stripBreakingChangeMarkers(message: string): string {
+  const lines = message.split("\n");
+  if (lines.length > 0) {
+    lines[0] = lines[0].replace(BREAKING_SUBJECT_RE, (_m, type: string, scope?: string) => `${type}${scope ?? ""}:`);
+  }
+  const kept = lines.filter((line, index) => index === 0 || !BREAKING_TRAILER_RE.test(line.trim()));
+  return kept.join("\n").replace(/\n+$/, "");
+}
+
 function registerCommitTool(orchestrator: Orchestrator): void {
   const pi = orchestrator.pi;
 
@@ -1173,7 +1185,7 @@ function registerCommitTool(orchestrator: Orchestrator): void {
       if (files.length === 0) {
         return { content: [{ type: "text" as const, text: "No modified files to commit." }], details: {} };
       }
-      const result = autoCommit(files, params.message, commitRepoPath);
+      const result = autoCommit(files, stripBreakingChangeMarkers(params.message), commitRepoPath);
       if (result.ok) {
         const remaining = [...orchestrator.active.modifiedFiles].filter((file) => {
           const absoluteFile = resolve(orchestrator.cwd, file);

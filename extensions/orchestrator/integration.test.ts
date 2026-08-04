@@ -3190,6 +3190,57 @@ describe("modified file tracking", () => {
     expect(result.content[0].text).toContain("Committed 1 file");
     expect(autoCommitSpy).toHaveBeenCalledWith(["src/new.ts"], "rename file", cwd);
   });
+
+  describe("breaking-change marker stripping", () => {
+    async function commitWithMessage(message: string): Promise<string> {
+      const cwd = makeTempDir();
+      const { pi, orchestrator } = await setupOrchestrator(cwd);
+      const autoCommitSpy = vi.spyOn(commandsModule, "autoCommit").mockReturnValue({ ok: true, commitHash: "abc123" });
+
+      await orchestrator.startTask(makeCtx() as any, "implement", "commit marker strip");
+      orchestrator.config = {
+        ...orchestrator.config,
+        general: { ...orchestrator.config.general, autoCommit: true },
+      } as any;
+      orchestrator.active!.state.phase = "implement";
+      orchestrator.active!.state.repos = [{ path: cwd, isRoot: true }];
+      saveTask(orchestrator.active!.dir, orchestrator.active!.state);
+
+      pi.exec.mockResolvedValueOnce({ code: 0, stdout: " M src/a.ts\n", stderr: "" });
+
+      const ppCommit = getTool(pi, "pp_commit");
+      await ppCommit.execute("call-strip", { message });
+      return autoCommitSpy.mock.calls.at(-1)![1] as string;
+    }
+
+    it("strips ! from every conventional type, scoped and unscoped", async () => {
+      for (const type of ["fix", "feat", "chore", "refactor", "docs", "test", "perf", "build", "ci", "style"]) {
+        expect(await commitWithMessage(`${type}!: subject text`)).toBe(`${type}: subject text`);
+        expect(await commitWithMessage(`${type}(scope)!: subject text`)).toBe(`${type}(scope): subject text`);
+      }
+    });
+
+    it("removes BREAKING CHANGE and BREAKING-CHANGE trailer lines", async () => {
+      expect(await commitWithMessage("feat!: thing\n\nBody para.\n\nBREAKING CHANGE: it breaks")).toBe(
+        "feat: thing\n\nBody para.",
+      );
+      expect(await commitWithMessage("feat: thing\n\nBREAKING-CHANGE: it breaks")).toBe("feat: thing");
+    });
+
+    it("leaves a non-breaking message byte-identical and never truncates the body", async () => {
+      const body = ["p1 line1", "p1 line2", "", "p2", "", "p3", "", "p4 not truncated"].join("\n");
+      const message = `feat: subject\n\n${body}`;
+      expect(await commitWithMessage(message)).toBe(message);
+    });
+
+    it("does not strip a ! that is not a breaking-change marker", async () => {
+      expect(await commitWithMessage("fix: it works!")).toBe("fix: it works!");
+      expect(await commitWithMessage("wip!: unknown type")).toBe("wip!: unknown type");
+      expect(await commitWithMessage("feat: keep BREAKING CHANGE: inline in body text")).toBe(
+        "feat: keep BREAKING CHANGE: inline in body text",
+      );
+    });
+  });
 });
 
 describe("resume and recovery", () => {
