@@ -581,6 +581,23 @@ describe("registered handler branches", () => {
     expect(errCall[0].content).toContain("model/API error");
   });
 
+  it("does NOT abort siblings when one agent exhausted its empty-turn retries", () => {
+    orchestrator.active = makeActiveTask();
+    orchestrator.spawnedAgentIds.add("agent-1");
+    orchestrator.spawnedAgentIds.add("agent-2");
+    const abortSpy = vi.spyOn(orchestrator, "abortAllSubagents");
+    // An all-empty agent now fails with status "error" and 0 tool uses, which is
+    // the API-error signature. But this fault is per-request and transient, so
+    // killing a healthy batch over it is exactly what the retry exists to avoid.
+    getEventHandler("subagents:failed")({
+      id: "agent-1",
+      status: "error",
+      toolUses: 0,
+      error: "Agent produced no output after 3 attempts (18432 tokens spent). The model returned a successful but empty response each time — no text and no tool calls.",
+    }, {});
+    expect(abortSpy).not.toHaveBeenCalled();
+  });
+
   it("supplies the transition summary during controller-initiated compaction", async () => {
     orchestrator.active = makeActiveTask();
     orchestrator.lastCtx = { isIdle: () => false } as any;

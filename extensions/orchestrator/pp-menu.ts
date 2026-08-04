@@ -4178,8 +4178,12 @@ async function runMultiRepoCursor(orchestrator: Orchestrator, ctx: any): Promise
     cur.status = status;
     if (result.status === "needs_changes") {
       status[repoPath] = "changes-requested";
-      feedbackMap[repoPath] = result.feedback ?? "";
-      cur.feedback = feedbackMap;
+      // Keep whatever was stored earlier when a re-review returns no feedback
+      // text: overwriting with "" would silently destroy the user's own words.
+      if (result.feedback) {
+        feedbackMap[repoPath] = result.feedback;
+        cur.feedback = feedbackMap;
+      }
       ctx.ui.notify(`${formatRepoLabel(repo)}: CHANGES REQUESTED — feedback saved, apply it all when you're done.`, "info");
     } else {
       status[repoPath] = "approved";
@@ -4470,11 +4474,11 @@ export async function showActiveTaskMenu(
     if (task.type === "quick") {
       return showQuickTaskMenu(orchestrator, ctx, summary, mode);
     }
-    // Auto-resume an in-progress per-repo Plannotator review (#3a): if the agent
-    // just finished fixing one repo's feedback and ran /pp, continue the loop at
-    // the next repo instead of showing the top-level menu. On another
-    // needs_changes this returns a fresh work instruction; when exhausted it
-    // clears the cursor and falls through to the normal menu.
+    // Auto-resume an in-progress Plannotator review (#3a): re-offer the repo
+    // picker instead of the top-level menu, so a review interrupted by ESC (or a
+    // /pp mid-review) resumes with its accumulated feedback intact. Returns a
+    // work instruction when the user applies feedback; on either explicit exit
+    // the cursor is cleared and this falls through to the normal menu.
     if (task.state.plannotatorCursor) {
       const resumeText = await runPlannotatorCursor(orchestrator, ctx);
       if (resumeText) return resumeText;

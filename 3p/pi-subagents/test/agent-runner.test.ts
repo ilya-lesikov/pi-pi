@@ -1409,6 +1409,17 @@ describe("agent-runner empty-turn retry", () => {
     expect(result.responseText).toBe("FINAL");
   });
 
+  it("does not mistake a PRIOR run's answer for the current empty turn on resume", async () => {
+    // A resumed session ALWAYS carries the previous run's final answer — that is
+    // why the record was resumable. A whole-history fallback would return that
+    // stale text as fresh output, so neither the retry nor the failure fires.
+    const session = createRetrySession([[]]);
+    session.messages.push({ role: "assistant", content: text("STALE ANSWER FROM PRIOR RUN") });
+
+    await expect(resumeAgent(session, "continue")).rejects.toThrow(/3 attempts/);
+    expect(session.prompt).toHaveBeenCalledTimes(3);
+  });
+
   it("retries an empty resume turn and fails loudly when it stays empty", async () => {
     const ok = createRetrySession([[], text("RESUMED")]);
     await expect(resumeAgent(ok, "continue")).resolves.toBe("RESUMED");

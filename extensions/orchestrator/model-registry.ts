@@ -388,14 +388,16 @@ function specForTier(tier: ProviderTierName, family: Family, bareId: string): st
   }
 }
 
-// Given a resolved spec, return it on the highest still-usable tier AT OR BELOW
-// its current tier (DEMOTE-ONLY), never emitting an id that isn't a real
-// registered model. Role specs are generated already pointing at their tier;
-// the resolver's job is to drop DOWN when the current tier is disabled
-// (settings) or demoted (a live rate-limit) — never to promote a spec upward
-// (which would e.g. reroute a paid flant-api spec onto the subscription, or
-// auto-prefer copilot, a routing policy deferred pending catalog-aware id
-// mapping since copilot's ids differ from flant's and it lacks gpt entirely).
+// Given a resolved spec, return it on a still-usable tier, never emitting an id
+// that isn't a real registered model. Role specs are generated already pointing
+// at their tier; the resolver's job is to drop DOWN when the current tier is
+// disabled (settings) or demoted (a live rate-limit). The ONE upward move is a
+// flant-api-born spec rising to copilot (flat-rate, so strictly cheaper) when
+// copilot has a real model for the family — see the promotion block below. A
+// sub-born spec is never rerouted upward, because flant-sub already outranks
+// copilot, and a paid flant-api spec is never promoted onto the subscription
+// (that would bypass the config generator's per-model `sub/<id>` eligibility
+// decision and could silently change the model version).
 //
 // Catalog-safety: for the copilot tier, whose catalog uses DIFFERENT ids than
 // flant, a rewrite is only performed to a REAL registered copilot model for the

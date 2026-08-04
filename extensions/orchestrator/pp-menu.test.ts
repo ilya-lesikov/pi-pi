@@ -566,6 +566,36 @@ describe("showActiveTaskMenu Publish/Next Back navigation (#6)", () => {
     expect(orchestrator.active.state.plannotatorCursor?.feedback?.["/repo/a"]).toBe("tighten it");
   });
 
+  it("multi-repo re-review with empty feedback keeps the previously stored feedback (#3)", async () => {
+    const orchestrator = makeCursorOrchestrator();
+    // Plannotator can return needs_changes with no feedback text. Overwriting
+    // with "" would destroy what the user already wrote, which is the same
+    // footgun as treating ESC like Discard.
+    plannotatorResults.push({ approved: false, feedback: "keep me" });
+    plannotatorResults.push({ approved: false, feedback: "" });
+    askQueue.push(
+      "/repo/a (root)", "Uncommitted changes",
+      "/repo/a (root)", "Uncommitted changes",
+      "Done — apply all feedback (1 repo)",
+    );
+    const result = await showActiveTaskMenu(orchestrator, ctx, "/pp", "tool");
+    expect(result).toContain("keep me");
+  });
+
+  it("multi-repo a first review with no feedback text is not counted or batched (#3)", async () => {
+    const orchestrator = makeCursorOrchestrator();
+    // needs_changes with no text and nothing stored earlier: there is genuinely
+    // nothing to apply, so Done must exit rather than emit an empty handoff.
+    plannotatorResults.push({ approved: false, feedback: "" });
+    askQueue.push(
+      "/repo/a (root)", "Uncommitted changes",
+      "Done — apply all feedback (0 repos)", "Back to prompt",
+    );
+    const result = await showActiveTaskMenu(orchestrator, ctx, "/pp", "tool");
+    expect(result).toBe("");
+    expect(orchestrator.active.state.plannotatorCursor).toBeUndefined();
+  });
+
   it("multi-repo tolerates a legacy fixes-applied cursor persisted before the batch flow (#3)", async () => {
     const orchestrator = makeCursorOrchestrator();
     // A cursor written by the OLD per-repo handoff code, resumed after upgrade:

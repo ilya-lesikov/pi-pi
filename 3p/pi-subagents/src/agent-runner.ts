@@ -278,6 +278,13 @@ const EMPTY_TURN_ATTEMPTS = 3;
 const EMPTY_TURN_NUDGE = "Your last turn produced no output. Provide your final answer now.";
 
 /**
+ * Message prefix consumers match to distinguish an exhausted empty-turn retry
+ * from a genuine model/API error. The class name does not survive the RPC
+ * boundary (only `error` as a string does), so the prefix is the contract.
+ */
+export const EMPTY_RESPONSE_ERROR_PREFIX = "Agent produced no output";
+
+/**
  * Thrown when every attempt came back empty. The manager's existing `.catch`
  * maps a thrown error to `status: "error"` + `record.error`, so the failure
  * renders through the error path instead of looking like a successful run with
@@ -288,12 +295,13 @@ const EMPTY_TURN_NUDGE = "Your last turn produced no output. Provide your final 
 export class EmptyResponseError extends Error {
   constructor(attempts: number, tokensSpent: number) {
     super(
-      `Agent produced no output after ${attempts} attempts (${tokensSpent} tokens spent). ` +
+      `${EMPTY_RESPONSE_ERROR_PREFIX} after ${attempts} attempts (${tokensSpent} tokens spent). ` +
       "The model returned a successful but empty response each time — no text and no tool calls.",
     );
     this.name = "EmptyResponseError";
   }
 }
+
 
 /**
  * Prompt a session, retrying while the terminal turn comes back empty.
@@ -318,12 +326,17 @@ async function promptWithEmptyRetry(
   try {
     for (let attempt = 1; attempt <= EMPTY_TURN_ATTEMPTS; attempt++) {
       const collector = collectResponseText(session);
+      // Only messages appended by THIS attempt can answer it. A resumed session
+      // already holds the previous run's answer, and an earlier turn may have
+      // emitted interim narration before its tool calls — scanning the whole
+      // history would return that stale text and silently defeat the retry.
+      const historyBefore = session.messages.length;
       try {
         await session.prompt(attempt === 1 ? prompt : EMPTY_TURN_NUDGE);
       } finally {
         collector.unsubscribe();
       }
-      const text = collector.getText().trim() || getLastAssistantText(session);
+      const text = collector.getText().trim() || getLastAssistantText(session, historyBefore);
       if (text) return text;
       if (isStopped()) return "";
     }
@@ -333,9 +346,12 @@ async function promptWithEmptyRetry(
   }
 }
 
-/** Get the last assistant text from the completed session history. */
-function getLastAssistantText(session: AgentSession): string {
-  for (let i = session.messages.length - 1; i >= 0; i--) {
+/**
+ * Get the last assistant text from the session history, optionally limited to
+ * messages appended at or after `fromIndex` (one turn's worth).
+ */
+function getLastAssistantText(session: AgentSession, fromIndex = 0): string {
+  for (let i = session.messages.length - 1; i >= fromIndex; i--) {
     const msg = session.messages[i];
     if (msg.role !== "assistant") continue;
     const text = extractText(msg.content).trim();

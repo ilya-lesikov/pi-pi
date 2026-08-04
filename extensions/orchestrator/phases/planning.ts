@@ -43,7 +43,7 @@ export function planningSystemPrompt(taskDir: string, mode: TaskMode): string {
     "",
     "# Your job (in this order):",
     "1. Wait for the notification that says 'All planners completed' — do NOT proceed before this",
-    `2. Read the COMPLETE planner outputs from ${plansDir}/ — a file whose content is only \`PLAN_STATUS: INCOMPLETE\`, or that lacks a trailing \`PLAN_STATUS: COMPLETE\` line, is an unfinished planner and must be treated as a gap, NOT as an input`,
+    `2. Read the COMPLETE planner outputs from ${plansDir}/ — a file marked \`PLAN_STATUS: INCOMPLETE\` is an unfinished planner and must be treated as a gap, NOT as an input (an older plan carrying no PLAN_STATUS marker at all is a complete legacy plan — use it)`,
     "3. USER_REQUEST.md and RESEARCH.md are already provided in your context above — do NOT re-read them from disk",
     `4. Synthesize all plans into a single plan at ${plansDir}/<timestamp>_synthesized.md`,
     "5. Treat as LOCKED PREDICATES (do not re-litigate): the user's explicit constraints, chosen language/framework, and scope from USER_REQUEST.md. Discard any planner suggestion that violates them.",

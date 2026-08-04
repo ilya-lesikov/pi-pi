@@ -2355,7 +2355,13 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       return;
     }
 
-    const isApiError = data.status === "error" && (data.toolUses ?? 0) === 0;
+    // An agent that exhausted its empty-turn retries also fails with 0 tool uses,
+    // but that fault is per-request and transient — aborting every sibling over it
+    // would defeat the retry that absorbs it. Matched by message because only the
+    // error STRING crosses the subagent RPC boundary; the prefix is defined by
+    // EMPTY_RESPONSE_ERROR_PREFIX in 3p/pi-subagents/src/agent-runner.ts.
+    const emptyResponseFailure = typeof data.error === "string" && data.error.startsWith("Agent produced no output");
+    const isApiError = data.status === "error" && (data.toolUses ?? 0) === 0 && !emptyResponseFailure;
     if (isApiError && orchestrator.spawnedAgentIds.size > 0) {
       orchestrator.abortAllSubagents();
     }

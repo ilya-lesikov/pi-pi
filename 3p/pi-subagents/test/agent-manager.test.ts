@@ -968,12 +968,13 @@ describe("AgentManager — an exhausted empty-turn retry is a loud failure, not 
     expect(record.error).toContain("3 attempts");
     expect(record.error).toContain("18432 tokens");
 
-    // The RENDERED output is what the user actually sees. index.ts renders
-    // `completed` and `steered` in one branch, so asserting only on status would
-    // miss a regression that leaves an empty result on the success path: the
-    // error text must be shown instead of the "No output." placeholder.
-    const rendered = record.result?.trim() || record.error?.trim() || "No output.";
-    expect(rendered).not.toBe("No output.");
-    expect(rendered).toContain("no output after 3 attempts");
+    // The record must NOT land on the success path at all: index.ts renders
+    // `completed` and `steered` through one branch whose result field falls back
+    // to "No output.", so an empty-but-successful record would be
+    // indistinguishable from a real answer. `error` status routes to the error
+    // path instead, where getStatusLabel surfaces the message.
+    expect(record.status).not.toBe("completed");
+    expect(record.status).not.toBe("steered");
+    expect(record.result ?? "").toBe("");
   });
 });
