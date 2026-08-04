@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { collectContextFiles, renderContextInjection, normalizeForHash, MAX_CONTEXT_FILE_BYTES, type ContextInjectionToggles } from "./context-injection.js";
+import { collectContextFiles, renderContextInjection, normalizeForHash, summarizeContextInjectionSize, MAX_CONTEXT_FILE_BYTES, CONTEXT_INJECTION_WARN_BYTES, type ContextInjectionToggles, type CollectedContextFile } from "./context-injection.js";
 
 const ALL_OFF: ContextInjectionToggles = {
   globalAgents: false, globalClaude: false,
@@ -113,6 +113,35 @@ describe("collectContextFiles", () => {
     writeFileSync(join(cwd, "AGENTS.md"), prefix + "PROJECT-TAIL");
     const files = collectContextFiles(cwd, { ...ALL_OFF, globalAgents: true, projectAgents: true });
     expect(files).toHaveLength(2);
+  });
+});
+
+describe("summarizeContextInjectionSize", () => {
+  const mk = (path: string, bytes: number): CollectedContextFile => ({
+    scope: "project", type: "agents", path, content: "a".repeat(bytes), truncated: false,
+  });
+
+  it("does not warn below the threshold", () => {
+    const r = summarizeContextInjectionSize([mk("/p/AGENTS.md", 1000)]);
+    expect(r.warning).toBeUndefined();
+    expect(r.totalBytes).toBe(1000);
+  });
+
+  it("warns above the threshold and names the files, without dropping any", () => {
+    const files = [mk("/p/AGENTS.md", CONTEXT_INJECTION_WARN_BYTES), mk("/g/CLAUDE.md", 2048)];
+    const r = summarizeContextInjectionSize(files);
+    expect(r.warning).toBeDefined();
+    expect(r.warning).toContain("/p/AGENTS.md");
+    expect(r.warning).toContain("/g/CLAUDE.md");
+    expect(r.totalBytes).toBe(CONTEXT_INJECTION_WARN_BYTES + 2048);
+    // Warn-only: the caller still injects every file (the function returns no
+    // filtered list; it only reports).
+  });
+
+  it("measures UTF-8 bytes, not string length", () => {
+    // '\u00e9' is 2 UTF-8 bytes; 1 char.
+    const f: CollectedContextFile = { scope: "project", type: "agents", path: "/p", content: "\u00e9", truncated: false };
+    expect(summarizeContextInjectionSize([f]).totalBytes).toBe(2);
   });
 });
 

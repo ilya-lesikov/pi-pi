@@ -42,7 +42,7 @@ import { createUsageTracker, dumpUsageSummary, loadUsageSummary, isSubscriptionR
 import { askUser, isCancel } from "../../3p/pi-ask-user/index.js";
 import { registerRecallTool, compile as vccCompile } from "../../3p/pi-vcc/index.js";
 import { computeVccMessageRange, buildVccDetails } from "./compaction-dispatch.js";
-import { collectContextFiles, renderContextInjection } from "./context-injection.js";
+import { collectContextFiles, renderContextInjection, summarizeContextInjectionSize } from "./context-injection.js";
 import { enabledSkills, renderSkillsManifest } from "./skills-manifest.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { findRootRepo, normalizeRepoPath, resolveRepoForFile, type RepoInfo } from "./repo-utils.js";
@@ -2500,9 +2500,13 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     // six-toggle enumerator (reads both file types per scope, unlike the
     // framework's first-match-per-dir loader). Replaces the old cwd-only
     // injectAgentsMd path.
-    const agentsMd = renderContextInjection(
-      collectContextFiles(orchestrator.cwd, orchestrator.config.contextInjection),
-    );
+    const contextFiles = collectContextFiles(orchestrator.cwd, orchestrator.config.contextInjection);
+    const contextSize = summarizeContextInjectionSize(contextFiles);
+    if (contextSize.warning) {
+      getLogger().warn({ s: "context-injection", bytes: contextSize.totalBytes, files: contextFiles.length }, contextSize.warning);
+      ctx.ui?.notify?.(contextSize.warning, "warning");
+    }
+    const agentsMd = renderContextInjection(contextFiles);
     // item 11: inject the enabled-skills manifest (name/description/path only;
     // bodies loaded on demand by the agent).
     const skillsManifest = renderSkillsManifest(

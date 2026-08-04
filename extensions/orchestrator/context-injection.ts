@@ -25,6 +25,11 @@ export interface ContextInjectionToggles {
 // Per-file byte cap so injecting large context files can't blow up the prompt.
 export const MAX_CONTEXT_FILE_BYTES = 64 * 1024;
 
+// Aggregate warn threshold. Above this total (UTF-8 bytes across all injected
+// context files) we emit a VISIBLE diagnostic but still inject everything —
+// the user asked for "all enabled", so this warns, it never drops.
+export const CONTEXT_INJECTION_WARN_BYTES = 256 * 1024;
+
 export interface CollectedContextFile {
   scope: ContextScope;
   type: ContextFileType;
@@ -164,6 +169,30 @@ export function collectContextFiles(
   if (toggles.projectClaude) push("project", "claude", projectDir);
 
   return out;
+}
+
+/**
+ * Total UTF-8 byte size of the rendered content of the collected files, and a
+ * per-file breakdown. When the total exceeds CONTEXT_INJECTION_WARN_BYTES,
+ * `warning` is a human-readable diagnostic naming the contributing files; it is
+ * undefined otherwise. NEVER drops a file — warn-only.
+ */
+export function summarizeContextInjectionSize(files: CollectedContextFile[]): {
+  totalBytes: number;
+  warning?: string;
+} {
+  const sized = files.map((f) => ({ path: f.path, bytes: Buffer.byteLength(f.content, "utf8") }));
+  const totalBytes = sized.reduce((sum, s) => sum + s.bytes, 0);
+  if (totalBytes <= CONTEXT_INJECTION_WARN_BYTES) return { totalBytes };
+  const kib = (n: number) => `${(n / 1024).toFixed(1)} KiB`;
+  const lines = sized
+    .sort((a, b) => b.bytes - a.bytes)
+    .map((s) => `  • ${s.path} (${kib(s.bytes)})`)
+    .join("\n");
+  const warning =
+    `Context injection is large: ${kib(totalBytes)} across ${files.length} file(s) ` +
+    `(warn threshold ${kib(CONTEXT_INJECTION_WARN_BYTES)}). All enabled files are still injected:\n${lines}`;
+  return { totalBytes, warning };
 }
 
 /**
