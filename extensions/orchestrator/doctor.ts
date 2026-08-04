@@ -471,7 +471,7 @@ export async function runDoctor(orchestrator: Orchestrator, ctx: any): Promise<v
   addCategory("Flant");
 
   await safeCheck(async () => {
-    const settings = loadFlantSettings();
+    const settings = loadFlantSettings(orchestrator.cwd);
     const shouldCheck = Boolean(process.env.FLANT_API_KEY) || settings.enabled || settings.subscription || !!settings.cachedFlantModels || !!settings.cachedOpenRouterData;
     if (!shouldCheck) {
       addLine({ severity: "pass", text: "Skipped: FLANT_API_KEY not set and no Flant configuration detected" });

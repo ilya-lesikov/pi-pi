@@ -258,7 +258,7 @@ describe("Flant submenu", () => {
     installConfigStore(cwd);
   });
 
-  it("toggles auto-update via saveFlantSettings", async () => {
+  it("toggles auto-update into the global config scope (not the cache)", async () => {
     const orchestrator = makeOrchestrator(cwd);
     flantSettings.enabled = true;
     const notes: string[] = [];
@@ -270,11 +270,13 @@ describe("Flant submenu", () => {
       "Back", "Back", "Back", "Back",
     );
     await navigate(orchestrator, ctx);
-    expect(flantMock.saveFlantSettings).toHaveBeenCalledWith(expect.objectContaining({ autoUpdate: false }));
+    // Durable policy is written through scoped config, never saveFlantSettings.
+    expect(globalStore.flant?.autoUpdate).toBe(false);
+    expect(flantMock.saveFlantSettings).not.toHaveBeenCalled();
     expect(notes.some((n) => n.includes("Auto-update on startup: OFF"))).toBe(true);
   });
 
-  it("disables Flant and clears generated config when currently enabled", async () => {
+  it("disables Flant into the global config scope and clears generated config", async () => {
     const orchestrator = makeOrchestrator(cwd);
     flantSettings.enabled = true;
     orchestrator.lastCtx = makeCtx();
@@ -284,12 +286,13 @@ describe("Flant submenu", () => {
       "Back", "Back", "Back", "Back",
     );
     await navigate(orchestrator, orchestrator.lastCtx);
-    expect(flantMock.saveFlantSettings).toHaveBeenCalledWith(expect.objectContaining({ enabled: false }));
+    expect(globalStore.flant?.enabled).toBe(false);
+    expect(flantMock.saveFlantSettings).not.toHaveBeenCalled();
     expect(flantMock.unregisterFlantProviders).toHaveBeenCalled();
     expect(flantMock.clearFlantGeneratedConfig).toHaveBeenCalled();
   });
 
-  it("sets the cache period from the picker", async () => {
+  it("sets the cache period into the global config scope", async () => {
     const orchestrator = makeOrchestrator(cwd);
     flantSettings.enabled = true;
     orchestrator.lastCtx = makeCtx();
@@ -300,7 +303,8 @@ describe("Flant submenu", () => {
       "Back", "Back", "Back", "Back",
     );
     await navigate(orchestrator, orchestrator.lastCtx);
-    expect(flantMock.saveFlantSettings).toHaveBeenCalledWith(expect.objectContaining({ cacheTTLDays: 14 }));
+    expect(globalStore.flant?.cacheTTLDays).toBe(14);
+    expect(flantMock.saveFlantSettings).not.toHaveBeenCalled();
   });
 
   it("warns and stays disabled when enabling without FLANT_API_KEY", async () => {

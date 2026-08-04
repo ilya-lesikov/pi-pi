@@ -2385,7 +2385,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     try {
       const { setPI, initFlantOnStartup } = await import("./flant-infra.js");
       setPI(pi);
-      await initFlantOnStartup(pi);
+      await initFlantOnStartup(pi, ctx.cwd);
     } catch (err: any) {
       getLogger().error({ s: "flant", err: err.message }, "flant infra init failed");
     }

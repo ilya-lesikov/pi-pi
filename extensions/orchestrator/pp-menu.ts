@@ -66,7 +66,6 @@ import {
   loadFlantSettings,
   readClaudeOAuthToken,
   readGatewayApiKey,
-  saveFlantSettings,
   syncProviderTiers,
   unregisterFlantProviders,
   updateFlantInfra,
@@ -1134,8 +1133,7 @@ async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise
 
     if (choice === enableLabel) {
       if (settings.enabled) {
-        const next = { ...settings, enabled: false };
-        saveFlantSettings(next);
+        setFlantConfigValue(orchestrator, "enabled", false);
         unregisterFlantProviders(orchestrator.pi);
         clearFlantGeneratedConfig();
         ctx.ui.notify("Flant disabled.", "info");
@@ -1144,9 +1142,8 @@ async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise
           ctx.ui.notify("Set FLANT_API_KEY environment variable first.", "warning");
           continue;
         }
-        const next = { ...settings, enabled: true };
-        saveFlantSettings(next);
-        const result = await updateFlantInfra(orchestrator.pi);
+        setFlantConfigValue(orchestrator, "enabled", true);
+        const result = await updateFlantInfra(orchestrator.pi, { cwd: orchestrator.cwd });
         const message = describeUpdateResult(result);
         ctx.ui.notify(message.text, message.kind);
       }
@@ -1154,14 +1151,14 @@ async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise
     }
 
     if (choice.startsWith("Auto-update on startup:")) {
-      saveFlantSettings({ ...settings, autoUpdate: !settings.autoUpdate });
+      setFlantConfigValue(orchestrator, "autoUpdate", !settings.autoUpdate);
       ctx.ui.notify(`Auto-update on startup: ${!settings.autoUpdate ? "ON" : "OFF"}`, "info");
       continue;
     }
 
     if (choice.startsWith("Automatic fallback on rate limit:")) {
       const next = !settings.autoRateLimitFallback;
-      saveFlantSettings({ ...settings, autoRateLimitFallback: next });
+      setFlantConfigValue(orchestrator, "autoRateLimitFallback", next);
       ctx.ui.notify(
         next
           ? "Automatic fallback ON — rate limits switch provider tier without asking (a notification is shown each time)."
@@ -1183,9 +1180,8 @@ async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise
           continue;
         }
       }
-      const next = { ...settings, subscription: turningOn };
-      saveFlantSettings(next);
-      const result = await updateFlantInfra(orchestrator.pi);
+      setFlantConfigValue(orchestrator, "subscription", turningOn);
+      const result = await updateFlantInfra(orchestrator.pi, { cwd: orchestrator.cwd });
       if (!result.ok) {
         ctx.ui.notify(`Personal subscription ${turningOn ? "enable" : "disable"} failed: ${result.error ?? "unknown error"}`, "error");
       } else {
@@ -1211,7 +1207,7 @@ async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise
       if (!selected || selected === "Back") continue;
       const mins = Number(selected.split(" ")[0]);
       if (!Number.isFinite(mins) || mins <= 0) continue;
-      saveFlantSettings({ ...settings, switchBackIntervalMinutes: mins });
+      setFlantConfigValue(orchestrator, "switchBackIntervalMinutes", mins);
       ctx.ui.notify(`Switch-back check interval set to ${mins} min.`, "info");
       continue;
     }
@@ -1228,13 +1224,13 @@ async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise
       if (!selected || selected === "Back") continue;
       const days = Number(selected.split(" ")[0]);
       if (!Number.isFinite(days) || days <= 0) continue;
-      saveFlantSettings({ ...settings, cacheTTLDays: days });
+      setFlantConfigValue(orchestrator, "cacheTTLDays", days);
       ctx.ui.notify(`Cache period set to ${days} ${days === 1 ? "day" : "days"}.`, "info");
       continue;
     }
 
     if (choice === "Update now") {
-      const result = await updateFlantInfra(orchestrator.pi, { force: true });
+      const result = await updateFlantInfra(orchestrator.pi, { force: true, cwd: orchestrator.cwd });
       const message = describeUpdateResult(result);
       ctx.ui.notify(message.text, message.kind);
       continue;
@@ -1940,6 +1936,14 @@ function applyConfigChange(orchestrator: Orchestrator, scope: Scope, keyPath: st
   }
   refreshSubagentDefinitions(orchestrator, keyPath);
   applyConcurrencyIfChanged(orchestrator, keyPath);
+}
+
+// Durable flant policy is edited from the flant/copilot menus without a scope
+// prompt; it lands in the GLOBAL scope, matching the legacy single-global cache
+// file and the item-8 migration destination (project overrides still win at
+// merge if a user hand-edits a project config).
+function setFlantConfigValue(orchestrator: Orchestrator, key: string, value: any): void {
+  applyConfigChange(orchestrator, "global", ["flant", key], value);
 }
 
 function clearConfigOverride(orchestrator: Orchestrator, scope: Scope, keyPath: string[]): void {
@@ -3445,7 +3449,7 @@ async function showCopilotMenu(orchestrator: Orchestrator, ctx: any): Promise<ty
         ctx.ui.notify("Set COPILOT_GITHUB_TOKEN first (the built-in github-copilot provider authenticates off it).", "warning");
         continue;
       }
-      saveFlantSettings({ ...settings, copilotEnabled: turningOn });
+      setFlantConfigValue(orchestrator, "copilotEnabled", turningOn);
       syncProviderTiers();
       ctx.ui.notify(
         turningOn

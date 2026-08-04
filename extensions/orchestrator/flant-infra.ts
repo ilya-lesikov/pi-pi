@@ -1111,6 +1111,8 @@ export interface UpdateFlantOptions {
    * what its label promises; auto/startup callers omit it and stay cache-bound.
    */
   force?: boolean;
+  /** Project dir for binding project-scoped flant overrides; omit for global-only. */
+  cwd?: string;
 }
 
 export async function updateFlantInfra(
@@ -1118,7 +1120,7 @@ export async function updateFlantInfra(
   options: UpdateFlantOptions = {},
 ): Promise<{ ok: boolean; error?: string; models?: string[] }> {
   setPI(pi);
-  const settings = loadFlantSettings();
+  const settings = loadFlantSettings(options.cwd);
 
   // Refresh the personal-subscription Claude OAuth token before (re)registering
   // providers so the sub provider is built with a valid, non-expired token.
@@ -1228,9 +1230,11 @@ export function initFlantSync(pi: ExtensionAPI): void {
   }
 }
 
-export async function initFlantOnStartup(pi: ExtensionAPI): Promise<void> {
+// `cwd` is the root session's project dir (known at session_start); passing it
+// lets project-scoped flant overrides bind. Omit for the global-only read.
+export async function initFlantOnStartup(pi: ExtensionAPI, cwd?: string): Promise<void> {
   setPI(pi);
-  const settings = loadFlantSettings();
+  const settings = loadFlantSettings(cwd);
   if (!settings.enabled) {
     generatedFlantConfig = null;
     return;
@@ -1241,5 +1245,5 @@ export async function initFlantOnStartup(pi: ExtensionAPI): Promise<void> {
     if (settings.subscription) await refreshClaudeOAuthToken();
     return;
   }
-  await updateFlantInfra(pi);
+  await updateFlantInfra(pi, { cwd });
 }

@@ -117,7 +117,7 @@ async function offerFallback(
   // Automatic mode (default): skip the permission dialogue and switch straight
   // to the next tier, surfacing a non-blocking notification instead. Checked
   // BEFORE the hasUI guard so a headless autonomous run still auto-switches.
-  if (loadFlantSettings().autoRateLimitFallback) {
+  if (loadFlantSettings(orchestrator.cwd).autoRateLimitFallback) {
     try {
       await activateFallback(orchestrator, ctx, subModelId, origin);
     } finally {
@@ -299,7 +299,7 @@ function currentThinking(orchestrator: Orchestrator): string {
 // opens the switch-back dialogue. Only one timer runs at a time.
 export function armSwitchBackProbe(orchestrator: Orchestrator): void {
   if (orchestrator.subSwitchBackTimer) clearTimeout(orchestrator.subSwitchBackTimer);
-  const minutes = Math.max(1, loadFlantSettings().switchBackIntervalMinutes || 10);
+  const minutes = Math.max(1, loadFlantSettings(orchestrator.cwd).switchBackIntervalMinutes || 10);
   const taskToken = orchestrator.activeTaskToken;
   orchestrator.subSwitchBackTimer = setTimeout(() => {
     orchestrator.subSwitchBackTimer = null;
@@ -337,7 +337,7 @@ async function offerSwitchBack(orchestrator: Orchestrator, subModelId: string): 
   // surfacing a non-blocking notification. Mirrors offerFallback's auto path.
   // A missing UI does NOT block auto switch-back (headless autonomous runs still
   // switch back); notifications are best-effort.
-  if (loadFlantSettings().autoRateLimitFallback) {
+  if (loadFlantSettings(orchestrator.cwd).autoRateLimitFallback) {
     await switchBackToSub(orchestrator, ctx, subModelId);
     return;
   }

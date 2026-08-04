@@ -259,6 +259,14 @@ describe("armSwitchBackProbe", () => {
     expect(orch.subSwitchBackTimer).not.toBeNull();
   });
 
+  it("reads the interval scoped to the orchestrator's cwd (project override binds)", () => {
+    vi.useFakeTimers();
+    mocks.loadFlantSettings.mockClear();
+    const orch = makeOrchestrator({ cwd: "/proj" });
+    armSwitchBackProbe(orch);
+    expect(mocks.loadFlantSettings).toHaveBeenCalledWith("/proj");
+  });
+
   it("runs the probe when the timer fires and stays on non-sub while still limited", async () => {
     vi.useFakeTimers();
     mocks.probeSubscriptionCleared.mockResolvedValue("rate_limited");
