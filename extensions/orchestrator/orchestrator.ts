@@ -103,6 +103,24 @@ export class Orchestrator {
   // eligible to fire on the next threshold crossing; disarmed after firing until
   // context drops back below the re-arm band.
   compactionArm: { armed: boolean } = { armed: true };
+  // Adaptive proactive-compaction state (item 6). In-memory per session:
+  //  - nextThreshold: the adaptive threshold override (null = use the fixed base)
+  //  - pendingProactiveMeasure: true after WE fired a proactive compaction and
+  //    are waiting to measure the post-compaction baseline (transition/manual
+  //    compactions never set it)
+  //  - disabled: proactive compaction disabled for this session after a thrash
+  //  - modelKey/window: the provider-qualified model spec + window the current
+  //    adaptive state was computed for; a change resets the adaptive state
+  //  - inFlight: WE just called ctx.compact() proactively and are waiting for the
+  //    session_compact event to confirm it (cleared if compact throws/declines)
+  adaptiveCompaction: {
+    nextThreshold: number | null;
+    inFlight: boolean;
+    pendingProactiveMeasure: boolean;
+    disabled: boolean;
+    modelKey: string | null;
+    window: number | null;
+  } = { nextThreshold: null, inFlight: false, pendingProactiveMeasure: false, disabled: false, modelKey: null, window: null };
   // Single consecutive-nudge guard (replaces the old multi-tier throttle). Reset
   // to 0 on any productive turn; once it reaches the cap the nudges halt with one
   // user notification.
@@ -739,7 +757,16 @@ export class Orchestrator {
     }
     this.mainTurnInFlight = false;
     this.mainTurnRecovering = false;
+    this.resetAdaptiveCompaction();
     this.clearSubscriptionFallback();
+  }
+
+  // Reset the adaptive proactive-compaction state (item 6). Called on task
+  // teardown and whenever the model or context window changes, so a stale
+  // baseline never drives the threshold for a different model/window.
+  resetAdaptiveCompaction(): void {
+    this.adaptiveCompaction = { nextThreshold: null, inFlight: false, pendingProactiveMeasure: false, disabled: false, modelKey: null, window: null };
+    this.compactionArm = { armed: true };
   }
 
   // Reset the subscription rate-limit fallback: cancel the switch-back probe

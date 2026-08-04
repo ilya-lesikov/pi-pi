@@ -1476,12 +1476,51 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       ) {
         const usage = ctx.getContextUsage();
         if (usage && typeof usage.contextWindow === "number" && usage.contextWindow > 0) {
-          const { compactionThresholdTokens, shouldFireCompaction } = await import("./compaction-trigger.js");
+          const { compactionThresholdTokens, shouldFireCompaction, adaptiveNextThreshold, wouldThrash } = await import("./compaction-trigger.js");
           const modelId = (typeof ctx.model?.id === "string" && ctx.model.id) || undefined;
-          const threshold = compactionThresholdTokens({ contextWindow: usage.contextWindow, modelId, config: cfg });
-          if (shouldFireCompaction(usage.tokens, threshold, orchestrator.compactionArm)) {
-            getLogger().info({ s: "compaction", tokens: usage.tokens, threshold, window: usage.contextWindow }, "proactive in-phase compaction triggered");
-            ctx.compact();
+          // Provider-qualified key: flant-sub and flant-api share bare ids, so a
+          // bare-id check would miss a sub<->api route change and reuse a stale
+          // baseline. Reset the adaptive state on any model or window change.
+          const modelKey = ctx.model?.provider && ctx.model?.id ? `${ctx.model.provider}/${ctx.model.id}` : (modelId ?? null);
+          if (orchestrator.adaptiveCompaction.modelKey !== modelKey || orchestrator.adaptiveCompaction.window !== usage.contextWindow) {
+            // resetAdaptiveCompaction REPLACES the object, so re-read the ref after.
+            orchestrator.resetAdaptiveCompaction();
+            orchestrator.adaptiveCompaction.modelKey = modelKey;
+            orchestrator.adaptiveCompaction.window = usage.contextWindow;
+          }
+          const adapt = orchestrator.adaptiveCompaction;
+          const thresholdInput = { contextWindow: usage.contextWindow, modelId, config: cfg };
+          const base = compactionThresholdTokens(thresholdInput);
+          // Capture the post-compaction baseline on the FIRST agent_end with
+          // non-null tokens after a proactive compaction (getContextUsage returns
+          // a hard null until then). Update nextThreshold or disable on thrash.
+          if (adapt.pendingProactiveMeasure && typeof usage.tokens === "number") {
+            adapt.pendingProactiveMeasure = false;
+            if (wouldThrash(thresholdInput, usage.tokens)) {
+              adapt.disabled = true;
+              getLogger().warn({ s: "compaction", baseline: usage.tokens, window: usage.contextWindow }, "adaptive compaction disabled: baseline+headroom exceeds the ceiling (thrash guard)");
+              ctx.ui?.notify?.("Proactive compaction disabled for this session: the post-compaction context is already too large to keep useful headroom.", "warning");
+            } else {
+              const next = adaptiveNextThreshold(thresholdInput, usage.tokens);
+              // Never LOWER an established threshold.
+              adapt.nextThreshold = Math.max(next, adapt.nextThreshold ?? 0, base);
+              getLogger().debug({ s: "compaction", baseline: usage.tokens, nextThreshold: adapt.nextThreshold }, "adaptive compaction threshold updated");
+            }
+          }
+          if (!adapt.disabled) {
+            const effectiveThreshold = Math.max(base, adapt.nextThreshold ?? 0);
+            if (shouldFireCompaction(usage.tokens, effectiveThreshold, orchestrator.compactionArm)) {
+              getLogger().info({ s: "compaction", tokens: usage.tokens, threshold: effectiveThreshold, window: usage.contextWindow }, "proactive in-phase compaction triggered");
+              try {
+                // Mark BEFORE compacting so the session_compact handler can
+                // attribute the upcoming event to us; clear if compact fails.
+                adapt.inFlight = true;
+                ctx.compact();
+              } catch (e) {
+                adapt.inFlight = false;
+                throw e;
+              }
+            }
           }
         }
       }
@@ -1491,6 +1530,14 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   });
   pi.on("session_compact", async (_event, ctx) => {
     if (ctx) orchestrator.lastCtx = ctx;
+    // Attribute this compaction to the adaptive lifecycle ONLY when WE fired it
+    // proactively (inFlight set at the agent_end trigger). Transition/manual
+    // compactions leave inFlight false and never schedule a measurement.
+    const adapt = orchestrator.adaptiveCompaction;
+    if (adapt.inFlight) {
+      adapt.inFlight = false;
+      adapt.pendingProactiveMeasure = true;
+    }
     orchestrator.transitionController.onSessionCompact();
   });
 

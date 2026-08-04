@@ -744,3 +744,81 @@ describe("pp_phase_complete tool", () => {
     expect(result.content[0].text).toBe("MENU_RESULT");
   });
 });
+
+describe("adaptive proactive-compaction lifecycle (item 6)", () => {
+  // ctx with a scripted getContextUsage() sequence and a compact() spy.
+  function makeCompactCtx(usages: Array<{ tokens: number | null; contextWindow: number }>) {
+    let i = 0;
+    const compact = vi.fn();
+    return {
+      model: { provider: "pp-flant-anthropic", id: "claude-opus-4-8" },
+      compact,
+      getContextUsage: () => usages[Math.min(i++, usages.length - 1)],
+      ui: { notify: vi.fn() },
+    } as any;
+  }
+
+  it("captures the post-compaction baseline and raises the threshold across the cycle", async () => {
+    orchestrator.active = makeActiveTask();
+    // Base (1M window) = 300K, headroom 120K.
+    const ctx = makeCompactCtx([
+      { tokens: 305_000, contextWindow: 1_000_000 }, // #1 crosses base -> fire
+      { tokens: null, contextWindow: 1_000_000 },    // post-compact null -> ignored
+      { tokens: 240_000, contextWindow: 1_000_000 }, // baseline captured -> next=360K
+    ]);
+    const agentEnd = getHandler("agent_end");
+    const sessionCompact = getHandler("session_compact");
+
+    await agentEnd({}, ctx);
+    expect(ctx.compact).toHaveBeenCalledTimes(1);
+    expect(orchestrator.adaptiveCompaction.inFlight).toBe(true);
+
+    await sessionCompact({}, ctx);
+    expect(orchestrator.adaptiveCompaction.pendingProactiveMeasure).toBe(true);
+
+    await agentEnd({}, ctx); // null tokens -> ignored, still pending
+    expect(orchestrator.adaptiveCompaction.pendingProactiveMeasure).toBe(true);
+
+    await agentEnd({}, ctx); // 240K -> capture baseline, next threshold = 360K
+    expect(orchestrator.adaptiveCompaction.pendingProactiveMeasure).toBe(false);
+    expect(orchestrator.adaptiveCompaction.nextThreshold).toBe(360_000);
+  });
+
+  it("a transition/manual session_compact does not schedule a measurement", async () => {
+    orchestrator.active = makeActiveTask();
+    const ctx = makeCompactCtx([{ tokens: 100_000, contextWindow: 1_000_000 }]);
+    // No proactive fire happened -> inFlight false.
+    await getHandler("session_compact")({}, ctx);
+    expect(orchestrator.adaptiveCompaction.pendingProactiveMeasure).toBe(false);
+  });
+
+  it("disables proactive compaction on a thrash and warns", async () => {
+    orchestrator.active = makeActiveTask();
+    // 200K window: base=ceiling=168K, headroom 40K. Baseline 135K -> 175K > 168K.
+    const ctx = makeCompactCtx([
+      { tokens: 170_000, contextWindow: 200_000 }, // crosses 168K -> fire
+      { tokens: 135_000, contextWindow: 200_000 }, // baseline -> thrash -> disable
+      { tokens: 199_000, contextWindow: 200_000 }, // would cross but disabled
+    ]);
+    const agentEnd = getHandler("agent_end");
+    await agentEnd({}, ctx);
+    expect(ctx.compact).toHaveBeenCalledTimes(1);
+    await getHandler("session_compact")({}, ctx);
+    await agentEnd({}, ctx); // capture 135K -> thrash -> disabled
+    expect(orchestrator.adaptiveCompaction.disabled).toBe(true);
+    expect(ctx.ui.notify).toHaveBeenCalled();
+    await agentEnd({}, ctx); // disabled -> no further fire
+    expect(ctx.compact).toHaveBeenCalledTimes(1);
+  });
+
+  it("resets adaptive state on a model change", async () => {
+    orchestrator.active = makeActiveTask();
+    const ctx = makeCompactCtx([{ tokens: 100_000, contextWindow: 1_000_000 }]);
+    orchestrator.adaptiveCompaction.nextThreshold = 360_000;
+    orchestrator.adaptiveCompaction.modelKey = "pp-flant-anthropic-sub/sub/claude-opus-4-8";
+    orchestrator.adaptiveCompaction.window = 1_000_000;
+    await getHandler("agent_end")({}, ctx); // modelKey differs -> reset
+    expect(orchestrator.adaptiveCompaction.nextThreshold).toBeNull();
+    expect(orchestrator.adaptiveCompaction.modelKey).toBe("pp-flant-anthropic/claude-opus-4-8");
+  });
+});
