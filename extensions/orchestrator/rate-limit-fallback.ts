@@ -186,10 +186,21 @@ async function activateFallback(
   const sameFamily =
     !!subModelId && getModelInfo(subModelId).family === getModelInfo(mainSpec).family;
   const switchMain = subModelId && (origin === "main" || (mainIsSubRouted && sameFamily));
+  // Record whether/what we actually change on the MAIN model, so the delayed
+  // switch-back reverts the main model ONLY when this fallback moved it (and
+  // restores exactly its prior spec). A subagent-origin limit that leaves the
+  // main model alone must leave subFallbackMainPriorSpec null.
+  orchestrator.subFallbackMainPriorSpec = null;
   if (switchMain) {
     const nonSub = toNonSubSpec(origin === "main" ? subModelId : mainSpec);
     const ok = await orchestrator.switchModel(ctx, nonSub, currentThinking(orchestrator));
-    if (!ok) log.warn({ s: "ratelimit", nonSub }, "failed to switch main model to non-sub");
+    if (ok) {
+      // Only claim a restore obligation when the switch SUCCEEDED (a failed
+      // switch must not create false restore state).
+      orchestrator.subFallbackMainPriorSpec = mainSpec || subModelId;
+    } else {
+      log.warn({ s: "ratelimit", nonSub }, "failed to switch main model to non-sub");
+    }
   }
 
   ctx.ui?.notify?.("Switched to regular flant Claude (paid per token). Will periodically check if the subscription limit has cleared.", "info");
@@ -364,14 +375,26 @@ async function offerSwitchBack(orchestrator: Orchestrator, subModelId: string): 
 async function switchBackToSub(orchestrator: Orchestrator, ctx: any, subModelId: string): Promise<void> {
   const log = getLogger();
   // Clear the override FIRST so switchModel resolves the sub spec unrewritten.
+  // This ALWAYS happens (regardless of origin) so future main/subagent spawns
+  // resolve back to the subscription.
   orchestrator.subFallbackActive = false;
   setSubscriptionFallbackActive(false);
   if (orchestrator.subSwitchBackTimer) {
     clearTimeout(orchestrator.subSwitchBackTimer);
     orchestrator.subSwitchBackTimer = null;
   }
-  const ok = await orchestrator.switchModel(ctx, subModelId, currentThinking(orchestrator));
-  if (!ok) log.warn({ s: "ratelimit", subModelId }, "failed to switch back to sub model");
+  // Revert the LIVE MAIN model ONLY when this fallback actually switched it. A
+  // subagent-origin fallback that left the main model alone (prior spec null)
+  // must NOT mutate the main model here — the old code unconditionally switched
+  // the main model to the subagent's sub model.
+  const priorSpec = orchestrator.subFallbackMainPriorSpec;
+  if (priorSpec) {
+    // Restore the main model's OWN prior (sub-routed) spec, captured at fallback
+    // time — which may differ from the subagent's failing `subModelId`.
+    const ok = await orchestrator.switchModel(ctx, priorSpec, currentThinking(orchestrator));
+    if (!ok) log.warn({ s: "ratelimit", priorSpec }, "failed to switch back main model to sub");
+  }
+  orchestrator.subFallbackMainPriorSpec = null;
   orchestrator.subFallbackModelId = null;
   ctx.ui?.notify?.("Switched back to the personal Claude subscription.", "info");
   const phase = orchestrator.active?.state.phase ?? "current";

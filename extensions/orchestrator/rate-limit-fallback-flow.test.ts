@@ -16,9 +16,10 @@ const flantSettings: { switchBackIntervalMinutes: number; autoRateLimitFallback:
   switchBackIntervalMinutes: 30,
   autoRateLimitFallback: false,
 };
+const probeSubscriptionClearedMock = vi.fn();
 vi.mock("./flant-infra.js", () => ({
   loadFlantSettings: () => ({ ...flantSettings }),
-  probeSubscriptionCleared: vi.fn(),
+  probeSubscriptionCleared: (...a: any[]) => probeSubscriptionClearedMock(...a),
   SUB_PROVIDER: "pp-flant-anthropic-sub",
   SUB_MODEL_PREFIX: "sub/",
 }));
@@ -61,6 +62,8 @@ function makeOrchestrator() {
     sendUserMessageWhenIdle: vi.fn(),
     cancelPendingRetry: vi.fn(),
     safeSendUserMessage: vi.fn(),
+    subFallbackMainPriorSpec: null as string | null,
+    lastCtx: undefined as any,
   } as any;
 }
 
@@ -201,6 +204,63 @@ describe("automatic fallback (no dialogue) when autoRateLimitFallback is ON", ()
     expect(orch.switchModel).not.toHaveBeenCalled();
     // The pending-decision flag was cleared by the auto path (no leak).
     expect(orch.subFallbackPendingDecision).toBe(false);
+  });
+});
+
+describe("switch-back (item 4c): only revert the main model when fallback switched it", () => {
+  beforeEach(() => {
+    flantSettings.autoRateLimitFallback = true; // auto: no dialogs
+    flantSettings.switchBackIntervalMinutes = 1;
+    probeSubscriptionClearedMock.mockReset();
+    probeSubscriptionClearedMock.mockResolvedValue("ok");
+  });
+
+  // Drive: activate fallback (auto), then fire the probe timer -> switch-back.
+  async function runFallbackThenSwitchBack(orch: any, ctx: any, trigger: () => Promise<void>) {
+    orch.lastCtx = ctx;
+    await trigger();
+    // fallback switch happened synchronously in trigger(); reset the spy so we
+    // observe ONLY the switch-back call.
+    orch.switchModel.mockClear();
+    await vi.advanceTimersByTimeAsync(60_000); // fire the probe timer
+    // Let the probe promise + switch-back microtasks settle.
+    await vi.runOnlyPendingTimersAsync();
+  }
+
+  it("main-origin: restores the main model to its prior sub spec", async () => {
+    vi.useFakeTimers();
+    const orch = makeOrchestrator();
+    const ctx = makeCtx({ provider: "pp-flant-anthropic-sub", id: "sub/claude-opus-4-8" });
+    await runFallbackThenSwitchBack(orch, ctx, () =>
+      handleMainRateLimit(orch, ctx, "pp-flant-anthropic-sub/sub/claude-opus-4-8", "pp-flant-anthropic-sub"),
+    );
+    expect(orch.subFallbackActive).toBe(false);
+    // Main WAS switched by fallback -> switch-back restores its prior sub spec.
+    expect(orch.switchModel).toHaveBeenCalledWith(ctx, "pp-flant-anthropic-sub/sub/claude-opus-4-8", "high");
+  });
+
+  it("subagent-origin, main NOT switched: leaves the main model untouched", async () => {
+    vi.useFakeTimers();
+    const orch = makeOrchestrator();
+    // Main is paid (not sub-routed) -> fallback does NOT switch the main model.
+    const ctx = makeCtx({ provider: "pp-flant-anthropic", id: "claude-opus-4-8" });
+    await runFallbackThenSwitchBack(orch, ctx, () =>
+      handleSubagentRateLimit(orch, ctx, "pp-flant-anthropic-sub/sub/claude-opus-4-8"),
+    );
+    expect(orch.subFallbackActive).toBe(false);
+    // Main was never switched by fallback -> switch-back must NOT touch it.
+    expect(orch.switchModel).not.toHaveBeenCalled();
+  });
+
+  it("subagent-origin, main WAS switched (same sub family): restores the main's own prior spec", async () => {
+    vi.useFakeTimers();
+    const orch = makeOrchestrator();
+    // Main is on the same sub-routed opus family -> fallback switches it.
+    const ctx = makeCtx({ provider: "pp-flant-anthropic-sub", id: "sub/claude-opus-4-8" });
+    await runFallbackThenSwitchBack(orch, ctx, () =>
+      handleSubagentRateLimit(orch, ctx, "pp-flant-anthropic-sub/sub/claude-opus-4-8"),
+    );
+    expect(orch.switchModel).toHaveBeenCalledWith(ctx, "pp-flant-anthropic-sub/sub/claude-opus-4-8", "high");
   });
 });
 

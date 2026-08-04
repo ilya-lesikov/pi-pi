@@ -171,6 +171,13 @@ export class Orchestrator {
   subFallbackPendingDecision = false;
   subFallbackModelId: string | null = null;
   subSwitchBackTimer: ReturnType<typeof setTimeout> | null = null;
+  // When fallback actually switched the LIVE MAIN model, this records the prior
+  // main spec so switch-back can restore EXACTLY that (and only when it changed
+  // it). null means the main model was NOT switched by the fallback (e.g. a
+  // subagent-origin limit on an unrelated/already-paid main) — switch-back must
+  // then leave the main model untouched. The delayed timer callback cannot
+  // reconstruct this, so it is captured at activateFallback time.
+  subFallbackMainPriorSpec: string | null = null;
   userGatePending = false;
   lastCtx: any = null;
   failedPlannerVariants: string[] = [];
@@ -744,6 +751,7 @@ export class Orchestrator {
       this.subSwitchBackTimer = null;
     }
     this.subFallbackActive = false;
+    this.subFallbackMainPriorSpec = null;
     this.subFallbackDialogPending = false;
     this.interactivePromptOpen = false;
     this.subFallbackPendingDecision = false;
