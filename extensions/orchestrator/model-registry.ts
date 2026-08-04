@@ -332,8 +332,18 @@ export function restoreTierForFamily(tier: ProviderTierName, family: Family): vo
   demotedTierFamily.delete(`${tier}:${family}`);
 }
 
-export function clearAllTierDemotions(): void {
+// Read-only snapshot of the current `${tier}:${family}` demotions (sorted for
+// stable display). Used by the /pp menu to hide the clear action when empty.
+export function listTierDemotions(): string[] {
+  return [...demotedTierFamily].sort();
+}
+
+// Clear all tier demotions and RETURN the entries that were cleared, so callers
+// (the /pp menu action) can report the count/list.
+export function clearAllTierDemotions(): string[] {
+  const cleared = [...demotedTierFamily].sort();
   demotedTierFamily.clear();
+  return cleared;
 }
 
 function isTierUsable(tier: ProviderTierName, family: Family): boolean {

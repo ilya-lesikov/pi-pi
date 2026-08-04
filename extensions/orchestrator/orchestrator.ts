@@ -27,7 +27,7 @@ import { createTaskAgent } from "./agents/task.js";
 import { createAdvisorAgent } from "./agents/advisor.js";
 import { createDeepDebuggerAgent } from "./agents/deep-debugger.js";
 import { createReviewerAgent } from "./agents/reviewer.js";
-import { resolveModel, getModelInfo, findLatestFamilyMatch, setSubscriptionFallbackActive } from "./model-registry.js";
+import { resolveModel, getModelInfo, findLatestFamilyMatch, setSubscriptionFallbackActive, clearAllTierDemotions } from "./model-registry.js";
 import { buildRepoContext } from "./agents/repo-context.js";
 import { getLogger, addTaskDestination, removeTaskDestination, setLogLevel } from "./log.js";
 import { handleSpawnResult } from "./spawn-cleanup.js";
@@ -757,6 +757,10 @@ export class Orchestrator {
     this.subFallbackPendingDecision = false;
     this.subFallbackModelId = null;
     setSubscriptionFallbackActive(false);
+    // Monthly-cap tier demotions are session/task-scoped; clear them on teardown
+    // alongside the subscription override so a one-way demotion never leaks
+    // across tasks (the only other recovery is the manual /pp menu action).
+    clearAllTierDemotions();
   }
 
   async cleanupActive(): Promise<void> {

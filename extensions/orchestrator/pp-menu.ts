@@ -37,7 +37,7 @@ import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
 import { spawnCodeReviewers } from "./phases/review.js";
 import { spawnBrainstormReviewers } from "./phases/brainstorm.js";
 import { nextPhase } from "./phases/machine.js";
-import { getAllAliases, getModelFamilies, getModelInfo, resolveModel, updateRegistryFromAvailableModels } from "./model-registry.js";
+import { getAllAliases, getModelFamilies, getModelInfo, resolveModel, updateRegistryFromAvailableModels, listTierDemotions, clearAllTierDemotions } from "./model-registry.js";
 import { compareModelVersion } from "./model-version.js";
 
 import {
@@ -1057,6 +1057,17 @@ function flantStatusText(settings: FlantSettings): string {
       lines.push(`- ${assignment}`);
     }
   }
+  const demotions = listTierDemotions();
+  if (demotions.length > 0) {
+    lines.push(`Monthly-cap tier demotions (active): ${demotions.join(", ")}`);
+  }
+  // Cooldown semantics (item 5) — the recovery mechanisms are DISTINCT, not one
+  // universal 10-minute timer:
+  lines.push("Cooldown/recovery semantics:");
+  lines.push(`  - flant subscription switch-back: configurable, default 10 min (currently ${settings.switchBackIntervalMinutes} min)`);
+  lines.push("  - Exa/Tavily/Jina web providers: independent fixed 10-min retry cooldown");
+  lines.push("  - CBM: no provider cooldown");
+  lines.push("  - monthly usage caps: manual reset (this menu) or automatic on task teardown — NOT minute polling");
   return lines.join("\n");
 }
 
@@ -1095,11 +1106,31 @@ async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise
         { title: "Update now", description: "Fetch the latest model list from Flant right away" },
         { title: "Current status", description: "Show the current Flant configuration, providers, and model counts" },
       );
+      // Monthly-cap tier demotions are one-way for the session; offer a manual
+      // reset ONLY when some exist (they reset automatically on task teardown).
+      const demotions = listTierDemotions();
+      if (demotions.length > 0) {
+        options.push({
+          title: `Clear provider tier demotions (${demotions.length})`,
+          description: `Restore tiers demoted by a monthly usage cap: ${demotions.join(", ")}`,
+        });
+      }
     }
     options.push({ title: "Back", description: "Return to the previous menu" });
 
     const choice = await selectOption(ctx, "Flant", options);
     if (!choice || choice === "Back") return BACK;
+
+    if (choice.startsWith("Clear provider tier demotions")) {
+      const cleared = clearAllTierDemotions();
+      ctx.ui.notify(
+        cleared.length > 0
+          ? `Cleared ${cleared.length} provider tier demotion(s): ${cleared.join(", ")}.`
+          : "No provider tier demotions to clear.",
+        "info",
+      );
+      continue;
+    }
 
     if (choice === enableLabel) {
       if (settings.enabled) {

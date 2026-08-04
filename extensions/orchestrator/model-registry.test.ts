@@ -15,6 +15,7 @@ import {
   getModelInfo,
   getTierEnabled,
   isSubscriptionFallbackActive,
+  listTierDemotions,
   PROVIDER_TIER_ORDER,
   resolveModel,
   restoreTierForFamily,
@@ -388,6 +389,18 @@ describe("model-registry", () => {
 
     it("exposes the fixed precedence order copilot > flant-sub > flant-api", () => {
       expect([...PROVIDER_TIER_ORDER]).toEqual(["copilot", "flant-sub", "flant-api"]);
+    });
+
+    it("listTierDemotions reports current demotions and clearAllTierDemotions returns what it cleared", () => {
+      expect(listTierDemotions()).toEqual([]);
+      demoteTierForFamily("flant-sub", "opus");
+      demoteTierForFamily("flant-api", "gpt-sol");
+      expect(listTierDemotions()).toEqual(["flant-api:gpt-sol", "flant-sub:opus"]);
+      const cleared = clearAllTierDemotions();
+      expect(cleared).toEqual(["flant-api:gpt-sol", "flant-sub:opus"]);
+      expect(listTierDemotions()).toEqual([]);
+      // Clearing again returns an empty list (idempotent).
+      expect(clearAllTierDemotions()).toEqual([]);
     });
 
     it("keeps a copilot-generated spec on copilot when enabled (no demotion)", () => {
