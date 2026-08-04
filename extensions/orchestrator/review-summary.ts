@@ -105,18 +105,21 @@ export interface CrossPassSummaryInput {
   maxPasses: number;
 }
 
-// Build the deterministic cross-pass summary markdown. Returns null when there
-// is not more than one completed pass with loadable output — callers keep the
-// existing single-pass wording in that case.
-export function buildCrossPassSummary(input: CrossPassSummaryInput): string | null {
-  const { taskDir, phase, passes } = input;
-  if (passes < 2) return null;
+interface PassRecord {
+  pass: number;
+  present: boolean;
+  reviewers: { reviewer: string; verdict: ReviewVerdict; actionable: number }[];
+}
 
-  interface PassRecord {
-    pass: number;
-    present: boolean;
-    reviewers: { reviewer: string; verdict: ReviewVerdict; actionable: number }[];
-  }
+interface PassScan {
+  passRecords: PassRecord[];
+  findings: Map<string, Finding>;
+  statusOf: (f: Finding) => FindingStatus;
+}
+
+// Read every attempted pass off disk once. Shared by the full summary and the
+// one-line digest so the two can never disagree about counts or statuses.
+function scanPasses(taskDir: string, phase: string, passes: number): PassScan | null {
   const passRecords: PassRecord[] = [];
   const findings = new Map<string, Finding>();
   let anyOutput = false;
@@ -164,15 +167,32 @@ export function buildCrossPassSummary(input: CrossPassSummaryInput): string | nu
   const statusOf = (f: Finding): FindingStatus =>
     f.lastPass >= lastPresentPass ? "remaining" : "addressed (not re-reported)";
 
-  // Assemble markdown with a hard byte budget on BOTH the per-pass records AND
-  // the findings section (a long unlimited-pass loop can make the pass records
-  // alone large), so the FINAL output is always within MAX_SUMMARY_BYTES.
-  const capNote = input.capReached
+  return { passRecords, findings, statusOf };
+}
+
+function outcomeLabel(input: CrossPassSummaryInput): string {
+  return input.capReached
     ? `reached the ${input.maxPasses >= 999 ? "unlimited" : input.maxPasses}-pass cap`
     : input.approvedClean
       ? "reviewers approved"
       : "review loop ended";
-  const title = `## Cross-pass review summary (${phase}, ${passes} passes — ${capNote})\n\n`;
+}
+
+// Build the deterministic cross-pass summary markdown. Returns null when there
+// is not more than one completed pass with loadable output — callers keep the
+// existing single-pass wording in that case.
+export function buildCrossPassSummary(input: CrossPassSummaryInput): string | null {
+  const { taskDir, phase, passes } = input;
+  if (passes < 2) return null;
+
+  const scan = scanPasses(taskDir, phase, passes);
+  if (!scan) return null;
+  const { passRecords, findings, statusOf } = scan;
+
+  // Assemble markdown with a hard byte budget on BOTH the per-pass records AND
+  // the findings section (a long unlimited-pass loop can make the pass records
+  // alone large), so the FINAL output is always within MAX_SUMMARY_BYTES.
+  const title = `## Cross-pass review summary (${phase}, ${passes} passes — ${outcomeLabel(input)})\n\n`;
 
   const passLineGroups = passRecords.map((pr) => {
     const g = [`### Pass ${pr.pass}`];
@@ -231,4 +251,50 @@ export function mergeSummary(agentSummary: string | undefined, crossPass: string
   if (!crossPass) return agent;
   if (!agent) return crossPass;
   return `${agent}\n\n${crossPass}`;
+}
+
+// One-line stand-in for the full cross-pass markdown, for the interactive menu
+// title. The full version lists every finding's heading verbatim, which after a
+// multi-pass loop is thousands of bytes of reviewer prose restating what the
+// agent already explained in the message above the dialog.
+export function buildCrossPassDigest(input: CrossPassSummaryInput): string | null {
+  const { taskDir, phase, passes } = input;
+  if (passes < 2) return null;
+
+  const scan = scanPasses(taskDir, phase, passes);
+  if (!scan) return null;
+
+  const all = [...scan.findings.values()];
+  const remaining = all.filter((f) => scan.statusOf(f) === "remaining").length;
+  return `Review: ${passes} passes, ${outcomeLabel(input)} — ${all.length - remaining} findings addressed, ${remaining} remaining.`;
+}
+
+// Byte budget for the agent-authored part of an interactive menu title. The
+// dialog is a chooser, not a report: the agent's full prose is already in the
+// message right above it, so a summary that scrolls the menu off-screen costs
+// scannability and buys nothing.
+const MAX_MENU_SUMMARY_BYTES = 700;
+
+// Merge for the interactive menu: cap the agent summary and use the one-line
+// digest instead of the full cross-pass markdown.
+export function mergeMenuSummary(agentSummary: string | undefined, digest: string | null): string {
+  const agent = (agentSummary ?? "").trim();
+  let head = agent;
+  if (Buffer.byteLength(agent, "utf8") > MAX_MENU_SUMMARY_BYTES) {
+    const note = "\n\n_(truncated — full details are in the message above)_";
+    const budget = MAX_MENU_SUMMARY_BYTES - Buffer.byteLength(note, "utf8");
+    // Cut on a line boundary so a sentence is never sliced mid-word.
+    const kept: string[] = [];
+    let used = 0;
+    for (const line of agent.split("\n")) {
+      const cost = Buffer.byteLength(line + "\n", "utf8");
+      if (used + cost > budget) break;
+      kept.push(line);
+      used += cost;
+    }
+    head = (kept.join("\n").trimEnd() || agent.slice(0, budget).trimEnd()) + note;
+  }
+  if (!digest) return head;
+  if (!head) return digest;
+  return `${head}\n\n${digest}`;
 }

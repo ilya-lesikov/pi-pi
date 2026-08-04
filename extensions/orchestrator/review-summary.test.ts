@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { buildCrossPassSummary, extractActionableHeadings, mergeSummary } from "./review-summary.js";
+import { buildCrossPassSummary, buildCrossPassDigest, extractActionableHeadings, mergeSummary, mergeMenuSummary } from "./review-summary.js";
 
 const tempDirs: string[] = [];
 function makeTaskDir(): string {
@@ -185,6 +185,89 @@ describe("buildCrossPassSummary", () => {
     writePlanReview(dir, 1, "gpt", 2, "VERDICT: APPROVE");
     const out = buildCrossPassSummary({ taskDir: dir, phase: "plan", passes: 2, approvedClean: true, capReached: false, maxPasses: 3 })!;
     expect(out).toContain("[addressed (not re-reported)] (gpt, pass 1) BLOCKERS: plan.md:3 missing step");
+  });
+});
+
+describe("buildCrossPassDigest", () => {
+  const threePass = (dir: string) => {
+    writeReview(dir, 1, "fable", 1, "VERDICT: NEEDS_CHANGES\n- MAJOR: broken thing at src/a.ts:10 with a very long explanatory paragraph that would bloat any dialog it was pasted into, going on at length about mechanisms and fix shapes.\n");
+    writeReview(dir, 2, "gpt", 1, "VERDICT: UNKNOWN\n");
+    writeReview(dir, 3, "fable", 2, "VERDICT: APPROVE\n");
+    writeReview(dir, 4, "gpt", 2, "VERDICT: NEEDS_CHANGES\n- MAJOR: other thing at src/b.ts:20 also with a lengthy paragraph of reviewer prose attached to it.\n");
+    writeReview(dir, 5, "fable", 3, "VERDICT: APPROVE\n");
+    writeReview(dir, 6, "gpt", 3, "VERDICT: APPROVE\n");
+  };
+
+  it("is a single line naming passes, outcome, and finding counts", () => {
+    const dir = makeTaskDir();
+    threePass(dir);
+    const digest = buildCrossPassDigest({
+      taskDir: dir, phase: "implement", passes: 3,
+      approvedClean: true, capReached: false, maxPasses: 3,
+    });
+    expect(digest).toBe("Review: 3 passes, reviewers approved — 2 findings addressed, 0 remaining.");
+  });
+
+  it("omits per-finding prose entirely, however verbose the reviewers were", () => {
+    const dir = makeTaskDir();
+    threePass(dir);
+    const digest = buildCrossPassDigest({
+      taskDir: dir, phase: "implement", passes: 3,
+      approvedClean: true, capReached: false, maxPasses: 3,
+    })!;
+    expect(digest).not.toContain("src/a.ts:10");
+    expect(digest).not.toContain("bloat any dialog");
+    expect(digest.split("\n")).toHaveLength(1);
+    expect(Buffer.byteLength(digest, "utf8")).toBeLessThan(200);
+  });
+
+  it("reports remaining findings and a reached cap", () => {
+    const dir = makeTaskDir();
+    writeReview(dir, 1, "fable", 1, "VERDICT: NEEDS_CHANGES\n- MAJOR: still broken at src/a.ts:10\n");
+    writeReview(dir, 2, "fable", 2, "VERDICT: NEEDS_CHANGES\n- MAJOR: still broken at src/a.ts:10\n");
+    const digest = buildCrossPassDigest({
+      taskDir: dir, phase: "implement", passes: 2,
+      approvedClean: false, capReached: true, maxPasses: 2,
+    });
+    expect(digest).toBe("Review: 2 passes, reached the 2-pass cap — 0 findings addressed, 1 remaining.");
+  });
+
+  it("returns null for a single pass, like the full summary", () => {
+    const dir = makeTaskDir();
+    writeReview(dir, 1, "fable", 1, "VERDICT: APPROVE\n");
+    expect(buildCrossPassDigest({
+      taskDir: dir, phase: "implement", passes: 1,
+      approvedClean: true, capReached: false, maxPasses: 3,
+    })).toBeNull();
+  });
+});
+
+describe("mergeMenuSummary", () => {
+  it("keeps a short agent summary intact and appends the digest", () => {
+    expect(mergeMenuSummary("Did the thing.", "Review: 2 passes, reviewers approved — 1 findings addressed, 0 remaining."))
+      .toBe("Did the thing.\n\nReview: 2 passes, reviewers approved — 1 findings addressed, 0 remaining.");
+  });
+
+  it("truncates an enormous agent summary at a line boundary and points to the message above", () => {
+    const huge = Array.from({ length: 60 }, (_, i) => `Fix ${i}: a long paragraph of detail about what changed and why, repeated to blow the budget.`).join("\n\n");
+    const out = mergeMenuSummary(huge, null);
+    expect(Buffer.byteLength(out, "utf8")).toBeLessThan(1200);
+    expect(out).toContain("Fix 0:");
+    expect(out).not.toContain("Fix 59:");
+    expect(out).toContain("full details are in the message above");
+    // Never cuts mid-line.
+    expect(out.split("\n").every((l) => !l.endsWith("repeated to blow the budge"))).toBe(true);
+  });
+
+  it("does not truncate when the agent summary already fits", () => {
+    const fits = "One short line.\n\nAnother short line.";
+    expect(mergeMenuSummary(fits, null)).toBe(fits);
+  });
+
+  it("keeps the digest even when the agent summary is truncated", () => {
+    const huge = Array.from({ length: 60 }, (_, i) => `Fix ${i}: a long paragraph of detail about what changed and why.`).join("\n\n");
+    const out = mergeMenuSummary(huge, "Review: 3 passes, reviewers approved — 7 findings addressed, 0 remaining.");
+    expect(out).toContain("Review: 3 passes, reviewers approved — 7 findings addressed, 0 remaining.");
   });
 });
 

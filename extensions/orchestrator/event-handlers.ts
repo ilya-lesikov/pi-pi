@@ -34,7 +34,7 @@ import { spawnBrainstormReviewers } from "./phases/brainstorm.js";
 import { reviewPassUnanimousApprove, reviewPassMinorOnly, reviewsDirForPhase } from "./phases/verdict.js";
 import { reconcileMissingReviewers } from "./review-files.js";
 import { classifyPlanVariants } from "./plan-files.js";
-import { buildCrossPassSummary, mergeSummary } from "./review-summary.js";
+import { buildCrossPassDigest, buildCrossPassSummary, mergeMenuSummary, mergeSummary } from "./review-summary.js";
 import { nextPhase, validateExitCriteria } from "./phases/machine.js";
 import { openPlannotator, waitForPlannotatorResult, cancelPendingPlannotatorWait } from "./plannotator.js";
 import { advanceBanner } from "./messages.js";
@@ -681,18 +681,28 @@ async function runReviewCyclePass(
 // Item 1: build the deterministic cross-pass review summary at loop termination
 // (active is still alive here). N = the completed auto/manual pass count for the
 // phase; returns null unless >1 pass ran with loadable output.
-function assembleCrossPassSummary(active: NonNullable<Orchestrator["active"]>, phase: Phase): string | null {
-  const passes = active.state.reviewPassByKind?.[phase]?.auto ?? 0;
-  return buildCrossPassSummary({
+function crossPassInput(active: NonNullable<Orchestrator["active"]>, phase: Phase) {
+  return {
     taskDir: active.dir,
     phase,
-    passes,
+    passes: active.state.reviewPassByKind?.[phase]?.auto ?? 0,
     approvedClean: !!active.state.reviewApprovedClean,
     capReached: !active.state.reviewApprovedClean,
     maxPasses: active.state.manualAutoReview?.maxPasses
       ?? active.state.autonomousConfig?.phases?.[phase]?.maxReviewPasses
       ?? 0,
-  });
+  };
+}
+
+function assembleCrossPassSummary(active: NonNullable<Orchestrator["active"]>, phase: Phase): string | null {
+  return buildCrossPassSummary(crossPassInput(active, phase));
+}
+
+// The interactive menu gets the one-line digest, not the full markdown: the
+// dialog sits directly under the agent's own prose, so restating every finding
+// there just pushes the options off-screen.
+function assembleCrossPassDigest(active: NonNullable<Orchestrator["active"]>, phase: Phase): string | null {
+  return buildCrossPassDigest(crossPassInput(active, phase));
 }
 
 export function registerOrchestratorToolsForTest(orchestrator: Orchestrator): void {
@@ -1250,7 +1260,7 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
       "Call when the current phase is complete. Shows a dialog to the user for " +
       "approval. The user's choice is returned — act on it accordingly.",
     parameters: Type.Object({
-      summary: Type.String({ description: "Brief summary of what was accomplished in this phase" }),
+      summary: Type.String({ description: "One or two lines naming what this phase produced. This is a dialog label, NOT a report: the user has already read your message above it, so do not restate per-item detail, findings, review rounds, or verification output here — anything longer is truncated." }),
     }),
     async execute(_toolCallId, params: any, _signal, _onUpdate, ctx) {
       if (!orchestrator.active) {
@@ -1334,6 +1344,7 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
         // Item 1: assemble the cross-pass summary once, before any transition
         // tears down active.
         const autoCrossPass = assembleCrossPassSummary(orchestrator.active, phase);
+        const autoCrossDigest = assembleCrossPassDigest(orchestrator.active, phase);
 
         // Terminal handoff (#1): an autonomous IMPLEMENT phase whose next phase is
         // "done" should NOT auto-complete. Run afterImplement (transitionToNextPhase
@@ -1352,7 +1363,7 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
           try {
             const { showActiveTaskMenu, USER_CANCELLED } = await import("./pp-menu.js");
             // Path 4: merge the cross-pass summary into the terminal menu.
-            const text = await showActiveTaskMenu(orchestrator, ctx, mergeSummary(params.summary, autoCrossPass), "tool", true);
+            const text = await showActiveTaskMenu(orchestrator, ctx, mergeMenuSummary(params.summary, autoCrossDigest), "tool", true);
             if (text === USER_CANCELLED) {
               return { content: [{ type: "text" as const, text: "User dismissed the phase-completion menu. Stop and wait for the user's next message." }], details: {} };
             }
@@ -1376,8 +1387,8 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
         const { showActiveTaskMenu, USER_CANCELLED } = await import("./pp-menu.js");
         // Path 5 (guided): merge a cross-pass summary when a multi-pass loop ran
         // (null for single-pass/no-review, so the wording is unchanged there).
-        const guidedCrossPass = assembleCrossPassSummary(orchestrator.active, orchestrator.active.state.phase);
-        const text = await showActiveTaskMenu(orchestrator, ctx, mergeSummary(params.summary, guidedCrossPass), "tool");
+        const guidedCrossDigest = assembleCrossPassDigest(orchestrator.active, orchestrator.active.state.phase);
+        const text = await showActiveTaskMenu(orchestrator, ctx, mergeMenuSummary(params.summary, guidedCrossDigest), "tool");
         if (text === USER_CANCELLED) {
           return { content: [{ type: "text" as const, text: "User dismissed the phase-completion menu. Stop and wait for the user's next message." }], details: {} };
         }

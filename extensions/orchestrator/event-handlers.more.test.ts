@@ -815,7 +815,7 @@ describe("pp_phase_complete tool", () => {
     writeFileSync(join(rdir, "001_gpt_round-2.md"), "VERDICT: APPROVE", "utf-8");
   }
 
-  it("guided menu path shows the cross-pass summary when >1 pass ran", async () => {
+  it("guided menu path shows the one-line digest, not the full cross-pass markdown", async () => {
     showActiveTaskMenuMock.mockClear();
     orchestrator.active = makeActiveTask();
     orchestrator.active.state.phase = "implement";
@@ -829,8 +829,11 @@ describe("pp_phase_complete tool", () => {
     await tool.execute("id", { summary: "agent summary" }, undefined, undefined, ctxWithUi());
     const passedSummary = showActiveTaskMenuMock.mock.calls.at(-1)?.[2] as string;
     expect(passedSummary).toContain("agent summary");
-    expect(passedSummary).toContain("Cross-pass review summary (implement, 2 passes");
-    expect(passedSummary).toContain("[addressed (not re-reported)] (gpt, pass 1) MAJOR: src/a.ts:12 leak");
+    expect(passedSummary).toContain("Review: 2 passes, reviewers approved — 1 findings addressed, 0 remaining.");
+    // The dialog is a chooser sitting under the agent's own prose: per-finding
+    // reviewer text belongs in the message, not in the menu title.
+    expect(passedSummary).not.toContain("Cross-pass review summary");
+    expect(passedSummary).not.toContain("src/a.ts:12 leak");
   });
 
   it("guided menu path keeps the single-pass summary unchanged (no cross-pass)", async () => {
@@ -910,6 +913,22 @@ describe("pp_phase_complete tool", () => {
     const tool = getTool("pp_phase_complete");
     await tool.execute("id", { summary: "s" }, undefined, undefined, ctxWithUi());
     expect(stashed).toContain("Cross-pass review summary (plan, 2 passes");
+  });
+
+  it("truncates an enormous agent summary in the menu title", async () => {
+    showActiveTaskMenuMock.mockClear();
+    orchestrator.active = makeActiveTask();
+    orchestrator.active.state.phase = "implement";
+    orchestrator.active.state.step = "llm_work";
+    orchestrator.active.state.reconciledPhase = "implement";
+    registerOrchestratorToolsForTest(orchestrator);
+    const tool = getTool("pp_phase_complete");
+    const huge = Array.from({ length: 40 }, (_, i) => `Fix ${i}: a full paragraph restating what changed, why, and how it was verified.`).join("\n\n");
+    await tool.execute("id", { summary: huge }, undefined, undefined, ctxWithUi());
+    const passedSummary = showActiveTaskMenuMock.mock.calls.at(-1)?.[2] as string;
+    expect(Buffer.byteLength(passedSummary, "utf8")).toBeLessThan(1000);
+    expect(passedSummary).toContain("Fix 0:");
+    expect(passedSummary).toContain("full details are in the message above");
   });
 
   it("manual advance to done surfaces the cross-pass summary in the tool text (not the discarded handoff)", async () => {
