@@ -185,6 +185,20 @@ describe("phased factory prompts: manifest guidance replaces the do-not-re-read 
     expect(p.prompt).toContain("Do NOT spawn task, advisor, deep-debugger, or reviewer");
   });
 
+  it("planner writes a stub FIRST and marks completion in the file's content", () => {
+    const p = createPlannerAgent("opus", planners, { userRequest: "u", research: "r", manifest }, "/out.md", []);
+    // Mirrors the reviewer WRITE-FIRST convention: the file must exist even if the
+    // planner burns its whole budget before producing a plan.
+    expect(p.prompt).toContain("WRITE-FIRST");
+    expect(p.prompt).toContain("PLAN_STATUS: INCOMPLETE");
+    expect(p.prompt).toContain("PLAN_STATUS: COMPLETE");
+    expect(p.prompt).toContain("guarantees the file exists even if you run out of budget");
+    // The completion marker is an exception to the no-other-sections rule, which
+    // would otherwise forbid the trailing line.
+    expect(p.prompt).toMatch(/PLAN_STATUS: COMPLETE[^\n]*(exception|allowed|permitted)|(?:exception|allowed|permitted)[^\n]*PLAN_STATUS: COMPLETE/);
+    expect(p.prompt).toContain("# MANDATORY OUTPUT FILE (write a stub here FIRST, overwrite with the final plan LAST)");
+  });
+
   it("plan-reviewer lists manifest paths and restricts spawns", () => {
     const p = createPlanReviewerAgent(
       "opus",
