@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   registerExaTools: vi.fn(),
   registerAstSearchTool: vi.fn(),
   initFlantSync: vi.fn(),
+  registerBillingHook: vi.fn(),
   suppressPierreThemeSpam: vi.fn(),
 }));
 
@@ -19,6 +20,7 @@ vi.mock("./exa.js", () => ({ registerExaTools: mocks.registerExaTools }));
 vi.mock("./ast-search.js", () => ({ registerAstSearchTool: mocks.registerAstSearchTool }));
 vi.mock("./validate-artifacts.js", () => ({ validatePlan: vi.fn(), validateArtifact: vi.fn() }));
 vi.mock("./flant-infra.js", () => ({ initFlantSync: mocks.initFlantSync }));
+vi.mock("./billing-spoof.js", () => ({ registerBillingHook: mocks.registerBillingHook }));
 vi.mock("./suppress-pierre-theme-spam.js", () => ({ suppressPierreThemeSpam: mocks.suppressPierreThemeSpam }));
 
 import init, { SUBAGENT_SESSION_KEY } from "./index.js";
@@ -65,6 +67,9 @@ describe("orchestrator extension entrypoint", () => {
     expect(mocks.registerExaTools).toHaveBeenCalledWith(pi);
     expect(mocks.registerAstSearchTool).toHaveBeenCalledTimes(1);
     expect(pi.on).toHaveBeenCalledWith("tool_result", expect.any(Function));
+    // The subagent branch registers the billing hook so child subscription
+    // requests get the billing system[0] block (root-only hook doesn't run here).
+    expect(mocks.registerBillingHook).toHaveBeenCalledWith(pi);
     expect(mocks.Orchestrator).not.toHaveBeenCalled();
   });
 

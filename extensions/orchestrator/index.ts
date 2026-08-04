@@ -9,6 +9,7 @@ import { registerExaTools } from "./exa.js";
 import { registerAstSearchTool } from "./ast-search.js";
 import { validatePlan, validateArtifact } from "./validate-artifacts.js";
 import { initFlantSync } from "./flant-infra.js";
+import { registerBillingHook } from "./billing-spoof.js";
 import { suppressPierreThemeSpam } from "./suppress-pierre-theme-spam.js";
 
 const ORCHESTRATOR_KEY = Symbol.for("pi-pi:orchestrator-initialized");
@@ -25,6 +26,11 @@ export default function (pi: ExtensionAPI) {
       (globalThis as any)[SUBAGENT_SESSION_KEY] = { depth: 1 };
     }
     initFlantSync(pi);
+    // Child sessions never run registerEventHandlers, so without this the
+    // root-only billing hook is absent and subagent subscription requests miss
+    // the billing system[0] block — the reason switch-back "works" for the main
+    // model but not for subagents. Gated to Claude/identity payloads internally.
+    registerBillingHook(pi);
     registerSubagentTools(pi);
     return;
   }

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 // Ported from pi-claude-auth (src/signing.ts + transforms.ts). Routes
 // subscription (OAuth-stealth) Claude requests to the Pro/Max PLAN instead of
@@ -95,4 +96,21 @@ export function injectBillingHeader(payload: unknown): boolean {
   const billingHeader = buildBillingHeaderValue(p.messages as Array<{ role?: string; content?: unknown }>);
   p.system = [{ type: "text", text: billingHeader }, ...system];
   return true;
+}
+
+// Register the `before_provider_request` billing-injection hook. Shared by the
+// root session (registerEventHandlers) AND the subagent branch (index.ts): child
+// subscription requests otherwise never get the billing system[0] entry (the
+// root-only hook doesn't run in child sessions), so switch-back "works" for the
+// main model but not for subagents. injectBillingHeader is itself gated to
+// Claude + identity-block payloads, so this is a no-op for other requests.
+export function registerBillingHook(pi: ExtensionAPI, log?: (msg: string, err: unknown) => void): void {
+  pi.on("before_provider_request", async (event) => {
+    try {
+      injectBillingHeader(event.payload);
+    } catch (err: any) {
+      log?.("billing header injection failed", err);
+    }
+    return event.payload;
+  });
 }

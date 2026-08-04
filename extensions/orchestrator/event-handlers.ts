@@ -35,7 +35,7 @@ import { reviewPassUnanimousApprove, reviewPassMinorOnly } from "./phases/verdic
 import { nextPhase, validateExitCriteria } from "./phases/machine.js";
 import { openPlannotator, waitForPlannotatorResult, cancelPendingPlannotatorWait } from "./plannotator.js";
 import { advanceBanner } from "./messages.js";
-import { injectBillingHeader } from "./billing-spoof.js";
+import { registerBillingHook } from "./billing-spoof.js";
 import { Orchestrator, type ActiveTask } from "./orchestrator.js";
 import { createCustomFooter, setFooterContext, setFooterTracker, setFooterOrchestrator } from "./custom-footer.js";
 import { createUsageTracker, dumpUsageSummary, loadUsageSummary, isSubscriptionRouted, type UsageTracker } from "./usage-tracker.js";
@@ -1430,14 +1430,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   // travels via the sub provider's model.headers (see flant-infra). Idempotent
   // and gated to Claude + identity-block payloads, so non-Anthropic and
   // plain-API-key requests are untouched.
-  pi.on("before_provider_request", async (event) => {
-    try {
-      injectBillingHeader(event.payload);
-    } catch (err: any) {
-      getLogger().debug({ s: "billing", err: err?.message }, "billing header injection failed");
-    }
-    return event.payload;
-  });
+  registerBillingHook(pi, (msg, err: any) => getLogger().debug({ s: "billing", err: err?.message }, msg));
 
   // Personal-subscription Claude routing registers the sub provider with a
   // literal OAuth token (a static snapshot). That token expires within a few

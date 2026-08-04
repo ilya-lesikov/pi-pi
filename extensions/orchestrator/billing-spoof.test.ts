@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { injectBillingHeader, buildUserAgent, CC_VERSION, CC_ENTRYPOINT } from "./billing-spoof.js";
+import { injectBillingHeader, buildUserAgent, registerBillingHook, CC_VERSION, CC_ENTRYPOINT } from "./billing-spoof.js";
 
 const CC_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
 
@@ -63,5 +63,38 @@ describe("injectBillingHeader", () => {
     ]);
     // First user message content unchanged (cch computed on it as-is).
     expect(payload.messages[0].content).toBe("hello world this is the first user message");
+  });
+});
+
+describe("registerBillingHook", () => {
+  function fakePi() {
+    let handler: ((event: any) => Promise<any>) | undefined;
+    return {
+      on: (name: string, fn: (event: any) => Promise<any>) => { if (name === "before_provider_request") handler = fn; },
+      fire: (payload: any) => handler!({ payload }),
+      registered: () => handler !== undefined,
+    };
+  }
+
+  it("registers a before_provider_request hook that injects the billing block for sub/Claude payloads", async () => {
+    const pi = fakePi();
+    registerBillingHook(pi as any);
+    expect(pi.registered()).toBe(true);
+    const payload = claudePayload([{ type: "text", text: CC_IDENTITY }]);
+    await pi.fire(payload);
+    expect(payload.system[0].text).toMatch(/^x-anthropic-billing-header:/);
+  });
+
+  it("leaves non-Claude / non-identity payloads untouched", async () => {
+    const pi = fakePi();
+    registerBillingHook(pi as any);
+    // No CC identity block -> gate fails, untouched.
+    const noIdentity = { model: "sub/claude-opus-4-8", system: [{ type: "text", text: "other" }], messages: [{ role: "user", content: "hi" }] };
+    await pi.fire(noIdentity);
+    expect(noIdentity.system[0].text).toBe("other");
+    // Non-Claude model -> untouched.
+    const nonClaude = { model: "openai/gpt-x", system: [{ type: "text", text: CC_IDENTITY }], messages: [{ role: "user", content: "hi" }] };
+    await pi.fire(nonClaude);
+    expect(nonClaude.system[0].text).toBe(CC_IDENTITY);
   });
 });
