@@ -74,20 +74,19 @@ export function extractActionableHeadings(content: string): string[] {
       continue;
     }
     // Empty severity header (`## MAJOR`): the findings are on the following
-    // lines until the next header. Emit each meaningful body line as its own
-    // finding, tagged with the severity so anchors/status still track.
+    // lines until the next header. Mirror hasActionableFindings (verdict.ts) —
+    // which treats ANY meaningful non-"none" body line (bulleted OR unbulleted)
+    // as the finding — so an unbulleted `### CRITICAL\nnull deref at x.ts:1` is
+    // not dropped. Each meaningful line becomes a finding tagged with the
+    // severity so anchors/status still track.
     if (!isHeader) continue;
     const severity = m[0].toUpperCase();
     for (let j = i + 1; j < lines.length; j++) {
       const rawBody = lines[j].trim();
       if (/^#{1,4}\s/.test(rawBody)) break;
-      // Only LIST ITEMS (`-`/`*`/`N.`) under the header are findings; free prose
-      // is explanatory text, not a distinct finding, so it is not captured.
-      const bulletMatch = rawBody.match(/^(?:[-*]|\d+\.)\s+(.*)$/);
-      if (!bulletMatch) continue;
-      const bodyLine = bulletMatch[1].trim();
+      const bodyLine = rawBody.replace(/^(?:[-*]|\d+\.)\s+/, "").trim();
       if (bodyLine.length === 0 || isNoneBody(bodyLine)) continue;
-      // A bullet that itself carries a severity/section token (actionable or the
+      // A line that itself carries a severity/section token (actionable or the
       // non-actionable MINOR/NIT) belongs to its OWN classification, not this
       // section's body — leave it for its own iteration / skip it.
       if (ACTIONABLE_RE.test(bodyLine) || /^(?:MINOR|NIT)\b/i.test(bodyLine)) continue;

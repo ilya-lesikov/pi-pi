@@ -112,12 +112,20 @@ describe("buildCrossPassSummary", () => {
     expect(out).toContain("MAJOR: src/y.ts:9 null deref");
   });
 
-  it("captures only LIST ITEMS under a severity header, not explanatory prose", () => {
-    const prose = "This paragraph explains the section but is not itself a finding.";
-    const content = ["## MAJOR", prose, "- real.ts:1 the actual finding"].join("\n");
-    const h = extractActionableHeadings(content);
-    expect(h).toEqual(["MAJOR: real.ts:1 the actual finding"]);
-    expect(h.some((x) => x.includes("paragraph explains"))).toBe(false);
+  it("captures an UNBULLETED finding line under a severity header (mirrors hasActionableFindings)", () => {
+    // hasActionableFindings treats `### CRITICAL\nnull deref at x.ts:1` as a
+    // real finding, so the cross-pass extractor must not drop the unbulleted
+    // line — otherwise a required finding would be silently omitted.
+    const content = ["### CRITICAL", "null deref at x.ts:1", "", "### MAJOR", "None."].join("\n");
+    expect(extractActionableHeadings(content)).toEqual(["CRITICAL: null deref at x.ts:1"]);
+  });
+
+  it("captures both bulleted and unbulleted body lines, skipping none-bodies", () => {
+    const content = ["## MAJOR", "- real.ts:1 finding one", "prose finding two at real.ts:2"].join("\n");
+    expect(extractActionableHeadings(content)).toEqual([
+      "MAJOR: real.ts:1 finding one",
+      "MAJOR: prose finding two at real.ts:2",
+    ]);
   });
 
   it("handles a 3-pass fixture with per-pass verdict lines", () => {
