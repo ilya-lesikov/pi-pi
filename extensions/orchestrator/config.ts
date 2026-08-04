@@ -188,8 +188,8 @@ const DEFAULT_CONFIG: PiPiConfig = {
     projectClaude: true,
   },
   skills: {
-    loadProject: false,
-    loadGlobal: false,
+    loadProject: true,
+    loadGlobal: true,
     disabled: [],
   },
   compaction: {

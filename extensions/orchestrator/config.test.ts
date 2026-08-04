@@ -167,9 +167,9 @@ describe("validateConfig", () => {
     expect(() => validateConfig({ contextInjection: { globalClaude: "yes" } as any })).toThrow("config.contextInjection.globalClaude");
   });
 
-  it("defaults skills to discovery-off and validates its shape", () => {
+  it("defaults skills to discovery-on for both scopes and validates its shape", () => {
     const d = getDefaultConfig();
-    expect(d.skills).toEqual({ loadProject: false, loadGlobal: false, disabled: [] });
+    expect(d.skills).toEqual({ loadProject: true, loadGlobal: true, disabled: [] });
     expect(() => validateConfig({ skills: { loadProject: true, loadGlobal: false, disabled: ["project:x"] } })).not.toThrow();
     expect(() => validateConfig({ skills: { loadProject: "yes" } as any })).toThrow("config.skills.loadProject");
     expect(() => validateConfig({ skills: { disabled: [1] } as any })).toThrow("config.skills.disabled");
