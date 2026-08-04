@@ -128,6 +128,19 @@ describe("buildCrossPassSummary", () => {
     expect(out).toContain("further finding line(s) omitted");
   });
 
+  it("bounds a many-pass header (999 approving passes, zero findings) within 32 KiB", () => {
+    const dir = makeTaskDir();
+    const passes = 999;
+    for (let p = 1; p <= passes; p++) {
+      writeReview(dir, 1, "gpt-reviewer-with-a-longish-name", p, "VERDICT: APPROVE");
+      writeReview(dir, 2, "fable-reviewer-with-a-longish-name", p, "VERDICT: APPROVE");
+    }
+    const out = buildCrossPassSummary({ taskDir: dir, phase: "implement", passes, approvedClean: true, capReached: false, maxPasses: 999 })!;
+    expect(out).not.toBeNull();
+    expect(Buffer.byteLength(out, "utf8")).toBeLessThanOrEqual(32 * 1024);
+    expect(out).toContain("pass record(s) omitted");
+  });
+
   it("works for the plan phase (plan-reviews dir, BLOCKERS)", () => {
     const dir = makeTaskDir();
     writePlanReview(dir, 1, "gpt", 1, "VERDICT: NEEDS_CHANGES\n## BLOCKERS: plan.md:3 missing step");

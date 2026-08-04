@@ -119,57 +119,57 @@ export function buildCrossPassSummary(input: CrossPassSummaryInput): string | nu
   const statusOf = (f: Finding): FindingStatus =>
     f.lastPass >= passes ? "remaining" : "addressed (not re-reported)";
 
-  // Assemble markdown with a hard byte budget; overflow is reported, not silent.
-  const lines: string[] = [];
+  // Assemble markdown with a hard byte budget on BOTH the per-pass records AND
+  // the findings section (a long unlimited-pass loop can make the pass records
+  // alone large), so the FINAL output is always within MAX_SUMMARY_BYTES.
   const capNote = input.capReached
     ? `reached the ${input.maxPasses >= 999 ? "unlimited" : input.maxPasses}-pass cap`
     : input.approvedClean
       ? "reviewers approved"
       : "review loop ended";
-  lines.push(`## Cross-pass review summary (${phase}, ${passes} passes — ${capNote})`);
-  lines.push("");
+  const title = `## Cross-pass review summary (${phase}, ${passes} passes — ${capNote})\n\n`;
 
-  for (const pr of passRecords) {
-    lines.push(`### Pass ${pr.pass}`);
+  const passLineGroups = passRecords.map((pr) => {
+    const g = [`### Pass ${pr.pass}`];
     for (const r of pr.reviewers) {
-      lines.push(`- ${r.reviewer}: ${r.verdict} (${r.actionable} actionable finding${r.actionable === 1 ? "" : "s"})`);
+      g.push(`- ${r.reviewer}: ${r.verdict} (${r.actionable} actionable finding${r.actionable === 1 ? "" : "s"})`);
     }
-    lines.push("");
-  }
+    return g.join("\n") + "\n\n";
+  });
 
   const sortedFindings = [...findings.values()].sort(
     (a, b) => a.firstPass - b.firstPass || a.reviewer.localeCompare(b.reviewer) || a.heading.localeCompare(b.heading),
   );
   const remaining = sortedFindings.filter((f) => statusOf(f) === "remaining");
   const addressed = sortedFindings.filter((f) => statusOf(f) !== "remaining");
+  const findingsHeader = `### Findings (${remaining.length} remaining, ${addressed.length} addressed)\n`;
+  const findingLines = sortedFindings.map((f) => `- [${statusOf(f)}] (${f.reviewer}, pass ${f.firstPass}) ${f.heading}\n`);
 
-  lines.push(`### Findings (${remaining.length} remaining, ${addressed.length} addressed)`);
-  const findingLines: string[] = [];
-  for (const f of sortedFindings) {
-    findingLines.push(`- [${statusOf(f)}] (${f.reviewer}, pass ${f.firstPass}) ${f.heading}`);
-  }
-
-  // Apply the byte budget: keep as many finding lines as fit, then note the
-  // omitted count rather than dumping everything. Reserve room up front for the
-  // worst-case omission notice so the FINAL output (notice included) stays
-  // within MAX_SUMMARY_BYTES.
-  const header = lines.join("\n") + "\n";
-  const noticeReserve = Buffer.byteLength(
-    `\n_${findingLines.length} further finding line(s) omitted to stay within the summary size budget._\n`,
-    "utf8",
-  );
-  let body = "";
-  let omitted = 0;
-  for (let i = 0; i < findingLines.length; i++) {
-    const candidate = body + findingLines[i] + "\n";
-    if (Buffer.byteLength(header + candidate, "utf8") + noticeReserve > MAX_SUMMARY_BYTES) {
-      omitted = findingLines.length - i;
-      break;
+  // Greedily append chunks while they fit, reserving room for a worst-case
+  // omission notice; return { text, omitted }.
+  const omitNotice = (kind: string, n: number) => `\n_${n} ${kind} omitted to stay within the summary size budget._\n`;
+  const fitChunks = (chunks: string[], prefixBytes: number, budget: number, kind: string): { text: string; omitted: number } => {
+    const reserve = Buffer.byteLength(omitNotice(kind, chunks.length), "utf8");
+    let text = "";
+    for (let i = 0; i < chunks.length; i++) {
+      if (prefixBytes + Buffer.byteLength(text + chunks[i], "utf8") + reserve > budget) {
+        return { text: text + omitNotice(kind, chunks.length - i), omitted: chunks.length - i };
+      }
+      text += chunks[i];
     }
-    body = candidate;
-  }
-  let out = header + body;
-  if (omitted > 0) out += `\n_${omitted} further finding line(s) omitted to stay within the summary size budget._\n`;
+    return { text, omitted: 0 };
+  };
+
+  const titleBytes = Buffer.byteLength(title, "utf8");
+  // Split the remaining budget: up to half for the pass records, the rest for
+  // findings (findings also get whatever the pass records did not use).
+  const afterTitle = MAX_SUMMARY_BYTES - titleBytes;
+  const passBudget = titleBytes + Math.floor(afterTitle / 2);
+  const passSection = fitChunks(passLineGroups, titleBytes, passBudget, "further pass record(s)");
+  const usedSoFar = titleBytes + Buffer.byteLength(passSection.text, "utf8") + Buffer.byteLength(findingsHeader, "utf8");
+  const findingsSection = fitChunks(findingLines, usedSoFar, MAX_SUMMARY_BYTES, "further finding line(s)");
+
+  const out = title + passSection.text + findingsHeader + findingsSection.text;
   return out.trimEnd() + "\n";
 }
 
