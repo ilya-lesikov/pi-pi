@@ -667,7 +667,10 @@ describe("brainstorm/debug Review in Plannotator (annotate-folder) (#4)", () => 
   function makeBrainstormOrchestrator(): any {
     taskDir = mkdtempSync(join(tmpdir(), "pp-annotate-"));
     return {
-      active: { type: "brainstorm", dir: taskDir, state: { phase: "brainstorm", step: "llm_work", mode: "guided" } },
+      // An implement task in its brainstorm PHASE — the artifact-Plannotator path
+      // is phase-gated, so this exercises the same branch the removed brainstorm
+      // TASK type used to reach.
+      active: { type: "implement", dir: taskDir, state: { phase: "brainstorm", step: "llm_work", mode: "guided" } },
       transitionController: { isRunning: () => false, abortMainAgent: () => {} },
       pi: {},
       cancelPendingRetry: () => {},

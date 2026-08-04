@@ -492,18 +492,7 @@ async function finishTask(orchestrator: Orchestrator, ctx: any): Promise<string>
     ctx.ui.notify(terminalAssumptionsSummary(dir), "info");
   }
 
-  const urExists = existsSync(join(dir, "USER_REQUEST.md"));
-  const resExists = existsSync(join(dir, "RESEARCH.md"));
-
-  if (type === "review" && urExists && resExists) {
-    const taskRelPath = relative(join(orchestrator.cwd, ".pp", "state"), dir);
-    ctx.ui.notify(
-      `Task "${name}" completed. Artifacts saved.\nUse /pp → Implement → From and choose ${taskRelPath}`,
-      "info",
-    );
-  } else {
-    ctx.ui.notify(`Task "${name}" completed.`, "info");
-  }
+  ctx.ui.notify(`Task "${name}" completed.`, "info");
 
   return `Task "${name}" completed.`;
 }
@@ -4310,29 +4299,6 @@ async function showReviewMenu(orchestrator: Orchestrator, ctx: any): Promise<typ
     }
 
     const result = await showResumeMenu(orchestrator, ctx, "review", "No paused review tasks found.");
-    if (result === "started") return result;
-  }
-}
-
-async function showTaskTypeMenu(
-  orchestrator: Orchestrator,
-  ctx: any,
-  type: TaskType,
-): Promise<typeof BACK | "started"> {
-  while (true) {
-    const choice = await selectOption(ctx, type.charAt(0).toUpperCase() + type.slice(1), [
-      { title: "New", description: "Start a new session" },
-      { title: "Resume", description: "Resume a paused session" },
-      { title: "Back", description: "Return to the previous menu" },
-    ]);
-    if (!choice || choice === "Back") return BACK;
-
-    if (choice === "New") {
-      await orchestrator.startTask(ctx, type, type, undefined, undefined, undefined);
-      return "started";
-    }
-
-    const result = await showResumeMenu(orchestrator, ctx, type, `No paused ${type} tasks found.`);
     if (result === "started") return result;
   }
 }
