@@ -1217,9 +1217,12 @@ export function syncProviderTiers(settings?: FlantSettings): void {
   });
 }
 
-export function initFlantSync(pi: ExtensionAPI): void {
+// `cwd`, when supplied, binds project-scoped flant overrides (the root session's
+// project dir, shared with child sessions via ORCHESTRATOR_CWD_KEY). Omit for a
+// global-only read (e.g. before any cwd is known).
+export function initFlantSync(pi: ExtensionAPI, cwd?: string): void {
   setPI(pi);
-  const settings = loadFlantSettings();
+  const settings = loadFlantSettings(cwd);
   const log = getLogger();
   syncProviderTiers(settings);
   if (!settings.enabled) {
@@ -1253,6 +1256,17 @@ export async function initFlantOnStartup(pi: ExtensionAPI, cwd?: string): Promis
     // updateFlantInfra (which refreshes the token) is skipped when auto-update
     // is off, but any registered sub provider still needs a fresh token.
     if (settings.subscription) await refreshClaudeOAuthToken();
+    // autoUpdate=false means "do not REFRESH the cache", NOT "stay unregistered".
+    // With effective (project-scoped) enabled=true, still register from the
+    // cached models so a global-disabled + project-enabled + autoUpdate=false
+    // session actually gets its providers (initFlantSync ran global-only and
+    // registered nothing). If there is no cache yet, bootstrap once via update.
+    if (settings.cachedFlantModels && settings.cachedOpenRouterData) {
+      registerFlantProviders(pi, settings.cachedFlantModels, settings.cachedOpenRouterData, { subscription: settings.subscription });
+      generatedFlantConfig = generateFlantConfig(settings.cachedFlantModels, isSubscriptionActive(settings));
+      return;
+    }
+    await updateFlantInfra(pi, { cwd });
     return;
   }
   await updateFlantInfra(pi, { cwd });

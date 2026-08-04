@@ -1517,11 +1517,10 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
         const usage = ctx.getContextUsage();
         if (usage && typeof usage.contextWindow === "number" && usage.contextWindow > 0) {
           const { compactionThresholdTokens, shouldFireCompaction, adaptiveNextThreshold, wouldThrash } = await import("./compaction-trigger.js");
-          const modelId = (typeof ctx.model?.id === "string" && ctx.model.id) || undefined;
           // Provider-qualified key: flant-sub and flant-api share bare ids, so a
           // bare-id check would miss a sub<->api route change and reuse a stale
           // baseline. Reset the adaptive state on any model or window change.
-          const modelKey = ctx.model?.provider && ctx.model?.id ? `${ctx.model.provider}/${ctx.model.id}` : (modelId ?? null);
+          const modelKey = ctx.model?.provider && ctx.model?.id ? `${ctx.model.provider}/${ctx.model.id}` : ((typeof ctx.model?.id === "string" && ctx.model.id) || null);
           if (orchestrator.adaptiveCompaction.modelKey !== modelKey || orchestrator.adaptiveCompaction.window !== usage.contextWindow) {
             // resetAdaptiveCompaction REPLACES the object, so re-read the ref after.
             orchestrator.resetAdaptiveCompaction();
@@ -1529,7 +1528,10 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
             orchestrator.adaptiveCompaction.window = usage.contextWindow;
           }
           const adapt = orchestrator.adaptiveCompaction;
-          const thresholdInput = { contextWindow: usage.contextWindow, modelId, config: cfg };
+          // Pass the PROVIDER-QUALIFIED spec as modelId so an exact perModel
+          // override (`provider/id`) is selectable; effectiveCompactionParams
+          // still falls back to the bare id internally.
+          const thresholdInput = { contextWindow: usage.contextWindow, modelId: modelKey ?? undefined, config: cfg };
           const base = compactionThresholdTokens(thresholdInput);
           // Capture the post-compaction baseline on the FIRST agent_end with
           // non-null tokens after a proactive compaction (getContextUsage returns

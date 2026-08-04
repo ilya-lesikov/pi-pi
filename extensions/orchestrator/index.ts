@@ -25,7 +25,10 @@ export default function (pi: ExtensionAPI) {
     if (!(globalThis as any)[SUBAGENT_SESSION_KEY]) {
       (globalThis as any)[SUBAGENT_SESSION_KEY] = { depth: 1 };
     }
-    initFlantSync(pi);
+    // Child sessions inherit the root project cwd (seeded/refreshed on the root
+    // ORCHESTRATOR_CWD_KEY) so project-scoped flant overrides bind; fall back to
+    // global-only when no root cwd is known.
+    initFlantSync(pi, (globalThis as any)[ORCHESTRATOR_CWD_KEY]);
     // Child sessions never run registerEventHandlers, so without this the
     // root-only billing hook is absent and subagent subscription requests miss
     // the billing system[0] block — the reason switch-back "works" for the main

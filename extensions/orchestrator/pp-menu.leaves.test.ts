@@ -5,6 +5,7 @@ import { tmpdir } from "os";
 import { getDefaultConfig, GLOBAL_CONFIG_PATH, mergeConfigLayers } from "./config.js";
 import * as configModule from "./config.js";
 import { buildResetOptions, showActiveTaskMenu } from "./pp-menu.js";
+import { demoteTierForFamily, clearAllTierDemotions } from "./model-registry.js";
 
 const askQueue: string[] = [];
 const askQuestions: string[] = [];
@@ -267,6 +268,7 @@ describe("Flant submenu", () => {
     askQueue.push(
       "Settings", "Flant",
       "Auto-update on startup: ON",
+      "Set globally",
       "Back", "Back", "Back", "Back",
     );
     await navigate(orchestrator, ctx);
@@ -283,10 +285,15 @@ describe("Flant submenu", () => {
     askQueue.push(
       "Settings", "Flant",
       "Enable: ON",
+      "Set globally",
       "Back", "Back", "Back", "Back",
     );
     await navigate(orchestrator, orchestrator.lastCtx);
-    expect(globalStore.flant?.enabled).toBe(false);
+    // Disabling writes `false`, which equals the flant.enabled DEFAULT, so
+    // applyScopeChoice clears the global override rather than pinning `false`.
+    // Effective enabled is still off (default false) and the disable side-effects
+    // ran; durable policy never goes through the cache (saveFlantSettings).
+    expect(globalStore.flant?.enabled ?? false).toBe(false);
     expect(flantMock.saveFlantSettings).not.toHaveBeenCalled();
     expect(flantMock.unregisterFlantProviders).toHaveBeenCalled();
     expect(flantMock.clearFlantGeneratedConfig).toHaveBeenCalled();
@@ -300,6 +307,7 @@ describe("Flant submenu", () => {
       "Settings", "Flant",
       "Cache period: 7 days",
       "14 days",
+      "Set globally",
       "Back", "Back", "Back", "Back",
     );
     await navigate(orchestrator, orchestrator.lastCtx);
@@ -322,6 +330,21 @@ describe("Flant submenu", () => {
     expect(notes.some((n) => n.includes("FLANT_API_KEY"))).toBe(true);
     expect(flantMock.updateFlantInfra).not.toHaveBeenCalled();
     if (prev !== undefined) process.env.FLANT_API_KEY = prev;
+  });
+
+  it("offers 'Clear provider tier demotions' even when flant is disabled (finding 8)", async () => {
+    clearAllTierDemotions();
+    // A Copilot-origin demotion with flant OFF must still be reachable.
+    demoteTierForFamily("copilot", "gpt");
+    const orchestrator = makeOrchestrator(cwd);
+    flantSettings.enabled = false;
+    orchestrator.lastCtx = makeCtx();
+    askQueue.push("Settings", "Flant", "Back", "Back", "Back", "Back");
+    await navigate(orchestrator, orchestrator.lastCtx);
+    const flantMenu = askOptions.find((opts) => opts.some((t) => t.startsWith("Enable:")));
+    expect(flantMenu).toBeDefined();
+    expect(flantMenu!.some((t) => t.startsWith("Clear provider tier demotions"))).toBe(true);
+    clearAllTierDemotions();
   });
 
   it("shows current status without mutating settings", async () => {

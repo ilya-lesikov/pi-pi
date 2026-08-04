@@ -1093,7 +1093,7 @@ function describeUpdateResult(result: { ok: boolean; error?: string; models?: st
 
 async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
   while (true) {
-    const settings = loadFlantSettings();
+    const settings = loadFlantSettings(orchestrator.cwd);
     const enableLabel = `Enable: ${settings.enabled ? "ON" : "OFF"}`;
     const options: OptionInput[] = [
       { title: enableLabel, description: "Turn the Flant AI model providers on or off" },
@@ -1113,15 +1113,17 @@ async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise
         { title: "Update now", description: "Fetch the latest model list from Flant right away" },
         { title: "Current status", description: "Show the current Flant configuration, providers, and model counts" },
       );
-      // Monthly-cap tier demotions are one-way for the session; offer a manual
-      // reset ONLY when some exist (they reset automatically on task teardown).
-      const demotions = listTierDemotions();
-      if (demotions.length > 0) {
-        options.push({
-          title: `Clear provider tier demotions (${demotions.length})`,
-          description: `Restore tiers demoted by a monthly usage cap: ${demotions.join(", ")}`,
-        });
-      }
+    }
+    // Monthly-cap tier demotions are one-way for the session; offer a manual
+    // reset whenever any exist (they reset automatically on task teardown).
+    // Independent of flant.enabled — demotions can originate from Copilot too,
+    // so this must be reachable even when flant is off.
+    const demotions = listTierDemotions();
+    if (demotions.length > 0) {
+      options.push({
+        title: `Clear provider tier demotions (${demotions.length})`,
+        description: `Restore tiers demoted by a monthly usage cap: ${demotions.join(", ")}`,
+      });
     }
     options.push({ title: "Back", description: "Return to the previous menu" });
 
@@ -1141,7 +1143,7 @@ async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise
 
     if (choice === enableLabel) {
       if (settings.enabled) {
-        setFlantConfigValue(orchestrator, "enabled", false);
+        if (!(await setFlantConfigValue(orchestrator, ctx, "enabled", false))) continue;
         unregisterFlantProviders(orchestrator.pi);
         clearFlantGeneratedConfig();
         ctx.ui.notify("Flant disabled.", "info");
@@ -1150,7 +1152,7 @@ async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise
           ctx.ui.notify("Set FLANT_API_KEY environment variable first.", "warning");
           continue;
         }
-        setFlantConfigValue(orchestrator, "enabled", true);
+        if (!(await setFlantConfigValue(orchestrator, ctx, "enabled", true))) continue;
         const result = await updateFlantInfra(orchestrator.pi, { cwd: orchestrator.cwd });
         const message = describeUpdateResult(result);
         ctx.ui.notify(message.text, message.kind);
@@ -1159,14 +1161,14 @@ async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise
     }
 
     if (choice.startsWith("Auto-update on startup:")) {
-      setFlantConfigValue(orchestrator, "autoUpdate", !settings.autoUpdate);
+      if (!(await setFlantConfigValue(orchestrator, ctx, "autoUpdate", !settings.autoUpdate))) continue;
       ctx.ui.notify(`Auto-update on startup: ${!settings.autoUpdate ? "ON" : "OFF"}`, "info");
       continue;
     }
 
     if (choice.startsWith("Automatic fallback on rate limit:")) {
       const next = !settings.autoRateLimitFallback;
-      setFlantConfigValue(orchestrator, "autoRateLimitFallback", next);
+      if (!(await setFlantConfigValue(orchestrator, ctx, "autoRateLimitFallback", next))) continue;
       ctx.ui.notify(
         next
           ? "Automatic fallback ON — rate limits switch provider tier without asking (a notification is shown each time)."
@@ -1188,7 +1190,7 @@ async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise
           continue;
         }
       }
-      setFlantConfigValue(orchestrator, "subscription", turningOn);
+      if (!(await setFlantConfigValue(orchestrator, ctx, "subscription", turningOn))) continue;
       const result = await updateFlantInfra(orchestrator.pi, { cwd: orchestrator.cwd });
       if (!result.ok) {
         ctx.ui.notify(`Personal subscription ${turningOn ? "enable" : "disable"} failed: ${result.error ?? "unknown error"}`, "error");
@@ -1215,7 +1217,7 @@ async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise
       if (!selected || selected === "Back") continue;
       const mins = Number(selected.split(" ")[0]);
       if (!Number.isFinite(mins) || mins <= 0) continue;
-      setFlantConfigValue(orchestrator, "switchBackIntervalMinutes", mins);
+      if (!(await setFlantConfigValue(orchestrator, ctx, "switchBackIntervalMinutes", mins))) continue;
       ctx.ui.notify(`Switch-back check interval set to ${mins} min.`, "info");
       continue;
     }
@@ -1232,7 +1234,7 @@ async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise
       if (!selected || selected === "Back") continue;
       const days = Number(selected.split(" ")[0]);
       if (!Number.isFinite(days) || days <= 0) continue;
-      setFlantConfigValue(orchestrator, "cacheTTLDays", days);
+      if (!(await setFlantConfigValue(orchestrator, ctx, "cacheTTLDays", days))) continue;
       ctx.ui.notify(`Cache period set to ${days} ${days === 1 ? "day" : "days"}.`, "info");
       continue;
     }
@@ -1946,12 +1948,17 @@ function applyConfigChange(orchestrator: Orchestrator, scope: Scope, keyPath: st
   applyConcurrencyIfChanged(orchestrator, keyPath);
 }
 
-// Durable flant policy is edited from the flant/copilot menus without a scope
-// prompt; it lands in the GLOBAL scope, matching the legacy single-global cache
-// file and the item-8 migration destination (project overrides still win at
-// merge if a user hand-edits a project config).
-function setFlantConfigValue(orchestrator: Orchestrator, key: string, value: any): void {
-  applyConfigChange(orchestrator, "global", ["flant", key], value);
+// Durable flant policy is scoped like every other PiPiConfig setting: prompt for
+// the scope and route through applyScopeChoice (so a value equal to the effective
+// default clears the override rather than pinning it). Returns false if the user
+// cancels scope selection — callers must then skip their provider side-effects.
+// (The legacy single-global cache file is still the item-8 MIGRATION destination;
+// that is unrelated to interactive edits.)
+async function setFlantConfigValue(orchestrator: Orchestrator, ctx: any, key: string, value: any): Promise<boolean> {
+  const scope = await pickScope(ctx, orchestrator);
+  if (!scope) return false;
+  applyScopeChoice(orchestrator, ["flant", key], value, scope);
+  return true;
 }
 
 function clearConfigOverride(orchestrator: Orchestrator, scope: Scope, keyPath: string[]): void {
@@ -3434,7 +3441,7 @@ async function showCompactionSettings(orchestrator: Orchestrator, ctx: any): Pro
 // catalog-aware id-mapping the resolver doesn't do; the resolver is demote-only).
 async function showCopilotMenu(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
   while (true) {
-    const settings = loadFlantSettings();
+    const settings = loadFlantSettings(orchestrator.cwd);
     const tokenPresent = !!process.env.COPILOT_GITHUB_TOKEN;
     const enableLabel = `Enable Copilot tier: ${settings.copilotEnabled ? "ON" : "OFF"}`;
     const statusLine = settings.copilotEnabled
@@ -3457,7 +3464,7 @@ async function showCopilotMenu(orchestrator: Orchestrator, ctx: any): Promise<ty
         ctx.ui.notify("Set COPILOT_GITHUB_TOKEN first (the built-in github-copilot provider authenticates off it).", "warning");
         continue;
       }
-      setFlantConfigValue(orchestrator, "copilotEnabled", turningOn);
+      if (!(await setFlantConfigValue(orchestrator, ctx, "copilotEnabled", turningOn))) continue;
       syncProviderTiers();
       ctx.ui.notify(
         turningOn

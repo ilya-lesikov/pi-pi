@@ -61,10 +61,13 @@ describe("orchestrator extension entrypoint", () => {
 
   it("takes the subagent branch when already initialized", () => {
     (globalThis as any)[ORCHESTRATOR_KEY] = true;
+    (globalThis as any)[ORCHESTRATOR_CWD_KEY] = "/root/project";
     const pi = makePi();
     init(pi);
     expect((globalThis as any)[SUBAGENT_SESSION_KEY]).toEqual({ depth: 1 });
-    expect(mocks.initFlantSync).toHaveBeenCalledWith(pi);
+    // Child inherits the shared root project cwd so project-scoped flant
+    // overrides bind (not a global-only read).
+    expect(mocks.initFlantSync).toHaveBeenCalledWith(pi, "/root/project");
     // Migration is root-only; the subagent branch must not touch config.
     expect(mocks.migrateLegacyFlantSettings).not.toHaveBeenCalled();
     expect(mocks.registerCbmTools).toHaveBeenCalledTimes(1);

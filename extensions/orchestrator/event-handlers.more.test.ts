@@ -913,6 +913,19 @@ describe("adaptive proactive-compaction lifecycle (item 6)", () => {
     expect(orchestrator.adaptiveCompaction.nextThreshold).toBe(360_000);
   });
 
+  it("applies a PROVIDER-QUALIFIED perModel override at runtime (finding 1)", async () => {
+    orchestrator.active = makeActiveTask();
+    // Override keyed by the exact provider-qualified spec raises the base to
+    // 0.9*1M = 900K, so a 305K usage that WOULD fire at the default 300K base
+    // must NOT fire. A bare-id-only lookup would miss this key and fire.
+    orchestrator.config.compaction.perModel = {
+      "pp-flant-anthropic/claude-opus-4-8": { fraction: 0.9 },
+    } as any;
+    const ctx = makeCompactCtx([{ tokens: 305_000, contextWindow: 1_000_000 }]);
+    await getHandler("agent_end")({}, ctx);
+    expect(ctx.compact).not.toHaveBeenCalled();
+  });
+
   it("a transition/manual session_compact does not schedule a measurement", async () => {
     orchestrator.active = makeActiveTask();
     const ctx = makeCompactCtx([{ tokens: 100_000, contextWindow: 1_000_000 }]);

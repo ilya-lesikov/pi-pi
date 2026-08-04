@@ -20,7 +20,7 @@ type FindingStatus = "remaining" | "addressed (not re-reported)";
 
 interface Finding {
   anchor: string;
-  reviewer: string;
+  reviewers: Set<string>;
   heading: string;
   firstPass: number;
   lastPass: number;
@@ -44,24 +44,50 @@ function findingAnchor(heading: string): string {
   return normalizeHeading(heading).toLowerCase();
 }
 
+function isNoneBody(text: string): boolean {
+  const cleaned = text.replace(/[().*]/g, "").trim().toLowerCase();
+  return cleaned === "" || /^none\b/.test(cleaned);
+}
+
 // Extract actionable finding headings from one reviewer's output. Recognizes
-// both inline (`- MAJOR: ...` / `MAJOR: ...`) and header (`## MAJOR ...`) forms,
-// mirroring the line/header scan style of hasActionableFindings.
+// inline forms (`- MAJOR: ...` / `MAJOR: ...`) AND SECTION-HEADER forms where the
+// severity is a header with an empty remainder and the findings live as bullets
+// on the following lines (`## MAJOR\n- foo\n- bar`), mirroring the line/header
+// look-ahead of hasActionableFindings (verdict.ts) so a section-body shape is
+// not silently dropped.
 export function extractActionableHeadings(content: string): string[] {
   const out: string[] = [];
   const lines = content.split("\n");
-  for (const rawLine of lines) {
-    const raw = rawLine.trim();
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i].trim();
     if (!raw) continue;
-    const header = raw.match(/^#{1,4}\s*(.*)$/);
-    const candidate = header ? header[1].trim() : raw.replace(/^[-*]\s*/, "");
+
+    const isHeader = /^#{1,4}\s/.test(raw);
+    const candidate = isHeader ? raw.replace(/^#{1,4}\s*/, "").trim() : raw.replace(/^[-*]\s*/, "");
     const m = candidate.match(ACTIONABLE_RE);
     if (!m) continue;
+
     const body = candidate.slice(m[0].length).replace(/^\s*:?\s*/, "").trim();
-    // Skip an empty / explicit "none" body (no real finding).
-    const cleaned = body.replace(/[().*]/g, "").toLowerCase();
-    if (cleaned === "" || /^none\b/.test(cleaned)) continue;
-    out.push(normalizeHeading(candidate));
+    if (!isNoneBody(body)) {
+      // Inline finding (severity + text on one line).
+      out.push(normalizeHeading(candidate));
+      continue;
+    }
+    // Empty severity header (`## MAJOR`): the findings are on the following
+    // lines until the next header. Emit each meaningful body line as its own
+    // finding, tagged with the severity so anchors/status still track.
+    if (!isHeader) continue;
+    const severity = m[0].toUpperCase();
+    for (let j = i + 1; j < lines.length; j++) {
+      if (/^#{1,4}\s/.test(lines[j].trim())) break;
+      const bodyLine = lines[j].trim().replace(/^[-*]\s*/, "");
+      if (bodyLine.length === 0 || isNoneBody(bodyLine)) continue;
+      // A line that itself carries a severity/section token (actionable or the
+      // non-actionable MINOR/NIT) belongs to its OWN classification, not this
+      // section's body — leave it for its own iteration / skip it.
+      if (ACTIONABLE_RE.test(bodyLine) || /^(?:MINOR|NIT)\b/i.test(bodyLine)) continue;
+      out.push(normalizeHeading(`${severity}: ${bodyLine}`));
+    }
   }
   return out;
 }
@@ -84,6 +110,7 @@ export function buildCrossPassSummary(input: CrossPassSummaryInput): string | nu
 
   interface PassRecord {
     pass: number;
+    present: boolean;
     reviewers: { reviewer: string; verdict: ReviewVerdict; actionable: number }[];
   }
   const passRecords: PassRecord[] = [];
@@ -92,7 +119,13 @@ export function buildCrossPassSummary(input: CrossPassSummaryInput): string | nu
 
   for (let p = 1; p <= passes; p++) {
     const outputs = loadPhaseReviewOutputs(taskDir, phase, p);
-    if (outputs.length === 0) continue;
+    // Record EVERY attempted pass, present or not — a missing pass must not be
+    // read as "the findings were addressed" (finding 6). An absent final pass
+    // leaves prior findings `remaining` (see statusOf below).
+    if (outputs.length === 0) {
+      passRecords.push({ pass: p, present: false, reviewers: [] });
+      continue;
+    }
     anyOutput = true;
     const reviewers: PassRecord["reviewers"] = [];
     for (const { name, content } of outputs) {
@@ -101,23 +134,31 @@ export function buildCrossPassSummary(input: CrossPassSummaryInput): string | nu
       const headings = extractActionableHeadings(content);
       reviewers.push({ reviewer, verdict, actionable: headings.length });
       for (const heading of headings) {
+        // Key by ANCHOR ONLY (path:line, else normalized heading). Reviewer
+        // identity is retained SEPARATELY as a set — two reviewers reporting
+        // the same anchored defect are ONE finding, and it is `remaining` iff
+        // ANY reviewer re-reported it in the final present pass (finding 7).
         const anchor = findingAnchor(heading);
-        const key = `${reviewer}\u0000${anchor}`;
-        const existing = findings.get(key);
+        const existing = findings.get(anchor);
         if (existing) {
+          existing.reviewers.add(reviewer);
           existing.lastPass = p;
         } else {
-          findings.set(key, { anchor, reviewer, heading, firstPass: p, lastPass: p });
+          findings.set(anchor, { anchor, reviewers: new Set([reviewer]), heading, firstPass: p, lastPass: p });
         }
       }
     }
-    passRecords.push({ pass: p, reviewers });
+    passRecords.push({ pass: p, present: true, reviewers });
   }
 
   if (!anyOutput) return null;
 
+  // The last pass that actually produced output. A finding is only `addressed`
+  // when it was absent from a PRESENT later pass; if the final pass(es) never
+  // ran, absence is NOT proof of a fix, so it stays `remaining` (finding 6).
+  const lastPresentPass = passRecords.reduce((m, r) => (r.present ? Math.max(m, r.pass) : m), 0);
   const statusOf = (f: Finding): FindingStatus =>
-    f.lastPass >= passes ? "remaining" : "addressed (not re-reported)";
+    f.lastPass >= lastPresentPass ? "remaining" : "addressed (not re-reported)";
 
   // Assemble markdown with a hard byte budget on BOTH the per-pass records AND
   // the findings section (a long unlimited-pass loop can make the pass records
@@ -131,19 +172,24 @@ export function buildCrossPassSummary(input: CrossPassSummaryInput): string | nu
 
   const passLineGroups = passRecords.map((pr) => {
     const g = [`### Pass ${pr.pass}`];
+    if (!pr.present) {
+      g.push("- (no reviewer output on record for this pass)");
+      return g.join("\n") + "\n\n";
+    }
     for (const r of pr.reviewers) {
       g.push(`- ${r.reviewer}: ${r.verdict} (${r.actionable} actionable finding${r.actionable === 1 ? "" : "s"})`);
     }
     return g.join("\n") + "\n\n";
   });
 
+  const reviewerList = (f: Finding) => [...f.reviewers].sort().join(", ");
   const sortedFindings = [...findings.values()].sort(
-    (a, b) => a.firstPass - b.firstPass || a.reviewer.localeCompare(b.reviewer) || a.heading.localeCompare(b.heading),
+    (a, b) => a.firstPass - b.firstPass || reviewerList(a).localeCompare(reviewerList(b)) || a.heading.localeCompare(b.heading),
   );
   const remaining = sortedFindings.filter((f) => statusOf(f) === "remaining");
   const addressed = sortedFindings.filter((f) => statusOf(f) !== "remaining");
   const findingsHeader = `### Findings (${remaining.length} remaining, ${addressed.length} addressed)\n`;
-  const findingLines = sortedFindings.map((f) => `- [${statusOf(f)}] (${f.reviewer}, pass ${f.firstPass}) ${f.heading}\n`);
+  const findingLines = sortedFindings.map((f) => `- [${statusOf(f)}] (${reviewerList(f)}, pass ${f.firstPass}) ${f.heading}\n`);
 
   // Greedily append chunks while they fit, reserving room for a worst-case
   // omission notice; return { text, omitted }.

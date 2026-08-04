@@ -77,17 +77,39 @@ describe("buildCrossPassSummary", () => {
     expect(out).toContain("reviewers approved");
   });
 
-  it("tracks the same path:line finding across passes and reviewers separately", () => {
+  it("merges the same path:line anchor across reviewers into ONE finding, remaining if ANY reviewer re-reports it", () => {
     const dir = makeTaskDir();
     writeReview(dir, 1, "gpt", 1, "VERDICT: NEEDS_CHANGES\n## MAJOR: at src/a.ts:12 wording X");
     writeReview(dir, 2, "fable", 1, "VERDICT: NEEDS_CHANGES\n## MAJOR: src/a.ts:12 different wording");
     writeReview(dir, 1, "gpt", 2, "VERDICT: NEEDS_CHANGES\n## MAJOR: src/a.ts:12 CHANGED wording");
     writeReview(dir, 2, "fable", 2, "VERDICT: APPROVE");
     const out = buildCrossPassSummary({ taskDir: dir, phase: "implement", passes: 2, approvedClean: false, capReached: true, maxPasses: 2 })!;
-    // gpt's a.ts:12 persists to the final pass despite changed wording -> remaining.
-    expect(out).toContain("[remaining] (gpt, pass 1)");
-    // fable's a.ts:12 is gone by the final pass -> addressed.
-    expect(out).toContain("[addressed (not re-reported)] (fable, pass 1)");
+    // src/a.ts:12 is ONE finding keyed by anchor; gpt re-reported it in the
+    // final pass -> remaining. Both reviewers are listed on the single line.
+    expect(out).toContain("[remaining] (fable, gpt, pass 1)");
+    // It must NOT also appear as a separate addressed line for the same anchor.
+    expect(out).not.toContain("[addressed (not re-reported)]");
+    expect((out.match(/src\/a\.ts:12/g) ?? []).length).toBe(1);
+  });
+
+  it("keeps a finding remaining when the final pass never ran (missing round is not proof of a fix)", () => {
+    const dir = makeTaskDir();
+    // Two passes claimed, but only pass 1 produced output; pass 2 is missing.
+    writeReview(dir, 1, "gpt", 1, "VERDICT: NEEDS_CHANGES\n## MAJOR: src/a.ts:12 leak");
+    const out = buildCrossPassSummary({ taskDir: dir, phase: "implement", passes: 2, approvedClean: false, capReached: true, maxPasses: 2 })!;
+    // Absence in a NON-present final pass must NOT be reported as addressed.
+    expect(out).toContain("[remaining] (gpt, pass 1) MAJOR: src/a.ts:12 leak");
+    expect(out).toContain("(no reviewer output on record for this pass)");
+  });
+
+  it("extracts findings written as bullets under an empty severity section header", () => {
+    const dir = makeTaskDir();
+    const body = ["VERDICT: NEEDS_CHANGES", "## MAJOR", "- src/x.ts:5 off-by-one", "- src/y.ts:9 null deref"].join("\n");
+    writeReview(dir, 1, "gpt", 1, body);
+    writeReview(dir, 1, "gpt", 2, body);
+    const out = buildCrossPassSummary({ taskDir: dir, phase: "implement", passes: 2, approvedClean: false, capReached: true, maxPasses: 2 })!;
+    expect(out).toContain("MAJOR: src/x.ts:5 off-by-one");
+    expect(out).toContain("MAJOR: src/y.ts:9 null deref");
   });
 
   it("handles a 3-pass fixture with per-pass verdict lines", () => {

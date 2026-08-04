@@ -385,6 +385,55 @@ describe("initFlantSync / initFlantOnStartup", () => {
     expect(pi.registerProvider).not.toHaveBeenCalled();
   });
 
+  it("initFlantOnStartup registers from cache when autoUpdate is off but flant is enabled", async () => {
+    const dir = makeTempDir();
+    const cfgDir = join(dir, "extensions", "pp");
+    mkdirSync(cfgDir, { recursive: true });
+    // Global disables; a PROJECT override enables with autoUpdate off — the
+    // provider must still register from the cached model list (finding 3).
+    writeFileSync(join(cfgDir, "config.json"), JSON.stringify({ flant: { enabled: false } }), "utf-8");
+    const cacheDir = join(cfgDir, "cache");
+    mkdirSync(cacheDir, { recursive: true });
+    writeFileSync(
+      join(cacheDir, "flant-models.json"),
+      JSON.stringify({ cachedFlantModels: ["claude-opus-4-8"], cachedOpenRouterData: {} }),
+      "utf-8",
+    );
+    const projCwd = makeTempDir();
+    mkdirSync(join(projCwd, ".pp"), { recursive: true });
+    writeFileSync(join(projCwd, ".pp", "config.json"), JSON.stringify({ flant: { enabled: true, autoUpdate: false, subscription: false } }), "utf-8");
+
+    const mod = await loadModule(dir);
+    const pi = makePi();
+    await mod.initFlantOnStartup(pi, projCwd);
+    expect(pi.registerProvider).toHaveBeenCalled();
+    expect(mod.getFlantGeneratedConfig()).not.toBeNull();
+  });
+
+  it("initFlantSync honors a project override via the shared root cwd", async () => {
+    const dir = makeTempDir();
+    const cfgDir = join(dir, "extensions", "pp");
+    mkdirSync(cfgDir, { recursive: true });
+    // Global disables flant; the project (root cwd) ENABLES it with a cache.
+    writeFileSync(join(cfgDir, "config.json"), JSON.stringify({ flant: { enabled: false } }), "utf-8");
+    const cacheDir = join(cfgDir, "cache");
+    mkdirSync(cacheDir, { recursive: true });
+    writeFileSync(
+      join(cacheDir, "flant-models.json"),
+      JSON.stringify({ cachedFlantModels: ["claude-opus-4-8"], cachedOpenRouterData: {} }),
+      "utf-8",
+    );
+    const projCwd = makeTempDir();
+    mkdirSync(join(projCwd, ".pp"), { recursive: true });
+    writeFileSync(join(projCwd, ".pp", "config.json"), JSON.stringify({ flant: { enabled: true } }), "utf-8");
+
+    const mod = await loadModule(dir);
+    const pi = makePi();
+    // Global-only read would register nothing; the shared root cwd must bind.
+    mod.initFlantSync(pi, projCwd);
+    expect(pi.registerProvider).toHaveBeenCalled();
+  });
+
   it("a project override disabling flant unregisters providers at session_start", async () => {
     const dir = makeTempDir();
     // Global enables flant + subscription (what initFlantSync would register).
