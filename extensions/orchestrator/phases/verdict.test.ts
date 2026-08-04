@@ -90,6 +90,15 @@ describe("reviewPassUnanimousApprove", () => {
     expect(reviewPassUnanimousApprove(dir, "implement", 1, 1)).toBe(true);
   });
 
+  it("returns false when a reviewer file is an INCOMPLETE stub/placeholder", () => {
+    const rd = join(dir, "code-reviews");
+    mkdirSync(rd, { recursive: true });
+    writeFileSync(join(rd, "1_gpt_round-1.md"), "VERDICT: APPROVE\nREVIEW_STATUS: COMPLETE");
+    // A placeholder for a reviewer that produced nothing must block approval.
+    writeFileSync(join(rd, "1_fable_round-1.md"), "VERDICT: UNKNOWN\nREVIEW_STATUS: INCOMPLETE\nno output");
+    expect(reviewPassUnanimousApprove(dir, "implement", 1, 2)).toBe(false);
+  });
+
   it("returns false when one reviewer needs changes", () => {
     const rd = join(dir, "code-reviews");
     mkdirSync(rd, { recursive: true });

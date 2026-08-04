@@ -31,7 +31,8 @@ import { resolveModel, getModelInfo, updateRegistryFromAvailableModels } from ".
 import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
 import { spawnCodeReviewers } from "./phases/review.js";
 import { spawnBrainstormReviewers } from "./phases/brainstorm.js";
-import { reviewPassUnanimousApprove, reviewPassMinorOnly } from "./phases/verdict.js";
+import { reviewPassUnanimousApprove, reviewPassMinorOnly, reviewsDirForPhase } from "./phases/verdict.js";
+import { reconcileMissingReviewers } from "./review-files.js";
 import { buildCrossPassSummary, mergeSummary } from "./review-summary.js";
 import { nextPhase, validateExitCriteria } from "./phases/machine.js";
 import { openPlannotator, waitForPlannotatorResult, cancelPendingPlannotatorWait } from "./plannotator.js";
@@ -293,6 +294,24 @@ function tryCompleteReviewCycle(orchestrator: Orchestrator, spawnedReviewers?: n
   // subsequent caller. No separate dedup token needed.
   const cycle = orchestrator.active.state.reviewCycle;
   const phase = orchestrator.active.state.phase;
+  // Enforce per-reviewer coverage by IDENTITY: any launched reviewer that left
+  // no completed file gets an explicit UNKNOWN/INCOMPLETE placeholder (so it
+  // can't silently vanish from the unanimous gate) and a visible warning.
+  // Skip reconciliation when NO reviewers were actually spawned (e.g. brainstorm
+  // with no artifacts) — fabricating a placeholder there would keep an otherwise
+  // empty cycle alive. Only enforce coverage when reviewers really launched.
+  const expectedReviewers = cycle.expectedReviewers ?? [];
+  if (spawnedReviewers !== 0 && expectedReviewers.length > 0) {
+    const missing = reconcileMissingReviewers(reviewsDirForPhase(orchestrator.active.dir, phase), cycle.pass, expectedReviewers);
+    if (missing.length > 0) {
+      orchestrator.safeSendUserMessage(
+        `[PI-PI] Reviewer(s) produced no completed output this pass: ${missing.join(", ")}. ` +
+        `They are recorded as UNKNOWN (not an approval), so this pass is NOT unanimous. ` +
+        `This usually means the reviewer ran out of budget mid-review — consider re-running or a lighter reviewer preset.`,
+      );
+      getLogger().warn({ s: "review", phase, pass: cycle.pass, missing }, "reviewers produced no completed output");
+    }
+  }
   const outputs = loadPhaseReviewOutputs(orchestrator.active.dir, phase, cycle.pass);
   const pi = orchestrator.pi;
 
@@ -425,7 +444,8 @@ export async function enterReviewCycle(
   saveTask(orchestrator.active.dir, orchestrator.active.state);
 
   const reviewers = resolveReviewers(orchestrator, phase, presetName);
-  const enabledCount = Object.values(reviewers).filter((v) => isEnabled(v)).length;
+  const enabledReviewerNames = Object.entries(reviewers).filter(([, v]) => isEnabled(v)).map(([name]) => name);
+  const enabledCount = enabledReviewerNames.length;
   if (enabledCount === 0) {
     orchestrator.active.state.reviewCycle = null;
     saveTask(orchestrator.active.dir, orchestrator.active.state);
@@ -433,6 +453,12 @@ export async function enterReviewCycle(
     const label = labelGroup === "brainstormReviewers" ? "artifact" : labelGroup === "planReviewers" ? "plan" : "code";
     return `No ${label} reviewers enabled. Choose another option.`;
   }
+  // Persist the LAUNCHED reviewer roster so completion enforces per-reviewer
+  // coverage by identity — a reviewer that never wrote a COMPLETE file must not
+  // silently vanish from the unanimous-approve gate (config could otherwise
+  // drift by the time completion recomputes the enabled set).
+  orchestrator.active.state.reviewCycle.expectedReviewers = enabledReviewerNames;
+  saveTask(orchestrator.active.dir, orchestrator.active.state);
 
   orchestrator.pendingSubagentSpawns = enabledCount;
   // Anchor the wedge-reconciler grace window at cycle entry (refreshed on each

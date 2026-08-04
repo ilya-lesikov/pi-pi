@@ -1,7 +1,7 @@
 import { readFileSync, existsSync, readdirSync } from "fs";
 import { join } from "path";
 import type { Phase } from "../state.js";
-import { isReviewFileForRound } from "../review-files.js";
+import { isReviewFileForRound, isReviewComplete } from "../review-files.js";
 import { reviewPresetGroupForPhase } from "../config.js";
 
 export type ReviewVerdict = "approve" | "changes" | "unknown";
@@ -51,7 +51,7 @@ export function hasActionableFindings(reviewContent: string): boolean {
   return false;
 }
 
-function reviewsDirForPhase(taskDir: string, phase: Phase): string {
+export function reviewsDirForPhase(taskDir: string, phase: Phase): string {
   const group = reviewPresetGroupForPhase(phase);
   if (group === "brainstormReviewers") return join(taskDir, "brainstorm-reviews");
   if (group === "planReviewers") return join(taskDir, "plan-reviews");
@@ -76,6 +76,9 @@ export function reviewPassUnanimousApprove(
     } catch {
       return false;
     }
+    // An incomplete/stub review (reviewer ran out of budget or a written-in
+    // placeholder) is never an approval, regardless of any partial content.
+    if (!isReviewComplete(content)) return false;
     if (parseVerdict(content) !== "approve") return false;
     if (hasActionableFindings(content)) return false;
   }
@@ -146,6 +149,9 @@ export function reviewPassMinorOnly(
     } catch {
       return notMinor;
     }
+    // An incomplete/stub/placeholder review is not a clean minor-only pass —
+    // treat it as needing a real re-review.
+    if (!isReviewComplete(content)) return notMinor;
     // Any actionable finding disqualifies minor-only (that's a real re-review).
     if (hasActionableFindings(content)) return notMinor;
     // A NON-approve verdict (NEEDS_CHANGES/REJECT) is NOT minor-only even when

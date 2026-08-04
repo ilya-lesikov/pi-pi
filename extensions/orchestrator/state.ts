@@ -40,7 +40,7 @@ export interface TaskState {
   phase: Phase;
   initialPhase?: string;
   step: string | null;
-  reviewCycle: { kind: string; step: string; pass: number } | null;
+  reviewCycle: { kind: string; step: string; pass: number; expectedReviewers?: string[] } | null;
   reviewPass: number;
   reviewPassByKind?: Record<string, Record<string, number>>;
   reviewApprovedClean?: boolean;

@@ -2085,9 +2085,9 @@ describe("task modes and quick task", () => {
     const reviewsDir = join(taskDir, "code-reviews");
     mkdirSync(reviewsDir, { recursive: true });
     const round = orchestrator.active!.state.reviewCycle!.pass;
-    for (const v of ["opus", "gpt", "gemini"]) {
-      writeFileSync(join(reviewsDir, `1_${v}_round-${round}.md`), "VERDICT: APPROVE\n- CRITICAL: none", "utf-8");
-    }
+    // The test config enables a single "test" code reviewer; write its file
+    // (the persisted expectedReviewers roster is ["test"]).
+    writeFileSync(join(reviewsDir, `1_test_round-${round}.md`), "VERDICT: APPROVE\n- CRITICAL: none\nREVIEW_STATUS: COMPLETE", "utf-8");
     emitSubagentCreated(pi, "reviewer-1", "Code reviewer (test)");
     emitSubagentCompleted(pi, "reviewer-1", "Code reviewer (test)");
 
@@ -2179,9 +2179,7 @@ describe("task modes and quick task", () => {
     const planReviewsDir = join(taskDir, "plan-reviews");
     mkdirSync(planReviewsDir, { recursive: true });
     const round = orchestrator.active!.state.reviewCycle!.pass;
-    for (const v of ["opus", "gpt", "gemini"]) {
-      writeFileSync(join(planReviewsDir, `1_${v}_round-${round}.md`), "VERDICT: APPROVE\n- CRITICAL: none", "utf-8");
-    }
+    writeFileSync(join(planReviewsDir, `1_test_round-${round}.md`), "VERDICT: APPROVE\n- CRITICAL: none\nREVIEW_STATUS: COMPLETE", "utf-8");
     emitSubagentCreated(pi, "plan-reviewer-1", "Plan reviewer (test)");
     emitSubagentCompleted(pi, "plan-reviewer-1", "Plan reviewer (test)");
 
@@ -2762,9 +2760,7 @@ describe("task modes and quick task", () => {
 
     const reviewsDir = join(taskDir, "code-reviews");
     mkdirSync(reviewsDir, { recursive: true });
-    for (const v of ["opus", "gpt", "gemini"]) {
-      writeFileSync(join(reviewsDir, `1_${v}_round-1.md`), "VERDICT: APPROVE\n- CRITICAL: none", "utf-8");
-    }
+    writeFileSync(join(reviewsDir, `1_test_round-1.md`), "VERDICT: APPROVE\n- CRITICAL: none\nREVIEW_STATUS: COMPLETE", "utf-8");
     emitSubagentCreated(pi, "reviewer-auto-1", "Code reviewer (test)");
     emitSubagentCompleted(pi, "reviewer-auto-1", "Code reviewer (test)");
 
