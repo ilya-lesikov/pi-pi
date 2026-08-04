@@ -326,17 +326,13 @@ async function promptWithEmptyRetry(
   try {
     for (let attempt = 1; attempt <= EMPTY_TURN_ATTEMPTS; attempt++) {
       const collector = collectResponseText(session);
-      // Only messages appended by THIS attempt can answer it. A resumed session
-      // already holds the previous run's answer, and an earlier turn may have
-      // emitted interim narration before its tool calls — scanning the whole
-      // history would return that stale text and silently defeat the retry.
       const historyBefore = session.messages.length;
       try {
         await session.prompt(attempt === 1 ? prompt : EMPTY_TURN_NUDGE);
       } finally {
         collector.unsubscribe();
       }
-      const text = collector.getText().trim() || getLastAssistantText(session, historyBefore);
+      const text = collector.getText().trim() || terminalAssistantText(session, historyBefore);
       if (text) return text;
       if (isStopped()) return "";
     }
@@ -347,15 +343,18 @@ async function promptWithEmptyRetry(
 }
 
 /**
- * Get the last assistant text from the session history, optionally limited to
- * messages appended at or after `fromIndex` (one turn's worth).
+ * Text of the FINAL assistant message appended at or after `fromIndex`.
+ *
+ * One `prompt()` spans many turns, so an attempt appends several assistant
+ * messages and only its last one is the answer: an earlier turn's narration
+ * ("I've initiated a data retrieval request...") must not satisfy a terminal
+ * turn that came back empty, or the retry is silently defeated. Bounding by
+ * `fromIndex` likewise excludes a resumed session's previous answer.
  */
-function getLastAssistantText(session: AgentSession, fromIndex = 0): string {
+function terminalAssistantText(session: AgentSession, fromIndex: number): string {
   for (let i = session.messages.length - 1; i >= fromIndex; i--) {
-    const msg = session.messages[i];
-    if (msg.role !== "assistant") continue;
-    const text = extractText(msg.content).trim();
-    if (text) return text;
+    if (session.messages[i].role !== "assistant") continue;
+    return extractText(session.messages[i].content).trim();
   }
   return "";
 }

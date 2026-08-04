@@ -475,6 +475,34 @@ describe("AgentManager — lifetime usage + compaction count are eagerly initial
     expect(manager.getRecord(id)!.lifetimeUsage).toEqual({ input: 70, output: 30, cacheWrite: 5 });
     expect(manager.getRecord(id)!.compactionCount).toBe(1);
   });
+
+  it("an externally stopped resume stays stopped instead of completing with an empty result", async () => {
+    manager = new AgentManager();
+    const session = { ...mockSession() };
+    vi.mocked(runAgent).mockResolvedValue({
+      responseText: "first",
+      session: session as any,
+      aborted: false,
+      steered: false,
+    });
+    const id = manager.spawn(mockPi, mockCtx, "general-purpose", "test", {
+      description: "test",
+      isBackground: true,
+    });
+    await manager.getRecord(id)!.promise;
+
+    // A stop during a resume aborts the run, which returns "" by design. The
+    // record must not then be marked a successful completion.
+    const { resumeAgent: resumeMock } = await import("../src/agent-runner.js");
+    vi.mocked(resumeMock).mockImplementation(async () => {
+      manager.abort(id);
+      return "";
+    });
+
+    await manager.resume(id, "more");
+
+    expect(manager.getRecord(id)!.status).toBe("stopped");
+  });
 });
 
 // Regression: `isolation: "worktree"` MUST fail loud when the cwd can't host

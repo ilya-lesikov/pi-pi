@@ -1347,6 +1347,12 @@ describe("agent-runner empty-turn retry", () => {
       prompt: vi.fn(async () => {
         const content = turns[Math.min(call, turns.length - 1)];
         call++;
+        // A single prompt() spans many turns, so one attempt can append several
+        // assistant messages: a nested array describes that multi-message shape.
+        if (Array.isArray(content) && content.length > 0 && Array.isArray(content[0])) {
+          for (const msg of content as any[]) session.messages.push({ role: "assistant", content: msg });
+          return;
+        }
         session.messages.push({ role: "assistant", content });
       }),
       abort: vi.fn(),
@@ -1407,6 +1413,22 @@ describe("agent-runner empty-turn retry", () => {
     const result = await runAgent(ctx, "Explore", "go", { pi });
 
     expect(result.responseText).toBe("FINAL");
+  });
+
+  it("does not accept an earlier turn's narration when the attempt's FINAL turn is empty", async () => {
+    // One prompt() spans many turns. Turn 1 narrates alongside its tool call and
+    // the terminal turn comes back empty: the narration is not the answer, so the
+    // attempt must count as empty and be retried.
+    const session = createRetrySession([
+      [text("Let me look that up"), toolCallOnly, []],
+      [text("REAL ANSWER")],
+    ]);
+    createAgentSession.mockResolvedValue({ session });
+
+    const result = await runAgent(ctx, "Explore", "go", { pi });
+
+    expect(result.responseText).toBe("REAL ANSWER");
+    expect(session.prompt).toHaveBeenCalledTimes(2);
   });
 
   it("does not mistake a PRIOR run's answer for the current empty turn on resume", async () => {

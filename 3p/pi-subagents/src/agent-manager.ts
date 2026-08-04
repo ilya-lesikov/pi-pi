@@ -461,8 +461,13 @@ export class AgentManager {
         },
         signal,
       });
-      record.status = "completed";
-      record.result = responseText;
+      // An external stop flips the record to "stopped" while the resume is still
+      // in flight, and the aborted run resolves with "" — overwriting the status
+      // here would render a cancelled agent as a successful empty result.
+      if ((record.status as string) !== "stopped") {
+        record.status = "completed";
+        record.result = responseText;
+      }
       record.completedAt = Date.now();
     } catch (err) {
       record.status = "error";
