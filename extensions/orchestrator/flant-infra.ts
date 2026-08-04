@@ -1171,7 +1171,10 @@ export async function updateFlantInfra(
   }
 
   try {
-    registerFlantProviders(pi, models, metadata);
+    // Forward the EFFECTIVE (cwd-scoped) subscription so a project override
+    // binds, instead of letting registerFlantProviders fall back to a
+    // global-only read.
+    registerFlantProviders(pi, models, metadata, { subscription: settings.subscription });
     generatedFlantConfig = generateFlantConfig(models, isSubscriptionActive(settings));
     if (!refreshed && settings.cachedFlantModels && settings.cachedOpenRouterData && !settings.lastUpdated) {
       settings.lastUpdated = new Date().toISOString();
@@ -1235,7 +1238,14 @@ export function initFlantSync(pi: ExtensionAPI): void {
 export async function initFlantOnStartup(pi: ExtensionAPI, cwd?: string): Promise<void> {
   setPI(pi);
   const settings = loadFlantSettings(cwd);
+  // Sync tiers from the EFFECTIVE (cwd-scoped) settings so a project override
+  // rebinds what initFlantSync (global-only, at extension init) computed.
+  syncProviderTiers(settings);
   if (!settings.enabled) {
+    // A project override may DISABLE flant even though initFlantSync already
+    // registered the global-enabled providers — unregister them so the override
+    // is honored rather than leaving stale registrations in place.
+    unregisterFlantProviders(pi);
     generatedFlantConfig = null;
     return;
   }

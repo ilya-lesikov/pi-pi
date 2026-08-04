@@ -824,15 +824,19 @@ describe("pp_phase_complete tool", () => {
     expect(result.content[0].text).toContain("Cross-pass review summary (implement, 2 passes");
   });
 
-  it("manual advance stashes the cross-pass summary for the transition handoff", async () => {
+  it("manual advance (non-terminal) stashes the cross-pass summary for the transition handoff", async () => {
     orchestrator.active = makeActiveTask();
-    orchestrator.active.state.phase = "implement";
+    // plan -> implement is non-terminal, so the summary is stashed for the handoff.
+    orchestrator.active.state.phase = "plan";
     orchestrator.active.state.step = "llm_work";
-    orchestrator.active.state.reconciledPhase = "implement";
+    orchestrator.active.state.reconciledPhase = "plan";
     orchestrator.active.state.reviewApprovedClean = true;
-    orchestrator.active.state.reviewPassByKind = { implement: { auto: 2 } };
-    orchestrator.active.state.manualAutoReview = { phase: "implement", preset: "regular", maxPasses: 3, advanceOnComplete: true, deferredAdvance: {} };
-    writeRounds(orchestrator.active.dir);
+    orchestrator.active.state.reviewPassByKind = { plan: { auto: 2 } };
+    orchestrator.active.state.manualAutoReview = { phase: "plan", preset: "regular", maxPasses: 3, advanceOnComplete: true, deferredAdvance: {} };
+    const rdir = join(orchestrator.active.dir, "plan-reviews");
+    mkdirSync(rdir, { recursive: true });
+    writeFileSync(join(rdir, "001_gpt_round-1.md"), "VERDICT: NEEDS_CHANGES\n## BLOCKERS: plan.md:3 gap", "utf-8");
+    writeFileSync(join(rdir, "001_gpt_round-2.md"), "VERDICT: APPROVE", "utf-8");
     // Capture the stashed summary at transition time (transitionToNextPhase would
     // otherwise consume/clear it in the real path — here it is spied).
     let stashed: string | undefined;
@@ -843,7 +847,30 @@ describe("pp_phase_complete tool", () => {
     registerOrchestratorToolsForTest(orchestrator);
     const tool = getTool("pp_phase_complete");
     await tool.execute("id", { summary: "s" }, undefined, undefined, ctxWithUi());
-    expect(stashed).toContain("Cross-pass review summary (implement, 2 passes");
+    expect(stashed).toContain("Cross-pass review summary (plan, 2 passes");
+  });
+
+  it("manual advance to done surfaces the cross-pass summary in the tool text (not the discarded handoff)", async () => {
+    orchestrator.active = makeActiveTask();
+    // implement -> done DISCARDS the conversation, so the summary must be in text.
+    orchestrator.active.state.phase = "implement";
+    orchestrator.active.state.step = "llm_work";
+    orchestrator.active.state.reconciledPhase = "implement";
+    orchestrator.active.state.reviewApprovedClean = true;
+    orchestrator.active.state.reviewPassByKind = { implement: { auto: 2 } };
+    orchestrator.active.state.manualAutoReview = { phase: "implement", preset: "regular", maxPasses: 3, advanceOnComplete: true, deferredAdvance: {} };
+    writeRounds(orchestrator.active.dir);
+    let stashed: string | undefined = "SENTINEL";
+    orchestrator.transitionToNextPhase = vi.fn(async () => {
+      stashed = orchestrator.active!.state.pendingCrossPassSummary;
+      return { ok: true as const };
+    });
+    registerOrchestratorToolsForTest(orchestrator);
+    const tool = getTool("pp_phase_complete");
+    const result = await tool.execute("id", { summary: "s" }, undefined, undefined, ctxWithUi());
+    expect(result.content[0].text).toContain("Cross-pass review summary (implement, 2 passes");
+    // NOT stashed into the discarded transition handoff.
+    expect(stashed).toBeUndefined();
   });
 });
 
@@ -922,5 +949,31 @@ describe("adaptive proactive-compaction lifecycle (item 6)", () => {
     await getHandler("agent_end")({}, ctx); // modelKey differs -> reset
     expect(orchestrator.adaptiveCompaction.nextThreshold).toBeNull();
     expect(orchestrator.adaptiveCompaction.modelKey).toBe("pp-flant-anthropic/claude-opus-4-8");
+  });
+
+  it("clears inFlight via onError so a later session_compact is not misclassified (compact is fire-and-forget)", async () => {
+    orchestrator.active = makeActiveTask();
+    // compact() is fire-and-forget: it reports failure by invoking onError, NOT
+    // by throwing synchronously.
+    let capturedOnError: ((e: any) => void) | undefined;
+    const ctx = {
+      model: { provider: "pp-flant-anthropic", id: "claude-opus-4-8" },
+      compact: vi.fn((opts: any) => { capturedOnError = opts?.onError; }),
+      getContextUsage: () => ({ tokens: 305_000, contextWindow: 1_000_000 }),
+      ui: { notify: vi.fn() },
+    } as any;
+    const agentEnd = getHandler("agent_end");
+    const sessionCompact = getHandler("session_compact");
+
+    await agentEnd({}, ctx);
+    expect(ctx.compact).toHaveBeenCalledTimes(1);
+    expect(orchestrator.adaptiveCompaction.inFlight).toBe(true);
+    // The compaction fails asynchronously.
+    capturedOnError?.(new Error("compaction failed"));
+    expect(orchestrator.adaptiveCompaction.inFlight).toBe(false);
+    // A subsequent (manual/transition) session_compact must NOT be attributed
+    // to the failed proactive compaction.
+    await sessionCompact({}, ctx);
+    expect(orchestrator.adaptiveCompaction.pendingProactiveMeasure).toBe(false);
   });
 });

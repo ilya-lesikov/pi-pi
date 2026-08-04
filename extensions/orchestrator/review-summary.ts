@@ -150,13 +150,19 @@ export function buildCrossPassSummary(input: CrossPassSummaryInput): string | nu
   }
 
   // Apply the byte budget: keep as many finding lines as fit, then note the
-  // omitted count rather than dumping everything.
+  // omitted count rather than dumping everything. Reserve room up front for the
+  // worst-case omission notice so the FINAL output (notice included) stays
+  // within MAX_SUMMARY_BYTES.
   const header = lines.join("\n") + "\n";
+  const noticeReserve = Buffer.byteLength(
+    `\n_${findingLines.length} further finding line(s) omitted to stay within the summary size budget._\n`,
+    "utf8",
+  );
   let body = "";
   let omitted = 0;
   for (let i = 0; i < findingLines.length; i++) {
     const candidate = body + findingLines[i] + "\n";
-    if (Buffer.byteLength(header + candidate, "utf8") > MAX_SUMMARY_BYTES) {
+    if (Buffer.byteLength(header + candidate, "utf8") + noticeReserve > MAX_SUMMARY_BYTES) {
       omitted = findingLines.length - i;
       break;
     }

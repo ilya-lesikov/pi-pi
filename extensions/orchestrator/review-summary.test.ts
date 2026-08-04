@@ -124,7 +124,7 @@ describe("buildCrossPassSummary", () => {
     writeReview(dir, 1, "gpt", 1, mk(1));
     writeReview(dir, 1, "gpt", 2, mk(2));
     const out = buildCrossPassSummary({ taskDir: dir, phase: "implement", passes: 2, approvedClean: false, capReached: true, maxPasses: 2 })!;
-    expect(Buffer.byteLength(out, "utf8")).toBeLessThanOrEqual(32 * 1024 + 200);
+    expect(Buffer.byteLength(out, "utf8")).toBeLessThanOrEqual(32 * 1024);
     expect(out).toContain("further finding line(s) omitted");
   });
 

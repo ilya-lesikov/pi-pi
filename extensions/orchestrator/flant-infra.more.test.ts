@@ -384,6 +384,25 @@ describe("initFlantSync / initFlantOnStartup", () => {
     await mod.initFlantOnStartup(pi);
     expect(pi.registerProvider).not.toHaveBeenCalled();
   });
+
+  it("a project override disabling flant unregisters providers at session_start", async () => {
+    const dir = makeTempDir();
+    // Global enables flant + subscription (what initFlantSync would register).
+    const cfgDir = join(dir, "extensions", "pp");
+    mkdirSync(cfgDir, { recursive: true });
+    writeFileSync(join(cfgDir, "config.json"), JSON.stringify({ flant: { enabled: true, subscription: true } }), "utf-8");
+    // Project (cwd/.pp) DISABLES flant.
+    const projCwd = makeTempDir();
+    mkdirSync(join(projCwd, ".pp"), { recursive: true });
+    writeFileSync(join(projCwd, ".pp", "config.json"), JSON.stringify({ flant: { enabled: false } }), "utf-8");
+
+    const mod = await loadModule(dir);
+    const pi = makePi();
+    await mod.initFlantOnStartup(pi, projCwd);
+    // Honor the project override: no registration, providers unregistered.
+    expect(pi.registerProvider).not.toHaveBeenCalled();
+    expect(pi.unregisterProvider).toHaveBeenCalledWith("pp-flant-anthropic-sub");
+  });
 });
 
 describe("unregisterFlantProviders", () => {

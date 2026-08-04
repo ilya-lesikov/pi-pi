@@ -1239,9 +1239,11 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
       const manual = orchestrator.active.state.manualAutoReview;
       if (manual && manual.phase === orchestrator.active.state.phase) {
         const phase = orchestrator.active.state.phase;
-        const completedManualPasses = orchestrator.active.state.reviewPassByKind?.[phase]?.auto ?? 0;
         const pass = await runReviewCyclePass(orchestrator, ctx, phase, manual.preset, manual.maxPasses);
         if ("handled" in pass) return pass.handled;
+        // Read AFTER the pass: runReviewCyclePass finalizes and increments the
+        // just-completed round, so a pre-pass snapshot would be stale by one.
+        const completedManualPasses = orchestrator.active.state.reviewPassByKind?.[phase]?.auto ?? 0;
         // Loop finished: either unanimous approve or the pass cap was reached.
         const clean = !!orchestrator.active.state.reviewApprovedClean;
         const advanceOnComplete = manual.advanceOnComplete;
@@ -1263,8 +1265,11 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
         // Item 7: finalize + transition to the next phase using the deferred
         // advance inputs captured when the loop was armed (this branch is
         // headless and must not prompt). Path 2: stash the cross-pass summary so
-        // transitionToNextPhase folds it into the compaction handoff.
-        orchestrator.active.state.pendingCrossPassSummary = crossPass ?? undefined;
+        // transitionToNextPhase folds it into the compaction handoff — EXCEPT
+        // when the next phase is `done`, which DISCARDS the whole conversation
+        // before consuming the stash, so surface the summary in the tool text.
+        const advancingToDone = nextPhase(orchestrator.active.type, phase) === "done";
+        orchestrator.active.state.pendingCrossPassSummary = advancingToDone ? undefined : (crossPass ?? undefined);
         if (deferred?.mode) orchestrator.active.state.mode = deferred.mode;
         if (deferred?.autonomousConfig) orchestrator.active.state.autonomousConfig = deferred.autonomousConfig;
         orchestrator.active.state.effectiveMode = undefined;
@@ -1273,7 +1278,7 @@ function registerPhaseCompleteTool(orchestrator: Orchestrator): void {
         if (!advResult.ok) {
           return { content: [{ type: "text" as const, text: `Transition blocked: ${advResult.error}` }], details: {} };
         }
-        return { content: [{ type: "text" as const, text: "" }], details: {} };
+        return { content: [{ type: "text" as const, text: advancingToDone && crossPass ? crossPass : "" }], details: {} };
       }
 
       const effectiveMode = getEffectivePhaseMode(orchestrator.active.state);
@@ -1546,15 +1551,19 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
             const effectiveThreshold = Math.max(base, adapt.nextThreshold ?? 0);
             if (shouldFireCompaction(usage.tokens, effectiveThreshold, orchestrator.compactionArm)) {
               getLogger().info({ s: "compaction", tokens: usage.tokens, threshold: effectiveThreshold, window: usage.contextWindow }, "proactive in-phase compaction triggered");
-              try {
-                // Mark BEFORE compacting so the session_compact handler can
-                // attribute the upcoming event to us; clear if compact fails.
-                adapt.inFlight = true;
-                ctx.compact();
-              } catch (e) {
-                adapt.inFlight = false;
-                throw e;
-              }
+              // Mark BEFORE compacting so the session_compact handler can
+              // attribute the upcoming event to us. ctx.compact is fire-and-forget
+              // (the host wraps the async work and routes failures to onError, so a
+              // synchronous try/catch here can NEVER see a compaction failure).
+              // Clear the marker in onError so a later manual/transition
+              // session_compact is not misclassified as this proactive one.
+              adapt.inFlight = true;
+              ctx.compact({
+                onError: (err: any) => {
+                  orchestrator.adaptiveCompaction.inFlight = false;
+                  getLogger().error({ s: "compaction", err: err?.message }, "proactive compaction failed");
+                },
+              });
             }
           }
         }
