@@ -9,6 +9,7 @@ import { getContextDirs, getLatestSynthesizedPlan, getArtifactManifest } from ".
 import type { RepoInfo } from "../repo-utils.js";
 import { validatePlan } from "../validate-artifacts.js";
 import { isReviewFileForRound } from "../review-files.js";
+import { classifyPlanVariants, isPlanStub } from "../plan-files.js";
 import type { TaskMode } from "../state.js";
 import type { PhaseSend } from "../transition-controller.js";
 
@@ -108,6 +109,12 @@ export async function spawnPlanners(
                 return `You finished without writing your plan file. Write your plan to: ${outputPath}`;
               }
               const content = readFileSync(outputPath, "utf-8");
+              // Only the stub was ever written, so the planner never produced a
+              // plan. Its structure errors would be noise — the actionable
+              // problem is that the run did not finish.
+              if (isPlanStub(content)) {
+                return `You finished without writing your plan — only the PLAN_STATUS: INCOMPLETE stub is present. Write your plan to: ${outputPath}`;
+              }
               const validation = validatePlan(content);
               if (!validation.ok) {
                 return `Plan validation failed:\n${validation.errors.join("\n")}\n\nFix the plan at ${outputPath}`;

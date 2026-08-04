@@ -8,6 +8,7 @@ import { registerCbmTools } from "./cbm.js";
 import { registerExaTools } from "./exa.js";
 import { registerAstSearchTool } from "./ast-search.js";
 import { validatePlan, validateArtifact } from "./validate-artifacts.js";
+import { isPlanStub } from "./plan-files.js";
 import { initFlantSync, migrateLegacyFlantSettings } from "./flant-infra.js";
 import { registerBillingHook } from "./billing-spoof.js";
 import { suppressPierreThemeSpam } from "./suppress-pierre-theme-spam.js";
@@ -73,6 +74,10 @@ function registerSubagentTools(pi: ExtensionAPI): void {
 
     if (resolved.includes("/plans/") && !resolved.includes("synthesized") && !resolved.includes("review_")) {
       const content = readFileSync(resolved, "utf-8");
+      // A planner writes the INCOMPLETE stub as its FIRST action, before it has
+      // any plan content to validate. Structure errors there would fight the
+      // convention that guarantees the file exists if the run dies.
+      if (isPlanStub(content)) return;
       const result = validatePlan(content);
       if (!result.ok) {
         return {
