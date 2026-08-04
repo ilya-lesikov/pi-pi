@@ -814,19 +814,70 @@ describe("flant-infra", () => {
       return existsSync(p) ? (JSON.parse(readFileSync(p, "utf-8")).flant ?? {}) : {};
     }
 
-    it("preserves a legacy switchBackIntervalMinutes: 30 into global config, and strips it from cache", async () => {
+    it("migrates genuine choices but skips a historical-default switchBackIntervalMinutes: 30, and strips durable keys from cache", async () => {
       const dir = makeTempDir();
       const mod = await loadFlantInfraModule(dir);
       writeLegacyCache(dir, { enabled: true, subscription: true, switchBackIntervalMinutes: 30, cachedFlantModels: ["gpt-5-4"] });
 
       mod.migrateLegacyFlantSettings();
 
-      expect(readGlobalFlant(dir)).toMatchObject({ enabled: true, subscription: true, switchBackIntervalMinutes: 30 });
+      // enabled/subscription are genuine choices (their historical default is
+      // false), so they still migrate.
+      expect(readGlobalFlant(dir)).toMatchObject({ enabled: true, subscription: true });
+      // 30 was the v0.8.0/v0.9.0 default the legacy cache persisted verbatim;
+      // promoting it would permanently outrank the current default of 10.
+      expect(readGlobalFlant(dir)).not.toHaveProperty("switchBackIntervalMinutes");
       // Cache file no longer holds durable fields, but keeps cache data.
       const cacheRaw = JSON.parse(readFileSync(join(dir, "extensions", "pp", "cache", "flant-models.json"), "utf-8"));
       expect(cacheRaw).not.toHaveProperty("switchBackIntervalMinutes");
       expect(cacheRaw.cachedFlantModels).toEqual(["gpt-5-4"]);
-      expect(mod.loadFlantSettings().switchBackIntervalMinutes).toBe(30);
+      expect(mod.loadFlantSettings().switchBackIntervalMinutes).toBe(10);
+    });
+
+    it("skips a historical-default cacheTTLDays: 7 so the new default of 3 applies", async () => {
+      const dir = makeTempDir();
+      const mod = await loadFlantInfraModule(dir);
+      writeLegacyCache(dir, { cacheTTLDays: 7 });
+
+      mod.migrateLegacyFlantSettings();
+
+      expect(readGlobalFlant(dir)).not.toHaveProperty("cacheTTLDays");
+      expect(mod.loadFlantSettings().cacheTTLDays).toBe(3);
+    });
+
+    it("migrates a non-historical switchBackIntervalMinutes: 45", async () => {
+      const dir = makeTempDir();
+      const mod = await loadFlantInfraModule(dir);
+      writeLegacyCache(dir, { switchBackIntervalMinutes: 45 });
+
+      mod.migrateLegacyFlantSettings();
+
+      expect(readGlobalFlant(dir)).toMatchObject({ switchBackIntervalMinutes: 45 });
+      expect(mod.loadFlantSettings().switchBackIntervalMinutes).toBe(45);
+    });
+
+    it("compares historical defaults AFTER normalization, so a legacy string \"30\" is skipped", async () => {
+      const dir = makeTempDir();
+      const mod = await loadFlantInfraModule(dir);
+      writeLegacyCache(dir, { switchBackIntervalMinutes: "30" });
+
+      mod.migrateLegacyFlantSettings();
+
+      expect(readGlobalFlant(dir)).not.toHaveProperty("switchBackIntervalMinutes");
+    });
+
+    it("still rewrites the cache when every durable key is skipped as historical", async () => {
+      const dir = makeTempDir();
+      const mod = await loadFlantInfraModule(dir);
+      writeLegacyCache(dir, { switchBackIntervalMinutes: 30, cacheTTLDays: 7, cachedFlantModels: ["gpt-5-4"] });
+
+      mod.migrateLegacyFlantSettings();
+
+      expect(readGlobalFlant(dir)).toEqual({});
+      const cacheRaw = JSON.parse(readFileSync(join(dir, "extensions", "pp", "cache", "flant-models.json"), "utf-8"));
+      expect(cacheRaw).not.toHaveProperty("switchBackIntervalMinutes");
+      expect(cacheRaw).not.toHaveProperty("cacheTTLDays");
+      expect(cacheRaw.cachedFlantModels).toEqual(["gpt-5-4"]);
     });
 
     it("skips a key already set explicitly in global config", async () => {

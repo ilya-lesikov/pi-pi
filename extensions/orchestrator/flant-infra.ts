@@ -309,6 +309,26 @@ const DURABLE_FLANT_KEYS = [
   "cacheTTLDays",
 ] as const;
 
+// Values that a RELEASED version shipped as the default for each durable key.
+// The legacy cache file was written with JSON.stringify(settings), so it
+// persisted untouched defaults as if the user had chosen them. Migrating such a
+// value would launder a stale default into permanent explicit policy that
+// outranks every future default change (this is exactly how a v0.8.0-era
+// switchBackIntervalMinutes: 30 kept overriding the current 10). A cached value
+// matching a historical default is therefore treated as "never chosen".
+//
+// Accepted limitation: a user who deliberately picked exactly the old default is
+// indistinguishable from one who never touched it, and loses that choice.
+const HISTORICAL_DEFAULTS: Record<string, unknown[]> = {
+  switchBackIntervalMinutes: [30, 10], // 30 = v0.8.0/v0.9.0, 10 = v0.16.0
+  cacheTTLDays: [7], // 7 in every released version
+  enabled: [false],
+  subscription: [false],
+  copilotEnabled: [false],
+  autoUpdate: [true],
+  autoRateLimitFallback: [true],
+};
+
 function loadFlantCache(): FlantCache {
   const empty: FlantCache = { lastUpdated: null, cachedFlantModels: null, cachedOpenRouterData: null };
   if (!existsSync(SETTINGS_PATH)) return empty;
@@ -376,12 +396,18 @@ export function migrateLegacyFlantSettings(globalConfigPath = GLOBAL_CONFIG_PATH
   }
   const globalFlant = (globalRaw?.flant && typeof globalRaw.flant === "object") ? (globalRaw.flant as Record<string, unknown>) : {};
 
+  // Normalize once so a legacy string/other type lands as the correct typed
+  // config value, and so historical-default comparison happens post-coercion
+  // (a legacy "30" must match the numeric 30).
+  const normalized = normalizeSettings(raw) as unknown as Record<string, unknown>;
+
   for (const key of DURABLE_FLANT_KEYS) {
     if (!Object.prototype.hasOwnProperty.call(raw, key)) continue;
     if (Object.prototype.hasOwnProperty.call(globalFlant, key)) continue;
-    // Normalize the single value through the settings normalizer so a legacy
-    // string/other type lands as the correct typed config value.
-    const normalized = normalizeSettings(raw) as unknown as Record<string, unknown>;
+    if (HISTORICAL_DEFAULTS[key]?.includes(normalized[key])) {
+      getLogger().info({ s: "flant", key }, "skipped legacy flant setting matching a historical default");
+      continue;
+    }
     writeConfigValue(globalConfigPath, ["flant", key], normalized[key]);
     getLogger().info({ s: "flant", key }, "migrated legacy flant setting into global config");
   }
