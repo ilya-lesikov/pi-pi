@@ -3408,6 +3408,8 @@ async function showCompactionSettings(orchestrator: Orchestrator, ctx: any): Pro
     const c = orchestrator.config.compaction;
     const pct = Math.round(c.fraction * 100);
     const floorK = Math.round(c.floorTokens / 1000);
+    const headroomPct = Math.round(c.headroomFraction * 100);
+    const headroomFloorK = Math.round(c.headroomFloorTokens / 1000);
     const enableLabel = `Enable in-phase compaction: ${c.enabled ? "ON" : "OFF"}`;
     const options: OptionInput[] = [
       { title: enableLabel, description: "Proactively compact context within a phase when it grows past the threshold" },
@@ -3416,6 +3418,8 @@ async function showCompactionSettings(orchestrator: Orchestrator, ctx: any): Pro
       options.push(
         { title: `Trigger fraction: ${pct}% of context window`, description: "Compact once estimated context exceeds this fraction of the model's window" },
         { title: `Floor: ${floorK}K tokens`, description: "Never trigger below this token count even if the fraction is smaller" },
+        { title: `Headroom fraction: ${headroomPct}% of context window`, description: "Working room kept above the post-compaction size so the trigger doesn't creep down" },
+        { title: `Headroom floor: ${headroomFloorK}K tokens`, description: "Minimum working room kept above the post-compaction size" },
       );
     }
     options.push({ title: "Back", description: "Return to the previous menu" });
@@ -3459,6 +3463,38 @@ async function showCompactionSettings(orchestrator: Orchestrator, ctx: any): Pro
       if (Number.isFinite(floor) && floor > 0) {
         const res = tryApplyConfigChange(orchestrator, "project", ["compaction", "floorTokens"], floor);
         ctx.ui.notify(res.ok ? `Floor set to ${sel} tokens.` : `Failed: ${res.error}`, res.ok ? "info" : "error");
+      }
+      continue;
+    }
+    if (choice.startsWith("Headroom fraction:")) {
+      const sel = await selectOption(ctx, "Headroom fraction", [
+        { title: "8%", description: "Less working room (trigger climbs more slowly)" },
+        { title: "12%", description: "Default" },
+        { title: "20%", description: "More working room" },
+        { title: "30%", description: "Much more working room" },
+        { title: "Back", description: "Return to the previous menu" },
+      ]);
+      if (!sel || sel === "Back") continue;
+      const frac = Number(sel.replace("%", "")) / 100;
+      if (Number.isFinite(frac) && frac > 0) {
+        const res = tryApplyConfigChange(orchestrator, "project", ["compaction", "headroomFraction"], frac);
+        ctx.ui.notify(res.ok ? `Headroom fraction set to ${sel}.` : `Failed: ${res.error}`, res.ok ? "info" : "error");
+      }
+      continue;
+    }
+    if (choice.startsWith("Headroom floor:")) {
+      const sel = await selectOption(ctx, "Headroom floor (tokens)", [
+        { title: "20K", description: "Lower headroom floor" },
+        { title: "40K", description: "Default" },
+        { title: "80K", description: "Higher headroom floor" },
+        { title: "120K", description: "Much higher headroom floor" },
+        { title: "Back", description: "Return to the previous menu" },
+      ]);
+      if (!sel || sel === "Back") continue;
+      const floor = Number(sel.replace("K", "")) * 1000;
+      if (Number.isFinite(floor) && floor > 0) {
+        const res = tryApplyConfigChange(orchestrator, "project", ["compaction", "headroomFloorTokens"], floor);
+        ctx.ui.notify(res.ok ? `Headroom floor set to ${sel} tokens.` : `Failed: ${res.error}`, res.ok ? "info" : "error");
       }
       continue;
     }

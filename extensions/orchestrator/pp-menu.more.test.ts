@@ -641,3 +641,66 @@ describe("showPpMenu", () => {
     expect(askQuestions[0]).not.toContain("Task");
   });
 });
+
+describe("Settings > Compaction headroom controls", () => {
+  function compactionOptions(): string[] {
+    const idx = askQuestions.lastIndexOf("Compaction");
+    return idx === -1 ? [] : (askOptionTitles[idx] ?? []);
+  }
+
+  it("renders both headroom rows with live effective values when compaction is enabled", async () => {
+    const orchestrator = makeMenuOrchestrator("implement");
+    orchestrator.active = null;
+    askQueue.push("Settings", "Compaction", "Back", "Back", "Back to prompt");
+    await showPpMenu(orchestrator, makeMenuCtx(), "command");
+    // Defaults are headroomFraction 0.12 and headroomFloorTokens 40000.
+    expect(compactionOptions()).toContain("Headroom fraction: 12% of context window");
+    expect(compactionOptions()).toContain("Headroom floor: 40K tokens");
+  });
+
+  it("hides the headroom rows when compaction is disabled", async () => {
+    const orchestrator = makeMenuOrchestrator("implement");
+    orchestrator.active = null;
+    orchestrator.config.compaction.enabled = false;
+    askQueue.push("Settings", "Compaction", "Back", "Back", "Back to prompt");
+    await showPpMenu(orchestrator, makeMenuCtx(), "command");
+    const titles = compactionOptions().join("|");
+    expect(titles).not.toContain("Headroom fraction:");
+    expect(titles).not.toContain("Headroom floor:");
+    expect(titles).not.toContain("Trigger fraction:");
+  });
+
+  it("offers the approved headroom-fraction presets and writes the choice at project scope", async () => {
+    const orchestrator = makeMenuOrchestrator("implement");
+    orchestrator.active = null;
+    const write = vi.spyOn(configModule, "writeConfigValue").mockImplementation(() => {});
+    vi.spyOn(configModule, "loadConfig").mockReturnValue(orchestrator.config);
+    askQueue.push("Settings", "Compaction", "Headroom fraction: 12% of context window", "20%", "Back", "Back", "Back to prompt");
+    await showPpMenu(orchestrator, makeMenuCtx(), "command");
+
+    const idx = askQuestions.lastIndexOf("Headroom fraction");
+    expect(askOptionTitles[idx]).toEqual(["8%", "12%", "20%", "30%", "Back"]);
+    expect(write).toHaveBeenCalledWith(
+      join(orchestrator.cwd, ".pp", "config.json"),
+      ["compaction", "headroomFraction"],
+      0.2,
+    );
+  });
+
+  it("offers the approved headroom-floor presets and writes the choice at project scope", async () => {
+    const orchestrator = makeMenuOrchestrator("implement");
+    orchestrator.active = null;
+    const write = vi.spyOn(configModule, "writeConfigValue").mockImplementation(() => {});
+    vi.spyOn(configModule, "loadConfig").mockReturnValue(orchestrator.config);
+    askQueue.push("Settings", "Compaction", "Headroom floor: 40K tokens", "80K", "Back", "Back", "Back to prompt");
+    await showPpMenu(orchestrator, makeMenuCtx(), "command");
+
+    const idx = askQuestions.lastIndexOf("Headroom floor (tokens)");
+    expect(askOptionTitles[idx]).toEqual(["20K", "40K", "80K", "120K", "Back"]);
+    expect(write).toHaveBeenCalledWith(
+      join(orchestrator.cwd, ".pp", "config.json"),
+      ["compaction", "headroomFloorTokens"],
+      80000,
+    );
+  });
+});
