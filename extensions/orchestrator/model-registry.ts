@@ -269,7 +269,7 @@ import { SUB_MODEL_PREFIX, SUB_PROVIDER } from "./flant-infra.js";
 export type ProviderTierName = "copilot" | "flant-sub" | "flant-api";
 
 // Fixed precedence order.
-export const PROVIDER_TIER_ORDER: readonly ProviderTierName[] = ["copilot", "flant-sub", "flant-api"] as const;
+export const PROVIDER_TIER_ORDER: readonly ProviderTierName[] = ["flant-sub", "copilot", "flant-api"] as const;
 
 const COPILOT_PROVIDER = "github-copilot";
 
@@ -421,18 +421,17 @@ function applyTierResolution(spec: string): string {
 
   const haveCatalog = registeredSpecs.size > 0;
 
-  // Copilot precedence (the user's explicit request: "Copilot models should have
-  // higher precedence than flant-api or flant-subscription"). When the current
-  // tier is a FLANT tier and copilot is enabled + usable + has a REAL registered
-  // model for the family, PROMOTE up to copilot. This is safe because
-  // registeredSpecForTier returns copilot's own catalog id (never a fabricated
-  // github-copilot/<flant-id>), and a family copilot lacks (e.g. gpt) yields
-  // null so the spec stays on flant. Copilot is flat-rate (cost 0), so this only
-  // lowers cost, and the copilot tier is OFF by default — promotion happens only
-  // after the user explicitly enables it. Flant↔flant stays demote-only below
-  // (never promote a paid api spec onto the subscription). An explicit copilot
-  // pin is handled by the current-tier branch, not here.
-  if (currentTier !== "copilot" && isTierUsable("copilot", family)) {
+  // Copilot sits BETWEEN the subscription and paid flant-api, so promotion lifts
+  // only flant-api-born specs: a paid spec rises to flat-rate copilot (cost 0)
+  // when copilot is enabled + usable + has a REAL registered model for the
+  // family. This is safe because registeredSpecForTier returns copilot's own
+  // catalog id (never a fabricated github-copilot/<flant-id>), and a family
+  // copilot lacks (e.g. gpt) yields null so the spec stays on flant. A sub-born
+  // spec is NEVER rerouted upward — the subscription already outranks copilot,
+  // and flant↔flant stays demote-only below (never promote a paid api spec onto
+  // the subscription). An explicit copilot pin is handled by the current-tier
+  // branch, not here.
+  if (currentTier === "flant-api" && isTierUsable("copilot", family)) {
     const copilotSpec = registeredSpecForTier("copilot", family);
     if (copilotSpec) return copilotSpec;
   }

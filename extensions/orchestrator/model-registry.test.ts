@@ -387,8 +387,8 @@ describe("model-registry", () => {
       setTierEnabled({ "copilot": false, "flant-sub": true, "flant-api": true });
     });
 
-    it("exposes the fixed precedence order copilot > flant-sub > flant-api", () => {
-      expect([...PROVIDER_TIER_ORDER]).toEqual(["copilot", "flant-sub", "flant-api"]);
+    it("exposes the fixed precedence order flant-sub > copilot > flant-api", () => {
+      expect([...PROVIDER_TIER_ORDER]).toEqual(["flant-sub", "copilot", "flant-api"]);
     });
 
     it("listTierDemotions reports current demotions and clearAllTierDemotions returns what it cleared", () => {
@@ -409,9 +409,11 @@ describe("model-registry", () => {
     });
 
     it("demotes a copilot spec down when copilot is disabled", () => {
-      // copilot disabled (default) -> a copilot-generated Claude spec falls to
-      // the next usable tier (sub, which is Claude-capable + enabled).
-      expect(resolveModel("github-copilot/claude-opus-4-8")).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
+      // copilot disabled (default) -> a copilot-generated Claude spec walks DOWN
+      // only. flant-sub now outranks copilot, so the sub tier is above the walk
+      // start and is never reached: the spec lands on the flant-api floor rather
+      // than being rerouted upward onto the subscription.
+      expect(resolveModel("github-copilot/claude-opus-4-8")).toBe("pp-flant-anthropic/claude-opus-4-8");
     });
 
     it("flant↔flant stays demote-only: a paid flant-api spec is never promoted to the subscription", () => {
@@ -430,9 +432,10 @@ describe("model-registry", () => {
 
     it("demoting copilot for a family falls that family to the next usable tier", () => {
       setTierEnabled({ "copilot": true });
-      // opus prefers copilot; demote copilot for opus -> falls to sub.
+      // A copilot-born opus with copilot demoted walks DOWN past the (higher)
+      // sub tier to the flant-api floor.
       demoteTierForFamily("copilot", "opus");
-      expect(resolveModel("github-copilot/claude-opus-4-8")).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
+      expect(resolveModel("github-copilot/claude-opus-4-8")).toBe("pp-flant-anthropic/claude-opus-4-8");
       // A gpt on copilot, demoted, skips Claude-only sub and lands on flant-api.
       demoteTierForFamily("copilot", "gpt-sol");
       expect(resolveModel("github-copilot/gpt-5.6-sol")).toBe("pp-flant-openai/gpt-5.6-sol");
@@ -449,7 +452,7 @@ describe("model-registry", () => {
     it("restoring a demoted tier brings the family back up", () => {
       setTierEnabled({ "copilot": true });
       demoteTierForFamily("copilot", "opus");
-      expect(resolveModel("github-copilot/claude-opus-4-8")).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
+      expect(resolveModel("github-copilot/claude-opus-4-8")).toBe("pp-flant-anthropic/claude-opus-4-8");
       restoreTierForFamily("copilot", "opus");
       expect(resolveModel("github-copilot/claude-opus-4-8")).toBe("github-copilot/claude-opus-4-8");
     });
@@ -488,12 +491,32 @@ describe("model-registry", () => {
       updateRegistryFromAvailableModels([]);
     });
 
-    it("PROMOTES a generated flant Claude spec to the real latest copilot id when copilot is enabled", () => {
-      // Copilot precedence (user's explicit request): a generated flant claude
-      // spec routes UP to copilot's OWN latest registered opus id (4.6), not a
-      // prefix-swap. copilot is OFF by default so this only happens on opt-in.
+    it("keeps a sub-born Claude spec on the subscription instead of promoting it to copilot", () => {
+      // flant-sub now outranks copilot, so a usable sub-born spec is never
+      // rerouted upward: promotion lifts only flant-api-born specs.
       setTierEnabled({ "copilot": true });
+      expect(resolveModel("pp-flant-anthropic-sub/sub/claude-opus-4-8")).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
+    });
+
+    it("PROMOTES an api-born Claude spec to the real latest copilot id when copilot is enabled", () => {
+      // A paid flant-api spec still routes UP to copilot's OWN latest registered
+      // opus id (4.6), not a prefix-swap — copilot is flat-rate, so this lowers
+      // cost, and copilot is OFF by default so it only happens on opt-in.
+      setTierEnabled({ "copilot": true });
+      expect(resolveModel("pp-flant-anthropic/claude-opus-4-8")).toBe("github-copilot/claude-opus-4.6");
+    });
+
+    it("falls a sub-born Claude spec to copilot when the subscription is disabled", () => {
+      // The new chain in action: sub unusable -> copilot (a real registered id)
+      // -> flant-api. Previously this went straight to flant-api.
+      setTierEnabled({ "copilot": true });
+      setSubscriptionFallbackActive(true);
       expect(resolveModel("pp-flant-anthropic-sub/sub/claude-opus-4-8")).toBe("github-copilot/claude-opus-4.6");
+    });
+
+    it("falls a sub-born Claude spec to flant-api when the subscription is disabled and copilot is not usable", () => {
+      setSubscriptionFallbackActive(true);
+      expect(resolveModel("pp-flant-anthropic-sub/sub/claude-opus-4-8")).toBe("pp-flant-anthropic/claude-opus-4-8");
     });
 
     it("does NOT promote a gpt flant spec to copilot (copilot has no gpt) — stays on flant", () => {
@@ -502,15 +525,15 @@ describe("model-registry", () => {
     });
 
     it("does NOT promote to copilot when the copilot tier is disabled (default)", () => {
-      // copilot OFF (default): a generated flant claude spec stays on flant.
-      expect(resolveModel("pp-flant-anthropic-sub/sub/claude-opus-4-8")).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
+      // copilot OFF (default): an api-born claude spec stays on flant-api.
+      expect(resolveModel("pp-flant-anthropic/claude-opus-4-8")).toBe("pp-flant-anthropic/claude-opus-4-8");
     });
 
     it("does NOT promote to copilot when that family is demoted for copilot (live rate-limit)", () => {
       setTierEnabled({ "copilot": true });
       demoteTierForFamily("copilot", "opus");
-      // opus copilot demoted -> the generated flant spec stays on flant.
-      expect(resolveModel("pp-flant-anthropic-sub/sub/claude-opus-4-8")).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
+      // opus copilot demoted -> the api-born spec stays on flant-api.
+      expect(resolveModel("pp-flant-anthropic/claude-opus-4-8")).toBe("pp-flant-anthropic/claude-opus-4-8");
     });
 
     it("respects an explicit copilot pin against the real catalog (no rewrite to flant)", () => {
@@ -527,9 +550,10 @@ describe("model-registry", () => {
     });
 
     it("demotes an explicit copilot pin to a real flant id when copilot is disabled", () => {
-      // copilot off (default) -> the pin can't be honored, routes to the highest
-      // usable flant tier with a REAL id (not github-copilot/<flant-id>).
-      expect(resolveModel("github-copilot/claude-opus-4.5")).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
+      // copilot off (default) -> the pin can't be honored and walks DOWN only, so
+      // it lands on the flant-api floor. It is never rerouted UP onto the
+      // subscription, which now outranks copilot.
+      expect(resolveModel("github-copilot/claude-opus-4.5")).toBe("pp-flant-anthropic/claude-opus-4-8");
     });
 
     it("never emits an unregistered copilot id when demoting a copilot spec whose family copilot lacks", () => {
