@@ -16,8 +16,11 @@ import { createHash } from "node:crypto";
 const BILLING_SALT = "59cf53e54c78";
 export const CC_VERSION = process.env.ANTHROPIC_CLI_VERSION ?? "2.1.160";
 export const CC_ENTRYPOINT = process.env.CLAUDE_CODE_ENTRYPOINT ?? "sdk-cli";
-const BILLING_PREFIX = "x-anthropic-billing-header";
-const CC_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
+export const BILLING_PREFIX = "x-anthropic-billing-header";
+// pi-ai's Claude Code identity system block. injectBillingHeader is gated on
+// its presence, so any payload that wants the billing entry (live requests and
+// the recovery probe alike) must carry this exact text as a system entry.
+export const CC_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
 
 // The full-form Claude Code user-agent. pi-ai sends a bare `claude-cli/<ver>`;
 // Anthropic's plan-billing validation expects this form.

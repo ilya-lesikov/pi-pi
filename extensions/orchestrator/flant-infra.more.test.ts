@@ -168,6 +168,26 @@ describe("probeSubscriptionCleared", () => {
     await expect(mod.probeSubscriptionCleared("sub/claude-haiku-4-5")).resolves.toBe("rate_limited");
   });
 
+  it("sends a billing-parity probe: full UA + CC identity + billing system[0], no temperature", async () => {
+    const dir = makeTempDir();
+    writeAuth(dir);
+    process.env.LLM_API_KEY = "gw";
+    const mod = await loadModule(dir);
+    const fn = stubFetch(() => ({ ok: true, status: 200 }));
+    await mod.probeSubscriptionCleared("sub/claude-haiku-4-5");
+    const req = fn.mock.calls[0][1];
+    // (i) full-form user-agent, not the bare claude-cli/1.0.0.
+    expect(req.headers["user-agent"]).toMatch(/^claude-cli\/[0-9.]+ \(external, /);
+    expect(req.headers["user-agent"]).not.toBe("claude-cli/1.0.0");
+    const body = JSON.parse(req.body);
+    // (ii) system[0] is the billing header entry.
+    expect(body.system[0].text).toMatch(/^x-anthropic-billing-header:/);
+    // (iii) the CC identity block is present (it is what gates injection).
+    expect(body.system.some((e: any) => e.text.startsWith("You are Claude Code, Anthropic's official CLI for Claude."))).toBe(true);
+    // (iv) no temperature key.
+    expect(body.temperature).toBeUndefined();
+  });
+
   it("treats a 400 extra-usage response as still-limited (item 10)", async () => {
     const dir = makeTempDir();
     writeAuth(dir);

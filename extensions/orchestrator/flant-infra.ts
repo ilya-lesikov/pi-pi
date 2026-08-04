@@ -8,7 +8,7 @@ import { getDefaultConfig, type PiPiConfig } from "./config.js";
 import { updateRegistryFromAvailableModels, setTierEnabled, isSubscriptionFallbackActive } from "./model-registry.js";
 import { compareModelVersion } from "./model-version.js";
 import { getLogger } from "./log.js";
-import { buildUserAgent } from "./billing-spoof.js";
+import { buildUserAgent, injectBillingHeader, CC_IDENTITY } from "./billing-spoof.js";
 
 export interface OpenRouterModelData {
   name: string;
@@ -421,6 +421,20 @@ export async function probeSubscriptionCleared(
   }
   // The gateway expects the bare claude-* id under the `sub/` prefix.
   const probeModel = subProbeModelId(modelId);
+  // Build a payload that matches a LIVE subscription request's billing shape:
+  // it must carry the Claude Code identity system block (so injectBillingHeader
+  // passes its gate) and the billing system[0] entry the transform prepends.
+  // Without this the probe lands in the "extra usage" bucket, keeps getting the
+  // 400, is classified rate_limited, and the switch-back timer re-arms forever.
+  const probePayload: Record<string, unknown> = {
+    model: probeModel,
+    max_tokens: 1,
+    system: [{ type: "text", text: CC_IDENTITY }],
+    messages: [{ role: "user", content: "just respond hi" }],
+    // No `temperature`: the gateway rejects it as deprecated for some models
+    // (a separate 400 source) — sending it would make the probe 400 forever.
+  };
+  injectBillingHeader(probePayload);
   try {
     const res = await fetch("https://llm-api.flant.ru/v1/messages", {
       method: "POST",
@@ -431,18 +445,15 @@ export async function probeSubscriptionCleared(
         // subscription (sub/) routing; without them it can reject the probe and
         // we would never detect that the limit cleared. Mirrors doctor.ts.
         "anthropic-beta": "claude-code-20250219,oauth-2025-04-20",
-        "user-agent": "claude-cli/1.0.0",
+        // Full-form Claude Code user-agent (same as live sub requests via the
+        // sub provider's model.headers) — a bare claude-cli/1.0.0 is bucketed
+        // as un-spoofed "extra usage" traffic and the probe never recovers.
+        "user-agent": buildUserAgent(),
         "x-app": "cli",
         Authorization: `Bearer ${oauthToken}`,
         "x-litellm-api-key": `Bearer ${gatewayKey}`,
       },
-      // No `temperature`: the gateway rejects it as deprecated for some models
-      // (a separate 400 source) — sending it would make the probe 400 forever.
-      body: JSON.stringify({
-        model: probeModel,
-        max_tokens: 1,
-        messages: [{ role: "user", content: "just respond hi" }],
-      }),
+      body: JSON.stringify(probePayload),
       signal: AbortSignal.timeout(30000),
     });
     if (res.status === 429) {
