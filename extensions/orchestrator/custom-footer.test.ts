@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeEach } from "vitest";
-import { createCustomFooter, setFooterContext, setFooterTracker, setFooterOrchestrator } from "./custom-footer.js";
+import { readFileSync } from "node:fs";
+import { createCustomFooter, setFooterContext, setFooterTracker, setFooterOrchestrator, resolvePackageVersion } from "./custom-footer.js";
 
 const theme = { fg: (_color: string, text: string) => text } as any;
 const footerData = { getGitBranch: () => "main" } as any;
@@ -101,5 +102,23 @@ describe("createCustomFooter", () => {
     setFooterContext(makeCtx({ tokens: null, contextWindow: 1000000, percent: null }));
     const [, line2] = render();
     expect(line2).toContain("?%/?/1.0M (auto)");
+  });
+
+  it("line 1 shows the pi-pi package version", () => {
+    setFooterContext(makeCtx());
+    const [line1] = render();
+    const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8"));
+    expect(line1).toContain(`pp v${pkg.version}`);
+  });
+});
+
+describe("resolvePackageVersion", () => {
+  it("reads the real package version", () => {
+    const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8"));
+    expect(resolvePackageVersion()).toBe(pkg.version);
+  });
+
+  it("degrades to '?' when the manifest cannot be read", () => {
+    expect(resolvePackageVersion(new URL("file:///nonexistent/package.json"))).toBe("?");
   });
 });

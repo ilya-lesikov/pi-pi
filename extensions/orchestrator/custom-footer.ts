@@ -1,9 +1,25 @@
 import { homedir } from "node:os";
+import { readFileSync } from "node:fs";
 import type { ExtensionContext, ReadonlyFooterDataProvider, Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 import type { UsageTracker } from "./usage-tracker.js";
 import type { Orchestrator } from "./orchestrator.js";
 import { formatModeIndicator, taskNameFromState } from "./state.js";
+
+// Resolve the pi-pi package version once at module load. ESM-safe: resolve
+// package.json relative to this module's URL (never __dirname or a fixed
+// install-dir depth). Degrade to "?" if the read/parse fails.
+export function resolvePackageVersion(packageUrl: URL = new URL("../../package.json", import.meta.url)): string {
+  try {
+    const raw = readFileSync(packageUrl, "utf8");
+    const version = JSON.parse(raw)?.version;
+    return typeof version === "string" && version ? version : "?";
+  } catch {
+    return "?";
+  }
+}
+
+const PP_VERSION = resolvePackageVersion();
 
 let footerCtx: ExtensionContext | undefined;
 let footerTracker: UsageTracker | undefined;
@@ -135,6 +151,8 @@ function renderPathLine(width: number, theme: Theme, footerData: ReadonlyFooterD
     const sessionName = ctx?.sessionManager.getSessionName();
     if (sessionName) line += ` • ${sessionName}`;
   }
+
+  line += ` • pp v${PP_VERSION}`;
 
   return truncateToWidth(theme.fg("dim", line), width, theme.fg("dim", "..."));
 }
