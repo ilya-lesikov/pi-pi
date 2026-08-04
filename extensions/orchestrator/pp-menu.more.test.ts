@@ -18,10 +18,14 @@ type ResetOption = { title: string; description?: string };
 
 const askQueue: string[] = [];
 const askQuestions: string[] = [];
+const askOptionTitles: string[][] = [];
+const askInitialIndex: Array<number | undefined> = [];
 vi.mock("../../3p/pi-ask-user/index.js", () => ({
   isCancel: (r: any) => r?.__cancel === true,
   askUser: vi.fn(async (_ctx: any, opts: any) => {
     askQuestions.push(opts.question);
+    askOptionTitles.push((opts.options ?? []).map((o: any) => o.title));
+    askInitialIndex.push(opts.initialIndex);
     const next = askQueue.shift();
     if (next === undefined || next === "__ESC__") return { __cancel: true, reason: "user" };
     return { kind: "selection", selections: [next] };
@@ -48,6 +52,8 @@ function makeTmp(prefix: string): string {
 afterEach(() => {
   askQueue.length = 0;
   askQuestions.length = 0;
+  askOptionTitles.length = 0;
+  askInitialIndex.length = 0;
   vi.restoreAllMocks();
   delete (globalThis as any)[USAGE_TRACKER_SYMBOL];
   delete (globalThis as any)[TASKS_STORE_SYMBOL];
@@ -194,6 +200,31 @@ describe("pickPreset", () => {
     askQueue.push("__ESC__");
     await pickPreset(ctx, orchestrator, "codeReviewers", "Review preset");
     expect(askQuestions).toHaveLength(1);
+  });
+
+  it("orders presets quick -> regular -> deep, then Back", async () => {
+    const orchestrator = makeOrchestrator(cwd);
+    askQueue.push("__ESC__");
+    await pickPreset(ctx, orchestrator, "codeReviewers", "Review preset");
+    // regular is the default so it carries the [default] tag.
+    expect(askOptionTitles[0]).toEqual(["quick", "regular [default]", "deep", "Back"]);
+  });
+
+  it("starts the cursor on the group default (regular), not the first (quick) option", async () => {
+    const orchestrator = makeOrchestrator(cwd);
+    askQueue.push("__ESC__");
+    await pickPreset(ctx, orchestrator, "planners", "Planner preset");
+    // quick(0), regular(1) => cursor on index 1.
+    expect(askOptionTitles[0]).toEqual(["quick", "regular [default]", "deep", "Back"]);
+    expect(askInitialIndex[0]).toBe(1);
+  });
+
+  it("falls back to index 0 when the default preset is disabled", async () => {
+    const orchestrator = makeOrchestrator(cwd);
+    (orchestrator.config as any).agents.subagents.presetGroups.planners.presets.regular.enabled = false;
+    askQueue.push("__ESC__");
+    await pickPreset(ctx, orchestrator, "planners", "Planner preset");
+    expect(askInitialIndex[0]).toBe(0);
   });
 });
 

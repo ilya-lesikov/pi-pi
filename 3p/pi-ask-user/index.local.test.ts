@@ -8,7 +8,7 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { askUser, isCancel } from "./index";
+import { askUser, isCancel, clampInitialIndex } from "./index";
 
 interface CustomCapture {
    options: any;
@@ -197,5 +197,21 @@ describe("cancel-reason plumbing (local fork)", () => {
       });
       expect(isCancel(result)).toBe(true);
       expect((result as any).reason).toBe("signal");
+   });
+
+   describe("clampInitialIndex (single-select initial cursor)", () => {
+      test("keeps an in-range integer index", () => {
+         expect(clampInitialIndex(1, 4)).toBe(1);
+         expect(clampInitialIndex(3, 4)).toBe(3);
+         expect(clampInitialIndex(0, 4)).toBe(0);
+      });
+      test("clamps out-of-range, negative, and non-integer values to 0", () => {
+         expect(clampInitialIndex(4, 4)).toBe(0);
+         expect(clampInitialIndex(99, 4)).toBe(0);
+         expect(clampInitialIndex(-1, 4)).toBe(0);
+         expect(clampInitialIndex(1.5, 4)).toBe(0);
+         expect(clampInitialIndex(NaN, 4)).toBe(0);
+         expect(clampInitialIndex(0, 0)).toBe(0);
+      });
    });
 });

@@ -85,6 +85,12 @@ function safeMarkdownTheme(): MarkdownTheme | undefined {
 
 type AskOptionInput = QuestionOption | string;
 
+// Clamp a caller-supplied initial cursor index into [0, count). Any non-integer,
+// negative, or out-of-range value falls back to 0 (first option).
+export function clampInitialIndex(index: number, count: number): number {
+   return Number.isInteger(index) && index >= 0 && index < count ? index : 0;
+}
+
 type AskDisplayMode = "overlay" | "inline";
 
 interface AskParams {
@@ -97,6 +103,9 @@ interface AskParams {
    displayMode?: AskDisplayMode;
    overlayToggleKey?: string | null;
    timeout?: number;
+   // Zero-based index of the option the cursor should start on (single-select
+   // only). Optional and defaults to 0; out-of-range values are clamped to 0.
+   initialIndex?: number;
 }
 
 type AskResponse =
@@ -652,6 +661,7 @@ class WrappedSingleSelectList implements Component {
       theme: Theme,
       keybindings: KeybindingsManager,
       commentSelect: ResolvedShortcut,
+      initialIndex = 0,
    ) {
       this.options = options;
       this.allowFreeform = allowFreeform;
@@ -659,6 +669,7 @@ class WrappedSingleSelectList implements Component {
       this.theme = theme;
       this.keybindings = keybindings;
       this.commentSelect = commentSelect;
+      this.selectedIndex = clampInitialIndex(initialIndex, options.length);
    }
 
    setMaxVisibleRows(rows: number): void {
@@ -959,6 +970,7 @@ class AskComponent extends Container {
    private allowFreeform: boolean;
    private allowComment: boolean;
    private displayMode: AskDisplayMode;
+   private initialIndex: number;
    private tui: TUI;
    private theme: Theme;
    private keybindings: KeybindingsManager;
@@ -1001,6 +1013,7 @@ class AskComponent extends Container {
       allowFreeform: boolean,
       allowComment: boolean,
       displayMode: AskDisplayMode,
+      initialIndex: number,
       tui: TUI,
       theme: Theme,
       keybindings: KeybindingsManager,
@@ -1015,6 +1028,7 @@ class AskComponent extends Container {
       this.allowFreeform = allowFreeform;
       this.allowComment = allowComment;
       this.displayMode = displayMode;
+      this.initialIndex = initialIndex;
       this.tui = tui;
       this.theme = theme;
       this.keybindings = keybindings;
@@ -1184,6 +1198,7 @@ class AskComponent extends Container {
          this.theme,
          this.keybindings,
          this.shortcuts.commentSelect,
+         this.initialIndex,
       );
       list.onSubmit = (result, wantsComment) => this.handleSelectionSubmit([result], wantsComment);
       list.onCancel = () => this.onDone(makeCancel("user"));
@@ -1438,6 +1453,7 @@ export async function askUser(
       overlay?: boolean;
       displayMode?: AskDisplayMode;
       overlayToggleKey?: string | null;
+      initialIndex?: number;
    },
 ): Promise<AskResponse | AskCancel | null> {
    const {
@@ -1452,6 +1468,7 @@ export async function askUser(
       overlay,
       displayMode,
       overlayToggleKey,
+      initialIndex = 0,
    } = opts;
 
    const requestedMode = displayMode ?? (overlay === undefined ? undefined : overlay ? "overlay" : "inline");
@@ -1502,6 +1519,7 @@ export async function askUser(
             allowFreeform,
             allowComment,
             effectiveDisplayMode,
+            initialIndex,
             tui,
             theme,
             keybindings,

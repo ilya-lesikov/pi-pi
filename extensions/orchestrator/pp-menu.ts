@@ -101,8 +101,8 @@ function isEnabled(value: { enabled?: boolean } | undefined): boolean {
   return value?.enabled !== false;
 }
 
-async function selectOption(ctx: any, question: string, options: OptionInput[]): Promise<string | undefined> {
-  return (await selectOptionCancelable(ctx, question, options)).choice;
+async function selectOption(ctx: any, question: string, options: OptionInput[], initialIndex = 0): Promise<string | undefined> {
+  return (await selectOptionCancelable(ctx, question, options, initialIndex)).choice;
 }
 
 // Like selectOption but also surfaces the cancel reason so callers can tell a
@@ -112,6 +112,7 @@ async function selectOptionCancelable(
   ctx: any,
   question: string,
   options: OptionInput[],
+  initialIndex = 0,
 ): Promise<{ choice?: string; cancelReason?: CancelReason }> {
   const orchestrator = Orchestrator.current;
   if (orchestrator) orchestrator.interactivePromptOpen = true;
@@ -122,6 +123,7 @@ async function selectOptionCancelable(
       allowFreeform: false,
       allowComment: false,
       allowMultiple: false,
+      initialIndex,
     });
     if (result && isCancel(result)) return { cancelReason: result.reason };
     if (!result || result.kind !== "selection") return {};
@@ -527,10 +529,23 @@ export async function pickPreset(
   const presets = orchestrator.config.agents.subagents.presetGroups[group].presets ?? {};
   const defaultPresetName = orchestrator.config.agents.subagents.presetGroups[group].default;
 
+  // Render presets in a fixed conceptual order — quick, regular, deep — then any
+  // custom presets in their existing enumeration order. NOT object-key insertion
+  // order (fragile against user-merged / Flant-merged configs).
+  const FIXED_ORDER = ["quick", "regular", "deep"];
+  const orderedNames = Object.keys(presets).sort((a, b) => {
+    const ia = FIXED_ORDER.indexOf(a);
+    const ib = FIXED_ORDER.indexOf(b);
+    if (ia !== -1 || ib !== -1) return (ia === -1 ? Infinity : ia) - (ib === -1 ? Infinity : ib);
+    return 0; // both custom: preserve relative order (stable sort)
+  });
+
   const options: OptionInput[] = [];
   const byTitle = new Map<string, string>();
+  let defaultIndex = 0;
 
-  for (const [presetName, preset] of Object.entries(presets)) {
+  for (const presetName of orderedNames) {
+    const preset = presets[presetName];
     if (!isPresetEnabled(preset)) continue;
     const enabledModels = Object.values(preset.agents)
       .filter((variant) => isEnabled(variant))
@@ -540,13 +555,17 @@ export async function pickPreset(
       });
     const description = enabledModels.length > 0 ? enabledModels.join(", ") : "No enabled models";
     const optionTitle = presetName === defaultPresetName ? `${presetName} [default]` : presetName;
+    // Cursor starts on the group's DEFAULT preset (keyed off the `default`
+    // field, not the literal "regular"). If the default is disabled/absent it
+    // simply never matches and the cursor falls back to index 0.
+    if (presetName === defaultPresetName) defaultIndex = options.length;
     byTitle.set(optionTitle, presetName);
     options.push({ title: optionTitle, description });
   }
 
   options.push({ title: "Back", description: "Return to the previous menu" });
 
-  const choice = await selectOption(ctx, title, options);
+  const choice = await selectOption(ctx, title, options, defaultIndex);
   if (!choice || choice === "Back") return null;
   return byTitle.get(choice) ?? null;
 }
