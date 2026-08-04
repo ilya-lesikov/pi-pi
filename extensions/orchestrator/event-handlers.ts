@@ -1140,9 +1140,11 @@ function registerCommitTool(orchestrator: Orchestrator): void {
       "Format: a concise subject line (ideally <=72 chars, but never truncate a meaningful " +
       "subject to fit), then an optional body separated by a blank line for extra detail. " +
       "Prefix the subject with a conventional-commit type (fix:, feat:, or chore:) " +
-      "unless the user asked for a different commit style.",
+      "unless the user asked for a different commit style. NEVER use a breaking-change marker — " +
+      "no `!` before the colon (not `feat!:`, `fix!:`, `chore!:`) and no `BREAKING CHANGE:` trailer. " +
+      "Keep the body to at most 2 paragraphs.",
     parameters: Type.Object({
-      message: Type.String({ description: "Commit message: a subject line (conventional-commit prefix, aim for <=72 chars) optionally followed by a blank line and a body. Written verbatim; never truncated." }),
+      message: Type.String({ description: "Commit message: a subject line (conventional-commit prefix, no `!` breaking-change marker, aim for <=72 chars) optionally followed by a blank line and a body of at most 2 paragraphs. Written verbatim apart from breaking-change-marker removal; never truncated." }),
       repo: Type.Optional(Type.String({ description: "Absolute path to the repo to commit in. Defaults to root." })),
     }),
     async execute(_toolCallId, params: any) {
@@ -3056,7 +3058,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       orchestrator.transitionController.sendCustom(
         {
           customType: "pp-commit-reminder",
-          content: `You have ${orchestrator.active.modifiedFiles.size} uncommitted file(s). If you've completed a logical unit of work, call pp_commit with a descriptive message. Prefix it with a conventional-commit type (fix:, feat:, or chore:) unless the user asked for a different commit style.`,
+          content: `You have ${orchestrator.active.modifiedFiles.size} uncommitted file(s). If you've completed a logical unit of work, call pp_commit with a descriptive message. Prefix it with a conventional-commit type (fix:, feat:, or chore:) unless the user asked for a different commit style. NEVER use a breaking-change marker — no \`!\` before the colon (not \`feat!:\`, \`fix!:\`, \`chore!:\`) and no \`BREAKING CHANGE:\` trailer. Keep the body to at most 2 paragraphs.`,
           display: false,
         },
         "context",

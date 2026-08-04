@@ -35,6 +35,8 @@ export function implementationSystemPrompt(taskDir: string, cwd: string): string
     "After completing a logical unit of work (a plan item, a bug fix, a test), call pp_commit",
     "with a descriptive message (what changed and why). Prefix it with a conventional-commit",
     "type (fix:, feat:, or chore:) unless the user asked for a different commit style.",
+    "NEVER use a breaking-change marker — no `!` before the colon (not `feat!:`, `fix!:`, `chore!:`)",
+    "and no `BREAKING CHANGE:` trailer. Keep the body to at most 2 paragraphs.",
     "Don't batch all changes into one commit.",
     "",
     "Fix issues found by lsp diagnostics before moving on.",
