@@ -442,9 +442,10 @@ describe("showActiveTaskMenu phase branches", () => {
     expect(askQuestions[0]).toContain("Phase: brainstorm");
   });
 
-  it("autonomous mode renders the compact menu with Complete/Pause", async () => {
+  it("autonomous mode renders the compact menu with Complete/Pause when the controller is busy", async () => {
     const orchestrator = makeMenuOrchestrator("implement");
     orchestrator.active.state.mode = "autonomous";
+    orchestrator.transitionController.isRunning = () => false; // waiting -> Next hidden
     askQueue.push("Back to prompt");
     const result = await showActiveTaskMenu(orchestrator, makeMenuCtx(), "/pp", "command");
     expect(result).toBe("");
@@ -465,7 +466,10 @@ describe("showActiveTaskMenu phase branches", () => {
     await showActiveTaskMenu(orchestrator, makeMenuCtx(), "/pp", "command");
     expect(optionTitles).toContain("Next");
     expect(optionTitles).toContain("Review");
-    expect(optionTitles).toContain("Complete task");
+    // Next is shown, so the duplicate top-level pair is dropped: complete/pause
+    // are reached through Next instead.
+    expect(optionTitles).not.toContain("Complete task");
+    expect(optionTitles).not.toContain("Pause task");
   });
 
   it("bug A: autonomous menu hides Next + Review while a transition is in flight", async () => {
@@ -483,6 +487,27 @@ describe("showActiveTaskMenu phase branches", () => {
     expect(optionTitles).not.toContain("Next");
     expect(optionTitles).not.toContain("Review");
     expect(optionTitles).toContain("Complete task");
+    expect(optionTitles).toContain("Pause task");
+  });
+
+  it("autonomous menu is never a dead end: exactly one route to complete/pause exists in both states", async () => {
+    for (const running of [true, false]) {
+      const orchestrator = makeMenuOrchestrator("implement");
+      orchestrator.active.state.mode = "autonomous";
+      orchestrator.transitionController.isRunning = () => running;
+      let optionTitles: string[] = [];
+      const askMock = (await import("../../3p/pi-ask-user/index.js")).askUser as any;
+      askMock.mockImplementationOnce(async (_c: any, opts: any) => {
+        askQuestions.push(opts.question);
+        optionTitles = opts.options.map((o: any) => o.title);
+        return { __cancel: true, reason: "user" };
+      });
+      await showActiveTaskMenu(orchestrator, makeMenuCtx(), "/pp", "command");
+      const viaNext = optionTitles.includes("Next");
+      const viaTopLevel = optionTitles.includes("Complete task");
+      expect(viaNext || viaTopLevel).toBe(true);
+      expect(viaNext && viaTopLevel).toBe(false);
+    }
   });
 
   it("autonomous ESC in tool mode returns the USER_CANCELLED sentinel", async () => {

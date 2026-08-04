@@ -4517,13 +4517,21 @@ export async function showActiveTaskMenu(
       // i.e. !waiting) WITHOUT persisting a mode change — mirroring the existing
       // forceGuided display-only pattern. These route into the shared Next/
       // Review handlers below, identical to guided mode.
+      //
+      // Complete/Pause are the exact COMPLEMENT of Next: Next's submenu already
+      // offers them, so surfacing them here too would be a second route to the
+      // same handlers. They appear only when Next is hidden, which keeps the
+      // menu from becoming a dead end while the controller is busy without
+      // duplicating the action. Mind the polarity: `waiting === true` means the
+      // controller is IDLE-blocked and Next is NOT shown.
       const autoOptions: OptionInput[] = [];
       if (!waiting) {
         autoOptions.push(opt("Next", "Continue to next phase, complete, or pause"));
         autoOptions.push(opt("Review", `Review ${reviewTarget}: automated reviewers${hasPlannotator ? ", Plannotator, or" : " or"} your own editor pass`));
+      } else {
+        autoOptions.push(opt("Complete task", "Mark task as done and clean up"));
+        autoOptions.push(opt("Pause task", "Suspend task to resume later"));
       }
-      autoOptions.push(opt("Complete task", "Mark task as done and clean up"));
-      autoOptions.push(opt("Pause task", "Suspend task to resume later"));
       autoOptions.push(opt("Subagents", "View and manage running subagents"));
       autoOptions.push(opt("Settings", "Models, agents, commands, and other configuration"));
       autoOptions.push(opt("Back to prompt", "Return to the prompt and keep working"));
