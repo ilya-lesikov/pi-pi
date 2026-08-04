@@ -529,9 +529,13 @@ export async function pickPreset(
   const presets = orchestrator.config.agents.subagents.presetGroups[group].presets ?? {};
   const groupDefault = orchestrator.config.agents.subagents.presetGroups[group].default;
   // Cursor pre-selects an explicit preselect (e.g. a Review task's up-front
-  // reviewer choice) when it exists and is enabled, else the group default.
-  const defaultPresetName =
-    preselectName && isPresetEnabled(presets[preselectName]) ? preselectName : groupDefault;
+  // reviewer choice) when it exists AND is enabled, else the group default.
+  // The own-property guard matters because isPresetEnabled(undefined) is true.
+  const preselectUsable =
+    !!preselectName &&
+    Object.prototype.hasOwnProperty.call(presets, preselectName) &&
+    isPresetEnabled(presets[preselectName]);
+  const defaultPresetName = preselectUsable ? preselectName! : groupDefault;
 
   // Render presets in a fixed conceptual order — quick, regular, deep — then any
   // custom presets in their existing enumeration order. NOT object-key insertion

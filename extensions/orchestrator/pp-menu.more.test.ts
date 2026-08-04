@@ -245,6 +245,16 @@ describe("pickPreset", () => {
     expect(askOptionTitles[0]).toEqual(["regular [default]", "deep", "Back"]);
     expect(askInitialIndex[0]).toBe(0);
   });
+
+  it("ignores an absent preselect (not a group member) and uses the group default cursor", async () => {
+    const orchestrator = makeOrchestrator(cwd);
+    askQueue.push("__ESC__");
+    await pickPreset(ctx, orchestrator, "codeReviewers", "Review preset", "nonexistent");
+    // Absent preselect must NOT collapse the cursor to index 0; it stays on the
+    // group default (regular at index 1).
+    expect(askOptionTitles[0]).toEqual(["quick", "regular [default]", "deep", "Back"]);
+    expect(askInitialIndex[0]).toBe(1);
+  });
 });
 
 describe("resumeTask", () => {
