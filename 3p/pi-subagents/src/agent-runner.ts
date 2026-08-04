@@ -266,6 +266,73 @@ function collectResponseText(session: AgentSession) {
   return { getText: () => text, unsubscribe };
 }
 
+/**
+ * Total attempts (initial + retries) for a turn that comes back empty.
+ * The upstream gateway intermittently answers a tool-calling request with a
+ * successful-but-empty completion (no text, no tool calls, 0 completion tokens),
+ * independently per request — so re-prompting the same session almost always
+ * recovers, and three attempts leave a negligible residual failure rate.
+ */
+const EMPTY_TURN_ATTEMPTS = 3;
+
+const EMPTY_TURN_NUDGE = "Your last turn produced no output. Provide your final answer now.";
+
+/**
+ * Thrown when every attempt came back empty. The manager's existing `.catch`
+ * maps a thrown error to `status: "error"` + `record.error`, so the failure
+ * renders through the error path instead of looking like a successful run with
+ * an empty result. Both runAgent and resumeAgent throw this, which is why the
+ * boundary is an exception rather than widened result metadata: resumeAgent
+ * returns a bare string and has no room for a flag.
+ */
+export class EmptyResponseError extends Error {
+  constructor(attempts: number, tokensSpent: number) {
+    super(
+      `Agent produced no output after ${attempts} attempts (${tokensSpent} tokens spent). ` +
+      "The model returned a successful but empty response each time — no text and no tool calls.",
+    );
+    this.name = "EmptyResponseError";
+  }
+}
+
+/**
+ * Prompt a session, retrying while the terminal turn comes back empty.
+ *
+ * A fresh collector is subscribed per attempt: collectResponseText accumulates
+ * into a closure, so reusing one across attempts would concatenate them or lose
+ * the retry's text. An external stop/abort is never retried — a user-initiated
+ * halt legitimately produces no answer.
+ */
+async function promptWithEmptyRetry(
+  session: AgentSession,
+  prompt: string,
+  isStopped: () => boolean,
+): Promise<string> {
+  let tokensSpent = 0;
+  const unsubUsage = session.subscribe((event: AgentSessionEvent) => {
+    if (event.type === "message_end" && event.message.role === "assistant") {
+      const u = (event.message as any).usage;
+      if (u) tokensSpent += (u.input ?? 0) + (u.output ?? 0);
+    }
+  });
+  try {
+    for (let attempt = 1; attempt <= EMPTY_TURN_ATTEMPTS; attempt++) {
+      const collector = collectResponseText(session);
+      try {
+        await session.prompt(attempt === 1 ? prompt : EMPTY_TURN_NUDGE);
+      } finally {
+        collector.unsubscribe();
+      }
+      const text = collector.getText().trim() || getLastAssistantText(session);
+      if (text) return text;
+      if (isStopped()) return "";
+    }
+    throw new EmptyResponseError(EMPTY_TURN_ATTEMPTS, tokensSpent);
+  } finally {
+    unsubUsage();
+  }
+}
+
 /** Get the last assistant text from the completed session history. */
 function getLastAssistantText(session: AgentSession): string {
   for (let i = session.messages.length - 1; i >= 0; i--) {
@@ -652,7 +719,6 @@ export async function runAgent(
     }
   });
 
-  const collector = collectResponseText(session);
   const cleanupAbort = forwardAbortSignal(session, options.signal);
 
   // Build the effective prompt: optionally prepend parent context
@@ -664,15 +730,22 @@ export async function runAgent(
     }
   }
 
+  let responseText: string;
   try {
-    await session.prompt(effectivePrompt);
+    // A hard abort (max_turns + grace) or an external signal is a legitimate
+    // reason to have no answer, so those are not retried. Hitting the SOFT turn
+    // limit is not: a steered wrap-up that comes back empty is the same silent
+    // failure as any other empty turn and must not surface as an empty success.
+    responseText = await promptWithEmptyRetry(
+      session,
+      effectivePrompt,
+      () => aborted || options.signal?.aborted === true,
+    );
   } finally {
     unsubTurns();
-    collector.unsubscribe();
     cleanupAbort();
   }
 
-  const responseText = collector.getText().trim() || getLastAssistantText(session);
   return { responseText, session, aborted, steered: softLimitReached };
 }
 
@@ -689,7 +762,6 @@ export async function resumeAgent(
     signal?: AbortSignal;
   } = {},
 ): Promise<string> {
-  const collector = collectResponseText(session);
   const cleanupAbort = forwardAbortSignal(session, options.signal);
 
   const unsubEvents = (options.onToolActivity || options.onAssistantUsage || options.onCompaction)
@@ -711,14 +783,11 @@ export async function resumeAgent(
     : () => {};
 
   try {
-    await session.prompt(prompt);
+    return await promptWithEmptyRetry(session, prompt, () => options.signal?.aborted === true);
   } finally {
-    collector.unsubscribe();
     unsubEvents();
     cleanupAbort();
   }
-
-  return collector.getText().trim() || getLastAssistantText(session);
 }
 
 /**

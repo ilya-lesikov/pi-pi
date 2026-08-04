@@ -1334,3 +1334,116 @@ describe("agent-runner ext: tool selectors", () => {
     expect(tools).not.toContain("foo_tool"); // denylisted even though ext:foo selects it
   });
 });
+
+describe("agent-runner empty-turn retry", () => {
+  // A session whose prompt() appends one assistant message per call, taking the
+  // content from `turns`. An empty content array models the gateway's
+  // empty-but-successful response (no text, no tool calls).
+  function createRetrySession(turns: any[][]) {
+    let call = 0;
+    const session: any = {
+      messages: [] as any[],
+      subscribe: vi.fn(() => () => {}),
+      prompt: vi.fn(async () => {
+        const content = turns[Math.min(call, turns.length - 1)];
+        call++;
+        session.messages.push({ role: "assistant", content });
+      }),
+      abort: vi.fn(),
+      steer: vi.fn(),
+      getActiveToolNames: vi.fn(() => ["read"]),
+      setActiveToolsByName: vi.fn(),
+      setSessionName: vi.fn(),
+      bindExtensions: vi.fn(async () => {}),
+    };
+    return session;
+  }
+
+  const text = (t: string) => [{ type: "text", text: t }];
+  const thinkingOnly = [{ type: "thinking", thinking: "I called a tool that never arrived." }];
+  const toolCallOnly = [{ type: "toolCall", toolName: "read", input: {} }];
+
+  it("returns immediately when the first turn has real text (no retry)", async () => {
+    const session = createRetrySession([text("ANSWER")]);
+    createAgentSession.mockResolvedValue({ session });
+
+    const result = await runAgent(ctx, "Explore", "go", { pi });
+
+    expect(result.responseText).toBe("ANSWER");
+    expect(session.prompt).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries an empty turn in the same session and returns the retry's text", async () => {
+    const session = createRetrySession([[], text("RECOVERED")]);
+    createAgentSession.mockResolvedValue({ session });
+
+    const result = await runAgent(ctx, "Explore", "go", { pi });
+
+    expect(result.responseText).toBe("RECOVERED");
+    expect(session.prompt).toHaveBeenCalledTimes(2);
+  });
+
+  it("throws after three empty attempts, naming the attempts and tokens spent", async () => {
+    const session = createRetrySession([[]]);
+    createAgentSession.mockResolvedValue({ session });
+
+    await expect(runAgent(ctx, "Explore", "go", { pi })).rejects.toThrow(/3 attempts/);
+    expect(session.prompt).toHaveBeenCalledTimes(3);
+  });
+
+  it("treats a thinking-only turn as empty and never returns the thinking text", async () => {
+    const session = createRetrySession([thinkingOnly]);
+    createAgentSession.mockResolvedValue({ session });
+
+    await expect(runAgent(ctx, "Explore", "go", { pi })).rejects.toThrow(/no output/i);
+    // The narration must not leak into the error as if it were an answer.
+    expect(session.prompt).toHaveBeenCalledTimes(3);
+  });
+
+  it("retries when earlier turns made tool calls but the terminal turn is empty", async () => {
+    const session = createRetrySession([toolCallOnly, [], text("FINAL")]);
+    createAgentSession.mockResolvedValue({ session });
+
+    const result = await runAgent(ctx, "Explore", "go", { pi });
+
+    expect(result.responseText).toBe("FINAL");
+  });
+
+  it("retries an empty resume turn and fails loudly when it stays empty", async () => {
+    const ok = createRetrySession([[], text("RESUMED")]);
+    await expect(resumeAgent(ok, "continue")).resolves.toBe("RESUMED");
+
+    const bad = createRetrySession([[]]);
+    await expect(resumeAgent(bad, "continue")).rejects.toThrow(/3 attempts/);
+    expect(bad.prompt).toHaveBeenCalledTimes(3);
+  });
+
+  it("retries an empty wrap-up after the soft turn limit instead of reporting empty success", async () => {
+    // Soft limit reached (steered) AND the wrap-up turn is empty: this must be a
+    // loud failure, not a "steered" record with an empty result that renders as
+    // "No output.".
+    const session = createRetrySession([[]]);
+    createAgentSession.mockResolvedValue({ session });
+    session.subscribe = vi.fn((listener: any) => {
+      // Drive turn_end past maxTurns so softLimitReached flips before the result
+      // is evaluated.
+      queueMicrotask(() => listener({ type: "turn_end" }));
+      return () => {};
+    });
+
+    await expect(runAgent(ctx, "Explore", "go", { pi, maxTurns: 1 })).rejects.toThrow(/3 attempts/);
+  });
+
+  it("does NOT retry when the run was externally aborted with an empty result", async () => {
+    const session = createRetrySession([[]]);
+    createAgentSession.mockResolvedValue({ session });
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await runAgent(ctx, "Explore", "go", { pi, signal: controller.signal });
+
+    // A user-initiated stop legitimately yields no answer: one attempt, no throw.
+    expect(result.responseText).toBe("");
+    expect(session.prompt).toHaveBeenCalledTimes(1);
+  });
+});

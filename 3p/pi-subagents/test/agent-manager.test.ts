@@ -945,3 +945,35 @@ describe("AgentManager — resolvedModelId capture (usage-by-model)", () => {
     expect(manager.getRecord(id)!.resolvedModelId).toBeUndefined();
   });
 });
+
+describe("AgentManager — an exhausted empty-turn retry is a loud failure, not an empty success", () => {
+  let manager: AgentManager;
+  afterEach(() => manager?.dispose());
+
+  it("records status='error' with the token count and never renders 'No output.'", async () => {
+    manager = new AgentManager();
+    // What agent-runner throws once all three attempts came back empty.
+    vi.mocked(runAgent).mockRejectedValue(
+      new Error(
+        "Agent produced no output after 3 attempts (18432 tokens spent). " +
+        "The model returned a successful but empty response each time — no text and no tool calls.",
+      ),
+    );
+
+    const id = manager.spawn(mockPi, mockCtx, "X", "p", { description: "explore", isBackground: false });
+    const record = manager.getRecord(id)!;
+    await record.promise.catch(() => {});
+
+    expect(record.status).toBe("error");
+    expect(record.error).toContain("3 attempts");
+    expect(record.error).toContain("18432 tokens");
+
+    // The RENDERED output is what the user actually sees. index.ts renders
+    // `completed` and `steered` in one branch, so asserting only on status would
+    // miss a regression that leaves an empty result on the success path: the
+    // error text must be shown instead of the "No output." placeholder.
+    const rendered = record.result?.trim() || record.error?.trim() || "No output.";
+    expect(rendered).not.toBe("No output.");
+    expect(rendered).toContain("no output after 3 attempts");
+  });
+});
