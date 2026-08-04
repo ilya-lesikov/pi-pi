@@ -524,9 +524,14 @@ export async function pickPreset(
   orchestrator: Orchestrator,
   group: PresetGroup,
   title: string,
+  preselectName?: string,
 ): Promise<string | null> {
   const presets = orchestrator.config.agents.subagents.presetGroups[group].presets ?? {};
-  const defaultPresetName = orchestrator.config.agents.subagents.presetGroups[group].default;
+  const groupDefault = orchestrator.config.agents.subagents.presetGroups[group].default;
+  // Cursor pre-selects an explicit preselect (e.g. a Review task's up-front
+  // reviewer choice) when it exists and is enabled, else the group default.
+  const defaultPresetName =
+    preselectName && isPresetEnabled(presets[preselectName]) ? preselectName : groupDefault;
 
   // Render presets in a fixed conceptual order — quick, regular, deep — then any
   // custom presets in their existing enumeration order. NOT object-key insertion
@@ -553,10 +558,9 @@ export async function pickPreset(
         return `${info.vendor}/${info.family} (${variant.thinking})`;
       });
     const description = enabledModels.length > 0 ? enabledModels.join(", ") : "No enabled models";
-    const optionTitle = presetName === defaultPresetName ? `${presetName} [default]` : presetName;
-    // Cursor starts on the group's DEFAULT preset (keyed off the `default`
-    // field, not the literal "regular"). If the default is disabled/absent it
-    // simply never matches and the cursor falls back to index 0.
+    // The "[default]" tag always marks the GROUP default; the cursor lands on
+    // defaultPresetName (the preselect when set, else the group default).
+    const optionTitle = presetName === groupDefault ? `${presetName} [default]` : presetName;
     if (presetName === defaultPresetName) defaultIndex = options.length;
     byTitle.set(optionTitle, presetName);
     options.push({ title: optionTitle, description });
@@ -4152,9 +4156,17 @@ async function showReviewMenu(orchestrator: Orchestrator, ctx: any): Promise<typ
     if (choice === "New") {
       const modeSelection = await pickModeForTaskStart(orchestrator, ctx, "review");
       if (!modeSelection) continue;
+      // Let the user pick the code-reviewer preset (quick/regular/deep) up front
+      // for a Review task, so the review phase uses it without re-prompting.
+      const reviewerPreset = await pickPreset(ctx, orchestrator, "codeReviewers", "Reviewers for this review");
+      if (!reviewerPreset) continue;
       await orchestrator.startTask(ctx, "review", "review", undefined, undefined, modeSelection.mode);
       if (!orchestrator.active || orchestrator.active.type !== "review") return BACK;
       orchestrator.active.state.autonomousConfig = modeSelection.autonomousConfig;
+      // Persist the up-front choice as the phase's active reviewer preset; the
+      // interactive review-phase picker pre-selects it (the review phase is
+      // always interactive, so it never binds via autonomousConfig).
+      orchestrator.active.state.activeReviewPreset = reviewerPreset;
       saveTask(orchestrator.active.dir, orchestrator.active.state);
       return "started";
     }
@@ -4795,7 +4807,7 @@ export async function showActiveTaskMenu(
         );
       }
 
-      const reviewPreset = await pickPreset(ctx, orchestrator, getReviewPresetGroup(phase), "Review preset");
+      const reviewPreset = await pickPreset(ctx, orchestrator, getReviewPresetGroup(phase), "Review preset", task.state.activeReviewPreset);
       if (!reviewPreset) continue;
       if (!(await confirmReviewDespiteStaleState(orchestrator, ctx))) continue;
       finalizeReviewCycle(task);

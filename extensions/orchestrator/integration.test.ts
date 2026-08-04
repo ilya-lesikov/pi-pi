@@ -2819,13 +2819,17 @@ describe("task modes and quick task", () => {
       .expect({ question: "Task", options: { include: ["Review"] }, choose: "Review" })
       .expect({ question: "Review", options: { exact: ["New", "Resume", "Back"] }, choose: "New" })
       .expect({ question: "Mode", options: { include: ["Autonomous"] }, choose: "Autonomous" })
-      .expect({ question: "Autonomous", options: { include: ["Start"] }, choose: "Start" });
+      .expect({ question: "Autonomous", options: { include: ["Start"] }, choose: "Start" })
+      // Up-front reviewer-preset picker for a Review task.
+      .expect({ question: "Reviewers for this review", options: { include: ["regular [default]"] }, choose: "regular [default]" });
     const pp = getCommand(pi, "pp");
     await pp(undefined, ctx);
 
     expect(orchestrator.active!.type).toBe("review");
     expect(orchestrator.active!.state.autonomousConfig?.phases.review).toBeUndefined();
     expect(orchestrator.active!.state.autonomousConfig?.phases.implement?.reviewPreset).toBe("regular");
+    // The up-front choice is persisted as the phase's active reviewer preset.
+    expect(orchestrator.active!.state.activeReviewPreset).toBe("regular");
   });
 
   it("quick task does not track modified files", async () => {

@@ -226,6 +226,25 @@ describe("pickPreset", () => {
     await pickPreset(ctx, orchestrator, "planners", "Planner preset");
     expect(askInitialIndex[0]).toBe(0);
   });
+
+  it("pre-selects an explicit preselect preset over the group default", async () => {
+    const orchestrator = makeOrchestrator(cwd);
+    askQueue.push("__ESC__");
+    await pickPreset(ctx, orchestrator, "codeReviewers", "Review preset", "deep");
+    // quick(0), regular[default](1), deep(2) => cursor on the preselect (2).
+    expect(askOptionTitles[0]).toEqual(["quick", "regular [default]", "deep", "Back"]);
+    expect(askInitialIndex[0]).toBe(2);
+  });
+
+  it("ignores a disabled preselect and falls back to the group default", async () => {
+    const orchestrator = makeOrchestrator(cwd);
+    (orchestrator.config as any).agents.subagents.presetGroups.codeReviewers.presets.quick.enabled = false;
+    askQueue.push("__ESC__");
+    await pickPreset(ctx, orchestrator, "codeReviewers", "Review preset", "quick");
+    // quick disabled -> preselect ignored -> cursor on the group default regular.
+    expect(askOptionTitles[0]).toEqual(["regular [default]", "deep", "Back"]);
+    expect(askInitialIndex[0]).toBe(0);
+  });
 });
 
 describe("resumeTask", () => {
