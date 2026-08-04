@@ -612,17 +612,62 @@ describe("registered handler branches", () => {
     expect(sent).toContain("Create the plan yourself");
   });
 
+  const COMPLETE_PLAN = [
+    "# Plan",
+    "",
+    "## Scope",
+    "Do the thing.",
+    "",
+    "## Checklist",
+    "",
+    "- [ ] Thing is done — Done when: the test passes",
+    "",
+    "PLAN_STATUS: COMPLETE",
+    "",
+  ].join("\n");
+
   it("planner completion with plan files advances to synthesize", () => {
     orchestrator.active = makeActiveTask();
     orchestrator.active.state.phase = "plan";
     orchestrator.active.state.step = "await_planners";
     const plansDir = join(orchestrator.active.dir, "plans");
     mkdirSync(plansDir, { recursive: true });
-    writeFileSync(join(plansDir, "1_opus.md"), "a plan", "utf-8");
+    writeFileSync(join(plansDir, "1_opus.md"), COMPLETE_PLAN, "utf-8");
     orchestrator.checkPlannerCompletion();
     expect(orchestrator.active.state.step).toBe("synthesize");
     const sent = (pi.sendUserMessage as any).mock.calls.map((c: any[]) => c[0]).join(" ");
-    expect(sent).toContain("All planners completed");
+    expect(sent).toContain("Synthesize the plan from these COMPLETE planner outputs");
+    expect(sent).toContain("1_opus.md");
+  });
+
+  it("planner completion with only stubs routes to the self-plan fallback", () => {
+    orchestrator.active = makeActiveTask();
+    orchestrator.active.state.phase = "plan";
+    orchestrator.active.state.step = "await_planners";
+    const plansDir = join(orchestrator.active.dir, "plans");
+    mkdirSync(plansDir, { recursive: true });
+    // Every planner died after writing its stub: there is nothing to synthesize
+    // from, so this must NOT claim the planners completed.
+    writeFileSync(join(plansDir, "1_opus.md"), "PLAN_STATUS: INCOMPLETE\n", "utf-8");
+    orchestrator.checkPlannerCompletion();
+    const sent = (pi.sendUserMessage as any).mock.calls.map((c: any[]) => c[0]).join(" ");
+    expect(sent).toContain("No plan files were produced");
+    expect(sent).not.toContain("Synthesize the plan from these COMPLETE");
+  });
+
+  it("planner completion names incomplete variants as gaps in a mixed outcome", () => {
+    orchestrator.active = makeActiveTask();
+    orchestrator.active.state.phase = "plan";
+    orchestrator.active.state.step = "await_planners";
+    const plansDir = join(orchestrator.active.dir, "plans");
+    mkdirSync(plansDir, { recursive: true });
+    writeFileSync(join(plansDir, "1_opus.md"), COMPLETE_PLAN, "utf-8");
+    writeFileSync(join(plansDir, "1_fable.md"), "PLAN_STATUS: INCOMPLETE\n", "utf-8");
+    orchestrator.checkPlannerCompletion();
+    expect(orchestrator.active.state.step).toBe("synthesize");
+    const sent = (pi.sendUserMessage as any).mock.calls.map((c: any[]) => c[0]).join(" ");
+    expect(sent).toContain("1_opus.md");
+    expect(sent).not.toContain("1_fable.md");
   });
 });
 

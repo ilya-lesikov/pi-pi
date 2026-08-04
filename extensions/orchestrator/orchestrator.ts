@@ -15,6 +15,7 @@ import {
   type Phase,
 } from "./state.js";
 import { getContextDirs, loadAllContextFiles, getPhaseArtifacts, getLatestSynthesizedPlan } from "./context.js";
+import { classifyPlanVariants } from "./plan-files.js";
 import { brainstormSystemPrompt } from "./phases/brainstorm.js";
 import { planningSystemPrompt, spawnPlanners } from "./phases/planning.js";
 import { implementationSystemPrompt } from "./phases/implementation.js";
@@ -466,13 +467,9 @@ export class Orchestrator {
     const enabledPlannerVariants = Object.entries(plannerVariants)
       .filter(([, v]) => isEnabled(v))
       .map(([name]) => name);
-    const plannerOutputs = existsSync(plansDir)
-      ? readdirSync(plansDir).filter((f) => f.endsWith(".md") && !f.includes("synthesized") && !f.includes("review_"))
-      : [];
-    const completedVariants = new Set(
-      plannerOutputs.map((f) => f.replace(/^\d+_/, "").replace(/\.md$/, "")),
-    );
-    const hasAllEnabledVariants = enabledPlannerVariants.every((name) => completedVariants.has(name));
+    // Content-aware: a variant that wrote only its INCOMPLETE stub has not
+    // finished, so synthesizing over it would synthesize over nothing.
+    const hasAllEnabledVariants = classifyPlanVariants(plansDir, enabledPlannerVariants).incompleteVariants.length === 0;
 
     if (enabledPlannerVariants.length === 0 || hasAllEnabledVariants || getLatestSynthesizedPlan(taskDir)) {
       return { step: "synthesize", shouldSpawnPlanners: false };

@@ -1,5 +1,5 @@
 import { readFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs";
-import { join } from "path";
+import { basename, join } from "path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { resolvePreset, type PiPiConfig, type VariantConfig } from "../config.js";
 import { registerAgentDefinitions, spawnViaRpc, waitForCompletion } from "../agents/registry.js";
@@ -43,7 +43,7 @@ export function planningSystemPrompt(taskDir: string, mode: TaskMode): string {
     "",
     "# Your job (in this order):",
     "1. Wait for the notification that says 'All planners completed' — do NOT proceed before this",
-    `2. Read ALL planner outputs from ${plansDir}/`,
+    `2. Read the COMPLETE planner outputs from ${plansDir}/ — a file whose content is only \`PLAN_STATUS: INCOMPLETE\`, or that lacks a trailing \`PLAN_STATUS: COMPLETE\` line, is an unfinished planner and must be treated as a gap, NOT as an input`,
     "3. USER_REQUEST.md and RESEARCH.md are already provided in your context above — do NOT re-read them from disk",
     `4. Synthesize all plans into a single plan at ${plansDir}/<timestamp>_synthesized.md`,
     "5. Treat as LOCKED PREDICATES (do not re-litigate): the user's explicit constraints, chosen language/framework, and scope from USER_REQUEST.md. Discard any planner suggestion that violates them.",
@@ -155,16 +155,21 @@ export async function spawnPlanners(
 
   await Promise.allSettled(results);
 
-  const planFiles = existsSync(plansDir) ? readdirSync(plansDir).filter((f) => !f.includes("synthesized") && !f.includes("review_")) : [];
-  if (planFiles.length > 0) {
+  // Report only FINISHED plans: a stub-only variant is a gap to be aware of, not
+  // an input for synthesis.
+  const { completeFiles, incompleteVariants } = classifyPlanVariants(plansDir, enabledVariants.map(([name]) => name));
+  if (completeFiles.length > 0) {
     send(
       {
         customType: "pp-planners-done",
         content: [
-          `${planFiles.length} planner(s) completed. Plans available in ${plansDir}:`,
-          ...planFiles.map((f) => `  - ${f}`),
+          `${completeFiles.length} planner(s) produced a complete plan in ${plansDir}:`,
+          ...completeFiles.map((f) => `  - ${basename(f)}`),
+          ...(incompleteVariants.length > 0
+            ? ["", `Did NOT produce a complete plan (treat as gaps, do NOT synthesize from them): ${incompleteVariants.join(", ")}.`]
+            : []),
           "",
-          "Read all plans and synthesize them into a single plan.",
+          "Read the complete plans listed above and synthesize them into a single plan.",
         ].join("\n"),
         display: true,
       },

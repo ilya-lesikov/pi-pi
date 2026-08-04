@@ -3373,6 +3373,67 @@ describe("crash resume", () => {
     );
   });
 
+  it("resume respawns a planner that crashed after writing only its stub", async () => {
+    const cwd = makeTempDir();
+    mkdirSync(join(cwd, ".git"), { recursive: true });
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx({ cwd });
+
+    await orchestrator.startTask(ctx as any, "implement", "resume planner stub");
+    const taskDir = orchestrator.active!.dir;
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+    mkdirSync(join(taskDir, "plans"), { recursive: true });
+    // The planner wrote its stub and then died. Judging completion by filename
+    // would treat this corpse as finished and never respawn it — strictly worse
+    // than before the stub existed, when no file meant a guaranteed respawn.
+    writeFileSync(
+      join(taskDir, "plans", `${Math.floor(Date.now() / 1000)}_test.md`),
+      "PLAN_STATUS: INCOMPLETE\n",
+      "utf-8",
+    );
+    orchestrator.active!.state.phase = "plan";
+    orchestrator.active!.state.step = "await_planners";
+    orchestrator.active!.state.activePlannerPreset = "regular";
+    saveTask(taskDir, orchestrator.active!.state);
+    await orchestrator.cleanupActive();
+
+    const result = await resumeTask(orchestrator, ctx, { dir: taskDir, state: loadTask(taskDir), type: "implement" });
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(result.ok).toBe(true);
+    expect(orchestrator.active!.state.step).toBe("await_planners");
+  });
+
+  it("resume goes straight to synthesize when a stale stub sits beside a completed respawn", async () => {
+    const cwd = makeTempDir();
+    mkdirSync(join(cwd, ".git"), { recursive: true });
+    const { orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx({ cwd });
+
+    await orchestrator.startTask(ctx as any, "implement", "resume planner respawned");
+    const taskDir = orchestrator.active!.dir;
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+    mkdirSync(join(taskDir, "plans"), { recursive: true });
+    writeFileSync(join(taskDir, "plans", "100_test.md"), "PLAN_STATUS: INCOMPLETE\n", "utf-8");
+    writeFileSync(
+      join(taskDir, "plans", "200_test.md"),
+      `${makeValidPlan(["- [ ] P1. Planner output item — Done when: planner output exists"])}\nPLAN_STATUS: COMPLETE\n`,
+      "utf-8",
+    );
+    orchestrator.active!.state.phase = "plan";
+    orchestrator.active!.state.step = "await_planners";
+    orchestrator.active!.state.activePlannerPreset = "regular";
+    saveTask(taskDir, orchestrator.active!.state);
+    await orchestrator.cleanupActive();
+
+    const result = await resumeTask(orchestrator, ctx, { dir: taskDir, state: loadTask(taskDir), type: "implement" });
+
+    expect(result.ok).toBe(true);
+    expect(orchestrator.active!.state.step).toBe("synthesize");
+  });
+
   it("resume in reviewCycle apply_feedback delivers review outputs and keeps cycle active", async () => {
     const cwd = makeTempDir();
     mkdirSync(join(cwd, ".git"), { recursive: true });

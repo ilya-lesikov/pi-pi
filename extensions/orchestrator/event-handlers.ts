@@ -33,6 +33,7 @@ import { spawnCodeReviewers } from "./phases/review.js";
 import { spawnBrainstormReviewers } from "./phases/brainstorm.js";
 import { reviewPassUnanimousApprove, reviewPassMinorOnly, reviewsDirForPhase } from "./phases/verdict.js";
 import { reconcileMissingReviewers } from "./review-files.js";
+import { classifyPlanVariants } from "./plan-files.js";
 import { buildCrossPassSummary, mergeSummary } from "./review-summary.js";
 import { nextPhase, validateExitCriteria } from "./phases/machine.js";
 import { openPlannotator, waitForPlannotatorResult, cancelPendingPlannotatorWait } from "./plannotator.js";
@@ -1888,8 +1889,15 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     ) return;
 
     const plansDir = join(orchestrator.active.dir, "plans");
-    const hasPlanFiles = existsSync(plansDir) &&
-      readdirSync(plansDir).some((f) => f.endsWith(".md") && !f.includes("synthesized") && !f.includes("review_"));
+    // Only FINISHED plans count: a directory of stubs means the planners produced
+    // nothing usable, which must route to the self-plan fallback rather than
+    // telling the synthesizer to read them.
+    const plannerPresetForCompletion = normalizeStoredPlannerPresetName(orchestrator);
+    const enabledPlannerNames = Object.entries(
+      resolvePreset(orchestrator.config, "planners", plannerPresetForCompletion),
+    ).filter(([, v]) => isEnabled(v)).map(([name]) => name);
+    const planClassification = classifyPlanVariants(plansDir, enabledPlannerNames);
+    const hasPlanFiles = planClassification.completeFiles.length > 0;
 
     const failedPlannerVariants = [...orchestrator.failedPlannerVariants];
     const effectiveMode = getEffectiveMode(orchestrator.active.state);
@@ -2058,7 +2066,15 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     markAllAgentsConsumed();
     orchestrator.active.state.step = "synthesize";
     saveTask(orchestrator.active.dir, orchestrator.active.state);
-    orchestrator.safeSendUserMessage("[PI-PI] All planners completed. Read their outputs and synthesize the plan.");
+    // Name what is actually available: claiming "all planners completed" when some
+    // produced only a stub would send the synthesizer to read non-plans.
+    const completeList = planClassification.completeFiles.map((f) => `  - ${basename(f)}`).join("\n");
+    const gapNote = planClassification.incompleteVariants.length > 0
+      ? `\n\nThese planner variants did NOT produce a complete plan and must be treated as gaps, not inputs: ${planClassification.incompleteVariants.join(", ")}.`
+      : "";
+    orchestrator.safeSendUserMessage(
+      `[PI-PI] Planners finished. Synthesize the plan from these COMPLETE planner outputs only:\n${completeList}${gapNote}`,
+    );
   }
 
   function checkReviewCycleCompletion(): void {

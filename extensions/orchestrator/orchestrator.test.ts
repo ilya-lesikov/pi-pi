@@ -541,14 +541,28 @@ describe("Orchestrator.getPlanStartState", () => {
     return config as any;
   }
 
+  const COMPLETE_PLAN = [
+    "# Plan",
+    "",
+    "## Scope",
+    "Do the thing.",
+    "",
+    "## Checklist",
+    "",
+    "- [ ] Thing is done — Done when: the test passes",
+    "",
+    "PLAN_STATUS: COMPLETE",
+    "",
+  ].join("\n");
+
   it("returns synthesize when all enabled planner variants have outputs", () => {
     const orchestrator = new Orchestrator(makePi());
     orchestrator.config = makePlannerConfig();
     const taskDir = makeTempDir();
     const plansDir = join(taskDir, "plans");
     mkdirSync(plansDir, { recursive: true });
-    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000)}_alpha.md`), "# Plan\n", "utf-8");
-    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000) + 1}_beta.md`), "# Plan\n", "utf-8");
+    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000)}_alpha.md`), COMPLETE_PLAN, "utf-8");
+    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000) + 1}_beta.md`), COMPLETE_PLAN, "utf-8");
 
     const state = orchestrator.getPlanStartState(taskDir, "regular");
 
@@ -561,11 +575,59 @@ describe("Orchestrator.getPlanStartState", () => {
     const taskDir = makeTempDir();
     const plansDir = join(taskDir, "plans");
     mkdirSync(plansDir, { recursive: true });
-    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000)}_alpha.md`), "# Plan\n", "utf-8");
+    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000)}_alpha.md`), COMPLETE_PLAN, "utf-8");
 
     const state = orchestrator.getPlanStartState(taskDir, "regular");
 
     expect(state).toEqual({ step: "await_planners", shouldSpawnPlanners: true });
+  });
+
+  it("returns await_planners when a variant wrote only its INCOMPLETE stub", () => {
+    const orchestrator = new Orchestrator(makePi());
+    orchestrator.config = makePlannerConfig();
+    const taskDir = makeTempDir();
+    const plansDir = join(taskDir, "plans");
+    mkdirSync(plansDir, { recursive: true });
+    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000)}_alpha.md`), COMPLETE_PLAN, "utf-8");
+    // beta died after writing its stub: the file exists but is not a plan, so
+    // synthesizing now would synthesize over nothing.
+    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000)}_beta.md`), "PLAN_STATUS: INCOMPLETE\n", "utf-8");
+
+    const state = orchestrator.getPlanStartState(taskDir, "regular");
+
+    expect(state).toEqual({ step: "await_planners", shouldSpawnPlanners: true });
+  });
+
+  it("returns synthesize when a stale stub sits beside a completed respawn", () => {
+    const orchestrator = new Orchestrator(makePi());
+    orchestrator.config = makePlannerConfig();
+    const taskDir = makeTempDir();
+    const plansDir = join(taskDir, "plans");
+    mkdirSync(plansDir, { recursive: true });
+    writeFileSync(join(plansDir, "100_alpha.md"), COMPLETE_PLAN, "utf-8");
+    // A respawn writes a NEW timestamped file and leaves the old stub behind, so
+    // a variant is complete when ANY of its files is complete.
+    writeFileSync(join(plansDir, "100_beta.md"), "PLAN_STATUS: INCOMPLETE\n", "utf-8");
+    writeFileSync(join(plansDir, "200_beta.md"), COMPLETE_PLAN, "utf-8");
+
+    const state = orchestrator.getPlanStartState(taskDir, "regular");
+
+    expect(state).toEqual({ step: "synthesize", shouldSpawnPlanners: false });
+  });
+
+  it("treats a legacy marker-less plan as complete so historical tasks still resume", () => {
+    const orchestrator = new Orchestrator(makePi());
+    orchestrator.config = makePlannerConfig();
+    const taskDir = makeTempDir();
+    const plansDir = join(taskDir, "plans");
+    mkdirSync(plansDir, { recursive: true });
+    const legacy = COMPLETE_PLAN.replace("\nPLAN_STATUS: COMPLETE\n", "");
+    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000)}_alpha.md`), legacy, "utf-8");
+    writeFileSync(join(plansDir, `${Math.floor(Date.now() / 1000) + 1}_beta.md`), legacy, "utf-8");
+
+    const state = orchestrator.getPlanStartState(taskDir, "regular");
+
+    expect(state).toEqual({ step: "synthesize", shouldSpawnPlanners: false });
   });
 
   it("returns synthesize when synthesized plan already exists", () => {

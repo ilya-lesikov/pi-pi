@@ -3,6 +3,7 @@ import { join, relative, basename } from "path";
 import { isDeepStrictEqual } from "util";
 import { askUser, isCancel, type CancelReason } from "../../3p/pi-ask-user/index.js";
 import { unregisterAgentDefinitions } from "./agents/registry.js";
+import { classifyPlanVariants } from "./plan-files.js";
 import {
   type AfterEditCommandConfig,
   type AfterImplementCommandConfig,
@@ -716,16 +717,16 @@ export async function resumeTask(
     }
     const plannerVariants = resolvePreset(orchestrator.config, "planners", plannerPresetName);
     const enabledVariants = Object.entries(plannerVariants).filter(([, v]) => isEnabled(v));
-    const planFiles = existsSync(plansDir)
-      ? readdirSync(plansDir).filter((f) => f.endsWith(".md") && !f.includes("synthesized") && !f.includes("review_"))
-      : [];
-    const completedVariants = new Set(planFiles.map((f) => f.replace(/^\d+_/, "").replace(/\.md$/, "")));
-    const hasAllEnabledVariants = enabledVariants.every(([name]) => completedVariants.has(name));
-    if (hasAllEnabledVariants) {
+    // Content-aware, and load-bearing: a planner that crashed AFTER writing its
+    // stub must still be respawned. Judging by filename alone would treat the
+    // corpse as finished and skip it forever.
+    const { incompleteVariants } = classifyPlanVariants(plansDir, enabledVariants.map(([name]) => name));
+    const incompleteSet = new Set(incompleteVariants);
+    if (incompleteSet.size === 0) {
       orchestrator.active.state.step = "synthesize";
       saveTask(orchestrator.active.dir, orchestrator.active.state);
     } else {
-      const missingVariants = enabledVariants.filter(([name]) => !completedVariants.has(name));
+      const missingVariants = enabledVariants.filter(([name]) => incompleteSet.has(name));
       if (missingVariants.length > 0) {
         const missingConfig: typeof plannerVariants = {};
         for (const [name, cfg] of missingVariants) missingConfig[name] = cfg;
