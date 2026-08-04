@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 
@@ -67,25 +68,49 @@ function ancestorDirs(cwd: string): string[] {
   return dirs.reverse();
 }
 
-function readCapped(path: string): { content: string; truncated: boolean } | null {
+// Normalize NEWLINES ONLY for content-dedup hashing: convert CRLF and lone CR
+// to LF, then strip exactly ONE trailing LF. Interior/other whitespace and
+// multiple trailing blank lines are preserved (treated as semantic).
+export function normalizeForHash(raw: string): string {
+  const lf = raw.replace(/\r\n?/g, "\n");
+  return lf.endsWith("\n") ? lf.slice(0, -1) : lf;
+}
+
+function contentHash(raw: string): string {
+  return createHash("sha256").update(normalizeForHash(raw), "utf8").digest("hex");
+}
+
+// Cap by UTF-8 BYTE length (not JS string .length), so non-ASCII markdown is
+// measured accurately against MAX_CONTEXT_FILE_BYTES.
+function capUtf8(raw: string): { content: string; truncated: boolean } {
+  const bytes = Buffer.from(raw, "utf8");
+  if (bytes.length <= MAX_CONTEXT_FILE_BYTES) return { content: raw, truncated: false };
+  // Slice on a byte boundary, then drop any trailing partial multibyte char.
+  const sliced = bytes.subarray(0, MAX_CONTEXT_FILE_BYTES).toString("utf8").replace(/\uFFFD$/, "");
+  return { content: sliced, truncated: true };
+}
+
+// Read a file, returning its FULL raw content plus the byte-capped render form.
+// The hash is computed over the full content BEFORE the cap so two files that
+// share a first 64 KiB but differ afterwards are NOT falsely deduped.
+function readCapped(path: string): { content: string; truncated: boolean; hash: string } | null {
   try {
     if (!existsSync(path)) return null;
     const raw = readFileSync(path, "utf-8");
-    if (raw.length > MAX_CONTEXT_FILE_BYTES) {
-      return { content: raw.slice(0, MAX_CONTEXT_FILE_BYTES), truncated: true };
-    }
-    return { content: raw, truncated: false };
+    const hash = contentHash(raw);
+    const { content, truncated } = capUtf8(raw);
+    return { content, truncated, hash };
   } catch {
     return null;
   }
 }
 
 // Read the first existing candidate of a file type in a directory.
-function readTypeInDir(dir: string, type: ContextFileType): { path: string; content: string; truncated: boolean } | null {
+function readTypeInDir(dir: string, type: ContextFileType): { path: string; content: string; truncated: boolean; hash: string } | null {
   for (const name of FILE_NAMES[type]) {
     const path = join(dir, name);
     const read = readCapped(path);
-    if (read) return { path, content: read.content, truncated: read.truncated };
+    if (read) return { path, content: read.content, truncated: read.truncated, hash: read.hash };
   }
   return null;
 }
@@ -101,6 +126,11 @@ export function collectContextFiles(
 ): CollectedContextFile[] {
   const out: CollectedContextFile[] = [];
   const seen = new Set<string>();
+  // Content-hash dedup: identical file CONTENT is injected once regardless of
+  // path (covers copies, not just symlinks). Collection runs least->most
+  // specific (global -> ancestor -> project), so on a content collision the
+  // LATER (more-specific) file REPLACES the earlier one.
+  const byContent = new Map<string, number>(); // hash -> index in `out`
 
   const push = (scope: ContextScope, type: ContextFileType, dir: string) => {
     const hit = readTypeInDir(dir, type);
@@ -108,7 +138,15 @@ export function collectContextFiles(
     const key = resolve(hit.path);
     if (seen.has(key)) return;
     seen.add(key);
-    out.push({ scope, type, path: hit.path, content: hit.content, truncated: hit.truncated });
+    const dupIndex = byContent.get(hit.hash);
+    const entry = { scope, type, path: hit.path, content: hit.content, truncated: hit.truncated };
+    if (dupIndex !== undefined) {
+      // Replace the less-specific duplicate in place (keep ordering position).
+      out[dupIndex] = entry;
+      return;
+    }
+    byContent.set(hit.hash, out.length);
+    out.push(entry);
   };
 
   const globalDir = resolveGlobalAgentDir();

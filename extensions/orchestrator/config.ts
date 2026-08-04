@@ -157,14 +157,15 @@ const DEFAULT_CONFIG: PiPiConfig = {
     tracing: false,
   },
   contextInjection: {
-    // Default preserves the old behavior (cwd AGENTS.md on) plus the newly
-    // available scopes OFF by default to avoid surprising prompt growth.
-    globalAgents: false,
-    globalClaude: false,
-    ancestorAgents: false,
-    ancestorClaude: false,
+    // All scopes/types ON by default, matching the framework's default breadth
+    // (global + every ancestor + cwd). Identical content is deduped by the
+    // collector so copies of AGENTS.md/CLAUDE.md are not injected twice.
+    globalAgents: true,
+    globalClaude: true,
+    ancestorAgents: true,
+    ancestorClaude: true,
     projectAgents: true,
-    projectClaude: false,
+    projectClaude: true,
   },
   skills: {
     loadProject: false,

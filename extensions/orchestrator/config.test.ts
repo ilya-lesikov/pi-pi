@@ -141,12 +141,12 @@ describe("validateConfig", () => {
     expect(() => validateConfig({ compaction: { floorTokens: 10 } })).toThrow("config.compaction.floorTokens");
   });
 
-  it("defaults contextInjection with only projectAgents on and validates toggles", () => {
+  it("defaults contextInjection with all six toggles on and validates toggles", () => {
     const d = getDefaultConfig();
     expect(d.contextInjection).toEqual({
-      globalAgents: false, globalClaude: false,
-      ancestorAgents: false, ancestorClaude: false,
-      projectAgents: true, projectClaude: false,
+      globalAgents: true, globalClaude: true,
+      ancestorAgents: true, ancestorClaude: true,
+      projectAgents: true, projectClaude: true,
     });
     expect(() => validateConfig({ contextInjection: { globalClaude: "yes" } as any })).toThrow("config.contextInjection.globalClaude");
   });

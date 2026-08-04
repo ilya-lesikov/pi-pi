@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { collectContextFiles, renderContextInjection, MAX_CONTEXT_FILE_BYTES, type ContextInjectionToggles } from "./context-injection.js";
+import { collectContextFiles, renderContextInjection, normalizeForHash, MAX_CONTEXT_FILE_BYTES, type ContextInjectionToggles } from "./context-injection.js";
 
 const ALL_OFF: ContextInjectionToggles = {
   globalAgents: false, globalClaude: false,
@@ -82,6 +82,50 @@ describe("collectContextFiles", () => {
     const files = collectContextFiles(cwd, { ...ALL_OFF, projectAgents: true });
     expect(files[0].truncated).toBe(true);
     expect(files[0].content.length).toBe(MAX_CONTEXT_FILE_BYTES);
+  });
+
+  it("injects byte-identical AGENTS.md and CLAUDE.md in one dir only once", () => {
+    writeFileSync(join(cwd, "AGENTS.md"), "same body\n");
+    writeFileSync(join(cwd, "CLAUDE.md"), "same body\n");
+    const files = collectContextFiles(cwd, { ...ALL_OFF, projectAgents: true, projectClaude: true });
+    expect(files).toHaveLength(1);
+  });
+
+  it("keeps the most-specific scope when the same content appears globally and in the project", () => {
+    writeFileSync(join(root, "agentdir", "AGENTS.md"), "shared guidance\n");
+    writeFileSync(join(cwd, "AGENTS.md"), "shared guidance\n");
+    const files = collectContextFiles(cwd, { ...ALL_OFF, globalAgents: true, projectAgents: true });
+    expect(files).toHaveLength(1);
+    expect(files[0].scope).toBe("project");
+  });
+
+  it("dedups CRLF vs LF copies (newline-only normalization)", () => {
+    writeFileSync(join(root, "agentdir", "AGENTS.md"), "line one\r\nline two\r\n");
+    writeFileSync(join(cwd, "AGENTS.md"), "line one\nline two\n");
+    const files = collectContextFiles(cwd, { ...ALL_OFF, globalAgents: true, projectAgents: true });
+    expect(files).toHaveLength(1);
+    expect(files[0].scope).toBe("project");
+  });
+
+  it("does NOT dedup two files that share the first 64 KiB but differ after", () => {
+    const prefix = "x".repeat(MAX_CONTEXT_FILE_BYTES);
+    writeFileSync(join(root, "agentdir", "AGENTS.md"), prefix + "GLOBAL-TAIL");
+    writeFileSync(join(cwd, "AGENTS.md"), prefix + "PROJECT-TAIL");
+    const files = collectContextFiles(cwd, { ...ALL_OFF, globalAgents: true, projectAgents: true });
+    expect(files).toHaveLength(2);
+  });
+});
+
+describe("normalizeForHash", () => {
+  it("converts CRLF and lone CR to LF", () => {
+    expect(normalizeForHash("a\r\nb\rc")).toBe("a\nb\nc");
+  });
+  it("strips exactly one trailing LF but keeps additional trailing blanks", () => {
+    expect(normalizeForHash("body\n")).toBe("body");
+    expect(normalizeForHash("body\n\n")).toBe("body\n");
+  });
+  it("leaves interior whitespace untouched", () => {
+    expect(normalizeForHash("a  b\tc")).toBe("a  b\tc");
   });
 });
 
