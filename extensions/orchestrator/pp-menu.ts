@@ -3215,7 +3215,7 @@ async function showSettingsMenu(orchestrator: Orchestrator, ctx: any): Promise<t
       opt("Context", "AGENTS.md / CLAUDE.md injection (global/ancestor/project)"),
       opt("Skills", "Project/global skill discovery and per-skill enablement"),
       opt("Compaction", "In-phase context compaction trigger"),
-      opt("Copilot", "GitHub Copilot model provider (highest precedence)"),
+      opt("Copilot", "GitHub Copilot model provider (fallback tier below the subscription)"),
       opt("Flant", "Configure corporate AI model provider"),
       opt("Report", "Bundle a local feedback report (note + logs + state)"),
       opt("Info", "Usage and task status"),
@@ -3464,13 +3464,15 @@ async function showCompactionSettings(orchestrator: Orchestrator, ctx: any): Pro
   }
 }
 
-// Copilot provider tier settings. Enabling the tier lets an explicitly-pinned
+// Copilot provider tier settings. Copilot sits BETWEEN the Claude subscription
+// and paid flant-api: a sub-born Claude spec falls to Copilot only once the
+// subscription is unusable, while a paid flant-api Claude spec is promoted up to
+// Copilot (flat-rate, so cheaper) when a real Copilot model exists for the
+// family. Enabling the tier also lets an explicitly-pinned
 // `github-copilot/<model>` resolve (via the built-in github-copilot provider,
-// keyed off COPILOT_GITHUB_TOKEN) and be restored after a rate-limit fallback,
-// and prevents such a pin from being demoted to Flant. NOTE: it does NOT yet
-// auto-route generated roles to Copilot — that auto-prefer routing is deferred
-// (Copilot's catalog uses different ids than Flant and lacks GPT, so it needs a
-// catalog-aware id-mapping the resolver doesn't do; the resolver is demote-only).
+// keyed off COPILOT_GITHUB_TOKEN) and be restored after a rate-limit fallback.
+// Copilot's catalog uses different ids than Flant and lacks GPT, so all routing
+// goes through the registered catalog and never a prefix swap.
 async function showCopilotMenu(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
   while (true) {
     const settings = loadFlantSettings(orchestrator.cwd);
@@ -3478,11 +3480,11 @@ async function showCopilotMenu(orchestrator: Orchestrator, ctx: any): Promise<ty
     const enableLabel = `Enable Copilot tier: ${settings.copilotEnabled ? "ON" : "OFF"}`;
     const statusLine = settings.copilotEnabled
       ? tokenPresent
-        ? "Active — explicit github-copilot/<model> picks resolve (and are restored after a fallback). Generated roles still use Flant."
+        ? "Active — Claude falls here when the subscription is unusable, and paid flant-api Claude is promoted here. Explicit github-copilot/<model> picks resolve (and are restored after a fallback)."
         : "Enabled but COPILOT_GITHUB_TOKEN is missing — tier is skipped until the token is set."
-      : "Disabled — an explicit github-copilot/<model> pick is demoted to Flant.";
+      : "Disabled — Claude falls straight from the subscription to paid flant-api, and an explicit github-copilot/<model> pick is demoted to Flant.";
     const options: OptionInput[] = [
-      { title: enableLabel, description: "Allow explicit github-copilot/<model> picks to resolve (does not auto-route generated roles)" },
+      { title: enableLabel, description: "Use Copilot as the tier between the Claude subscription and paid flant-api, and allow explicit github-copilot/<model> picks to resolve" },
       { title: "Current status", description: statusLine },
       { title: "Back", description: "Return to the previous menu" },
     ];
@@ -3505,8 +3507,8 @@ async function showCopilotMenu(orchestrator: Orchestrator, ctx: any): Promise<ty
       if (warnIfFlantEditMasked(ctx, "Copilot", copScope, turningOn, effCop.copilotEnabled)) continue;
       ctx.ui.notify(
         turningOn
-          ? "Copilot tier ON — explicit github-copilot/<model> picks now resolve (generated roles still use Flant)."
-          : "Copilot tier OFF — an explicit github-copilot/<model> pick is demoted to Flant.",
+          ? "Copilot tier ON — Claude now falls to Copilot before paid flant-api, and explicit github-copilot/<model> picks resolve."
+          : "Copilot tier OFF — Claude falls straight from the subscription to paid flant-api, and an explicit github-copilot/<model> pick is demoted to Flant.",
         "info",
       );
       continue;
