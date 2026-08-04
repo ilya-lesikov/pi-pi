@@ -207,7 +207,7 @@ const DEFAULT_CONFIG: PiPiConfig = {
     autoRateLimitFallback: true,
     copilotEnabled: false,
     autoUpdate: true,
-    cacheTTLDays: 7,
+    cacheTTLDays: 3,
   },
   agents: {
     maxConcurrentSubagents: 7,

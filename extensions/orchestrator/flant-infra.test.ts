@@ -664,7 +664,7 @@ describe("flant-infra", () => {
     expect(mod.loadFlantSettings()).toEqual({
       enabled: false,
       autoUpdate: true,
-      cacheTTLDays: 7,
+      cacheTTLDays: 3,
       switchBackIntervalMinutes: 10,
       autoRateLimitFallback: true,
       copilotEnabled: false,

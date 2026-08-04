@@ -80,7 +80,7 @@ const SETTINGS_PATH = join(SETTINGS_DIR, "flant-models.json");
 const DEFAULT_SETTINGS: FlantSettings = {
   enabled: false,
   autoUpdate: true,
-  cacheTTLDays: 7,
+  cacheTTLDays: 3,
   lastUpdated: null,
   cachedFlantModels: null,
   cachedOpenRouterData: null,

@@ -150,7 +150,7 @@ describe("validateConfig", () => {
       autoRateLimitFallback: true,
       copilotEnabled: false,
       autoUpdate: true,
-      cacheTTLDays: 7,
+      cacheTTLDays: 3,
     });
     expect(() => validateConfig({ flant: { enabled: true, switchBackIntervalMinutes: 30 } })).not.toThrow();
     expect(() => validateConfig({ flant: { switchBackIntervalMinutes: 0 } })).toThrow("config.flant.switchBackIntervalMinutes");

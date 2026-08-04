@@ -1245,8 +1245,8 @@ async function showFlantInfraMenu(orchestrator: Orchestrator, ctx: any): Promise
     if (choice.startsWith("Cache period:")) {
       const selected = await selectOption(ctx, "Cache period", [
         { title: "1 day", description: "Refresh model metadata daily" },
-        { title: "3 days", description: "Refresh model metadata every three days" },
-        { title: "7 days", description: "Default — refresh weekly" },
+        { title: "3 days", description: "Default — refresh every three days" },
+        { title: "7 days", description: "Refresh model metadata weekly" },
         { title: "14 days", description: "Refresh model metadata every two weeks" },
         { title: "30 days", description: "Refresh model metadata monthly" },
         { title: "Back", description: "Return to the previous menu" },
