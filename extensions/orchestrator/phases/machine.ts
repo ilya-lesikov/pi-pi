@@ -60,11 +60,6 @@ const TRANSITIONS: Record<TaskType, Record<string, string[]>> = {
     plan: ["implement"],
     implement: ["done"],
   },
-  brainstorm: {
-    brainstorm: ["plan"],
-    plan: ["implement"],
-    implement: ["done"],
-  },
   review: {
     review: ["plan"],
     plan: ["implement"],
@@ -92,10 +87,6 @@ export function validateExitCriteria(
 ): { ok: true } | { ok: false; reason: string } {
   switch (phase) {
     case "brainstorm": {
-      if (taskType === "brainstorm") {
-        return { ok: true };
-      }
-
       const ur = join(taskDir, "USER_REQUEST.md");
       const res = join(taskDir, "RESEARCH.md");
       if (isMissingOrEmpty(ur)) {
@@ -224,8 +215,6 @@ export function validateExitCriteria(
 export function phasePipeline(taskType: TaskType): Phase[] {
   switch (taskType) {
     case "implement":
-      return ["brainstorm", "plan", "implement", "done"];
-    case "brainstorm":
       return ["brainstorm", "plan", "implement", "done"];
     case "review":
       return ["review", "plan", "implement", "done"];

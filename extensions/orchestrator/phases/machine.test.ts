@@ -63,12 +63,6 @@ describe("canTransition", () => {
     expect(canTransition("implement", "done", "implement")).toBe(false);
   });
 
-  it("handles brainstorm transitions", () => {
-    expect(canTransition("brainstorm", "brainstorm", "plan")).toBe(true);
-    expect(canTransition("brainstorm", "brainstorm", "done")).toBe(false);
-    expect(canTransition("brainstorm", "done", "brainstorm")).toBe(false);
-  });
-
   it("handles quick transitions", () => {
     expect(canTransition("quick", "quick", "done")).toBe(true);
     expect(canTransition("quick", "quick", "implement")).toBe(false);
@@ -83,11 +77,6 @@ describe("nextPhase", () => {
     expect(nextPhase("implement", "done")).toBeNull();
   });
 
-  it("returns brainstorm next phase and terminal null", () => {
-    expect(nextPhase("brainstorm", "brainstorm")).toBe("plan");
-    expect(nextPhase("brainstorm", "done")).toBeNull();
-  });
-
   it("returns quick next phase and terminal null", () => {
     expect(nextPhase("quick", "quick")).toBe("done");
     expect(nextPhase("quick", "done")).toBeNull();
@@ -97,10 +86,6 @@ describe("nextPhase", () => {
 describe("phasePipeline", () => {
   it("returns implement pipeline", () => {
     expect(phasePipeline("implement")).toEqual(["brainstorm", "plan", "implement", "done"]);
-  });
-
-  it("returns brainstorm pipeline", () => {
-    expect(phasePipeline("brainstorm")).toEqual(["brainstorm", "plan", "implement", "done"]);
   });
 
   it("returns quick pipeline", () => {
@@ -250,11 +235,6 @@ Fix bug.
       "utf-8",
     );
     expect(validateExitCriteria(dir, "implement", "implement")).toEqual({ ok: true });
-  });
-
-  it("handles brainstorm phase for brainstorm task — always passes", () => {
-    const dir = makeTempDir();
-    expect(validateExitCriteria(dir, "brainstorm", "brainstorm")).toEqual({ ok: true });
   });
 
   it("validates brainstorm phase for implement task — requires artifacts", () => {

@@ -602,39 +602,38 @@ describe("Orchestrator model/thinking editor", () => {
   });
 });
 
-describe("Autonomous settings reached through brainstorm Next", () => {
+describe("brainstorm-phase Next advances without a mode prompt", () => {
   let cwd: string;
   beforeEach(() => {
     cwd = makeTmp("pp-leaves-auto-");
     installConfigStore(cwd);
   });
 
-  it("configures a plan-phase preset and max passes, then Start advances", async () => {
-    const orchestrator = makeOrchestrator(cwd, "brainstorm", "brainstorm");
+  // The standalone brainstorm TASK used to prompt Mode + Autonomous settings on
+  // its brainstorm->plan advance. That task type is gone, and an implement task's
+  // brainstorm phase inherits the mode chosen at task start, so the advance now
+  // goes straight through (guided tasks still pick a planner preset).
+  it("goes straight to the transition, offering no Mode picker", async () => {
+    const orchestrator = makeOrchestrator(cwd, "brainstorm", "implement");
     mkdirSync(orchestrator.active.dir, { recursive: true });
     orchestrator.transitionController.isRunning = () => true;
     orchestrator.transitionToNextPhase = vi.fn(async () => ({ ok: true }));
-    const ctx = makeCtx(undefined, async () => "5");
+    const ctx = makeCtx();
     orchestrator.lastCtx = ctx;
     askQueue.push(
       "Next",
       "Continue to plan & implement",
-      "Autonomous",
-      "Plan phase",
-      "Review preset", "regular [default]",
-      "Max review passes: 3",
-      "Back",
-      "Start",
+      "regular [default]",
     );
     const result = await showActiveTaskMenu(orchestrator, ctx, "/pp", "command");
     expect(result).toBe("");
     expect(orchestrator.transitionToNextPhase).toHaveBeenCalled();
-    expect(orchestrator.active.state.mode).toBe("autonomous");
-    expect(orchestrator.active.state.autonomousConfig.phases.plan.maxReviewPasses).toBe(5);
+    expect(askQuestions).not.toContain("Mode");
+    expect(askQuestions).not.toContain("Autonomous");
   });
 
-  it("Back from the mode picker returns to Next without transitioning", async () => {
-    const orchestrator = makeOrchestrator(cwd, "brainstorm", "brainstorm");
+  it("Back from the planner-preset picker returns without transitioning", async () => {
+    const orchestrator = makeOrchestrator(cwd, "brainstorm", "implement");
     mkdirSync(orchestrator.active.dir, { recursive: true });
     orchestrator.transitionController.isRunning = () => true;
     orchestrator.transitionToNextPhase = vi.fn(async () => ({ ok: true }));

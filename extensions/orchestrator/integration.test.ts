@@ -166,6 +166,31 @@ function makeTempDir(): string {
   return dir;
 }
 
+// Build a legacy .pp/state/brainstorm/<id>/ archive directly on disk. The
+// brainstorm TASK type no longer exists, so these cannot be produced via
+// startTask — but 9 such dirs exist in real repos and their artifacts must stay
+// reusable through Implement > From.
+function makeLegacyBrainstormTask(cwd: string, description: string): string {
+  const dir = join(cwd, ".pp", "state", "brainstorm", `abc123_${description.replace(/\W+/g, "-").toLowerCase()}`);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "state.json"),
+    JSON.stringify({
+      phase: "brainstorm",
+      step: "llm_work",
+      reviewCycle: null,
+      reviewPass: 0,
+      from: null,
+      description,
+      startedAt: new Date().toISOString(),
+    }, null, 2) + "\n",
+    "utf-8",
+  );
+  writeFileSync(join(dir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+  writeFileSync(join(dir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+  return dir;
+}
+
 beforeEach(() => {
   menu = createAskUserHarness();
 });
@@ -891,53 +916,6 @@ describe("subagent tracking", () => {
   });
 });
 
-describe("standalone brainstorm", () => {
-  it("can finish without artifacts (escape hatch)", async () => {
-    const cwd = makeTempDir();
-    const { pi, orchestrator } = await setupOrchestrator(cwd);
-    const ctx = makeCtx();
-
-    await orchestrator.startTask(ctx as any, "brainstorm", "Explore ideas");
-
-    expect(orchestrator.active!.state.phase).toBe("brainstorm");
-    expect(orchestrator.active!.type).toBe("brainstorm");
-
-    expectImplementToDone(menu);
-
-    const ppPhaseComplete = getTool(pi, "pp_phase_complete");
-    const result = await completePhase(ppPhaseComplete, "call-1", "Explored ideas", ctx);
-    expect(result.content[0].text).toBe("");
-
-    expect(orchestrator.active).toBeNull();
-  });
-
-  it("offers 'Start implementation' when artifacts exist", async () => {
-    const cwd = makeTempDir();
-    const { pi, orchestrator } = await setupOrchestrator(cwd);
-    const ctx = makeCtx();
-
-    await orchestrator.startTask(ctx as any, "brainstorm", "Explore ideas");
-    const taskDir = orchestrator.active!.dir;
-
-    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
-    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
-
-    menu
-      .expect({ question: m.anyTaskMenu, options: { include: ["Next"] }, choose: "Next" })
-      .expect({ question: "Next", options: { include: ["Continue to plan & implement"] }, choose: "Continue to plan & implement" })
-      .expect({ question: "Mode", options: { include: ["Guided", "Autonomous", "Back"] }, choose: "Guided" })
-      .expect({ question: "Planner preset", options: { include: [m.preset("regular"), "Back"] }, choose: m.preset("regular") });
-
-    const ppPhaseComplete = getTool(pi, "pp_phase_complete");
-    await completePhase(ppPhaseComplete, "call-1", "Conclusions ready", ctx);
-    await new Promise((r) => setTimeout(r, 10));
-
-    expect(orchestrator.active!.type).toBe("brainstorm");
-    expect(orchestrator.active!.state.phase).toBe("plan");
-    expect(orchestrator.active!.state.step).toBe("await_planners");
-  });
-});
-
 describe("planner completion tracking", () => {
   it("transitions await_planners → synthesize when all planners complete", async () => {
     const cwd = makeTempDir();
@@ -1647,7 +1625,13 @@ describe("edge cases and regressions", () => {
     const { pi, orchestrator } = await setupOrchestrator(cwd);
     const ctx = makeCtx();
 
-    await orchestrator.startTask(ctx as any, "brainstorm", "Brainstorm editor review");
+    await orchestrator.startTask(ctx as any, "implement", "Brainstorm editor review");
+    const taskDir = orchestrator.active!.dir;
+    // The brainstorm phase now always enforces its exit criteria (the standalone
+    // brainstorm task's artifact-validation bypass is gone), so the artifacts
+    // must exist before the phase can complete.
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
 
     expectReviewOnMyOwn(menu, "Done");
     const ppPhaseComplete = getTool(pi, "pp_phase_complete");
@@ -1750,15 +1734,12 @@ describe("edge cases and regressions", () => {
     expect(orchestrator.active!.state.step).toBe("await_planners");
   });
 
-  it("implement --from brainstorm also skips brainstorm and enters plan deterministically", async () => {
+  it("implement --from a legacy brainstorm archive also skips brainstorm and enters plan deterministically", async () => {
     const cwd = makeTempDir();
     const { orchestrator } = await setupOrchestrator(cwd);
     const ctx = makeCtx();
 
-    await orchestrator.startTask(ctx as any, "brainstorm", "Explore ideas");
-    const brainstormDir = orchestrator.active!.dir;
-    writeFileSync(join(brainstormDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
-    writeFileSync(join(brainstormDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+    const brainstormDir = makeLegacyBrainstormTask(cwd, "Explore ideas");
 
     await orchestrator.startTask(ctx as any, "implement", "implement", brainstormDir, true);
 
@@ -1790,15 +1771,12 @@ describe("edge cases and regressions", () => {
     expect(ctx.ui.notify).toHaveBeenCalledWith("Entered plan phase. Waiting for planners to complete before synthesis.", "info");
   });
 
-  it("implement from brainstorm task stores source path and skips brainstorm", async () => {
+  it("implement from a legacy brainstorm archive stores source path and skips brainstorm", async () => {
     const cwd = makeTempDir();
     const { orchestrator } = await setupOrchestrator(cwd);
     const ctx = makeCtx();
 
-    await orchestrator.startTask(ctx as any, "brainstorm", "Explore ideas");
-    const brainstormDir = orchestrator.active!.dir;
-    writeFileSync(join(brainstormDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
-    writeFileSync(join(brainstormDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+    const brainstormDir = makeLegacyBrainstormTask(cwd, "Explore ideas");
 
     await orchestrator.startTask(ctx as any, "implement", "implement", brainstormDir, true);
 
@@ -2353,28 +2331,7 @@ describe("task modes and quick task", () => {
     expect(orchestrator.active).toBeNull();
   });
 
-  it("brainstorm continue uses implement autonomous phase defaults", async () => {
-    const cwd = makeTempDir();
-    const { pi, orchestrator } = await setupOrchestrator(cwd);
-    const ctx = makeCtx();
 
-    await orchestrator.startTask(ctx as any, "brainstorm", "brainstorm");
-    const taskDir = orchestrator.active!.dir;
-    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
-    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
-
-    menu
-      .expect({ question: m.anyTaskMenu, options: { include: ["Next"] }, choose: "Next" })
-      .expect({ question: "Next", options: { include: ["Continue to plan & implement"] }, choose: "Continue to plan & implement" })
-      .expect({ question: "Mode", options: { include: ["Autonomous"] }, choose: "Autonomous" })
-      .expect({ question: "Autonomous", options: { include: ["Start"] }, choose: "Start" });
-    const ppPhaseComplete = getTool(pi, "pp_phase_complete");
-    await completePhase(ppPhaseComplete, "call-1", "Conclusions ready", ctx);
-
-    expect(orchestrator.active!.state.autonomousConfig?.phases.plan).toBeDefined();
-    expect(orchestrator.active!.state.autonomousConfig?.phases.implement).toBeDefined();
-    expect(orchestrator.active!.state.autonomousConfig?.phases.brainstorm).toBeUndefined();
-  });
 
   it("from-task implement sets initialPhase plan and ask_user is blocked in autonomous plan", async () => {
     const cwd = makeTempDir();

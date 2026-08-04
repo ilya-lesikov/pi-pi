@@ -5,6 +5,7 @@ import { tmpdir } from "os";
 import { getDefaultConfig } from "./config.js";
 import { Orchestrator } from "./orchestrator.js";
 import {
+  autonomousPhasesForTask,
   buildResetOptions,
   pickPreset,
   resumeTask,
@@ -702,5 +703,21 @@ describe("Settings > Compaction headroom controls", () => {
       ["compaction", "headroomFloorTokens"],
       80000,
     );
+  });
+});
+
+describe("autonomousPhasesForTask", () => {
+  // The first phase of a task (brainstorm for implement, review for review) is
+  // always user-driven, so it never receives an autonomous phase config. This is
+  // the invariant that made a standalone brainstorm TASK redundant.
+  it("covers only plan and implement, never the interactive first phase", () => {
+    expect(autonomousPhasesForTask("implement")).toEqual(["plan", "implement"]);
+    expect(autonomousPhasesForTask("implement")).not.toContain("brainstorm");
+    expect(autonomousPhasesForTask("review")).toEqual(["plan", "implement"]);
+    expect(autonomousPhasesForTask("review")).not.toContain("review");
+  });
+
+  it("returns nothing for a quick task, which has no autonomous phases", () => {
+    expect(autonomousPhasesForTask("quick")).toEqual([]);
   });
 });

@@ -14,6 +14,7 @@ import {
   loadTask,
   saveTask,
   taskAge,
+  taskFullName,
   taskName,
   validateFromPath,
   type TaskState,
@@ -53,9 +54,9 @@ describe("createTask", () => {
   });
 
 
-  it("uses brainstorm as initial phase for brainstorm", () => {
+  it("uses brainstorm as initial phase for implement", () => {
     const cwd = makeCwd();
-    const taskDir = createTask(cwd, "brainstorm", "Explore ideas");
+    const taskDir = createTask(cwd, "implement", "Explore ideas");
     const state = loadTask(taskDir);
     expect(state.phase).toBe("brainstorm");
     expect(state.step).toBe("llm_work");
@@ -136,7 +137,7 @@ describe("listTasks", () => {
     const cwd = makeCwd();
     const implementTask = createTask(cwd, "implement", "Implement feature");
     const reviewTask = createTask(cwd, "review", "Review crash");
-    const brainstormTask = createTask(cwd, "brainstorm", "Idea storm");
+    const quickTask = createTask(cwd, "quick", "Idea storm");
 
     const doneState = loadTask(reviewTask);
     doneState.phase = "done";
@@ -145,13 +146,13 @@ describe("listTasks", () => {
     const all = listTasks(cwd);
     const allDirs = all.map((t) => t.dir);
     expect(allDirs).toContain(implementTask);
-    expect(allDirs).toContain(brainstormTask);
+    expect(allDirs).toContain(quickTask);
     expect(allDirs).not.toContain(reviewTask);
 
-    const brainstormOnly = listTasks(cwd, "brainstorm");
-    expect(brainstormOnly).toHaveLength(1);
-    expect(brainstormOnly[0].dir).toBe(brainstormTask);
-    expect(brainstormOnly[0].type).toBe("brainstorm");
+    const quickOnly = listTasks(cwd, "quick");
+    expect(quickOnly).toHaveLength(1);
+    expect(quickOnly[0].dir).toBe(quickTask);
+    expect(quickOnly[0].type).toBe("quick");
   });
 
   it("includes done tasks when includeDone is set", () => {
@@ -244,7 +245,7 @@ describe("validateFromPath", () => {
     // stateDir-relative form (the same shape stored in state.from). This mirrors
     // that conversion and confirms the guard accepts it and returns the absolute dir.
     const cwd = makeCwd();
-    const absoluteTaskDir = createTask(cwd, "brainstorm", "Source");
+    const absoluteTaskDir = createTask(cwd, "implement", "Source");
     const rel = relative(join(cwd, ".pp", "state"), absoluteTaskDir);
 
     expect(validateFromPath(cwd, rel)).toEqual({ ok: true, dir: absoluteTaskDir });
@@ -275,7 +276,7 @@ describe("taskName", () => {
 
   it("prefers USER_REQUEST.md over RESEARCH.md for a generic description", () => {
     const cwd = makeCwd();
-    const taskDir = createTask(cwd, "brainstorm", "brainstorm");
+    const taskDir = createTask(cwd, "implement", "implement");
     writeFileSync(join(taskDir, "USER_REQUEST.md"), "# User Request\nAdd dark mode\n", "utf-8");
     writeFileSync(join(taskDir, "RESEARCH.md"), "## Affected Code\nsomething else\n", "utf-8");
     expect(taskName(taskDir)).toBe("Add dark mode");
@@ -444,10 +445,26 @@ describe("getActiveTaskStatus", () => {
   });
 });
 
+describe("taskFullName legacy generic-description fallback", () => {
+  // "brainstorm" is no longer a TaskType, but it MUST stay in taskFullName's
+  // generic-description list: legacy .pp/state/brainstorm tasks were created
+  // with that literal description, and the Implement > From picker shows them.
+  // Dropping it would surface the raw string instead of the derived intent.
+  it("still resolves a real intent for a legacy description of \"brainstorm\"", () => {
+    const cwd = makeCwd();
+    const taskDir = createTask(cwd, "implement", "placeholder");
+    const state = loadTask(taskDir);
+    state.description = "brainstorm";
+    saveTask(taskDir, state);
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), "# User Request\nAdd dark mode\n", "utf-8");
+
+    expect(taskFullName(taskDir, loadTask(taskDir))).toBe("Add dark mode");
+  });
+});
+
 describe("getFirstPhase", () => {
   it("returns expected first phase for each task type", () => {
     expect(getFirstPhase("implement")).toBe("brainstorm");
-    expect(getFirstPhase("brainstorm")).toBe("brainstorm");
     expect(getFirstPhase("review")).toBe("review");
     expect(getFirstPhase("quick")).toBe("quick");
   });

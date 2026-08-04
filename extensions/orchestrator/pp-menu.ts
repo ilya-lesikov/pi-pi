@@ -495,7 +495,7 @@ async function finishTask(orchestrator: Orchestrator, ctx: any): Promise<string>
   const urExists = existsSync(join(dir, "USER_REQUEST.md"));
   const resExists = existsSync(join(dir, "RESEARCH.md"));
 
-  if (type === "brainstorm" && urExists && resExists) {
+  if (type === "review" && urExists && resExists) {
     const taskRelPath = relative(join(orchestrator.cwd, ".pp", "state"), dir);
     ctx.ui.notify(
       `Task "${name}" completed. Artifacts saved.\nUse /pp → Implement → From and choose ${taskRelPath}`,
@@ -682,8 +682,7 @@ export async function resumeTask(
   getLogger().info({ s: "task", dir: task.dir, type: task.type, phase: task.state.phase }, "task resumed");
 
   const modelConfig = orchestrator.config.agents.orchestrators[
-    task.type === "brainstorm" ? "brainstorm"
-    : task.type === "review" ? "review"
+    task.type === "review" ? "review"
     : "implement"
   ];
   const modelOk = await orchestrator.switchModel(ctx, modelConfig.model, modelConfig.thinking);
@@ -912,12 +911,11 @@ export async function resumeTask(
 
 export function listCompletedFromTasks(cwd: string): TaskInfo[] {
   const paused = new Set<string>([
-    ...listTasks(cwd, "brainstorm").map((t) => t.dir),
     ...listTasks(cwd, "review").map((t) => t.dir),
   ]);
   const results: TaskInfo[] = [];
 
-  for (const type of ["brainstorm", "review"] as TaskType[]) {
+  for (const type of ["review"] as TaskType[]) {
     const typeDir = join(cwd, ".pp", "state", type);
     if (!existsSync(typeDir)) continue;
     for (const entry of readdirSync(typeDir, { withFileTypes: true })) {
@@ -929,6 +927,35 @@ export function listCompletedFromTasks(cwd: string): TaskInfo[] {
         if (state.phase !== "done") continue;
         if (!existsSync(join(dir, "USER_REQUEST.md")) || !existsSync(join(dir, "RESEARCH.md"))) continue;
         results.push({ dir, state, type });
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  // Legacy .pp/state/brainstorm/ tasks predate the removal of the brainstorm task
+  // type. Unlike debug below, their state.json parses fine through loadTask (its
+  // phase is still a valid implement phase) — they are unreachable only because
+  // listTasks no longer scans this directory. Read state.json directly so their
+  // artifacts stay reusable, and deliberately apply NO phase filter: a legacy
+  // brainstorm task can never be resumed again, so requiring phase === "done"
+  // would permanently strand artifacts from one the user simply never formally
+  // completed. Both artifacts present is the quality gate instead.
+  const legacyBrainstormDir = join(cwd, ".pp", "state", "brainstorm");
+  if (existsSync(legacyBrainstormDir)) {
+    for (const entry of readdirSync(legacyBrainstormDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const dir = join(legacyBrainstormDir, entry.name);
+      const sp = join(dir, "state.json");
+      if (!existsSync(sp)) continue;
+      try {
+        const parsed = JSON.parse(readFileSync(sp, "utf-8")) as unknown;
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) continue;
+        const state = parsed as TaskState;
+        if (!existsSync(join(dir, "USER_REQUEST.md")) || !existsSync(join(dir, "RESEARCH.md"))) continue;
+        // "brainstorm" is no longer a TaskType, so surface these under the
+        // supported type the artifacts feed into (as the debug archive does).
+        results.push({ dir, state, type: "implement" });
       } catch {
         continue;
       }
@@ -3767,7 +3794,7 @@ interface ResumeFilters {
 }
 
 const STATUS_CYCLE: StatusFilter[] = ["Active", "Active + Done", "Done only", "All"];
-const TYPE_CYCLE: Array<"All" | TaskType> = ["All", "implement", "brainstorm", "review", "quick"];
+const TYPE_CYCLE: Array<"All" | TaskType> = ["All", "implement", "review", "quick"];
 const MODE_CYCLE: Array<"All" | TaskMode> = ["All", "guided", "autonomous"];
 
 function defaultResumeFilters(): ResumeFilters {
@@ -3888,7 +3915,7 @@ async function showFromMenu(orchestrator: Orchestrator, ctx: any): Promise<typeo
   while (true) {
     const tasks = listCompletedFromTasks(orchestrator.cwd);
     if (tasks.length === 0) {
-      ctx.ui.notify("No completed brainstorm/review tasks with artifacts found.", "info");
+      ctx.ui.notify("No brainstorm/review tasks with artifacts found.", "info");
       return BACK;
     }
 
@@ -3922,7 +3949,7 @@ async function showImplementMenu(orchestrator: Orchestrator, ctx: any): Promise<
   while (true) {
     const choice = await selectOption(ctx, "Implement", [
       { title: "New", description: "Start a new implementation from scratch" },
-      { title: "From", description: "Continue from a completed brainstorm task" },
+      { title: "From", description: "Continue from a previous brainstorm or review task" },
       { title: "Resume", description: "Resume a paused implementation" },
       { title: "Back", description: "Return to the previous menu" },
     ]);
@@ -4314,19 +4341,12 @@ async function showTaskMenu(orchestrator: Orchestrator, ctx: any): Promise<typeo
   while (true) {
     const choice = await selectOption(ctx, "Task", [
       { title: "Implement", description: "Want to make some changes? Research any topic or a codebase, brainstorm solutions and implement the chosen one" },
-      { title: "Brainstorm", description: "No idea where to start? Research any topic or a codebase. If there is a problem to solve — brainstorm solutions and solve it" },
       { title: "Review", description: "Want to ensure that some commits or a GitHub PR are good to go? Review it. Even fix it yourself, if you want" },
       { title: "Quick", description: "Quick freeform task — no phases, no reviews, just work" },
       { title: "Resume", description: "Resume a previously unfinished task" },
       { title: "Back", description: "Return to the previous menu" },
     ]);
     if (!choice || choice === "Back") return BACK;
-
-    if (choice === "Brainstorm") {
-      const result = await showTaskTypeMenu(orchestrator, ctx, "brainstorm");
-      if (result === "started") return "started";
-      continue;
-    }
 
     if (choice === "Implement") {
       const result = await showImplementMenu(orchestrator, ctx);
@@ -4679,12 +4699,6 @@ export async function showActiveTaskMenu(
           // and stash them on the flag — the later headless pp_phase_complete
           // branch that advances cannot prompt the user.
           const deferred: { mode?: TaskMode; autonomousConfig?: AutonomousConfig; plannerPreset?: string } = {};
-          if (next === "plan" && task.type === "brainstorm") {
-            const modeSelection = await pickModeForTaskStart(orchestrator, ctx, "implement");
-            if (!modeSelection) continue;
-            deferred.mode = modeSelection.mode;
-            deferred.autonomousConfig = modeSelection.autonomousConfig;
-          }
           if (next === "plan" && getEffectiveMode(task.state) !== "autonomous") {
             const pickedPlannerPreset = await pickPreset(ctx, orchestrator, "planners", "Planner preset");
             if (!pickedPlannerPreset) continue;
@@ -4747,18 +4761,6 @@ export async function showActiveTaskMenu(
           return mode === "tool" ? text : "";
         }
         const next = nextPhase(task.type, phase);
-
-        if (
-          next === "plan" &&
-          task.type === "brainstorm"
-        ) {
-          const modeSelection = await pickModeForTaskStart(orchestrator, ctx, "implement");
-          if (!modeSelection) continue;
-          task.state.mode = modeSelection.mode;
-          task.state.effectiveMode = undefined;
-          task.state.autonomousConfig = modeSelection.autonomousConfig;
-          saveTask(task.dir, task.state);
-        }
 
         let plannerPreset: string | undefined;
         if (next === "plan") {

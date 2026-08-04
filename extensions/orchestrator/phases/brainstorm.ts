@@ -6,7 +6,6 @@ import { registerAgentDefinitions, spawnViaRpc, waitForCompletion } from "../age
 import { createBrainstormReviewerAgent } from "../agents/brainstorm-reviewer.js";
 import { getContextDirs, getArtifactManifest } from "../context.js";
 import type { RepoInfo } from "../repo-utils.js";
-import type { TaskType } from "../state.js";
 import { isReviewFileForRound } from "../review-files.js";
 import type { PhaseSend } from "../transition-controller.js";
 
@@ -24,75 +23,32 @@ function isEnabled(value: { enabled?: boolean } | undefined): boolean {
 // one question at a time with a second push, because the first answer to a design
 // question is usually the polished/surface one. "scope" (review-task intake) is
 // factual up-front scoping (which repo/branch/PR/range), not design elicitation, so
-// it deliberately keeps the batch-it-up-front behavior. `conversational` selects the
-// wording for the free-form brainstorm conversation (which is driven by the user turn
-// by turn) over the one-shot phase task; it never emits `/pp` or `pp_phase_complete`.
+// it deliberately keeps the batch-it-up-front behavior.
 export function interactiveFlowBlock(
   driverFamily: string,
   defaultAdvisor: string,
-  opts: { clarify?: "socratic" | "scope"; conversational?: boolean } = {},
+  opts: { clarify?: "socratic" | "scope" } = {},
 ): string {
-  const { clarify = "socratic", conversational = false } = opts;
+  const { clarify = "socratic" } = opts;
   const clarifyStep =
     clarify === "scope"
       ? "1. CLARIFY SCOPE UP-FRONT: if what to review is ambiguous (which repo/branch/PR/commit-range, what to focus on), ask up front before diving in. This is factual scoping, not design elicitation — ask them up front in quick succession (still one focused question per ask_user call, never bundled into one prompt) rather than dripping them out across the work. If the scope is clear, skip straight to step 2."
       : "1. CLARIFY ONE AT A TIME: if the request is ambiguous, ask ONE focused question, then WAIT for the answer before asking the next — do NOT batch a list. The first answer to a design question is usually the polished/surface one; push once more on it (\"what would that actually look like / what breaks if…\") to reach the real answer before moving on. Skip any question the request already answers. If running autonomously with no user to ask, do NOT block: make the strongest-supported assumption and record it via the assumptions rule in your constraints (artifacts/ASSUMPTIONS.md) instead of asking.";
-  const workStep = conversational
-    ? "2. WORK AUTONOMOUSLY IN THE MIDDLE: once the topic is clear, research/explore/design without stopping to ask. Delegate to subagents (parallel explores for broad searches) and use tools directly for quick lookups. Do NOT interrupt with piecemeal mid-flow questions — collect uncertainties and raise them together at a natural checkpoint. The one-at-a-time push above is for the clarify stage, not license to interrupt mid-work."
-    : "2. WORK AUTONOMOUSLY: research, explore, and design without stopping to ask. Delegate to subagents (parallel explores for broad searches). Do NOT interrupt mid-flow with questions — collect uncertainties for step 4 instead. Only a genuine blocker (you cannot proceed at all) justifies an ask here. The one-at-a-time push above is for the clarify stage, not license to interrupt mid-work.";
-  const presentStep = conversational
-    ? "6. PRESENT RESULTS: give conclusions as a clear, structured summary (findings, decisions, recommended direction) — don't just dump raw results."
-    : "6. PRESENT RESULTS: end with a structured summary (what you found, the decisions, the recommended direction) and hand back with the standard closing block.";
+  const workStep = "2. WORK AUTONOMOUSLY: research, explore, and design without stopping to ask. Delegate to subagents (parallel explores for broad searches). Do NOT interrupt mid-flow with questions — collect uncertainties for step 4 instead. Only a genuine blocker (you cannot proceed at all) justifies an ask here. The one-at-a-time push above is for the clarify stage, not license to interrupt mid-work.";
+  const presentStep = "6. PRESENT RESULTS: end with a structured summary (what you found, the decisions, the recommended direction) and hand back with the standard closing block.";
   return [
-    conversational ? "# Flow (minimize interruptions — the streamlined flow, adapted to conversation):" : "# Flow (minimize interruptions):",
+    "# Flow (minimize interruptions):",
     clarifyStep,
     workStep,
     `3. CONSULT AN ADVISOR: before presenting, get an independent second opinion from an advisor whose model family differs from yours. You run on ${driverFamily}, so default to ${defaultAdvisor}. Escalate to more advisors for hard or high-stakes calls.`,
     "4. CLARIFY AT THE END: surface any remaining decisions as focused asks — one at a time. Don't bury unresolved questions inside an approval prompt or the summary.",
     "5. APPROVE COMMITTED SPECIFICS: before finalizing, when your output commits to concrete, costly-to-reverse or opinion-heavy choices — exact wording, structure, naming, default values, or interface signatures — show the ACTUAL proposed text/values inline in your message, then ask for explicit approval. Don't silently invent and bury them.",
     presentStep,
-    ...(conversational ? ["This is still a conversation: the user drives it and may steer at any time. The flow shapes HOW you work between their messages — it does not forbid responding to what they say."] : []),
   ].join("\n");
 }
 
-export function brainstormSystemPrompt(taskType: TaskType, taskDescription: string, taskDir: string, cwd: string): string {
+export function brainstormSystemPrompt(taskDescription: string, taskDir: string, cwd: string): string {
   const registerReposInstruction = `First, register all git repositories you'll work in using pp_register_repo (including the root: ${cwd}). For each, determine the base branch by examining the current branch and remote tracking.`;
-  if (taskType === "brainstorm") {
-    return [
-      "[PI-PI — BRAINSTORM]",
-      `Topic: ${taskDescription}`,
-      "",
-      registerReposInstruction,
-      "",
-      "# This is a conversation, not a task.",
-      "Your primary job is to TALK WITH THE USER. Explore ideas, analyze tradeoffs, answer questions, discuss approaches.",
-      "Do NOT rush to produce artifacts or finish. Stay in the conversation until the user is satisfied.",
-      "",
-      interactiveFlowBlock("Claude", "a GPT-family advisor", { clarify: "socratic", conversational: true }),
-      "",
-      "# How to work:",
-      "- Discuss the topic with the user. Propose approaches. Analyze tradeoffs. When you give a judgment, take a position and say what evidence would change it — do NOT hedge without landing anywhere or offer empty validation (e.g. agreeing just to be agreeable). Examples of the anti-pattern to avoid: 'that could work', 'it depends' with no position taken.",
-      "- Scope triage up front: if the topic spans multiple independent subsystems, flag that immediately and help decompose it into sub-problems rather than treating it as one blob.",
-      "- Explore 2-3 viable approaches with tradeoffs; lead with your recommended one and say why. Do NOT dismiss a topic as 'too simple to need design' — that is where unexamined assumptions cause the most wasted work.",
-      "- Delegate research to subagents where useful (see the delegation guidance in your system prompt).",
-      "- Use tools directly for quick lookups (cbm_search, lsp, ast_search, grep, etc.)",
-      "",
-      "# Optional artifacts (only when the conversation naturally produces them):",
-      "If the discussion leads to a clear action plan or the user asks you to capture conclusions,",
-      "write them to:",
-      `- ${taskDir}/USER_REQUEST.md — MUST use structure: # User Request, ## Problem, ## Constraints`,
-      `- ${taskDir}/RESEARCH.md — MUST use structure: ## Affected Code, ## Architecture Context, ## Constraints & Edge Cases, ## Open Questions (optional)`,
-      "These files are validated. Missing or unexpected sections will be rejected.",
-      "Do NOT create these files preemptively. Only write them when there's substance to capture.",
-      "Once USER_REQUEST.md exists, keep it current: update it whenever the user's request changes or clarifies, so it never goes stale.",
-      "",
-      "# Optional: focused analysis artifacts",
-      `You may also write additional analysis files to ${taskDir}/artifacts/<name>.md`,
-      "for deep dives on specific topics (e.g. architecture analysis, API comparison, risk assessment).",
-      "Each artifact must start with # <Title>. Content is freeform. These are reviewed alongside USER_REQUEST.md and RESEARCH.md.",
-      "Do NOT duplicate content already in RESEARCH.md — artifacts are for supplementary deep dives.",
-    ].join("\n");
-  }
 
   return [
     "[PI-PI — BRAINSTORM PHASE]",

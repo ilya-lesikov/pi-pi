@@ -28,13 +28,14 @@ export interface AutonomousConfig {
   phases: Record<string, AutonomousPhaseConfig>;
 }
 
-export type TaskType = "implement" | "brainstorm" | "review" | "quick";
+export type TaskType = "implement" | "review" | "quick";
 
+// "brainstorm" remains a PHASE (the first phase of every implement task); only
+// the standalone brainstorm TASK type was removed.
 export type ImplementPhase = "brainstorm" | "plan" | "implement" | "done";
-export type BrainstormPhase = "brainstorm" | "plan" | "implement" | "done";
 export type ReviewPhase = "review" | "plan" | "implement" | "done";
 export type QuickPhase = "quick";
-export type Phase = ImplementPhase | BrainstormPhase | ReviewPhase | QuickPhase;
+export type Phase = ImplementPhase | ReviewPhase | QuickPhase;
 
 export interface TaskState {
   phase: Phase;
@@ -121,7 +122,7 @@ function taskStatePath(taskDir: string): string {
 }
 
 export function getFirstPhase(type: TaskType): Exclude<Phase, "done"> {
-  if (type === "implement" || type === "brainstorm") return "brainstorm";
+  if (type === "implement") return "brainstorm";
   if (type === "review") return "review";
   return "quick";
 }
@@ -233,7 +234,7 @@ export function listTasks(cwd: string, typeOrOptions?: TaskType | ListTasksOptio
   const base = stateDir(cwd);
   if (!existsSync(base)) return [];
 
-  const types: TaskType[] = options.type ? [options.type] : ["implement", "brainstorm", "review", "quick"];
+  const types: TaskType[] = options.type ? [options.type] : ["implement", "review", "quick"];
   const results: TaskInfo[] = [];
 
   for (const t of types) {
@@ -373,6 +374,11 @@ function firstMarkdownContent(path: string): string | null {
 export function taskFullName(taskDir: string, state: TaskState): string {
   let desc = state.description ?? "";
 
+  // "brainstorm" stays in this list even though it is no longer a TaskType:
+  // this is a DISPLAY fallback over historical data, and legacy
+  // .pp/state/brainstorm tasks were created with the generic description
+  // "brainstorm". Dropping it would surface that raw string in the Implement >
+  // From picker instead of the USER_REQUEST-derived name.
   if (["implement", "brainstorm", "review", "quick"].includes(desc)) {
     const fallback =
       firstMarkdownContent(join(taskDir, "USER_REQUEST.md")) ??

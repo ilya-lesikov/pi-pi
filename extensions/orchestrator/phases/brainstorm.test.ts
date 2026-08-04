@@ -6,36 +6,38 @@ import { brainstormSystemPrompt, spawnBrainstormReviewers } from "./brainstorm.j
 import { getDefaultConfig } from "../config.js";
 
 describe("brainstormSystemPrompt", () => {
-  it("brainstorm prompt body is pure procedure (no completion/menu restatements)", () => {
-    const prompt = brainstormSystemPrompt("brainstorm", "explore ideas", "/tmp/task", "/tmp");
-    expect(prompt).toContain("conversation");
+  it("prompt body is pure procedure (no completion/menu restatements)", () => {
+    const prompt = brainstormSystemPrompt("do the thing", "/tmp/task", "/tmp");
     expect(prompt).not.toContain("pp_phase_complete");
     expect(prompt).not.toContain("/pp");
   });
 
-  it("conversation branch uses the Socratic one-at-a-time-with-second-push clarify policy", () => {
-    const prompt = brainstormSystemPrompt("brainstorm", "explore ideas", "/tmp/task", "/tmp");
+  it("is the artifact-producing phase prompt, not the removed standalone-task conversation", () => {
+    const prompt = brainstormSystemPrompt("do the thing", "/tmp/task", "/tmp");
+    expect(prompt).toContain("[PI-PI — BRAINSTORM PHASE]");
+    expect(prompt).toContain("USER_REQUEST.md");
+    expect(prompt).toContain("RESEARCH.md");
+    // The standalone brainstorm TASK's conversational framing is gone.
+    expect(prompt).not.toContain("This is a conversation, not a task.");
+    expect(prompt).not.toContain("adapted to conversation");
+  });
+
+  it("carries the Socratic clarify policy and degrades to recorded assumptions when autonomous", () => {
+    const prompt = brainstormSystemPrompt("do the thing", "/tmp/task", "/tmp");
     expect(prompt).toContain("CLARIFY ONE AT A TIME");
     expect(prompt).toContain("push once more");
+    expect(prompt).toContain("artifacts/ASSUMPTIONS.md");
     expect(prompt).not.toContain("batch them into one focused round");
   });
 
-  it("task branch also carries the Socratic clarify policy and degrades to recorded assumptions when autonomous", () => {
-    const prompt = brainstormSystemPrompt("task", "do the thing", "/tmp/task", "/tmp");
-    expect(prompt).toContain("CLARIFY ONE AT A TIME");
-    expect(prompt).toContain("artifacts/ASSUMPTIONS.md");
-  });
-
-  it("both branches state anti-sycophancy as a behavior, with the quoted phrase adjacent to an example marker", () => {
-    for (const t of ["brainstorm", "task"] as const) {
-      const prompt = brainstormSystemPrompt(t, "x", "/tmp/task", "/tmp");
-      expect(prompt).toContain("take a position");
-      expect(prompt).toMatch(/what evidence would change|what would change it/i);
-      // The quoted anti-pattern phrase must sit right after an explicit example
-      // marker on the same line — a stray "e.g." elsewhere in the prompt must not
-      // satisfy this.
-      expect(prompt).toMatch(/(illustrative anti-patterns|Examples of the anti-pattern)[^\n]{0,60}'that could work'/);
-    }
+  it("states anti-sycophancy as a behavior, with the quoted phrase adjacent to an example marker", () => {
+    const prompt = brainstormSystemPrompt("x", "/tmp/task", "/tmp");
+    expect(prompt).toContain("take a position");
+    expect(prompt).toMatch(/what evidence would change|what would change it/i);
+    // The quoted anti-pattern phrase must sit right after an explicit example
+    // marker on the same line — a stray "e.g." elsewhere in the prompt must not
+    // satisfy this.
+    expect(prompt).toMatch(/(illustrative anti-patterns|Examples of the anti-pattern)[^\n]{0,60}'that could work'/);
   });
 });
 
