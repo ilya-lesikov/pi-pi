@@ -845,6 +845,21 @@ describe("flant-infra", () => {
       expect(mod.loadFlantSettings().cacheTTLDays).toBe(3);
     });
 
+    // Documented benign edge: an INVALID legacy value normalizes to the CURRENT
+    // default (3), which is not in cacheTTLDays' historical list [7], so it is
+    // migrated as an explicit 3. Redundant but harmless — it equals the default
+    // it would have resolved to anyway. Not worth special-casing in the skip rule.
+    it("migrates an invalid legacy cacheTTLDays as the current default, which is harmless", async () => {
+      const dir = makeTempDir();
+      const mod = await loadFlantInfraModule(dir);
+      writeLegacyCache(dir, { cacheTTLDays: "abc" });
+
+      mod.migrateLegacyFlantSettings();
+
+      expect(readGlobalFlant(dir)).toMatchObject({ cacheTTLDays: 3 });
+      expect(mod.loadFlantSettings().cacheTTLDays).toBe(3);
+    });
+
     it("migrates a non-historical switchBackIntervalMinutes: 45", async () => {
       const dir = makeTempDir();
       const mod = await loadFlantInfraModule(dir);
