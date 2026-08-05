@@ -38,11 +38,15 @@ It fails, naming the specific event or option, when the vendored code stops
 emitting a `subagents:*` event the orchestrator subscribes to, stops handling an
 RPC the orchestrator sends, stops reading a forwarded spawn option, or drops a
 manager-handle method. Then run the guard tests that assert the patched
-behavior actually executes rather than merely being accepted:
+behavior actually executes rather than merely being accepted. These must run
+from the package directory so they pick up its own vitest config — it dedupes
+`@earendil-works/pi-ai`, and the root config does not (that is what `npm run
+test:3p` does, and why root `npm test` excludes `3p/**`):
 
 ```
-npx vitest run 3p/pi-subagents/test/agent-runner.test.ts -t validateCompletion
-npx vitest run 3p/pi-subagents/test/agent-manager.test.ts -t first_tool
+cd 3p/pi-subagents
+npx vitest run test/agent-runner.test.ts -t validateCompletion
+npx vitest run test/agent-manager.test.ts -t first_tool
 ```
 
 To review every local divergence from pristine upstream, diff against the
