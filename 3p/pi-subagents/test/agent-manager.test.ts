@@ -1006,3 +1006,89 @@ describe("AgentManager — an exhausted empty-turn retry is a loud failure, not 
     expect(record.result ?? "").toBe("");
   });
 });
+
+// LOCAL PATCH (pi-pi) guard. first_tool/first_turn are emitted from
+// AgentManager.startAgent so EVERY spawn path reports them, including the
+// RPC-spawned reviewer panels the orchestrator uses. A subtree update reverted
+// the emission while the orchestrator kept subscribing, so the events silently
+// went dead — these tests fail if that happens again.
+describe("AgentManager — first_tool/first_turn emission (all spawn paths)", () => {
+  let manager: AgentManager;
+  afterEach(() => manager?.dispose());
+
+  function piWithEvents(): { pi: any; events: Array<{ name: string; data: any }> } {
+    const events: Array<{ name: string; data: any }> = [];
+    return { pi: { events: { emit: (name: string, data: any) => { events.push({ name, data }); } } }, events };
+  }
+
+  it("emits first_tool once on the first tool start, with id/type/toolName", async () => {
+    manager = new AgentManager();
+    const { pi, events } = piWithEvents();
+    vi.mocked(runAgent).mockImplementation(async (_ctx, _type, _prompt, opts: any) => {
+      opts.onToolActivity?.({ type: "start", toolName: "read" });
+      opts.onToolActivity?.({ type: "end", toolName: "read" });
+      opts.onToolActivity?.({ type: "start", toolName: "grep" });
+      return { responseText: "done", session: mockSession(), aborted: false, steered: false };
+    });
+
+    const id = manager.spawn(pi, mockCtx, "code_reviewer_gpt", "review", { description: "Code reviewer (gpt)" });
+    await manager.getRecord(id)!.promise;
+
+    const firstTool = events.filter((e) => e.name === "subagents:first_tool");
+    expect(firstTool).toHaveLength(1);
+    expect(firstTool[0].data).toMatchObject({ id, type: "code_reviewer_gpt", description: "Code reviewer (gpt)", toolName: "read" });
+  });
+
+  it("emits first_turn once on the first turn end, and still forwards onTurnEnd", async () => {
+    manager = new AgentManager();
+    const { pi, events } = piWithEvents();
+    const onTurnEnd = vi.fn();
+    vi.mocked(runAgent).mockImplementation(async (_ctx, _type, _prompt, opts: any) => {
+      opts.onTurnEnd?.(1);
+      opts.onTurnEnd?.(2);
+      return { responseText: "done", session: mockSession(), aborted: false, steered: false };
+    });
+
+    const id = manager.spawn(pi, mockCtx, "planner_fable", "plan", { description: "Planner (fable)", onTurnEnd });
+    await manager.getRecord(id)!.promise;
+
+    const firstTurn = events.filter((e) => e.name === "subagents:first_turn");
+    expect(firstTurn).toHaveLength(1);
+    expect(firstTurn[0].data).toMatchObject({ id, type: "planner_fable", turnCount: 1 });
+    // The caller's own callback must still see every turn.
+    expect(onTurnEnd.mock.calls).toEqual([[1], [2]]);
+  });
+
+  it("emits for a spawn that passes no callbacks of its own (the RPC reviewer path)", async () => {
+    // RPC spawns supply neither onToolActivity nor onTurnEnd. Emission must not
+    // depend on the caller having wired anything.
+    manager = new AgentManager();
+    const { pi, events } = piWithEvents();
+    vi.mocked(runAgent).mockImplementation(async (_ctx, _type, _prompt, opts: any) => {
+      opts.onToolActivity?.({ type: "start", toolName: "read" });
+      opts.onTurnEnd?.(1);
+      return { responseText: "done", session: mockSession(), aborted: false, steered: false };
+    });
+
+    const id = manager.spawn(pi, mockCtx, "code_reviewer_fable", "review", { description: "Code reviewer (fable)" });
+    await manager.getRecord(id)!.promise;
+
+    expect(events.map((e) => e.name)).toEqual(
+      expect.arrayContaining(["subagents:first_tool", "subagents:first_turn"]),
+    );
+  });
+
+  it("does not let an emit failure break the agent run", async () => {
+    manager = new AgentManager();
+    const pi = { events: { emit: () => { throw new Error("bus is down"); } } } as any;
+    vi.mocked(runAgent).mockImplementation(async (_ctx, _type, _prompt, opts: any) => {
+      opts.onToolActivity?.({ type: "start", toolName: "read" });
+      opts.onTurnEnd?.(1);
+      return { responseText: "done", session: mockSession(), aborted: false, steered: false };
+    });
+
+    const id = manager.spawn(pi, mockCtx, "explore", "go", { description: "Explore" });
+    await expect(manager.getRecord(id)!.promise).resolves.toBeDefined();
+    expect(manager.getRecord(id)!.status).toBe("completed");
+  });
+});

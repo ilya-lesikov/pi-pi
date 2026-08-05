@@ -236,6 +236,10 @@ export class AgentManager {
 
     record.status = "running";
     record.startedAt = Date.now();
+    // A re-started (e.g. dequeued) record must be able to emit first_tool/
+    // first_turn again for its fresh run.
+    record.firstToolEmitted = false;
+    record.firstTurnEmitted = false;
     if (options.isBackground) this.runningBackground++;
     this.onStart?.(record);
 
@@ -266,9 +270,29 @@ export class AgentManager {
       signal: record.abortController!.signal,
       onToolActivity: (activity) => {
         if (activity.type === "end") record.toolUses++;
+        // LOCAL PATCH (pi-pi): emit first_tool/first_turn from this single choke
+        // point so ALL spawn paths report them (RPC-spawned reviewer panels
+        // included), not just the Agent tool's background branch. Without it
+        // there is no way to tell whether a reviewer actually investigated (ran
+        // tools) or wrote from context alone. A subtree update reverted this
+        // once while the orchestrator kept subscribing — re-apply after upgrading.
+        if (activity.type === "start" && !record.firstToolEmitted) {
+          record.firstToolEmitted = true;
+          try {
+            pi.events.emit("subagents:first_tool", { id, type, description: options.description, toolName: activity.toolName });
+          } catch { /* ignore */ }
+        }
         options.onToolActivity?.(activity);
       },
-      onTurnEnd: options.onTurnEnd,
+      onTurnEnd: (turnCount) => {
+        if (!record.firstTurnEmitted) {
+          record.firstTurnEmitted = true;
+          try {
+            pi.events.emit("subagents:first_turn", { id, type, description: options.description, turnCount });
+          } catch { /* ignore */ }
+        }
+        options.onTurnEnd?.(turnCount);
+      },
       onTextDelta: options.onTextDelta,
       validateCompletion: options.validateCompletion,
       maxValidationRetries: options.maxValidationRetries,
