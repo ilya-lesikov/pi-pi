@@ -275,4 +275,45 @@ describe("armSwitchBackProbe", () => {
     await vi.runOnlyPendingTimersAsync();
     expect(mocks.probeSubscriptionCleared).toHaveBeenCalledWith("sub/claude");
   });
+
+  it("re-arms instead of dying when a tick lands with no active task", async () => {
+    vi.useFakeTimers();
+    const orch = makeOrchestrator({ subFallbackActive: true, subFallbackModelId: "sub/claude", active: null });
+    armSwitchBackProbe(orch);
+    await vi.runOnlyPendingTimersAsync();
+    expect(mocks.probeSubscriptionCleared).not.toHaveBeenCalled();
+    expect(orch.subSwitchBackTimer).not.toBeNull();
+  });
+
+  it("re-arms instead of dying when the task token changed under the tick", async () => {
+    vi.useFakeTimers();
+    const orch = makeOrchestrator({ subFallbackActive: true, subFallbackModelId: "sub/claude" });
+    armSwitchBackProbe(orch);
+    orch.activeTaskToken = 99;
+    await vi.runOnlyPendingTimersAsync();
+    expect(mocks.probeSubscriptionCleared).not.toHaveBeenCalled();
+    expect(orch.subSwitchBackTimer).not.toBeNull();
+  });
+
+  it("re-arms when the task goes away while the probe is in flight", async () => {
+    vi.useFakeTimers();
+    mocks.probeSubscriptionCleared.mockImplementation(async () => {
+      orch.active = null;
+      return "ok";
+    });
+    const orch = makeOrchestrator({ subFallbackActive: true, subFallbackModelId: "sub/claude" });
+    armSwitchBackProbe(orch);
+    await vi.runOnlyPendingTimersAsync();
+    expect(orch.switchModel).not.toHaveBeenCalled();
+    expect(orch.subSwitchBackTimer).not.toBeNull();
+  });
+
+  it("stops for good once the fallback is no longer active", async () => {
+    vi.useFakeTimers();
+    const orch = makeOrchestrator({ subFallbackActive: false, subFallbackModelId: "sub/claude" });
+    armSwitchBackProbe(orch);
+    await vi.runOnlyPendingTimersAsync();
+    expect(mocks.probeSubscriptionCleared).not.toHaveBeenCalled();
+    expect(orch.subSwitchBackTimer).toBeNull();
+  });
 });

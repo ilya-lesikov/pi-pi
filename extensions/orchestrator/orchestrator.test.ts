@@ -511,6 +511,47 @@ describe("Orchestrator.cleanupActive", () => {
     await expect(orchestrator.cleanupActive()).resolves.toBeUndefined();
     expect(orchestrator.active).toBeNull();
   });
+
+  it("restores the subscription model when a rate-limit fallback had switched it", async () => {
+    const orchestrator = new Orchestrator(makePi());
+    orchestrator.active = makeActiveTask(null);
+    orchestrator.lastCtx = { ui: { notify: vi.fn() } };
+    orchestrator.subFallbackActive = true;
+    orchestrator.subFallbackMainPriorSpec = "pp-flant-anthropic-sub/sub/claude-opus-5";
+    const switchModel = vi.spyOn(orchestrator, "switchModel").mockResolvedValue(true);
+
+    await orchestrator.cleanupActive();
+
+    expect(switchModel).toHaveBeenCalledWith(
+      orchestrator.lastCtx,
+      "pp-flant-anthropic-sub/sub/claude-opus-5",
+      expect.any(String),
+    );
+  });
+
+  it("leaves the model alone when no fallback had switched it", async () => {
+    const orchestrator = new Orchestrator(makePi());
+    orchestrator.active = makeActiveTask(null);
+    orchestrator.lastCtx = { ui: { notify: vi.fn() } };
+    const switchModel = vi.spyOn(orchestrator, "switchModel").mockResolvedValue(true);
+
+    await orchestrator.cleanupActive();
+
+    expect(switchModel).not.toHaveBeenCalled();
+  });
+
+  it("does not restore a subagent-origin fallback that never moved the main model", async () => {
+    const orchestrator = new Orchestrator(makePi());
+    orchestrator.active = makeActiveTask(null);
+    orchestrator.lastCtx = { ui: { notify: vi.fn() } };
+    orchestrator.subFallbackActive = true;
+    orchestrator.subFallbackMainPriorSpec = null;
+    const switchModel = vi.spyOn(orchestrator, "switchModel").mockResolvedValue(true);
+
+    await orchestrator.cleanupActive();
+
+    expect(switchModel).not.toHaveBeenCalled();
+  });
 });
 
 describe("Orchestrator.getPlanStartState", () => {

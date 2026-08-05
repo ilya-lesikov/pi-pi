@@ -4529,37 +4529,35 @@ describe("menu contracts", () => {
 
     menu
       .expect({ question: "/pp", options: { include: ["Settings"] }, choose: "Settings" })
-      .expect({ question: "Settings", options: { exact: ["General", "Agents", "Commands", "Performance", "LSP", "Context", "Skills", "Compaction", "Copilot", "Flant", "Report", "Info", "Back"] }, choose: "Back" })
+      .expect({ question: "Settings", options: { exact: ["General", "Agents", "Commands", "Performance", "LSP", "Context", "Skills", "Compaction", "Copilot", "Flant", "Report", "Usage", "Doctor", "Back"] }, choose: "Back" })
       .expect({ question: "/pp", options: { include: ["Back to prompt"] }, choose: "Back to prompt" });
 
     const pp = getCommand(pi, "pp");
     await pp(undefined, ctx);
   });
 
-  it("info menu (under Settings) shows Doctor and hides LSP", async () => {
+  it("settings menu without active task hides the task-scoped info entries", async () => {
     const cwd = makeTempDir();
     const { pi } = await setupOrchestrator(cwd);
     const ctx = makeCtx();
 
     menu
       .expect({ question: "/pp", options: { include: ["Settings"] }, choose: "Settings" })
-      .expect({ question: "Settings", options: { include: ["Info"] }, choose: "Info" })
       .expect({
-        question: "Info",
+        question: "Settings",
         options: {
           include: ["Usage", "Doctor", "Back"],
-          exclude: ["LSP", "Subagents"],
+          exclude: ["Task status", "Repos", "Subagents"],
         },
         choose: "Back",
       })
-      .expect({ question: "Settings", options: { include: ["Back"] }, choose: "Back" })
       .expect({ question: "/pp", options: { include: ["Back to prompt"] }, choose: "Back to prompt" });
 
     const pp = getCommand(pi, "pp");
     await pp(undefined, ctx);
   });
 
-  it("info doctor option calls runDoctor", async () => {
+  it("settings doctor option calls runDoctor", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);
     const ctx = makeCtx();
@@ -4567,9 +4565,7 @@ describe("menu contracts", () => {
 
     menu
       .expect({ question: "/pp", options: { include: ["Settings"] }, choose: "Settings" })
-      .expect({ question: "Settings", options: { include: ["Info"] }, choose: "Info" })
-      .expect({ question: "Info", options: { include: ["Doctor", "Back"] }, choose: "Doctor" })
-      .expect({ question: "Info", options: { include: ["Back"] }, choose: "Back" })
+      .expect({ question: "Settings", options: { include: ["Doctor", "Back"] }, choose: "Doctor" })
       .expect({ question: "Settings", options: { include: ["Back"] }, choose: "Back" })
       .expect({ question: "/pp", options: { include: ["Back to prompt"] }, choose: "Back to prompt" });
 

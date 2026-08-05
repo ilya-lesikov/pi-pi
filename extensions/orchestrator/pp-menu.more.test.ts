@@ -527,12 +527,15 @@ describe("showActiveTaskMenu phase branches", () => {
     expect(askQuestions).toContain("Settings");
   });
 
-  it("Info navigates into Settings then the info submenu then back", async () => {
+  it("Settings lists the info entries inline, with no Info submenu", async () => {
     const orchestrator = makeMenuOrchestrator("implement");
-    askQueue.push("Settings", "Info", "Back", "Back", "Back to prompt");
+    askQueue.push("Settings", "Back", "Back to prompt");
     const result = await showActiveTaskMenu(orchestrator, makeMenuCtx(), "/pp", "command");
     expect(result).toBe("");
-    expect(askQuestions).toContain("Info");
+    expect(askQuestions).not.toContain("Info");
+    const settings = askOptionTitles[askQuestions.indexOf("Settings")];
+    expect(settings).toEqual(expect.arrayContaining(["Usage", "Doctor", "Task status", "Repos"]));
+    expect(settings).not.toContain("Info");
   });
 
   it("hides Review while awaiting subagents (isRunning false)", async () => {
@@ -585,13 +588,16 @@ describe("showActiveTaskMenu quick task", () => {
     expect(askQuestions[0]).toContain("Task: quick");
   });
 
-  it("quick-task Info submenu (via Settings) then Back returns to the quick menu", async () => {
+  it("quick-task Settings lists the info entries inline then Back returns to the quick menu", async () => {
     const orchestrator = makeMenuOrchestrator("quick", "quick");
     orchestrator.active.state.phase = "quick";
-    askQueue.push("Settings", "Info", "Back", "Back", "Back to prompt");
+    askQueue.push("Settings", "Back", "Back to prompt");
     const result = await showActiveTaskMenu(orchestrator, makeMenuCtx(), "/pp", "command");
     expect(result).toBe("");
-    expect(askQuestions.filter((q) => q === "Info")).toHaveLength(1);
+    expect(askQuestions).not.toContain("Info");
+    expect(askOptionTitles[askQuestions.indexOf("Settings")]).toEqual(
+      expect.arrayContaining(["Usage", "Doctor", "Task status", "Repos"]),
+    );
   });
 });
 
@@ -619,13 +625,16 @@ describe("showPpMenu", () => {
     expect(result).toContain("user-cancelled");
   });
 
-  it("no-active menu navigates Settings then Info then Back", async () => {
+  it("no-active menu Settings lists the info entries inline, hiding the task-scoped ones", async () => {
     const orchestrator = makeMenuOrchestrator("implement");
     orchestrator.active = null;
-    askQueue.push("Settings", "Info", "Back", "Back", "Back to prompt");
+    askQueue.push("Settings", "Back", "Back to prompt");
     const result = await showPpMenu(orchestrator, makeMenuCtx(), "command");
     expect(result).toBeUndefined();
-    expect(askQuestions).toContain("Info");
+    expect(askQuestions).not.toContain("Info");
+    const settings = askOptionTitles[askQuestions.indexOf("Settings")];
+    expect(settings).toEqual(expect.arrayContaining(["Usage", "Doctor"]));
+    expect(settings).not.toEqual(expect.arrayContaining(["Task status", "Repos"]));
   });
 
   it("shows a read-only config-error menu when configError is set", async () => {

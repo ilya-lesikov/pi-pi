@@ -1474,38 +1474,6 @@ export function showUsage(ctx: any): void {
   ctx.ui.notify(lines.join("\n"), "info");
 }
 
-async function showInfoMenu(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
-  while (true) {
-    const options: OptionInput[] = [];
-    options.push({ title: "Usage", description: "Show session token usage and cost breakdown" });
-    options.push({ title: "Doctor", description: "Run diagnostic checks" });
-    if (orchestrator.active) {
-      options.push({ title: "Task status", description: "Show current task phase, step, and timing" });
-      options.push({ title: "Repos", description: "Registered repositories and base branches" });
-    }
-    options.push({ title: "Back", description: "Return to the previous menu" });
-
-    const choice = await selectOption(ctx, "Info", options);
-    if (!choice || choice === "Back") return BACK;
-    if (choice === "Usage") {
-      showUsage(ctx);
-      continue;
-    }
-    if (choice === "Doctor") {
-      await runDoctor(orchestrator, ctx);
-      continue;
-    }
-    if (choice === "Task status") {
-      showStatus(orchestrator, ctx);
-      continue;
-    }
-    if (choice === "Repos") {
-      await showReposSettings(orchestrator, ctx);
-      continue;
-    }
-  }
-}
-
 type Scope = "global" | "project";
 type MainModelRole = keyof PiPiConfig["agents"]["orchestrators"];
 type AgentRole = keyof PiPiConfig["agents"]["subagents"]["simple"];
@@ -3235,7 +3203,14 @@ async function showSettingsMenu(orchestrator: Orchestrator, ctx: any): Promise<t
       opt("Copilot", "GitHub Copilot model provider (fallback tier below the subscription)"),
       opt("Flant", "Configure corporate AI model provider"),
       opt("Report", "Bundle a local feedback report (note + logs + state)"),
-      opt("Info", "Usage and task status"),
+      opt("Usage", "Show session token usage and cost breakdown"),
+      opt("Doctor", "Run diagnostic checks"),
+      ...(orchestrator.active
+        ? [
+            opt("Task status", "Show current task phase, step, and timing"),
+            opt("Repos", "Registered repositories and base branches"),
+          ]
+        : []),
       opt("Back", "Return to the previous menu"),
     ];
 
@@ -3253,7 +3228,10 @@ async function showSettingsMenu(orchestrator: Orchestrator, ctx: any): Promise<t
     else if (choice === "Copilot") await showCopilotMenu(orchestrator, ctx);
     else if (choice === "Flant") await showFlantInfraMenu(orchestrator, ctx);
     else if (choice === "Report") await showReportMenu(orchestrator, ctx);
-    else if (choice === "Info") await showInfoMenu(orchestrator, ctx);
+    else if (choice === "Usage") showUsage(ctx);
+    else if (choice === "Doctor") await runDoctor(orchestrator, ctx);
+    else if (choice === "Task status") showStatus(orchestrator, ctx);
+    else if (choice === "Repos") await showReposSettings(orchestrator, ctx);
   }
 }
 

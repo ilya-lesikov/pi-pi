@@ -718,7 +718,9 @@ export class Orchestrator {
     this.pendingSubagentSpawns = 0;
   }
 
-  resetTaskScopedState(): void {
+  // Returns clearSubscriptionFallback's restore spec so the teardown caller can
+  // put the live model back on the subscription; activation callers ignore it.
+  resetTaskScopedState(): string | null {
     this.spawnedAgentIds.clear();
     this.agentDescriptions.clear();
     this.agentSpawnTimes.clear();
@@ -754,7 +756,7 @@ export class Orchestrator {
     this.mainTurnInFlight = false;
     this.mainTurnRecovering = false;
     this.resetAdaptiveCompaction();
-    this.clearSubscriptionFallback();
+    return this.clearSubscriptionFallback();
   }
 
   // Reset the adaptive proactive-compaction state (item 6). Called on task
@@ -768,11 +770,18 @@ export class Orchestrator {
   // Reset the subscription rate-limit fallback: cancel the switch-back probe
   // timer, clear the model-registry override, and reset guards. Called on task
   // reset/cleanup so the sticky override never leaks across tasks.
-  clearSubscriptionFallback(): void {
+  //
+  // Returns the main model's pre-fallback spec when a fallback had switched it,
+  // so a teardown caller can put the LIVE model back on the subscription. This
+  // is returned rather than switched here because the task-ACTIVATION path also
+  // calls this and then switches to the new task's own model — restoring here
+  // would race and clobber that.
+  clearSubscriptionFallback(): string | null {
     if (this.subSwitchBackTimer) {
       clearTimeout(this.subSwitchBackTimer);
       this.subSwitchBackTimer = null;
     }
+    const priorSpec = this.subFallbackActive ? this.subFallbackMainPriorSpec : null;
     this.subFallbackActive = false;
     this.subFallbackMainPriorSpec = null;
     this.subFallbackDialogPending = false;
@@ -784,6 +793,7 @@ export class Orchestrator {
     // alongside the subscription override so a one-way demotion never leaks
     // across tasks (the only other recovery is the manual /pp menu action).
     clearAllTierDemotions();
+    return priorSpec;
   }
 
   async cleanupActive(): Promise<void> {
@@ -791,7 +801,20 @@ export class Orchestrator {
     const dir = this.active.dir;
     getLogger().info({ s: "task", dir }, "cleaning up active task");
     removeTaskDestination();
-    this.resetTaskScopedState();
+    const restoreSpec = this.resetTaskScopedState();
+    // Put the live model back on the subscription when a rate-limit fallback had
+    // moved it: the override is cleared above, so without this the session would
+    // silently keep billing regular (paid) Claude after the task ends.
+    // Never let a restore failure escape: the lock release below must still run.
+    if (restoreSpec && this.lastCtx) {
+      try {
+        const thinking = this.config?.agents?.orchestrators?.implement?.thinking ?? "high";
+        const ok = await this.switchModel(this.lastCtx, restoreSpec, thinking);
+        if (!ok) getLogger().warn({ s: "model", spec: restoreSpec }, "failed to restore subscription model on task cleanup");
+      } catch (err: any) {
+        getLogger().warn({ s: "model", spec: restoreSpec, err: err?.message }, "failed to restore subscription model on task cleanup");
+      }
+    }
     if (this.active.release) {
       try {
         await this.active.release();

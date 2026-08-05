@@ -309,7 +309,15 @@ export function armSwitchBackProbe(orchestrator: Orchestrator): void {
 
 async function runSwitchBackProbe(orchestrator: Orchestrator, taskToken: number): Promise<void> {
   const log = getLogger();
-  if (orchestrator.activeTaskToken !== taskToken || !orchestrator.active || !orchestrator.subFallbackActive) {
+  // A tick that lands while no task is active (between tasks, or during a phase
+  // transition that bumps activeTaskToken) must RE-ARM rather than return: the
+  // fallback is still active and the subscription still needs watching, so
+  // bailing here used to kill the probe for the rest of the session and strand
+  // the session on paid non-sub Claude forever. Only a cleared fallback (whose
+  // teardown cancels the timer) legitimately stops the loop.
+  if (!orchestrator.subFallbackActive) return;
+  if (orchestrator.activeTaskToken !== taskToken || !orchestrator.active) {
+    armSwitchBackProbe(orchestrator);
     return;
   }
   const modelId = orchestrator.subFallbackModelId;
@@ -318,7 +326,9 @@ async function runSwitchBackProbe(orchestrator: Orchestrator, taskToken: number)
     return;
   }
   const outcome = await probeSubscriptionCleared(modelId);
-  if (orchestrator.activeTaskToken !== taskToken || !orchestrator.active || !orchestrator.subFallbackActive) {
+  if (!orchestrator.subFallbackActive) return;
+  if (orchestrator.activeTaskToken !== taskToken || !orchestrator.active) {
+    armSwitchBackProbe(orchestrator);
     return;
   }
   if (outcome !== "ok") {
