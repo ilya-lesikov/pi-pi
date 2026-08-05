@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs";
+import { readFileSync, existsSync, mkdirSync, statSync } from "fs";
 import { join } from "path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { resolvePreset, reviewPresetGroupForPhase, type PiPiConfig, type VariantConfig } from "../config.js";
@@ -7,7 +7,7 @@ import { createCodeReviewerAgent } from "../agents/code-reviewer.js";
 import { getContextDirs, getLatestSynthesizedPlan, getArtifactManifest } from "../context.js";
 import type { RepoInfo } from "../repo-utils.js";
 import type { PhaseSend } from "../transition-controller.js";
-import { isReviewFileForRound, isReviewComplete } from "../review-files.js";
+import { isReviewComplete, partitionRoundFiles } from "../review-files.js";
 
 function isEnabled(value: { enabled?: boolean } | undefined): boolean {
   return value?.enabled !== false;
@@ -265,19 +265,24 @@ export async function spawnCodeReviewers(
 
   await Promise.allSettled(results);
 
-  const reviewFiles = existsSync(reviewsDir)
-    ? readdirSync(reviewsDir).filter((f) => isReviewFileForRound(f, round))
-    : [];
+  const { complete, incomplete } = partitionRoundFiles(reviewsDir, round);
 
-  if (reviewFiles.length > 0) {
+  if (complete.length > 0) {
     send(
       {
         customType: "pp-code-reviews-done",
         content: [
-          `${reviewFiles.length} code reviewer(s) completed (round ${round}). Reviews in ${reviewsDir}:`,
-          ...reviewFiles.map((f) => `  - ${f}`),
+          `${complete.length} code reviewer(s) completed (round ${round}). Reviews in ${reviewsDir}:`,
+          ...complete.map((f) => `  - ${f}`),
+          ...(incomplete.length > 0
+            ? [
+              "",
+              `${incomplete.length} reviewer(s) left an INCOMPLETE stub and produced NO verdict — do NOT count them as approvals:`,
+              ...incomplete.map((f) => `  - ${f}`),
+            ]
+            : []),
           "",
-          "Read all reviews and synthesize them into a final review.",
+          "Read the completed reviews and synthesize them into a final review.",
         ].join("\n"),
         display: true,
       },
@@ -288,7 +293,9 @@ export async function spawnCodeReviewers(
       {
         customType: "pp-code-reviews-error",
         content: [
-          `All code reviewer variants failed (round ${round}) — no reviews were produced.`,
+          incomplete.length > 0
+            ? `No code reviewer produced a completed review (round ${round}) — ${incomplete.length} left an INCOMPLETE stub with no verdict.`
+            : `All code reviewer variants failed (round ${round}) — no reviews were produced.`,
           "You must review the implementation yourself and decide whether to approve or request changes.",
         ].join("\n"),
         display: true,

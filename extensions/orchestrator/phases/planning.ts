@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs";
+import { readFileSync, existsSync, mkdirSync, statSync } from "fs";
 import { basename, join } from "path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { resolvePreset, type PiPiConfig, type VariantConfig } from "../config.js";
@@ -8,7 +8,7 @@ import { createPlanReviewerAgent } from "../agents/plan-reviewer.js";
 import { getContextDirs, getLatestSynthesizedPlan, getArtifactManifest } from "../context.js";
 import type { RepoInfo } from "../repo-utils.js";
 import { validatePlan } from "../validate-artifacts.js";
-import { isReviewFileForRound, isReviewComplete } from "../review-files.js";
+import { isReviewComplete, partitionRoundFiles } from "../review-files.js";
 import { classifyPlanVariants, isPlanStub } from "../plan-files.js";
 import type { TaskMode } from "../state.js";
 import type { PhaseSend } from "../transition-controller.js";
@@ -287,19 +287,24 @@ export async function spawnPlanReviewers(
 
   await Promise.allSettled(results);
 
-  const actualReviewFiles = existsSync(planReviewsDir)
-    ? readdirSync(planReviewsDir).filter((f) => f.startsWith(`${timestamp}`) && isReviewFileForRound(f, pass))
-    : [];
+  const { complete, incomplete } = partitionRoundFiles(planReviewsDir, pass, (f) => f.startsWith(`${timestamp}`));
 
-  if (actualReviewFiles.length > 0) {
+  if (complete.length > 0) {
     send(
       {
           customType: "pp-plan-reviews-done",
           content: [
-          `${actualReviewFiles.length} plan reviewer(s) completed. Reviews in ${planReviewsDir}:`,
-          ...actualReviewFiles.map((f) => `  - ${f}`),
+          `${complete.length} plan reviewer(s) completed. Reviews in ${planReviewsDir}:`,
+          ...complete.map((f) => `  - ${f}`),
+          ...(incomplete.length > 0
+            ? [
+              "",
+              `${incomplete.length} reviewer(s) left an INCOMPLETE stub and produced NO verdict — do NOT count them as approvals:`,
+              ...incomplete.map((f) => `  - ${f}`),
+            ]
+            : []),
           "",
-          "Read all plan reviews and incorporate feedback into the synthesized plan if needed.",
+          "Read the completed plan reviews and incorporate feedback into the synthesized plan if needed.",
         ].join("\n"),
         display: true,
       },
@@ -309,7 +314,9 @@ export async function spawnPlanReviewers(
     send(
       {
         customType: "pp-plan-reviews-error",
-        content: "All plan reviewer variants failed — no reviews were produced. Proceeding without plan review.",
+        content: incomplete.length > 0
+          ? `No plan reviewer produced a completed review — ${incomplete.length} left an INCOMPLETE stub with no verdict. Proceeding without plan review.`
+          : "All plan reviewer variants failed — no reviews were produced. Proceeding without plan review.",
         display: true,
       },
       "context",

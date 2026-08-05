@@ -6,7 +6,7 @@ import { registerAgentDefinitions, spawnViaRpc, waitForCompletion } from "../age
 import { createBrainstormReviewerAgent } from "../agents/brainstorm-reviewer.js";
 import { getContextDirs, getArtifactManifest } from "../context.js";
 import type { RepoInfo } from "../repo-utils.js";
-import { isReviewFileForRound, isReviewComplete } from "../review-files.js";
+import { isReviewComplete, partitionRoundFiles } from "../review-files.js";
 import type { PhaseSend } from "../transition-controller.js";
 
 function isEnabled(value: { enabled?: boolean } | undefined): boolean {
@@ -202,19 +202,24 @@ export async function spawnBrainstormReviewers(
 
   await Promise.allSettled(results);
 
-  const reviewOutputFiles = existsSync(reviewsDir)
-    ? readdirSync(reviewsDir).filter((f) => isReviewFileForRound(f, round))
-    : [];
+  const { complete, incomplete } = partitionRoundFiles(reviewsDir, round);
 
-  if (reviewOutputFiles.length > 0) {
+  if (complete.length > 0) {
     send(
       {
         customType: "pp-brainstorm-reviews-done",
         content: [
-          `${reviewOutputFiles.length} brainstorm reviewer(s) completed (round ${round}). Reviews in ${reviewsDir}:`,
-          ...reviewOutputFiles.map((f) => `  - ${f}`),
+          `${complete.length} brainstorm reviewer(s) completed (round ${round}). Reviews in ${reviewsDir}:`,
+          ...complete.map((f) => `  - ${f}`),
+          ...(incomplete.length > 0
+            ? [
+              "",
+              `${incomplete.length} reviewer(s) left an INCOMPLETE stub and produced NO verdict — do NOT count them as approvals:`,
+              ...incomplete.map((f) => `  - ${f}`),
+            ]
+            : []),
           "",
-          "Read all reviews and update USER_REQUEST.md, RESEARCH.md, and any artifacts/ files if needed.",
+          "Read the completed reviews and update USER_REQUEST.md, RESEARCH.md, and any artifacts/ files if needed.",
         ].join("\n"),
         display: true,
       },
@@ -225,7 +230,9 @@ export async function spawnBrainstormReviewers(
       {
         customType: "pp-brainstorm-reviews-error",
         content: [
-          `All brainstorm reviewer variants failed (round ${round}) — no reviews were produced.`,
+          incomplete.length > 0
+            ? `No brainstorm reviewer produced a completed review (round ${round}) — ${incomplete.length} left an INCOMPLETE stub with no verdict.`
+            : `All brainstorm reviewer variants failed (round ${round}) — no reviews were produced.`,
           "Proceeding without automatic brainstorm review.",
         ].join("\n"),
         display: true,

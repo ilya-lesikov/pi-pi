@@ -26,6 +26,33 @@ export function isReviewComplete(content: string): boolean {
   return /VERDICT\**\s*:?\**\s*\n*\s*[A-Z_]+/i.test(content);
 }
 
+// Split a round's files into the ones carrying a real verdict and the ones that
+// are still stubs. The spawn-done messages tell the synthesizer what to read, so
+// counting a stub there reports a reviewer as "completed" and contradicts the
+// UNKNOWN/INCOMPLETE gap that reconcileMissingReviewers records for the same
+// round.
+export function partitionRoundFiles(
+  reviewsDir: string,
+  pass: number,
+  extraFilter?: (filename: string) => boolean,
+): { complete: string[]; incomplete: string[] } {
+  if (!existsSync(reviewsDir)) return { complete: [], incomplete: [] };
+  const complete: string[] = [];
+  const incomplete: string[] = [];
+  for (const f of readdirSync(reviewsDir)) {
+    if (!isReviewFileForRound(f, pass)) continue;
+    if (extraFilter && !extraFilter(f)) continue;
+    let content = "";
+    try {
+      content = readFileSync(join(reviewsDir, f), "utf-8");
+    } catch {
+      continue;
+    }
+    (isReviewComplete(content) ? complete : incomplete).push(f);
+  }
+  return { complete: complete.sort(), incomplete: incomplete.sort() };
+}
+
 // Reconcile the round's reviewer coverage against the roster that was actually
 // launched. For every expected reviewer that produced NO file, or only an
 // INCOMPLETE stub, write an explicit placeholder round file (VERDICT: UNKNOWN /
