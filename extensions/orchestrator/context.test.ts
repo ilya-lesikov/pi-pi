@@ -17,6 +17,8 @@ import {
   getArtifactManifest,
   formatManifestBlock,
   getPhaseArtifacts,
+  MAX_ARTIFACT_BYTES,
+  MAX_ARTIFACTS_TOTAL_BYTES,
   loadAllContextFiles,
   loadContextFiles,
   loadBrainstormReviewOutputs,
@@ -353,6 +355,45 @@ describe("getPhaseArtifacts", () => {
       { name: "USER_REQUEST.md", content: "request" },
       { name: "Synthesized Plan", content: "new plan" },
     ]);
+  });
+
+  it("caps an oversized artifact and points at the file on disk", () => {
+    const taskDir = makeTempDir();
+    mkdirSync(join(taskDir, "artifacts"), { recursive: true });
+    const hugePath = join(taskDir, "artifacts", "PATCHES.md");
+    writeFileSync(hugePath, "x".repeat(MAX_ARTIFACT_BYTES * 3), "utf-8");
+
+    const [artifact] = getPhaseArtifacts(taskDir, "implement");
+    expect(artifact.truncated).toBe(true);
+    expect(Buffer.byteLength(artifact.content, "utf8")).toBeLessThan(MAX_ARTIFACT_BYTES + 500);
+    expect(artifact.content).toContain(hugePath);
+  });
+
+  it("bounds the whole set, not just each file", () => {
+    const taskDir = makeTempDir();
+    mkdirSync(join(taskDir, "artifacts"), { recursive: true });
+    for (let i = 0; i < 40; i++) {
+      writeFileSync(join(taskDir, "artifacts", `A${i}.md`), "y".repeat(MAX_ARTIFACT_BYTES), "utf-8");
+    }
+
+    const total = getPhaseArtifacts(taskDir, "implement")
+      .reduce((n, a) => n + Buffer.byteLength(a.content, "utf8"), 0);
+    expect(total).toBeLessThanOrEqual(MAX_ARTIFACTS_TOTAL_BYTES + 2000);
+  });
+
+  it("keeps the synthesized plan verbatim when large artifacts exhaust the budget", () => {
+    const taskDir = makeTempDir();
+    mkdirSync(join(taskDir, "artifacts"), { recursive: true });
+    // Sort before "plans" and together exceed the set budget.
+    for (let i = 0; i < 12; i++) {
+      writeFileSync(join(taskDir, "artifacts", `A${i}.md`), "z".repeat(MAX_ARTIFACT_BYTES), "utf-8");
+    }
+    const plansDir = join(taskDir, "plans");
+    mkdirSync(plansDir, { recursive: true });
+    writeFileSync(join(plansDir, "20260101_synthesized.md"), "THE PLAN", "utf-8");
+
+    const plan = getPhaseArtifacts(taskDir, "implement").find((a) => a.name === "Synthesized Plan");
+    expect(plan).toEqual({ name: "Synthesized Plan", content: "THE PLAN" });
   });
 });
 

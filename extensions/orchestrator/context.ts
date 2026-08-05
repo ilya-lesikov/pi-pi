@@ -234,24 +234,27 @@ export function getContextDirs(rootCwd: string, repos: RepoInfo[], loadExtraRepo
   return dirs;
 }
 
-export function getPhaseArtifacts(taskDir: string, phase: Phase): { name: string; content: string }[] {
-  const artifacts: { name: string; content: string }[] = [];
+// Per-artifact and whole-set byte budgets for verbatim injection. A phase can
+// legitimately write mechanically-generated artifacts (e.g. raw `git diff -p`
+// dumps) that reach multiple MB; injecting those verbatim on every compaction
+// overflowed a 1M-token window with ~3.7M tokens of re-injected artifacts. The
+// set budget bounds the pathological many-medium-files case too, since the
+// per-file cap alone does not.
+export const MAX_ARTIFACT_BYTES = 64 * 1024;
+export const MAX_ARTIFACTS_TOTAL_BYTES = 512 * 1024;
 
-  const tryAdd = (name: string, path: string) => {
-    if (existsSync(path)) {
-      artifacts.push({ name, content: readFileSync(path, "utf-8") });
-    }
+export function getPhaseArtifacts(taskDir: string, phase: Phase): { name: string; content: string; truncated?: boolean }[] {
+  // Collected in PRIORITY order, not directory order: the request, research and
+  // the synthesized plan claim budget before the generic artifacts/ glob, so a
+  // pile of alphabetically-earlier analysis files cannot starve the plan down to
+  // a bare truncation marker.
+  const planned: { name: string; path: string }[] = [];
+  const push = (name: string, path: string) => {
+    if (existsSync(path)) planned.push({ name, path });
   };
 
-  tryAdd("USER_REQUEST.md", join(taskDir, "USER_REQUEST.md"));
-  tryAdd("RESEARCH.md", join(taskDir, "RESEARCH.md"));
-
-  const artifactsDir = join(taskDir, "artifacts");
-  if (existsSync(artifactsDir)) {
-    for (const file of readdirSync(artifactsDir).filter((f) => f.endsWith(".md")).sort()) {
-      tryAdd(`artifacts/${file}`, join(artifactsDir, file));
-    }
-  }
+  push("USER_REQUEST.md", join(taskDir, "USER_REQUEST.md"));
+  push("RESEARCH.md", join(taskDir, "RESEARCH.md"));
 
   if (phase === "plan" || phase === "implement") {
     const plansDir = join(taskDir, "plans");
@@ -260,13 +263,55 @@ export function getPhaseArtifacts(taskDir: string, phase: Phase): { name: string
         .filter((f) => f.includes("synthesized"))
         .sort(sortByTimestampPrefix);
       if (synthFiles.length > 0) {
-        const synthPath = join(plansDir, synthFiles[synthFiles.length - 1]);
-        tryAdd("Synthesized Plan", synthPath);
+        push("Synthesized Plan", join(plansDir, synthFiles[synthFiles.length - 1]));
       }
     }
   }
 
-  return artifacts;
+  const artifactsDir = join(taskDir, "artifacts");
+  if (existsSync(artifactsDir)) {
+    for (const file of readdirSync(artifactsDir).filter((f) => f.endsWith(".md")).sort()) {
+      push(`artifacts/${file}`, join(artifactsDir, file));
+    }
+  }
+
+  const byName = new Map<string, { name: string; content: string; truncated?: boolean }>();
+  let remainingBytes = MAX_ARTIFACTS_TOTAL_BYTES;
+  for (const { name, path } of planned) {
+    const raw = readFileSync(path, "utf-8");
+    const bytes = Buffer.from(raw, "utf8");
+    const budget = Math.max(0, Math.min(MAX_ARTIFACT_BYTES, remainingBytes));
+    // Budget spent: drop the artifact entirely rather than emit a bare marker,
+    // whose own bytes would push the set past the cap. The manifest paths the
+    // phase panels inject still tell the agent these files exist on disk.
+    if (budget === 0) continue;
+    if (bytes.length <= budget) {
+      remainingBytes -= bytes.length;
+      byName.set(name, { name, content: raw });
+      continue;
+    }
+    // Slice on a byte boundary, then drop any trailing partial multibyte char.
+    const head = bytes.subarray(0, budget).toString("utf8").replace(/\uFFFD$/, "");
+    remainingBytes -= budget;
+    const sizeKib = Math.round(bytes.length / 1024);
+    byName.set(name, {
+      name,
+      content: `${head}\n\n[PI-PI: TRUNCATED — ${name} is ${sizeKib} KiB on disk. Read ${path} with the read tool for the full content.]`,
+      truncated: true,
+    });
+  }
+
+  // Emit in the original (caller-facing) order: request, research, artifacts/, plan.
+  const order = [
+    "USER_REQUEST.md",
+    "RESEARCH.md",
+    ...planned.filter((p) => p.name.startsWith("artifacts/")).map((p) => p.name),
+    "Synthesized Plan",
+  ];
+  return order.flatMap((name) => {
+    const hit = byName.get(name);
+    return hit ? [hit] : [];
+  });
 }
 
 export function getLatestSynthesizedPlan(taskDir: string): string | null {

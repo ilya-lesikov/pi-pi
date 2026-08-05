@@ -1568,7 +1568,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       ) {
         const usage = ctx.getContextUsage();
         if (usage && typeof usage.contextWindow === "number" && usage.contextWindow > 0) {
-          const { compactionThresholdTokens, shouldFireCompaction, adaptiveNextThreshold, wouldThrash } = await import("./compaction-trigger.js");
+          const { compactionThresholdTokens, shouldFireCompaction, shouldForceCompaction, adaptiveNextThreshold, wouldThrash } = await import("./compaction-trigger.js");
           // Provider-qualified key: flant-sub and flant-api share bare ids, so a
           // bare-id check would miss a sub<->api route change and reuse a stale
           // baseline. Reset the adaptive state on any model or window change.
@@ -1603,8 +1603,21 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
           }
           if (!adapt.disabled) {
             const effectiveThreshold = Math.max(base, adapt.nextThreshold ?? 0);
-            if (shouldFireCompaction(usage.tokens, effectiveThreshold, orchestrator.compactionArm)) {
-              getLogger().info({ s: "compaction", tokens: usage.tokens, threshold: effectiveThreshold, window: usage.contextWindow }, "proactive in-phase compaction triggered");
+            // Blind-growth safety net: when the host cannot report usage, fall back
+            // to our own estimate and force a compaction once it passes the
+            // window-minus-reserve ceiling. Without this, tokens:null during an
+            // error storm lets context grow until the provider hard-rejects it.
+            const forced =
+              usage.tokens == null &&
+              orchestrator.lastEstimatedTokens != null &&
+              shouldForceCompaction(orchestrator.lastEstimatedTokens, usage.contextWindow);
+            if (forced || shouldFireCompaction(usage.tokens, effectiveThreshold, orchestrator.compactionArm)) {
+              if (forced) {
+                orchestrator.compactionArm.armed = false;
+                getLogger().warn({ s: "compaction", estimated: orchestrator.lastEstimatedTokens, window: usage.contextWindow }, "forcing compaction: host reports no usage and the estimate exceeds the ceiling");
+              } else {
+                getLogger().info({ s: "compaction", tokens: usage.tokens, threshold: effectiveThreshold, window: usage.contextWindow }, "proactive in-phase compaction triggered");
+              }
               // Mark BEFORE compacting so the session_compact handler can
               // attribute the upcoming event to us. ctx.compact is fire-and-forget
               // (the host wraps the async work and routes failures to onError, so a
@@ -1626,6 +1639,24 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       getLogger().error({ s: "compaction", err: err?.message }, "proactive compaction trigger failed");
     }
   });
+  // Keep a self-computed context estimate from the messages the host is about to
+  // send. getContextUsage() reports tokens:null until a SUCCESSFUL assistant reply
+  // follows a compaction, so during a provider error storm the usage-based trigger
+  // is blind while context keeps growing; this is the only size signal available
+  // then. Uses the host's own estimateTokens so the math matches its accounting.
+  pi.on("context", async (event) => {
+    try {
+      const messages = (event as any).messages as unknown[] | undefined;
+      if (!Array.isArray(messages)) return;
+      const { estimateTokens } = await import("@earendil-works/pi-coding-agent");
+      let total = 0;
+      for (const m of messages) total += estimateTokens(m as any);
+      orchestrator.lastEstimatedTokens = total;
+    } catch (err: any) {
+      getLogger().debug({ s: "compaction", err: err?.message }, "context estimate failed");
+    }
+  });
+
   pi.on("session_compact", async (_event, ctx) => {
     if (ctx) orchestrator.lastCtx = ctx;
     // Attribute this compaction to the adaptive lifecycle ONLY when WE fired it

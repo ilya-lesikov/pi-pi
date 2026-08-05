@@ -104,6 +104,10 @@ export class Orchestrator {
   // eligible to fire on the next threshold crossing; disarmed after firing until
   // context drops back below the re-arm band.
   compactionArm: { armed: boolean } = { armed: true };
+  // Self-computed context estimate from the last `context` event, used only when
+  // the host reports tokens:null (it does so until a SUCCESSFUL assistant reply
+  // follows a compaction, so an error storm leaves the real trigger blind).
+  lastEstimatedTokens: number | null = null;
   // Adaptive proactive-compaction state (item 6). In-memory per session:
   //  - nextThreshold: the adaptive threshold override (null = use the fixed base)
   //  - pendingProactiveMeasure: true after WE fired a proactive compaction and

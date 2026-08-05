@@ -137,3 +137,16 @@ export function shouldFireCompaction(
   }
   return false;
 }
+
+/**
+ * Last-resort trigger for when the host cannot report usage. getContextUsage()
+ * returns tokens:null whenever a compaction exists with no SUCCESSFUL assistant
+ * response after it (an aborted/errored response does not count), so a provider
+ * error storm right after a compaction blinds shouldFireCompaction indefinitely
+ * while the context keeps growing — the observed path to a hard context overflow.
+ * This ignores the arm state on purpose: the arm can only re-arm from a non-null
+ * reading, so honoring it here would reproduce the same deadlock.
+ */
+export function shouldForceCompaction(estimatedTokens: number, contextWindow: number): boolean {
+  return estimatedTokens > Math.max(1, contextWindow - CONTEXT_RESERVE_TOKENS);
+}

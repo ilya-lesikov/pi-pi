@@ -7,6 +7,7 @@ import {
   compactionHeadroom,
   adaptiveNextThreshold,
   wouldThrash,
+  shouldForceCompaction,
   CONTEXT_RESERVE_TOKENS,
 } from "./compaction-trigger.js";
 import type { CompactionConfig } from "./config.js";
@@ -148,5 +149,24 @@ describe("wouldThrash (strict greater-than boundary)", () => {
   });
   it("is true when baseline+headroom exceeds the ceiling", () => {
     expect(wouldThrash(input, 135_000)).toBe(true); // 175K > 168K
+  });
+});
+
+describe("shouldForceCompaction (blind-growth safety net)", () => {
+  it("fires above the window-minus-reserve ceiling", () => {
+    expect(shouldForceCompaction(3_691_003, 1_000_000)).toBe(true); // the observed overflow
+    expect(shouldForceCompaction(968_001, 1_000_000)).toBe(true);
+  });
+
+  it("does not fire at or below the ceiling", () => {
+    expect(shouldForceCompaction(1_000_000 - CONTEXT_RESERVE_TOKENS, 1_000_000)).toBe(false);
+    expect(shouldForceCompaction(443_273, 1_000_000)).toBe(false);
+  });
+
+  it("a disarmed state can never re-arm from a null reading, which is why the net ignores the arm", () => {
+    const state = makeCompactionArmState();
+    state.armed = false;
+    expect(shouldFireCompaction(null, 300_000, state)).toBe(false);
+    expect(state.armed).toBe(false);
   });
 });
