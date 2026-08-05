@@ -228,6 +228,18 @@ export interface RunOptions {
   /** Called at the end of each agentic turn with the cumulative count. */
   onTurnEnd?: (turnCount: number) => void;
   /**
+   * Called after the agent finishes but before the run is considered complete.
+   * Return a non-empty string to re-prompt the agent with that message; return
+   * undefined to accept completion. Called up to `maxValidationRetries` times.
+   *
+   * LOCAL PATCH (pi-pi): not part of upstream pi-subagents. A subtree update
+   * silently reverted it once, leaving every caller's callback dead while the
+   * option was still forwarded — re-apply it after upgrading. See
+   * test/agent-runner.test.ts "validateCompletion".
+   */
+  validateCompletion?: () => string | undefined;
+  maxValidationRetries?: number;
+  /**
    * Called once per assistant message_end with that message's usage delta.
    * Lets callers maintain a lifetime accumulator that survives compaction
    * (which replaces session.state.messages and resets stats-derived sums).
@@ -751,11 +763,17 @@ export async function runAgent(
     // reason to have no answer, so those are not retried. Hitting the SOFT turn
     // limit is not: a steered wrap-up that comes back empty is the same silent
     // failure as any other empty turn and must not surface as an empty success.
-    responseText = await promptWithEmptyRetry(
-      session,
-      effectivePrompt,
-      () => aborted || options.signal?.aborted === true,
-    );
+    const isStopped = () => aborted || options.signal?.aborted === true;
+    responseText = await promptWithEmptyRetry(session, effectivePrompt, isStopped);
+    if (options.validateCompletion) {
+      const maxRetries = options.maxValidationRetries ?? 2;
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        if (isStopped()) break;
+        const error = options.validateCompletion();
+        if (!error) break;
+        responseText = await promptWithEmptyRetry(session, error, isStopped);
+      }
+    }
   } finally {
     unsubTurns();
     cleanupAbort();

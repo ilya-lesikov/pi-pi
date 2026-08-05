@@ -1480,3 +1480,81 @@ describe("agent-runner empty-turn retry", () => {
     expect(session.prompt).toHaveBeenCalledTimes(1);
   });
 });
+
+// LOCAL PATCH (pi-pi) guard. `validateCompletion` is not upstream: a subtree
+// update to v0.13.0 once reverted it, and because every caller merely PASSES the
+// option, the orchestrator's planner/reviewer output-file enforcement went dead
+// silently for weeks. These tests assert the runner actually INVOKES the
+// callback, which is the only thing a caller-side test cannot prove.
+describe("agent-runner validateCompletion", () => {
+  function createSequenceSession(texts: string[]) {
+    let call = 0;
+    const session: any = {
+      messages: [] as any[],
+      subscribe: vi.fn(() => () => {}),
+      prompt: vi.fn(async () => {
+        const t = texts[Math.min(call, texts.length - 1)];
+        call++;
+        session.messages.push({ role: "assistant", content: [{ type: "text", text: t }] });
+      }),
+      abort: vi.fn(),
+      steer: vi.fn(),
+      getActiveToolNames: vi.fn(() => ["read"]),
+      setActiveToolsByName: vi.fn(),
+      setSessionName: vi.fn(),
+      bindExtensions: vi.fn(async () => {}),
+    };
+    return session;
+  }
+
+  it("invokes the callback and accepts completion when it returns undefined", async () => {
+    const session = createSequenceSession(["DONE"]);
+    createAgentSession.mockResolvedValue({ session });
+    const validateCompletion = vi.fn(() => undefined);
+
+    const result = await runAgent(ctx, "Explore", "go", { pi, validateCompletion });
+
+    expect(validateCompletion).toHaveBeenCalledTimes(1);
+    expect(session.prompt).toHaveBeenCalledTimes(1);
+    expect(result.responseText).toBe("DONE");
+  });
+
+  it("re-prompts with the returned message and stops once it passes", async () => {
+    const session = createSequenceSession(["STUB ONLY", "REAL REVIEW"]);
+    createAgentSession.mockResolvedValue({ session });
+    const validateCompletion = vi.fn()
+      .mockReturnValueOnce("Your review file is still the INCOMPLETE stub")
+      .mockReturnValue(undefined);
+
+    const result = await runAgent(ctx, "Explore", "go", { pi, validateCompletion });
+
+    expect(session.prompt).toHaveBeenCalledTimes(2);
+    expect(session.prompt).toHaveBeenLastCalledWith("Your review file is still the INCOMPLETE stub");
+    expect(result.responseText).toBe("REAL REVIEW");
+  });
+
+  it("gives up after maxValidationRetries re-prompts", async () => {
+    const session = createSequenceSession(["STILL A STUB"]);
+    createAgentSession.mockResolvedValue({ session });
+    const validateCompletion = vi.fn(() => "still incomplete");
+
+    await runAgent(ctx, "Explore", "go", { pi, validateCompletion, maxValidationRetries: 3 });
+
+    // Initial prompt + one re-prompt per failed validation.
+    expect(session.prompt).toHaveBeenCalledTimes(4);
+    expect(validateCompletion).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not validate an externally aborted run", async () => {
+    const session = createSequenceSession(["PARTIAL"]);
+    createAgentSession.mockResolvedValue({ session });
+    const controller = new AbortController();
+    controller.abort();
+    const validateCompletion = vi.fn(() => "incomplete");
+
+    await runAgent(ctx, "Explore", "go", { pi, validateCompletion, signal: controller.signal });
+
+    // A user-initiated stop must not be nagged into producing an output file.
+    expect(validateCompletion).not.toHaveBeenCalled();
+  });
+});

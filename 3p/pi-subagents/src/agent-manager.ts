@@ -91,6 +91,9 @@ interface SpawnOptions {
   onSessionCreated?: (session: AgentSession) => void;
   /** Called at the end of each agentic turn with the cumulative count. */
   onTurnEnd?: (turnCount: number) => void;
+  /** Re-prompts the agent when it finishes without a valid output file. LOCAL PATCH (pi-pi) — see RunOptions. */
+  validateCompletion?: () => string | undefined;
+  maxValidationRetries?: number;
   /** Called once per assistant message_end with that message's usage delta. */
   onAssistantUsage?: (usage: { input: number; output: number; cacheWrite: number }) => void;
   /** Called when the session successfully compacts. */
@@ -267,6 +270,8 @@ export class AgentManager {
       },
       onTurnEnd: options.onTurnEnd,
       onTextDelta: options.onTextDelta,
+      validateCompletion: options.validateCompletion,
+      maxValidationRetries: options.maxValidationRetries,
       onAssistantUsage: (usage) => {
         addUsage(record.lifetimeUsage, usage);
         options.onAssistantUsage?.(usage);

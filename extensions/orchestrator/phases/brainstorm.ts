@@ -6,7 +6,7 @@ import { registerAgentDefinitions, spawnViaRpc, waitForCompletion } from "../age
 import { createBrainstormReviewerAgent } from "../agents/brainstorm-reviewer.js";
 import { getContextDirs, getArtifactManifest } from "../context.js";
 import type { RepoInfo } from "../repo-utils.js";
-import { isReviewFileForRound } from "../review-files.js";
+import { isReviewFileForRound, isReviewComplete } from "../review-files.js";
 import type { PhaseSend } from "../transition-controller.js";
 
 function isEnabled(value: { enabled?: boolean } | undefined): boolean {
@@ -177,6 +177,9 @@ export async function spawnBrainstormReviewers(
             validateCompletion: () => {
               if (!existsSync(outputPath) || statSync(outputPath).size === 0) {
                 return `You finished without writing your review file. Write your review to: ${outputPath}`;
+              }
+              if (!isReviewComplete(readFileSync(outputPath, "utf-8"))) {
+                return `Your review file is still the INCOMPLETE stub — you never wrote your findings. Write your full review to ${outputPath}, ending with the line REVIEW_STATUS: COMPLETE.`;
               }
             },
           });

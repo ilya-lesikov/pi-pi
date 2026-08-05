@@ -8,7 +8,7 @@ import { createPlanReviewerAgent } from "../agents/plan-reviewer.js";
 import { getContextDirs, getLatestSynthesizedPlan, getArtifactManifest } from "../context.js";
 import type { RepoInfo } from "../repo-utils.js";
 import { validatePlan } from "../validate-artifacts.js";
-import { isReviewFileForRound } from "../review-files.js";
+import { isReviewFileForRound, isReviewComplete } from "../review-files.js";
 import { classifyPlanVariants, isPlanStub } from "../plan-files.js";
 import type { TaskMode } from "../state.js";
 import type { PhaseSend } from "../transition-controller.js";
@@ -262,6 +262,9 @@ export async function spawnPlanReviewers(
             validateCompletion: () => {
               if (!existsSync(outputPath) || statSync(outputPath).size === 0) {
                 return `You finished without writing your review file. Write your review to: ${outputPath}`;
+              }
+              if (!isReviewComplete(readFileSync(outputPath, "utf-8"))) {
+                return `Your review file is still the INCOMPLETE stub — you never wrote your findings. Write your full review to ${outputPath}, ending with the line REVIEW_STATUS: COMPLETE.`;
               }
             },
           });
