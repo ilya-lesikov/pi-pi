@@ -12,7 +12,7 @@ export function createDeepDebuggerAgent(entry: PoolEntry) {
       tools,
       model,
       thinking: entry.thinking,
-      max_turns: 120,
+      max_turns: 240,
       prompt_mode: "replace",
     },
     prompt: [

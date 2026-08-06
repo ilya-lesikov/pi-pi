@@ -30,7 +30,7 @@ export function createPlanReviewerAgent(
       tools,
       model: resolveModel(variantConfig.model),
       thinking: variantConfig.thinking,
-      max_turns: 120,
+      max_turns: 240,
       prompt_mode: "replace",
     },
     prompt: [

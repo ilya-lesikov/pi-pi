@@ -13,7 +13,7 @@ export function createLibrarianAgent(config: PiPiConfig) {
       tools,
       model,
       thinking,
-      max_turns: 120,
+      max_turns: 240,
       prompt_mode: "replace",
     },
     prompt: [
