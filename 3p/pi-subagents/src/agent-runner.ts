@@ -148,7 +148,14 @@ export function getDefaultMaxTurns(): number | undefined { return defaultMaxTurn
 /** Set the default max turns value. undefined or 0 = unlimited, otherwise minimum 1. */
 export function setDefaultMaxTurns(n: number | undefined): void { defaultMaxTurns = normalizeMaxTurns(n); }
 
-/** Additional turns allowed after the soft limit steer message. */
+/**
+ * Additional turns allowed after the soft limit steer message.
+ *
+ * LOCAL PATCH (pi-pi): upstream defaults this to 5. pi-pi's reviewers must still
+ * write their output file after tripping the soft limit, which 5 turns is not
+ * always enough for — an abort mid-writeup surfaces as an INCOMPLETE stub.
+ * A subtree update reverts this silently; re-apply after upgrading.
+ */
 let graceTurns = 10;
 
 /** Get the grace turns value. */
