@@ -4125,6 +4125,92 @@ describe("error retry", () => {
     );
   });
 
+  it("an apply_feedback stop names the owed pp_phase_complete call and uses its own budget", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "apply_feedback stall", undefined, undefined, "autonomous");
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "apply_feedback";
+    // The generic budget is already exhausted and latched: the review-pass nudge
+    // must not be starved by an unrelated earlier stall.
+    orchestrator.consecutiveNudges = 6;
+    orchestrator.nudgeHalted = true;
+
+    const turnEnd = pi._handlers.get("turn_end")!;
+    const textTurn = { message: { stopReason: "stop", content: [{ type: "text", text: "✅ Applied round-1 feedback: ..." }] }, toolResults: [] };
+    await turnEnd(textTurn, ctx);
+
+    const calls = (pi.sendUserMessage as any).mock.calls.map((c: any[]) => String(c[0]));
+    const recall = calls.filter((t: string) => t.includes("pp_phase_complete"));
+    expect(recall.length).toBe(1);
+    expect(recall[0]).toContain("not finalized");
+    expect(recall[0]).toContain("Do NOT reply with text");
+    expect(orchestrator.applyFeedbackNudges).toBe(1);
+    // The generic counter is untouched by the review-pass path.
+    expect(orchestrator.consecutiveNudges).toBe(6);
+  });
+
+  it("the apply_feedback nudge halts visibly at its own small cap", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "apply_feedback cap", undefined, undefined, "autonomous");
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "apply_feedback";
+
+    const turnEnd = pi._handlers.get("turn_end")!;
+    const textTurn = { message: { stopReason: "stop", content: [{ type: "text", text: "summary only" }] }, toolResults: [] };
+    for (let i = 0; i < 6; i += 1) await turnEnd(textTurn, ctx);
+
+    const recall = (pi.sendUserMessage as any).mock.calls
+      .map((c: any[]) => String(c[0]))
+      .filter((t: string) => t.includes("pp_phase_complete"));
+    expect(recall.length).toBe(3);
+    expect(pi.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ customType: "pp-continuation-halted" }),
+      { deliverAs: "steer" },
+    );
+  });
+
+  it("leaving apply_feedback resets its nudge budget", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "apply_feedback reset", undefined, undefined, "autonomous");
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "apply_feedback";
+
+    const turnEnd = pi._handlers.get("turn_end")!;
+    const textTurn = { message: { stopReason: "stop", content: [{ type: "text", text: "summary only" }] }, toolResults: [] };
+    await turnEnd(textTurn, ctx);
+    expect(orchestrator.applyFeedbackNudges).toBe(1);
+
+    orchestrator.active!.state.step = "llm_work";
+    await turnEnd(textTurn, ctx);
+    expect(orchestrator.applyFeedbackNudges).toBe(0);
+  });
+
+  it("a tool call in apply_feedback is progress and resets the budget", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "apply_feedback progress", undefined, undefined, "autonomous");
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "apply_feedback";
+
+    const turnEnd = pi._handlers.get("turn_end")!;
+    await turnEnd({ message: { stopReason: "stop", content: [{ type: "text", text: "x" }] }, toolResults: [] }, ctx);
+    expect(orchestrator.applyFeedbackNudges).toBe(1);
+
+    await turnEnd({ message: { stopReason: "stop", content: [{ type: "toolCall" }] }, toolResults: [{ ok: true }] }, ctx);
+    expect(orchestrator.applyFeedbackNudges).toBe(0);
+  });
+
   it("a genuine (non-[PI-PI]) user before_agent_start clears the nudge halt", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);

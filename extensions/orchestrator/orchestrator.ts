@@ -131,6 +131,11 @@ export class Orchestrator {
   // user notification.
   consecutiveNudges = 0;
   nudgeHalted = false;
+  // Separate, smaller budget for the apply_feedback stall (a review pass the
+  // model summarized instead of re-calling pp_phase_complete). Kept off
+  // consecutiveNudges so an unrelated earlier stall that already latched
+  // nudgeHalted cannot starve the one nudge that names the owed tool call.
+  applyFeedbackNudges = 0;
   pendingSubagentSpawns = 0;
   // Wall-clock timestamp (ms) of the LAST reviewer-lifecycle activity for the
   // current review cycle (set at cycle entry, refreshed on each
@@ -762,6 +767,7 @@ export class Orchestrator {
     this.errorNudgeHalted = false;
     this.commitReminderSent = false;
     this.consecutiveNudges = 0;
+    this.applyFeedbackNudges = 0;
     this.nudgeHalted = false;
     this.pendingNudges.clear();
     this.phaseStartTime = 0;

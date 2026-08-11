@@ -3347,10 +3347,41 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (!isGenuineStop) {
       // Forward progress — clear the consecutive-nudge guard.
       orchestrator.consecutiveNudges = 0;
+      orchestrator.applyFeedbackNudges = 0;
       return;
     }
 
-    if (!nudgesEnabled || orchestrator.nudgeHalted) return;
+    if (!nudgesEnabled) return;
+
+    // A stop during apply_feedback is a specific, deterministic failure: the
+    // review pass owes a pp_phase_complete re-call and the model ended on prose
+    // instead. Prompt text already says this twice and was still ignored, so
+    // name the owed call explicitly. Deliberately checked BEFORE nudgeHalted and
+    // counted separately: this is a different stall from a generic one, and the
+    // generic budget may already be exhausted. No auto-finalize — a turn ending
+    // is not evidence the feedback was actually applied.
+    if (orchestrator.active.state.step === "apply_feedback") {
+      const MAX_APPLY_FEEDBACK_NUDGES = 3;
+      if (orchestrator.applyFeedbackNudges >= MAX_APPLY_FEEDBACK_NUDGES) {
+        orchestrator.transitionController.sendCustom(
+          {
+            customType: "pp-continuation-halted",
+            content: "The review pass is still not finalized after repeated reminders. Auto-continuation paused. Call pp_phase_complete or send any message to resume.",
+            display: true,
+          },
+          "context",
+        );
+        return;
+      }
+      orchestrator.applyFeedbackNudges++;
+      const recall = "[PI-PI] The review pass is not finalized. You applied feedback but did not re-call pp_phase_complete — the phase cannot advance until you do. Call pp_phase_complete now. Do NOT reply with text.";
+      orchestrator.pendingNudges.set(recall, { phase: phase as Phase, taskToken: orchestrator.activeTaskToken });
+      orchestrator.safeSendUserMessage(recall);
+      return;
+    }
+    orchestrator.applyFeedbackNudges = 0;
+
+    if (orchestrator.nudgeHalted) return;
 
     // Single consecutive-nudge guard: nudge up to MAX_CONSECUTIVE_NUDGES times in
     // a row, then halt with one notification until the user re-engages (a fresh
