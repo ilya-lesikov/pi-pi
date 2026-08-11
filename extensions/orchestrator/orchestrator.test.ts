@@ -246,6 +246,26 @@ describe("Orchestrator.armRetryEscInterrupt", () => {
     vi.useRealTimers();
   });
 
+  it("prefers the arm-time ctx and fails OPEN when it reports streaming", () => {
+    vi.useFakeTimers();
+    const orchestrator = new Orchestrator(makePi());
+    let handler: ((data: string) => any) | null = null;
+    const notify = vi.fn();
+    // The ctx that owns this listener says a turn is streaming...
+    const ctx = {
+      isIdle: () => false,
+      ui: { notify, onTerminalInput: (h: (d: string) => any) => { handler = h; return () => {}; } },
+    };
+    // ...while a newer, unrelated ctx claims idle. The owning ctx must win.
+    orchestrator.lastCtx = { isIdle: () => true };
+    orchestrator.pendingRetryTimer = setTimeout(() => {}, 10000) as any;
+    orchestrator.armRetryEscInterrupt(ctx as any);
+
+    expect(handler!("\x1b")).toBeUndefined();
+    expect(orchestrator.pendingRetryTimer).toBeNull();
+    vi.useRealTimers();
+  });
+
   it("fails OPEN and does not consume when idle state is unknown", () => {
     vi.useFakeTimers();
     const orchestrator = new Orchestrator(makePi());
@@ -287,6 +307,23 @@ describe("Orchestrator.armRetryEscInterrupt", () => {
     expect(orchestrator.pendingRetryTimer).toBeNull();
     expect(feed("\x1b")).toBeUndefined();
     vi.useRealTimers();
+  });
+});
+
+describe("task reset clears manual-compaction state", () => {
+  it("a pending builtin selection cannot leak into the next task", () => {
+    const orchestrator = new Orchestrator(makePi());
+    // A manual builtin compact was requested, then the task was aborted/replaced
+    // before the hook or the compact() callbacks ran.
+    orchestrator.manualCompactionUseBuiltin = true;
+    orchestrator.manualCompactionPending = true;
+
+    orchestrator.resetTaskScopedState();
+
+    // Otherwise the next task's first AUTOMATIC compaction silently falls
+    // through to the host summarizer, and its menu entry refuses to run.
+    expect(orchestrator.manualCompactionUseBuiltin).toBe(false);
+    expect(orchestrator.manualCompactionPending).toBe(false);
   });
 });
 

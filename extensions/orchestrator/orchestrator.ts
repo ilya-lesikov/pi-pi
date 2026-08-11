@@ -290,8 +290,15 @@ export class Orchestrator {
         // streaming strands the running tool call. Cancel our retry but fall
         // THROUGH (undefined) unless the session is positively known idle;
         // unknown idle state fails open for the same reason.
-        const idleFn = this.lastCtx?.isIdle;
-        const idle = typeof idleFn === "function" ? !!idleFn.call(this.lastCtx) : false;
+        //
+        // Prefer the ctx that OWNS this listener over the orchestrator's
+        // most-recent one: lastCtx is reassigned across sessions, so it may
+        // describe a different session than the UI this handler is bound to.
+        // (Both are live views — the host defines isIdle as `() => !isStreaming`
+        // — so neither goes stale within a session.) Any source reporting
+        // non-idle vetoes consumption.
+        const idle = [ctx, this.lastCtx].some((c: any) => typeof c?.isIdle === "function")
+          && [ctx, this.lastCtx].every((c: any) => typeof c?.isIdle !== "function" || !!c.isIdle.call(c));
         this.cancelPendingRetry();
         if (!idle) return undefined;
         ctx?.ui?.notify?.("Retry cancelled.", "info");
@@ -779,6 +786,12 @@ export class Orchestrator {
     this.consecutiveNudges = 0;
     this.applyFeedbackNudges = 0;
     this.nudgeHalted = false;
+    // A manual compaction requested but not yet resolved (its hook and its
+    // compact() callbacks both run later) must not survive the task it was
+    // requested in: the selector would downgrade the NEXT task's first
+    // automatic compaction, and a stuck gate would block its manual entry.
+    this.manualCompactionUseBuiltin = false;
+    this.manualCompactionPending = false;
     this.pendingNudges.clear();
     this.phaseStartTime = 0;
     this.userGatePending = false;
