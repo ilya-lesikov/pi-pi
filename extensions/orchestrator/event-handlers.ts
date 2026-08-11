@@ -3353,6 +3353,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       // Forward progress — clear the consecutive-nudge guard.
       orchestrator.consecutiveNudges = 0;
       orchestrator.applyFeedbackNudges = 0;
+      orchestrator.applyFeedbackHalted = false;
       return;
     }
 
@@ -3368,6 +3369,10 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (orchestrator.active.state.step === "apply_feedback") {
       const MAX_APPLY_FEEDBACK_NUDGES = 3;
       if (orchestrator.applyFeedbackNudges >= MAX_APPLY_FEEDBACK_NUDGES) {
+        // Latch like nudgeHalted: without this every later text-only stop
+        // re-sends the visible halt banner.
+        if (orchestrator.applyFeedbackHalted) return;
+        orchestrator.applyFeedbackHalted = true;
         orchestrator.transitionController.sendCustom(
           {
             customType: "pp-continuation-halted",
@@ -3385,6 +3390,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       return;
     }
     orchestrator.applyFeedbackNudges = 0;
+    orchestrator.applyFeedbackHalted = false;
 
     if (orchestrator.nudgeHalted) return;
 

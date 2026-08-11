@@ -423,6 +423,14 @@ function makeMenuOrchestrator(phase: string, type = "implement"): any {
     },
     cancelPendingRetry: () => {},
     abortAllSubagents: () => {},
+    manualCompactionUseBuiltin: false,
+    manualCompactionPending: false,
+    manualCompactionRequestId: 0,
+    resetTaskScopedState() {
+      this.manualCompactionUseBuiltin = false;
+      this.manualCompactionPending = false;
+      this.manualCompactionRequestId += 1;
+    },
   };
   return orchestrator;
 }
@@ -753,6 +761,30 @@ describe("Settings > Compaction headroom controls", () => {
     onError?.(new Error("Nothing to compact (session too small)"));
     expect(orchestrator.manualCompactionUseBuiltin).toBe(false);
     expect(orchestrator.manualCompactionPending).toBe(false);
+  });
+
+  it("a stale callback from a previous request cannot clear a newer selection", async () => {
+    const orchestrator = makeMenuOrchestrator("implement");
+    orchestrator.active = null;
+    let firstOnComplete: (() => void) | undefined;
+    const compact = vi.fn((opts: any) => { firstOnComplete ??= opts?.onComplete; });
+    const ctx = { ...makeMenuCtx(), compact, isIdle: () => true };
+
+    // Request 1 (builtin), then the task is reset while it is still in flight.
+    askQueue.push("Settings", "Compaction", "Compact context now", "builtin (LLM-based)", "Back", "Back", "Back to prompt");
+    await showPpMenu(orchestrator, ctx, "command");
+    orchestrator.resetTaskScopedState();
+
+    // Request 2 (builtin) belongs to the new task.
+    askQueue.push("Settings", "Compaction", "Compact context now", "builtin (LLM-based)", "Back", "Back", "Back to prompt");
+    await showPpMenu(orchestrator, ctx, "command");
+    expect(orchestrator.manualCompactionUseBuiltin).toBe(true);
+
+    // Request 1's delayed callback finally fires: it must not settle request 2,
+    // or request 2 silently summarizes with VCC instead of the builtin.
+    firstOnComplete?.();
+    expect(orchestrator.manualCompactionUseBuiltin).toBe(true);
+    expect(orchestrator.manualCompactionPending).toBe(true);
   });
 
   it("offers the approved headroom-fraction presets and writes the choice at project scope", async () => {

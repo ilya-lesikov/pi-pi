@@ -3852,6 +3852,30 @@ describe("error retry", () => {
     vi.useRealTimers();
   });
 
+  it("turn_end defers a context overflow to the host instead of halting auto-retry", async () => {
+    vi.useFakeTimers();
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "overflow test");
+    const turnEnd = pi._handlers.get("turn_end")!;
+
+    await turnEnd({ message: {
+      stopReason: "error",
+      errorMessage: "This endpoint's maximum context length is 1000000 tokens. However, you requested about 3829867 tokens (3691003 of text input, 10864 of tool input, 128000 in the output)",
+      content: [],
+    } }, ctx);
+
+    // The host's _checkCompaction compacts and re-runs the turn once; telling the
+    // user auto-retry is paused would be wrong, and compacting here would race it.
+    expect(orchestrator.errorNudgeHalted).toBe(false);
+    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("context window"), "warning");
+    expect(ctx.ui.notify).not.toHaveBeenCalledWith(expect.stringContaining("non-transient error"), "error");
+    expect(ctx.compact).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
   it("turn_end halts immediately for malformed tool history", async () => {
     vi.useFakeTimers();
     const cwd = makeTempDir();
@@ -4175,6 +4199,27 @@ describe("error retry", () => {
     );
   });
 
+  it("sends the apply_feedback halt message exactly once, not on every later stop", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "apply_feedback halt once", undefined, undefined, "autonomous");
+    orchestrator.active!.state.phase = "implement";
+    orchestrator.active!.state.step = "apply_feedback";
+
+    const turnEnd = pi._handlers.get("turn_end")!;
+    const textTurn = { message: { stopReason: "stop", content: [{ type: "text", text: "summary only" }] }, toolResults: [] };
+    // 3 nudges, then many more stops well past the cap.
+    for (let i = 0; i < 10; i += 1) await turnEnd(textTurn, ctx);
+
+    const halts = (pi.sendMessage as any).mock.calls.filter(
+      (c: any[]) => c[0]?.customType === "pp-continuation-halted",
+    );
+    expect(halts.length).toBe(1);
+    expect(orchestrator.applyFeedbackHalted).toBe(true);
+  });
+
   it("leaving apply_feedback resets its nudge budget", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);
@@ -4192,6 +4237,7 @@ describe("error retry", () => {
     orchestrator.active!.state.step = "llm_work";
     await turnEnd(textTurn, ctx);
     expect(orchestrator.applyFeedbackNudges).toBe(0);
+    expect(orchestrator.applyFeedbackHalted).toBe(false);
   });
 
   it("a tool call in apply_feedback is progress and resets the budget", async () => {

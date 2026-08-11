@@ -3418,17 +3418,23 @@ async function runManualCompaction(orchestrator: Orchestrator, ctx: any): Promis
 
   orchestrator.manualCompactionUseBuiltin = sel === "builtin (LLM-based)";
   orchestrator.manualCompactionPending = true;
-  const settle = (): void => {
+  // compact() resolves asynchronously and its callbacks can outlive the task
+  // that requested it, so settle only the request this call owns — otherwise a
+  // straggler clears a newer task's selection and it silently uses VCC.
+  const requestId = (orchestrator.manualCompactionRequestId += 1);
+  const settle = (): boolean => {
+    if (orchestrator.manualCompactionRequestId !== requestId) return false;
     orchestrator.manualCompactionPending = false;
     orchestrator.manualCompactionUseBuiltin = false;
+    return true;
   };
   ctx.compact({
     onComplete: () => {
-      settle();
+      if (!settle()) return;
       ctx.ui?.notify?.("Context compacted.", "info");
     },
     onError: (err: any) => {
-      settle();
+      if (!settle()) return;
       ctx.ui?.notify?.(`Compaction failed: ${err?.message ?? String(err)}`, "error");
     },
   });

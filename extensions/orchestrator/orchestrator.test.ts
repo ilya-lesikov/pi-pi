@@ -325,6 +325,17 @@ describe("task reset clears manual-compaction state", () => {
     expect(orchestrator.manualCompactionUseBuiltin).toBe(false);
     expect(orchestrator.manualCompactionPending).toBe(false);
   });
+
+  it("orphans in-flight manual-compaction callbacks so they cannot clear a later request", () => {
+    const orchestrator = new Orchestrator(makePi());
+    const idBefore = orchestrator.manualCompactionRequestId;
+    orchestrator.manualCompactionPending = true;
+
+    orchestrator.resetTaskScopedState();
+
+    // A delayed onComplete/onError from the reset task must no longer match.
+    expect(orchestrator.manualCompactionRequestId).not.toBe(idBefore);
+  });
 });
 
 describe("idle-delivery poll timer separation", () => {

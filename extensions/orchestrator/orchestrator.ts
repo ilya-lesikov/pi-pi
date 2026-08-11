@@ -136,6 +136,9 @@ export class Orchestrator {
   // consecutiveNudges so an unrelated earlier stall that already latched
   // nudgeHalted cannot starve the one nudge that names the owed tool call.
   applyFeedbackNudges = 0;
+  // Latches once the apply_feedback cap is reported, mirroring nudgeHalted, so
+  // the halt message is sent once instead of on every subsequent stop.
+  applyFeedbackHalted = false;
   // One-shot summarizer choice for a user-triggered compaction. ctx.compact() is
   // fire-and-forget, so the menu handler returns long before
   // session_before_compact runs — the choice cannot live in the menu closure.
@@ -146,6 +149,11 @@ export class Orchestrator {
   // compaction to the host summarizer.
   manualCompactionUseBuiltin = false;
   manualCompactionPending = false;
+  // Identifies WHICH manual request the shared flags above belong to. compact()
+  // resolves asynchronously, so a callback from an abandoned request can outlive
+  // its task; without this it would settle (and silently de-select) a newer
+  // task's request. Bumped on every request and on task reset.
+  manualCompactionRequestId = 0;
   pendingSubagentSpawns = 0;
   // Wall-clock timestamp (ms) of the LAST reviewer-lifecycle activity for the
   // current review cycle (set at cycle entry, refreshed on each
@@ -785,6 +793,7 @@ export class Orchestrator {
     this.commitReminderSent = false;
     this.consecutiveNudges = 0;
     this.applyFeedbackNudges = 0;
+    this.applyFeedbackHalted = false;
     this.nudgeHalted = false;
     // A manual compaction requested but not yet resolved (its hook and its
     // compact() callbacks both run later) must not survive the task it was
@@ -792,6 +801,7 @@ export class Orchestrator {
     // automatic compaction, and a stuck gate would block its manual entry.
     this.manualCompactionUseBuiltin = false;
     this.manualCompactionPending = false;
+    this.manualCompactionRequestId += 1;
     this.pendingNudges.clear();
     this.phaseStartTime = 0;
     this.userGatePending = false;
