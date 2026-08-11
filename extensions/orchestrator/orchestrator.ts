@@ -136,6 +136,16 @@ export class Orchestrator {
   // consecutiveNudges so an unrelated earlier stall that already latched
   // nudgeHalted cannot starve the one nudge that names the owed tool call.
   applyFeedbackNudges = 0;
+  // One-shot summarizer choice for a user-triggered compaction. ctx.compact() is
+  // fire-and-forget, so the menu handler returns long before
+  // session_before_compact runs — the choice cannot live in the menu closure.
+  // CONSUMED (read and cleared) by the in-phase branch of that hook, and cleared
+  // again from the same compact() call's callbacks: the "Already compacted" /
+  // "Nothing to compact" no-ops throw BEFORE the hook is emitted, so without
+  // that a stale selection would silently downgrade the next AUTOMATIC
+  // compaction to the host summarizer.
+  manualCompactionUseBuiltin = false;
+  manualCompactionPending = false;
   pendingSubagentSpawns = 0;
   // Wall-clock timestamp (ms) of the LAST reviewer-lifecycle activity for the
   // current review cycle (set at cycle entry, refreshed on each

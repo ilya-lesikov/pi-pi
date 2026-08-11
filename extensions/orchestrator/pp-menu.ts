@@ -3397,6 +3397,43 @@ async function showSkillsListMenu(orchestrator: Orchestrator, ctx: any): Promise
 
 // Settings > Compaction (item 1): controls the proactive in-phase compaction
 // trigger. Persists into PiPiConfig.compaction via the project config file.
+// Trigger a user-requested compaction. ctx.compact() is fire-and-forget: it
+// reports both success and failure through callbacks, so the outcome can only be
+// surfaced from there, never from a try/catch around this call.
+async function runManualCompaction(orchestrator: Orchestrator, ctx: any): Promise<void> {
+  if (orchestrator.manualCompactionPending) {
+    ctx.ui?.notify?.("A manual compaction is already in progress.", "warning");
+    return;
+  }
+  if (typeof ctx?.compact !== "function") {
+    ctx.ui?.notify?.("Compaction is not available in this session.", "error");
+    return;
+  }
+  const sel = await selectOption(ctx, "Compact context now", [
+    { title: "VCC (default)", description: "Deterministic pi-pi summarizer; keeps vcc_recall able to resolve the summarized range" },
+    { title: "builtin (LLM-based)", description: "Let the host summarize the discarded messages with the model" },
+    { title: "Back", description: "Return to the previous menu" },
+  ]);
+  if (!sel || sel === "Back") return;
+
+  orchestrator.manualCompactionUseBuiltin = sel === "builtin (LLM-based)";
+  orchestrator.manualCompactionPending = true;
+  const settle = (): void => {
+    orchestrator.manualCompactionPending = false;
+    orchestrator.manualCompactionUseBuiltin = false;
+  };
+  ctx.compact({
+    onComplete: () => {
+      settle();
+      ctx.ui?.notify?.("Context compacted.", "info");
+    },
+    onError: (err: any) => {
+      settle();
+      ctx.ui?.notify?.(`Compaction failed: ${err?.message ?? String(err)}`, "error");
+    },
+  });
+}
+
 async function showCompactionSettings(orchestrator: Orchestrator, ctx: any): Promise<typeof BACK> {
   while (true) {
     const c = orchestrator.config.compaction;
@@ -3416,10 +3453,18 @@ async function showCompactionSettings(orchestrator: Orchestrator, ctx: any): Pro
         { title: `Headroom floor: ${headroomFloorK}K tokens`, description: "Minimum working room kept above the post-compaction size" },
       );
     }
+    // Available even when in-phase compaction is OFF: a user who disabled
+    // auto-compaction is exactly who needs a manual trigger.
+    options.push({ title: "Compact context now", description: "Compact the current session immediately, choosing the summarizer" });
     options.push({ title: "Back", description: "Return to the previous menu" });
 
     const choice = await selectOption(ctx, "Compaction", options);
     if (!choice || choice === "Back") return BACK;
+
+    if (choice === "Compact context now") {
+      await runManualCompaction(orchestrator, ctx);
+      continue;
+    }
 
     if (choice === enableLabel) {
       await showBooleanSetting(

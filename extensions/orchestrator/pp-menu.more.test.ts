@@ -680,6 +680,81 @@ describe("Settings > Compaction headroom controls", () => {
     expect(titles).not.toContain("Trigger fraction:");
   });
 
+  it("offers 'Compact context now' even when in-phase compaction is disabled", async () => {
+    const orchestrator = makeMenuOrchestrator("implement");
+    orchestrator.active = null;
+    orchestrator.config.compaction.enabled = false;
+    askQueue.push("Settings", "Compaction", "Back", "Back", "Back to prompt");
+    await showPpMenu(orchestrator, makeMenuCtx(), "command");
+    // A user who turned auto-compaction OFF is exactly who needs a manual trigger.
+    expect(compactionOptions()).toContain("Compact context now");
+  });
+
+  it("prompts for the summarizer and runs a VCC compaction", async () => {
+    const orchestrator = makeMenuOrchestrator("implement");
+    orchestrator.active = null;
+    const compact = vi.fn();
+    const ctx = { ...makeMenuCtx(), compact, isIdle: () => true };
+    askQueue.push("Settings", "Compaction", "Compact context now", "VCC (default)", "Back", "Back", "Back to prompt");
+    await showPpMenu(orchestrator, ctx, "command");
+
+    const idx = askQuestions.lastIndexOf("Compact context now");
+    expect(askOptionTitles[idx]).toEqual(["VCC (default)", "builtin (LLM-based)", "Back"]);
+    expect(compact).toHaveBeenCalledTimes(1);
+    expect(orchestrator.manualCompactionUseBuiltin).toBe(false);
+  });
+
+  it("sets the one-shot builtin selector when the builtin summarizer is chosen", async () => {
+    const orchestrator = makeMenuOrchestrator("implement");
+    orchestrator.active = null;
+    const compact = vi.fn();
+    const ctx = { ...makeMenuCtx(), compact, isIdle: () => true };
+    askQueue.push("Settings", "Compaction", "Compact context now", "builtin (LLM-based)", "Back", "Back", "Back to prompt");
+    await showPpMenu(orchestrator, ctx, "command");
+
+    expect(compact).toHaveBeenCalledTimes(1);
+    expect(orchestrator.manualCompactionUseBuiltin).toBe(true);
+    // A manual compact must never be attributed to the adaptive lifecycle, so
+    // the menu must not touch that state at all.
+    expect(orchestrator.adaptiveCompaction).toBeUndefined();
+  });
+
+  it("rejects a second manual compaction while the first is still outstanding", async () => {
+    const orchestrator = makeMenuOrchestrator("implement");
+    orchestrator.active = null;
+    // compact() never invokes its callbacks here: the first request stays pending.
+    const compact = vi.fn();
+    const notify = vi.fn();
+    const ctx = { ...makeMenuCtx(notify), compact, isIdle: () => true };
+    askQueue.push(
+      "Settings", "Compaction", "Compact context now", "VCC (default)",
+      "Compact context now",
+      "Back", "Back", "Back to prompt",
+    );
+    await showPpMenu(orchestrator, ctx, "command");
+
+    expect(compact).toHaveBeenCalledTimes(1);
+    // The second attempt must not even reach the summarizer prompt.
+    expect(askQuestions.filter((q) => q === "Compact context now").length).toBe(1);
+  });
+
+  it("clears the pending gate and the builtin selector when the compaction reports an error", async () => {
+    const orchestrator = makeMenuOrchestrator("implement");
+    orchestrator.active = null;
+    let onError: ((e: any) => void) | undefined;
+    const compact = vi.fn((opts: any) => { onError = opts?.onError; });
+    const ctx = { ...makeMenuCtx(), compact, isIdle: () => true };
+    askQueue.push("Settings", "Compaction", "Compact context now", "builtin (LLM-based)", "Back", "Back", "Back to prompt");
+    await showPpMenu(orchestrator, ctx, "command");
+
+    expect(orchestrator.manualCompactionUseBuiltin).toBe(true);
+    // The no-op cases ("Already compacted" / "Nothing to compact") throw BEFORE
+    // the hook is emitted, so onError is the only path that clears the selector.
+    onError?.(new Error("Nothing to compact (session too small)"));
+    expect(orchestrator.manualCompactionUseBuiltin).toBe(false);
+    expect(orchestrator.manualCompactionPending).toBe(false);
+  });
+
   it("offers the approved headroom-fraction presets and writes the choice at project scope", async () => {
     const orchestrator = makeMenuOrchestrator("implement");
     orchestrator.active = null;

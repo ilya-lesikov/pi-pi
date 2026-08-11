@@ -4479,6 +4479,59 @@ describe("compaction", () => {
     expect(result.compaction.firstKeptEntryId).toBe("m3");
   });
 
+  it("the manual builtin selection falls through to the host summarizer and is consumed", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    await orchestrator.startTask(makeCtx() as any, "implement", "manual builtin compaction");
+    writeFileSync(join(orchestrator.active!.dir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    orchestrator.manualCompactionUseBuiltin = true;
+
+    const prep = {
+      preparation: {
+        firstKeptEntryId: "m3",
+        tokensBefore: 5000,
+        messagesToSummarize: [
+          { role: "user", content: [{ type: "text", text: "do the thing" }] },
+          { role: "assistant", content: [{ type: "text", text: "did the thing" }] },
+        ],
+      },
+      branchEntries: [{ id: "m0", type: "message", message: { role: "user" } }, { id: "m3", type: "message", message: { role: "assistant" } }],
+    };
+
+    const beforeCompact = pi._handlers.get("session_before_compact")!;
+    const result = await beforeCompact(prep, {});
+
+    // undefined = fall through to the host's LLM summarizer.
+    expect(result).toBeUndefined();
+    // Artifact re-injection still runs for the builtin choice.
+    expect(pi.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ customType: "pp-artifact-reinject" }),
+      { deliverAs: "steer" },
+    );
+    // One-shot: the very next (automatic) compaction is VCC again.
+    expect(orchestrator.manualCompactionUseBuiltin).toBe(false);
+    const second = await beforeCompact(prep, {});
+    expect(second.compaction.details.compactor).toBe("pi-vcc");
+  });
+
+  it("a transition compaction ignores the manual builtin selection", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    await orchestrator.startTask(makeCtx() as any, "implement", "manual builtin vs transition");
+    orchestrator.lastCtx = makeCtx({ isIdle: vi.fn().mockReturnValue(false) });
+    orchestrator.manualCompactionUseBuiltin = true;
+    void orchestrator.transitionController.requestTransition({ kind: "phase", summary: "Phase summary text" });
+    orchestrator.transitionController.onAgentEnd();
+
+    const beforeCompact = pi._handlers.get("session_before_compact")!;
+    const result = await beforeCompact(
+      { preparation: { firstKeptEntryId: "e1", tokensBefore: 10 }, branchEntries: [{ id: "e1" }] },
+      {},
+    );
+
+    expect(result.compaction.summary).toBe("Phase summary text");
+  });
+
   it("a transition compaction does NOT invoke the vcc path (returns the phase summary)", async () => {
     const cwd = makeTempDir();
     const { pi, orchestrator } = await setupOrchestrator(cwd);

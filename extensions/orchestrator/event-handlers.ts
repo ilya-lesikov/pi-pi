@@ -3056,11 +3056,16 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     // artifacts so the task's own context survives.
     if (!orchestrator.active || orchestrator.active.state.phase === "done") return;
 
+    // Consume the manual summarizer choice: read-and-clear so it can only ever
+    // affect THIS compaction, never a later automatic one.
+    const useBuiltinSummarizer = orchestrator.manualCompactionUseBuiltin;
+    orchestrator.manualCompactionUseBuiltin = false;
+
     const prep: any = (event as any).preparation;
     const branchEntries = (event as any).branchEntries as Array<{ id: string; type?: string; message?: unknown }> | undefined;
     let compactionResult: { summary: string; details: unknown; firstKeptEntryId: string; tokensBefore: number } | undefined;
     try {
-      if (prep && Array.isArray(prep.messagesToSummarize) && prep.messagesToSummarize.length > 0) {
+      if (!useBuiltinSummarizer && prep && Array.isArray(prep.messagesToSummarize) && prep.messagesToSummarize.length > 0) {
         const messageRange = computeVccMessageRange(branchEntries ?? [], prep.firstKeptEntryId);
         const summary = vccCompile({
           messages: prep.messagesToSummarize,
