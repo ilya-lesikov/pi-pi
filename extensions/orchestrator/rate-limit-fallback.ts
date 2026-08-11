@@ -33,6 +33,22 @@ export function isMonthlyCapError(message?: string): boolean {
   return /key limit exceeded[\s\S]{0,40}monthly limit|monthly limit[\s\S]{0,40}exceeded/i.test(message);
 }
 
+// Recognise a CONTEXT-WINDOW OVERFLOW error (e.g. OpenRouter's "This endpoint's
+// maximum context length is X tokens. However, you requested about Y tokens").
+// Such an error is NOT terminal: the SDK's own _checkCompaction() compacts and
+// re-runs the turn once, so pi-pi must neither halt auto-retry nor start a
+// competing compact/re-send. Mirrors the host's classifier
+// (pi-ai/dist/utils/overflow.js), INCLUDING its precedence: a message matching a
+// non-overflow pattern is excluded even when it also matches an overflow one, so
+// a 429 mentioning tokens stays a rate limit and keeps its sub→non-sub fallback.
+export function isContextOverflowError(message?: string): boolean {
+  if (typeof message !== "string" || !message) return false;
+  if (/^(throttling error|service unavailable):|rate.?limit|too many requests/i.test(message)) return false;
+  return /prompt is too long|request_too_large|input is too long for requested model|exceeds the context window|exceeds (?:the )?(?:model'?s )?maximum context length of [\d,]+ tokens?|input token count[\s\S]*exceeds the maximum|maximum prompt length is \d+|reduce the length of the messages|maximum context length is \d+ tokens|input \(\d+ tokens\) is longer than the model'?s context length|exceeds the limit of \d+|exceeds the available context size|greater than the context length|context window exceeds limit|exceeded model token limit|too large for model with \d+ maximum context length|prompt too long; exceeded (?:max )?context length|context[_ ]length[_ ]exceeded|too many tokens|token limit exceeded/i.test(
+    message,
+  );
+}
+
 export function isMalformedToolHistoryError(message?: string): boolean {
   if (typeof message !== "string" || !message) return false;
   return /unexpected tool_use_id found in tool_result|tool_result blocks?[\s\S]{0,120}corresponding tool_use/i.test(message);

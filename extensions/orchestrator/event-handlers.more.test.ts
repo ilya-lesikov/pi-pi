@@ -1034,6 +1034,37 @@ describe("adaptive proactive-compaction lifecycle (item 6)", () => {
     expect(ctx.compact).toHaveBeenCalledTimes(1);
   });
 
+  it("still forces a compaction on blind growth after the thrash guard disabled adaptive compaction", async () => {
+    orchestrator.active = makeActiveTask();
+    // The thrash guard trips exactly when the post-compaction baseline is
+    // already huge, which is when runaway growth most needs a backstop; the
+    // forced net used to be nested inside `if (!adapt.disabled)` and so was
+    // unreachable in precisely that situation.
+    // modelKey/window must match the ctx or the handler resets the adaptive
+    // state object and wipes `disabled` before ever reading it.
+    orchestrator.adaptiveCompaction.modelKey = "pp-flant-anthropic/claude-opus-4-8";
+    orchestrator.adaptiveCompaction.window = 1_000_000;
+    orchestrator.adaptiveCompaction.disabled = true;
+    // tokens:null makes the usage-based trigger blind, so only the estimate
+    // can fire. 990K of a 1M window is past the window-minus-reserve ceiling.
+    orchestrator.lastEstimatedTokens = 990_000;
+    const ctx = makeCompactCtx([{ tokens: null, contextWindow: 1_000_000 }]);
+    await getHandler("agent_end")({}, ctx);
+    expect(orchestrator.adaptiveCompaction.disabled).toBe(true);
+    expect(ctx.compact).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fire the ordinary threshold trigger while adaptive compaction is disabled", async () => {
+    orchestrator.active = makeActiveTask();
+    orchestrator.adaptiveCompaction.modelKey = "pp-flant-anthropic/claude-opus-4-8";
+    orchestrator.adaptiveCompaction.window = 1_000_000;
+    orchestrator.adaptiveCompaction.disabled = true;
+    orchestrator.lastEstimatedTokens = null;
+    const ctx = makeCompactCtx([{ tokens: 305_000, contextWindow: 1_000_000 }]);
+    await getHandler("agent_end")({}, ctx);
+    expect(ctx.compact).not.toHaveBeenCalled();
+  });
+
   it("resets adaptive state on a model change", async () => {
     orchestrator.active = makeActiveTask();
     const ctx = makeCompactCtx([{ tokens: 100_000, contextWindow: 1_000_000 }]);

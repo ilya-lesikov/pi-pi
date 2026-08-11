@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isRateLimitError, isExtraUsageError, isMalformedToolHistoryError, isMonthlyCapError, isSdkRetryableError } from "./rate-limit-fallback.js";
+import { isRateLimitError, isExtraUsageError, isMalformedToolHistoryError, isMonthlyCapError, isSdkRetryableError, isContextOverflowError } from "./rate-limit-fallback.js";
 import { isSubscriptionRouted } from "./usage-tracker.js";
 import { SUB_MODEL_PREFIX, SUB_PROVIDER, subProbeModelId } from "./flant-infra.js";
 
@@ -64,6 +64,40 @@ describe("isMalformedToolHistoryError", () => {
   it("rejects unrelated request errors", () => {
     expect(isMalformedToolHistoryError("invalid request: bad tool arguments")).toBe(false);
     expect(isMalformedToolHistoryError(undefined)).toBe(false);
+  });
+});
+
+describe("isContextOverflowError", () => {
+  it("matches the verbatim OpenRouter overflow 400 the user hit", () => {
+    expect(
+      isContextOverflowError(
+        "This endpoint's maximum context length is 1000000 tokens. However, you requested about 3829867 tokens (3691003 of text input, 10864 of tool input, 128000 in the output)",
+      ),
+    ).toBe(true);
+  });
+
+  it("matches the other provider overflow phrasings the host recognises", () => {
+    expect(isContextOverflowError("prompt is too long: 213462 tokens > 200000 maximum")).toBe(true);
+    expect(isContextOverflowError("Your input exceeds the context window of this model")).toBe(true);
+    expect(isContextOverflowError("The input token count (1196265) exceeds the maximum number of tokens allowed (1048575)")).toBe(true);
+    expect(isContextOverflowError("context_length_exceeded")).toBe(true);
+  });
+
+  it("lets rate-limit errors win over overflow wording (host precedence)", () => {
+    // A 429 that also mentions tokens must stay a rate limit, or it loses the
+    // sub→non-sub fallback and gets routed into host overflow recovery instead.
+    expect(isContextOverflowError("rate limit reached: too many tokens")).toBe(false);
+    expect(isContextOverflowError("429 too many requests: token limit exceeded")).toBe(false);
+    expect(isContextOverflowError("Throttling error: Too many tokens, please wait before trying again.")).toBe(false);
+    expect(isContextOverflowError("Service unavailable: too many tokens")).toBe(false);
+    expect(isRateLimitError("rate limit reached: too many tokens")).toBe(true);
+  });
+
+  it("does not match unrelated errors", () => {
+    expect(isContextOverflowError("invalid request: bad tool arguments")).toBe(false);
+    expect(isContextOverflowError("500 internal server error")).toBe(false);
+    expect(isContextOverflowError("")).toBe(false);
+    expect(isContextOverflowError(undefined)).toBe(false);
   });
 });
 

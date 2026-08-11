@@ -25,7 +25,7 @@ import { SUBAGENT_SESSION_KEY } from "./index.js";
 import { registerCommandHandlers, runAfterImplementForActive } from "./command-handlers.js";
 import { registerStateFileTools } from "./pp-state-tools.js";
 import { isAiCommentOnlyChange } from "./ai-comment-cleanup.js";
-import { handleMainRateLimit, handleMonthlyCap, handleSubagentRateLimit, isRateLimitError, isExtraUsageError, isMalformedToolHistoryError, isMonthlyCapError, isSdkRetryableError } from "./rate-limit-fallback.js";
+import { handleMainRateLimit, handleMonthlyCap, handleSubagentRateLimit, isRateLimitError, isExtraUsageError, isMalformedToolHistoryError, isMonthlyCapError, isSdkRetryableError, isContextOverflowError } from "./rate-limit-fallback.js";
 import { getAgentConfigSnapshot, setExtensionOnlyMode, unregisterAgentDefinitions, registeredAgentNames, buildPoolRoster, baseRoleForName } from "./agents/registry.js";
 import { resolveModel, getModelInfo, updateRegistryFromAvailableModels } from "./model-registry.js";
 import { spawnPlanners, spawnPlanReviewers } from "./phases/planning.js";
@@ -1601,37 +1601,39 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
               getLogger().debug({ s: "compaction", baseline: usage.tokens, nextThreshold: adapt.nextThreshold }, "adaptive compaction threshold updated");
             }
           }
-          if (!adapt.disabled) {
-            const effectiveThreshold = Math.max(base, adapt.nextThreshold ?? 0);
-            // Blind-growth safety net: when the host cannot report usage, fall back
-            // to our own estimate and force a compaction once it passes the
-            // window-minus-reserve ceiling. Without this, tokens:null during an
-            // error storm lets context grow until the provider hard-rejects it.
-            const forced =
-              usage.tokens == null &&
-              orchestrator.lastEstimatedTokens != null &&
-              shouldForceCompaction(orchestrator.lastEstimatedTokens, usage.contextWindow);
-            if (forced || shouldFireCompaction(usage.tokens, effectiveThreshold, orchestrator.compactionArm)) {
-              if (forced) {
-                orchestrator.compactionArm.armed = false;
-                getLogger().warn({ s: "compaction", estimated: orchestrator.lastEstimatedTokens, window: usage.contextWindow }, "forcing compaction: host reports no usage and the estimate exceeds the ceiling");
-              } else {
-                getLogger().info({ s: "compaction", tokens: usage.tokens, threshold: effectiveThreshold, window: usage.contextWindow }, "proactive in-phase compaction triggered");
-              }
-              // Mark BEFORE compacting so the session_compact handler can
-              // attribute the upcoming event to us. ctx.compact is fire-and-forget
-              // (the host wraps the async work and routes failures to onError, so a
-              // synchronous try/catch here can NEVER see a compaction failure).
-              // Clear the marker in onError so a later manual/transition
-              // session_compact is not misclassified as this proactive one.
-              adapt.inFlight = true;
-              ctx.compact({
-                onError: (err: any) => {
-                  orchestrator.adaptiveCompaction.inFlight = false;
-                  getLogger().error({ s: "compaction", err: err?.message }, "proactive compaction failed");
-                },
-              });
+          const effectiveThreshold = Math.max(base, adapt.nextThreshold ?? 0);
+          // Blind-growth safety net: when the host cannot report usage, fall back
+          // to our own estimate and force a compaction once it passes the
+          // window-minus-reserve ceiling. Without this, tokens:null during an
+          // error storm lets context grow until the provider hard-rejects it.
+          // Evaluated even when the thrash guard disabled adaptive compaction:
+          // that guard trips precisely when the post-compaction baseline is
+          // already huge, which is when runaway growth most needs a backstop.
+          const forced =
+            usage.tokens == null &&
+            orchestrator.lastEstimatedTokens != null &&
+            shouldForceCompaction(orchestrator.lastEstimatedTokens, usage.contextWindow);
+          const fires = forced || (!adapt.disabled && shouldFireCompaction(usage.tokens, effectiveThreshold, orchestrator.compactionArm));
+          if (fires) {
+            if (forced) {
+              orchestrator.compactionArm.armed = false;
+              getLogger().warn({ s: "compaction", estimated: orchestrator.lastEstimatedTokens, window: usage.contextWindow, adaptiveDisabled: adapt.disabled }, "forcing compaction: host reports no usage and the estimate exceeds the ceiling");
+            } else {
+              getLogger().info({ s: "compaction", tokens: usage.tokens, threshold: effectiveThreshold, window: usage.contextWindow }, "proactive in-phase compaction triggered");
             }
+            // Mark BEFORE compacting so the session_compact handler can
+            // attribute the upcoming event to us. ctx.compact is fire-and-forget
+            // (the host wraps the async work and routes failures to onError, so a
+            // synchronous try/catch here can NEVER see a compaction failure).
+            // Clear the marker in onError so a later manual/transition
+            // session_compact is not misclassified as this proactive one.
+            adapt.inFlight = true;
+            ctx.compact({
+              onError: (err: any) => {
+                orchestrator.adaptiveCompaction.inFlight = false;
+                getLogger().error({ s: "compaction", err: err?.message }, "proactive compaction failed");
+              },
+            });
           }
         }
       }
@@ -3180,6 +3182,18 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       // generic retry backoff.
       if (isMonthlyCapError(errorMsg)) {
         handleMonthlyCap(orchestrator, ctx, activeModelId, activeProvider);
+        return;
+      }
+      // Context-window overflow is RECOVERABLE and the host owns the recovery:
+      // _handlePostAgentRun() → _checkCompaction() compacts and re-runs the turn
+      // once (_overflowRecoveryAttempted). Treating it as non-transient below
+      // would latch errorNudgeHalted and tell the user auto-retry is paused for
+      // an error that is about to fix itself. Do NOT compact/re-send here either:
+      // that races the host's recovery. Still notify, because if the host's
+      // one-shot recovery also fails the user would otherwise see nothing.
+      if (isContextOverflowError(errorMsg)) {
+        getLogger().warn({ s: "turn", err: errorMsg }, "context overflow; deferring to host compact-and-retry");
+        ctx.ui.notify(`The turn exceeded the model's context window: ${errorMsg}. Compacting and retrying automatically.`, "warning");
         return;
       }
       // The SDK ALSO auto-retries this class of error, but only with its own
