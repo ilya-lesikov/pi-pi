@@ -2,7 +2,6 @@ import { homedir } from "node:os";
 import { execFile } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve as resolvePath } from "node:path";
-import { promisify } from "node:util";
 import type { ExtensionContext, ReadonlyFooterDataProvider, Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 import type { UsageTracker } from "./usage-tracker.js";
@@ -24,7 +23,6 @@ export function resolvePackageVersion(packageUrl: URL = new URL("../../package.j
 
 const PP_VERSION = resolvePackageVersion();
 const BRANCH_REFRESH_MS = 5000;
-const execFileAsync = promisify(execFile);
 
 let footerCtx: ExtensionContext | undefined;
 let footerTracker: UsageTracker | undefined;
@@ -208,6 +206,7 @@ export function createCustomFooter(
   let branch = resolveBranch();
   let disposed = false;
   let confirming = false;
+  let detachedConfirmed = false;
 
   const apply = (next: string | null): void => {
     if (disposed || next === branch) return;
@@ -220,24 +219,25 @@ export function createCustomFooter(
   // component it is replacing.
   const timer = setInterval(() => {
     const next = resolveBranch();
-    if (next === branch) return;
     // "detached" is also what the sync read yields for a `.invalid` HEAD ref,
-    // which only git itself can resolve. Asking is worth one subprocess per
-    // change, and a genuinely detached HEAD settles after the first one.
+    // which only git itself can resolve — so ask git, but only once per entry
+    // into that state, and only here where blocking the render path is moot.
     if (next === "detached") {
-      if (confirming) return;
+      if (confirming || detachedConfirmed) return;
       confirming = true;
-      void execFileAsync("git", ["--no-optional-locks", "symbolic-ref", "--quiet", "--short", "HEAD"], {
-        cwd: footerCtx?.cwd ?? process.cwd(),
-        encoding: "utf8",
-      })
-        .then(({ stdout }) => apply(stdout.trim() || "detached"))
-        .catch(() => apply("detached"))
-        .finally(() => {
+      detachedConfirmed = true;
+      execFile(
+        "git",
+        ["--no-optional-locks", "symbolic-ref", "--quiet", "--short", "HEAD"],
+        { cwd: footerCtx?.cwd ?? process.cwd(), encoding: "utf8" },
+        (error, stdout) => {
           confirming = false;
-        });
+          apply(error ? "detached" : stdout.trim() || "detached");
+        },
+      );
       return;
     }
+    detachedConfirmed = false;
     apply(next);
   }, BRANCH_REFRESH_MS);
 

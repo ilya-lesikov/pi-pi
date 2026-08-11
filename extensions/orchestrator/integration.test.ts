@@ -3198,6 +3198,62 @@ describe("modified file tracking", () => {
       );
     });
   });
+
+  describe("over-long commit body advisory", () => {
+    async function commitResultText(message: string): Promise<string> {
+      const cwd = makeTempDir();
+      const { pi, orchestrator } = await setupOrchestrator(cwd);
+      vi.spyOn(commandsModule, "autoCommit").mockReturnValue({ ok: true, commitHash: "abc123" });
+
+      await orchestrator.startTask(makeCtx() as any, "implement", "commit body advisory");
+      orchestrator.config = {
+        ...orchestrator.config,
+        general: { ...orchestrator.config.general, autoCommit: true },
+      } as any;
+      orchestrator.active!.state.phase = "implement";
+      orchestrator.active!.state.repos = [{ path: cwd, isRoot: true }];
+      saveTask(orchestrator.active!.dir, orchestrator.active!.state);
+
+      pi.exec.mockResolvedValueOnce({ code: 0, stdout: " M src/a.ts\n", stderr: "" });
+
+      const ppCommit = getTool(pi, "pp_commit");
+      const result = await ppCommit.execute("call-body-advisory", { message });
+      return result.content[0].text as string;
+    }
+
+    it("warns when the body exceeds two paragraphs, but still commits", async () => {
+      const text = await commitResultText("fix: subject\n\npara one\n\npara two\n\npara three");
+      expect(text).toContain("Committed 1 file");
+      expect(text).toContain("exceeded the 2-short-paragraph guidance");
+    });
+
+    it("warns when the body exceeds the character budget, but still commits", async () => {
+      const text = await commitResultText(`fix: subject\n\n${"x".repeat(501)}`);
+      expect(text).toContain("Committed 1 file");
+      expect(text).toContain("exceeded the 2-short-paragraph guidance");
+    });
+
+    it("does not warn at exactly the limits", async () => {
+      const twoParas = `${"a".repeat(250)}\n\n${"b".repeat(248)}`;
+      expect(twoParas.replace(/\n/g, "").length).toBe(498);
+      const text = await commitResultText(`fix: subject\n\n${twoParas}`);
+      expect(text).toContain("Committed 1 file");
+      expect(text).not.toContain("guidance");
+    });
+
+    it("never warns on a subject-only commit", async () => {
+      const text = await commitResultText("fix: subject only");
+      expect(text).toContain("Committed 1 file");
+      expect(text).not.toContain("guidance");
+    });
+
+    it("measures the body BEFORE breaking-change markers are stripped", async () => {
+      // Stripping removes the trailer line; if measured after, a message that
+      // was over the paragraph limit as written would silently stop warning.
+      const text = await commitResultText("fix: subject\n\npara one\n\npara two\n\nBREAKING CHANGE: x");
+      expect(text).toContain("exceeded the 2-short-paragraph guidance");
+    });
+  });
 });
 
 describe("resume and recovery", () => {

@@ -1138,6 +1138,16 @@ function stripBreakingChangeMarkers(message: string): string {
   return kept.join("\n").replace(/\n+$/, "");
 }
 
+// Advisory only: the commit always succeeds. The body is everything after the
+// FIRST blank line, so segment 0 (the subject) never counts toward either
+// bound. Measured on the message AS SUPPLIED, before marker stripping removes
+// trailer lines, so trimming a trailer cannot mask an over-long body.
+function exceedsCommitBodyGuidance(message: string): boolean {
+  const paragraphs = message.split(/\n\s*\n/).slice(1).filter((p) => p.trim().length > 0);
+  if (paragraphs.length > 2) return true;
+  return paragraphs.join("").length > 500;
+}
+
 function registerCommitTool(orchestrator: Orchestrator): void {
   const pi = orchestrator.pi;
 
@@ -1153,9 +1163,10 @@ function registerCommitTool(orchestrator: Orchestrator): void {
       "Prefix the subject with a conventional-commit type (fix:, feat:, or chore:) " +
       "unless the user asked for a different commit style. NEVER use a breaking-change marker — " +
       "no `!` before the colon (not `feat!:`, `fix!:`, `chore!:`) and no `BREAKING CHANGE:` trailer. " +
-      "Keep the body to at most 2 paragraphs.",
+      "Keep the body to at most 2 short paragraphs — no more than 3 sentences each, ~500 characters total. " +
+      "Omit the body entirely unless it adds rationale the subject line can't carry.",
     parameters: Type.Object({
-      message: Type.String({ description: "Commit message: a subject line (conventional-commit prefix, no `!` breaking-change marker, aim for <=72 chars) optionally followed by a blank line and a body of at most 2 paragraphs. Written verbatim apart from breaking-change-marker removal; never truncated." }),
+      message: Type.String({ description: "Commit message: a subject line (conventional-commit prefix, no `!` breaking-change marker, aim for <=72 chars) optionally followed by a blank line and a body of at most 2 short paragraphs (<=3 sentences each, ~500 chars total). Written verbatim apart from breaking-change-marker removal; never truncated." }),
       repo: Type.Optional(Type.String({ description: "Absolute path to the repo to commit in. Defaults to root." })),
     }),
     async execute(_toolCallId, params: any) {
@@ -1212,7 +1223,10 @@ function registerCommitTool(orchestrator: Orchestrator): void {
         orchestrator.active.state.committedFiles = [...committed];
         saveTask(orchestrator.active.dir, orchestrator.active.state);
         orchestrator.commitReminderSent = false;
-        return { content: [{ type: "text" as const, text: `Committed ${files.length} file(s): ${result.commitHash ?? "ok"}` }], details: {} };
+        const advisory = exceedsCommitBodyGuidance(params.message)
+          ? " — note: the commit body exceeded the 2-short-paragraph guidance (~500 chars); keep future bodies tighter."
+          : "";
+        return { content: [{ type: "text" as const, text: `Committed ${files.length} file(s): ${result.commitHash ?? "ok"}${advisory}` }], details: {} };
       }
       return { content: [{ type: "text" as const, text: `Commit failed: ${result.error}` }], isError: true as const, details: {} };
     },
@@ -3124,7 +3138,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       orchestrator.transitionController.sendCustom(
         {
           customType: "pp-commit-reminder",
-          content: `You have ${orchestrator.active.modifiedFiles.size} uncommitted file(s). If you've completed a logical unit of work, call pp_commit with a descriptive message. Prefix it with a conventional-commit type (fix:, feat:, or chore:) unless the user asked for a different commit style. NEVER use a breaking-change marker — no \`!\` before the colon (not \`feat!:\`, \`fix!:\`, \`chore!:\`) and no \`BREAKING CHANGE:\` trailer. Keep the body to at most 2 paragraphs.`,
+          content: `You have ${orchestrator.active.modifiedFiles.size} uncommitted file(s). If you've completed a logical unit of work, call pp_commit with a descriptive message. Prefix it with a conventional-commit type (fix:, feat:, or chore:) unless the user asked for a different commit style. NEVER use a breaking-change marker — no \`!\` before the colon (not \`feat!:\`, \`fix!:\`, \`chore!:\`) and no \`BREAKING CHANGE:\` trailer. Keep the body to at most 2 short paragraphs (<=3 sentences each, ~500 chars total); omit it unless it adds rationale the subject can't carry.`,
           display: false,
         },
         "context",
