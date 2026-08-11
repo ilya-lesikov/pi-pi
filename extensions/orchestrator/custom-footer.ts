@@ -1,5 +1,8 @@
 import { homedir } from "node:os";
-import { readFileSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { dirname, join, resolve as resolvePath } from "node:path";
+import { promisify } from "node:util";
 import type { ExtensionContext, ReadonlyFooterDataProvider, Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 import type { UsageTracker } from "./usage-tracker.js";
@@ -20,6 +23,8 @@ export function resolvePackageVersion(packageUrl: URL = new URL("../../package.j
 }
 
 const PP_VERSION = resolvePackageVersion();
+const BRANCH_REFRESH_MS = 5000;
+const execFileAsync = promisify(execFile);
 
 let footerCtx: ExtensionContext | undefined;
 let footerTracker: UsageTracker | undefined;
@@ -35,6 +40,44 @@ export function setFooterTracker(tracker: UsageTracker): void {
 
 export function setFooterOrchestrator(orchestrator: Orchestrator): void {
   footerOrchestrator = orchestrator;
+}
+
+// The host caches its branch behind an fs.watch on .git/HEAD, which silently
+// misses updates under inotify pressure or on network/container filesystems, so
+// pi-pi reads HEAD itself. This must stay synchronous and filesystem-only: it
+// runs from the TUI render path, where a subprocess would block every frame.
+// The `.invalid` -> git symbolic-ref fallback therefore lives in the async
+// refresh, which reaches it via the "detached" result below.
+export function resolveGitBranchSync(cwd: string = footerCtx?.cwd ?? process.cwd()): string | null {
+  try {
+    let headPath = "";
+    for (let dir = cwd; !headPath; ) {
+      const gitPath = join(dir, ".git");
+      if (existsSync(gitPath)) {
+        const stat = statSync(gitPath);
+        if (stat.isDirectory()) {
+          headPath = join(gitPath, "HEAD");
+        } else if (stat.isFile()) {
+          const pointer = readFileSync(gitPath, "utf8").trim();
+          if (!pointer.startsWith("gitdir: ")) return null;
+          headPath = join(resolvePath(dir, pointer.slice(8).trim()), "HEAD");
+        } else {
+          return null;
+        }
+        if (!existsSync(headPath)) return null;
+        break;
+      }
+      const parent = dirname(dir);
+      if (parent === dir) return null;
+      dir = parent;
+    }
+    const content = readFileSync(headPath, "utf8").trim();
+    if (!content.startsWith("ref: refs/heads/")) return "detached";
+    const branch = content.slice(16);
+    return branch === ".invalid" ? "detached" : branch;
+  } catch {
+    return null;
+  }
 }
 
 function formatTokens(count: number): string {
@@ -132,10 +175,9 @@ function renderStatsLine(width: number, theme: Theme): string {
   return theme.fg("dim", left) + theme.fg("dim", remainder);
 }
 
-function renderPathLine(width: number, theme: Theme, footerData: ReadonlyFooterDataProvider): string {
+function renderPathLine(width: number, theme: Theme, branch: string | null): string {
   const ctx = footerCtx;
   const path = formatPath(ctx?.cwd ?? process.cwd());
-  const branch = footerData.getGitBranch();
 
   let line = path;
   if (branch) line += ` (${branch})`;
@@ -157,14 +199,58 @@ function renderPathLine(width: number, theme: Theme, footerData: ReadonlyFooterD
   return truncateToWidth(theme.fg("dim", line), width, theme.fg("dim", "..."));
 }
 
-export function createCustomFooter(_tui: TUI, theme: Theme, footerData: ReadonlyFooterDataProvider): Component & { dispose?(): void } {
+export function createCustomFooter(
+  tui: TUI,
+  theme: Theme,
+  _footerData: ReadonlyFooterDataProvider,
+  resolveBranch: (cwd?: string) => string | null = resolveGitBranchSync,
+): Component & { dispose?(): void } {
+  let branch = resolveBranch();
+  let disposed = false;
+  let confirming = false;
+
+  const apply = (next: string | null): void => {
+    if (disposed || next === branch) return;
+    branch = next;
+    tui.requestRender();
+  };
+
+  // The timer belongs to this closure, not module scope: pi-pi re-registers the
+  // footer on every session_start and the host only ever calls dispose() on the
+  // component it is replacing.
+  const timer = setInterval(() => {
+    const next = resolveBranch();
+    if (next === branch) return;
+    // "detached" is also what the sync read yields for a `.invalid` HEAD ref,
+    // which only git itself can resolve. Asking is worth one subprocess per
+    // change, and a genuinely detached HEAD settles after the first one.
+    if (next === "detached") {
+      if (confirming) return;
+      confirming = true;
+      void execFileAsync("git", ["--no-optional-locks", "symbolic-ref", "--quiet", "--short", "HEAD"], {
+        cwd: footerCtx?.cwd ?? process.cwd(),
+        encoding: "utf8",
+      })
+        .then(({ stdout }) => apply(stdout.trim() || "detached"))
+        .catch(() => apply("detached"))
+        .finally(() => {
+          confirming = false;
+        });
+      return;
+    }
+    apply(next);
+  }, BRANCH_REFRESH_MS);
+
   return {
     render(width: number): string[] {
-      const line1 = renderPathLine(width, theme, footerData);
+      const line1 = renderPathLine(width, theme, branch);
       const line2 = renderStatsLine(width, theme);
       return [line1, line2];
     },
     invalidate(): void {},
-    dispose(): void {},
+    dispose(): void {
+      disposed = true;
+      clearInterval(timer);
+    },
   };
 }

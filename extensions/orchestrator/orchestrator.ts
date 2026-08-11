@@ -155,6 +155,11 @@ export class Orchestrator {
   commitReminderSent = false;
   phaseStartTime = 0;
   pendingRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  // Separate from pendingRetryTimer: the idle-delivery poll runs while the
+  // session is BUSY (up to ~2min), whereas a retry backoff runs while it is
+  // idle. Sharing one field armed the ESC guard during streaming, so a bare ESC
+  // was consumed before the editor could abort the running tool call.
+  idlePollTimer: ReturnType<typeof setTimeout> | null = null;
   // Unsubscribe for the direct ESC interrupt armed while pendingRetryTimer is
   // live. pi-pi's own post-error retry is NOT covered by any SDK/interactive ESC
   // binding (the turn already ended in error, the session is not streaming), so
@@ -263,7 +268,17 @@ export class Orchestrator {
       // with 0x1b (e.g. "\x1b[A"), so `includes` would misfire on navigation
       // keys and swallow them; a bare ESC is exactly the one-byte string.
       if (data === "\x1b") {
+        // Extension input listeners run BEFORE the focused editor and a
+        // {consume:true} short-circuits it entirely. The editor's onEscape is
+        // the ONLY path to restoreQueuedMessagesToEditor({abort:true}) ->
+        // agent.abort() -> killProcessTree, so consuming while a turn is
+        // streaming strands the running tool call. Cancel our retry but fall
+        // THROUGH (undefined) unless the session is positively known idle;
+        // unknown idle state fails open for the same reason.
+        const idleFn = this.lastCtx?.isIdle;
+        const idle = typeof idleFn === "function" ? !!idleFn.call(this.lastCtx) : false;
         this.cancelPendingRetry();
+        if (!idle) return undefined;
         ctx?.ui?.notify?.("Retry cancelled.", "info");
         return { consume: true };
       }
@@ -284,24 +299,36 @@ export class Orchestrator {
   }
 
   // Cancel a pending post-error retry (timer + ESC interrupt) and reset the retry
-  // counter. Used by the ESC interrupt handler and by abort paths.
+  // counter. Used by the ESC interrupt handler and by abort paths. Also drops any
+  // in-flight idle-delivery poll so an abort leaves no orphan behind.
   cancelPendingRetry(): void {
     this.errorRetryFirstAt = null;
     if (this.pendingRetryTimer) {
       clearTimeout(this.pendingRetryTimer);
       this.pendingRetryTimer = null;
     }
+    this.cancelIdlePoll();
     this.disarmRetryEscInterrupt();
     this.errorRetryCount = 0;
     this.errorNudgeHalted = false;
+  }
+
+  // Drop only the idle-delivery poll. Deliberately does NOT touch the
+  // error-retry budget: cancelling a delivery poll is not evidence the error
+  // streak resolved, and resetting it there would re-open the retry floodgate.
+  cancelIdlePoll(): void {
+    if (this.idlePollTimer) {
+      clearTimeout(this.idlePollTimer);
+      this.idlePollTimer = null;
+    }
   }
 
   // Deliver a queued message only once the main session is idle. Firing a
   // followUp while the SDK still has an active run triggers an async, runtime-
   // swallowed "Agent is already processing" rejection (surfaces as
   // Extension "<runtime>" error), so we PRE-CHECK idle and DEFER (bounded poll)
-  // rather than dropping the nudge. Guarded by activeTaskToken; the poll reuses
-  // pendingRetryTimer so ESC/abort cancels it.
+  // rather than dropping the nudge. Guarded by activeTaskToken; the poll owns
+  // idlePollTimer, which abort paths clear alongside the retry timer.
   sendUserMessageWhenIdle(text: string, taskToken: number, attempt = 0): void {
     const log = getLogger();
     if (this.activeTaskToken !== taskToken || !this.active) {
@@ -325,8 +352,8 @@ export class Orchestrator {
       );
       return;
     }
-    this.pendingRetryTimer = setTimeout(() => {
-      this.pendingRetryTimer = null;
+    this.idlePollTimer = setTimeout(() => {
+      this.idlePollTimer = null;
       this.sendUserMessageWhenIdle(text, taskToken, attempt + 1);
     }, 1000);
   }
@@ -748,6 +775,7 @@ export class Orchestrator {
       clearTimeout(this.pendingRetryTimer);
       this.pendingRetryTimer = null;
     }
+    this.cancelIdlePoll();
     this.disarmRetryEscInterrupt();
     if (this.staleAgentTimer) {
       clearInterval(this.staleAgentTimer);

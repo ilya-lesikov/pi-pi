@@ -3268,9 +3268,9 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
           }
           // Defer until the main session is idle: sending a followUp while the SDK
           // still has an active run throws an async, runtime-swallowed "Agent is
-          // already processing" error. sendUserMessageWhenIdle polls (reusing
-          // pendingRetryTimer so ESC/abort still cancels) and disarms the ESC hook
-          // once delivered.
+          // already processing" error. sendUserMessageWhenIdle polls on its own
+          // idlePollTimer (abort paths clear it) and disarms the ESC hook once
+          // delivered.
           orchestrator.sendUserMessageWhenIdle(
             `[PI-PI] Transient API error; retrying the current phase (${phase}) from the last completed step.`,
             taskToken,

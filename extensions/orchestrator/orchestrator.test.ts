@@ -205,6 +205,9 @@ describe("Orchestrator.armRetryEscInterrupt", () => {
     vi.useFakeTimers();
     const orchestrator = new Orchestrator(makePi());
     const { ctx, notify, feed } = makeCtxWithTerminal();
+    // A retry backoff runs while the session is idle; consuming ESC is only
+    // correct there (see the streaming case below).
+    orchestrator.lastCtx = { isIdle: () => true };
     orchestrator.pendingRetryTimer = setTimeout(() => {}, 10000) as any;
     orchestrator.armRetryEscInterrupt(ctx as any);
 
@@ -226,6 +229,111 @@ describe("Orchestrator.armRetryEscInterrupt", () => {
     const { ctx, feed } = makeCtxWithTerminal();
     orchestrator.armRetryEscInterrupt(ctx as any);
     expect(feed("\x1b")).toBeUndefined();
+  });
+
+  it("does NOT consume ESC while the session is streaming, so the host can abort the tool call", () => {
+    vi.useFakeTimers();
+    const orchestrator = new Orchestrator(makePi());
+    const { ctx, feed } = makeCtxWithTerminal();
+    // Streaming: the editor's onEscape is the only path to agent.abort() ->
+    // killProcessTree. Consuming here strands the running tool.
+    orchestrator.lastCtx = { isIdle: () => false };
+    orchestrator.pendingRetryTimer = setTimeout(() => {}, 10000) as any;
+    orchestrator.armRetryEscInterrupt(ctx as any);
+
+    expect(feed("\x1b")).toBeUndefined();
+    expect(orchestrator.pendingRetryTimer).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it("fails OPEN and does not consume when idle state is unknown", () => {
+    vi.useFakeTimers();
+    const orchestrator = new Orchestrator(makePi());
+    const { ctx, feed } = makeCtxWithTerminal();
+    orchestrator.lastCtx = null;
+    orchestrator.pendingRetryTimer = setTimeout(() => {}, 10000) as any;
+    orchestrator.armRetryEscInterrupt(ctx as any);
+
+    expect(feed("\x1b")).toBeUndefined();
+    vi.useRealTimers();
+  });
+
+  it("still consumes ESC during a genuine idle retry backoff", () => {
+    vi.useFakeTimers();
+    const orchestrator = new Orchestrator(makePi());
+    const { ctx, notify, feed } = makeCtxWithTerminal();
+    orchestrator.lastCtx = { isIdle: () => true };
+    orchestrator.pendingRetryTimer = setTimeout(() => {}, 10000) as any;
+    orchestrator.armRetryEscInterrupt(ctx as any);
+
+    expect(feed("\x1b")).toEqual({ consume: true });
+    expect(orchestrator.pendingRetryTimer).toBeNull();
+    expect(notify).toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it("ignores an idle-delivery poll: ESC arms only for a real retry backoff", () => {
+    vi.useFakeTimers();
+    const orchestrator = new Orchestrator(makePi());
+    const { ctx, feed } = makeCtxWithTerminal();
+    orchestrator.active = makeActiveTask(null);
+    orchestrator.activeTaskToken = 3;
+    orchestrator.lastCtx = { isIdle: () => false };
+    orchestrator.armRetryEscInterrupt(ctx as any);
+
+    // An idle-delivery poll must not look like a retry backoff to the ESC guard.
+    orchestrator.sendUserMessageWhenIdle("[PI-PI] go", 3);
+    expect(orchestrator.idlePollTimer).not.toBeNull();
+    expect(orchestrator.pendingRetryTimer).toBeNull();
+    expect(feed("\x1b")).toBeUndefined();
+    vi.useRealTimers();
+  });
+});
+
+describe("idle-delivery poll timer separation", () => {
+  it("cancelPendingRetry clears the idle poll WITHOUT resetting the error-retry budget", () => {
+    vi.useFakeTimers();
+    const send = vi.fn();
+    const orchestrator = new Orchestrator(makePi({ sendUserMessage: send }));
+    orchestrator.active = makeActiveTask(null);
+    orchestrator.activeTaskToken = 5;
+    orchestrator.lastCtx = { isIdle: () => false };
+    orchestrator.errorRetryCount = 3;
+    orchestrator.errorRetryFirstAt = 1000;
+    orchestrator.errorNudgeHalted = true;
+
+    orchestrator.sendUserMessageWhenIdle("[PI-PI] go", 5);
+    expect(orchestrator.idlePollTimer).not.toBeNull();
+
+    orchestrator.cancelIdlePoll();
+
+    expect(orchestrator.idlePollTimer).toBeNull();
+    // Cancelling a delivery poll must not hand the error path a fresh budget.
+    expect(orchestrator.errorRetryCount).toBe(3);
+    expect(orchestrator.errorRetryFirstAt).toBe(1000);
+    expect(orchestrator.errorNudgeHalted).toBe(true);
+    vi.advanceTimersByTime(5000);
+    expect(send).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it("cancelPendingRetry clears BOTH timers so no orphan poll survives an abort", () => {
+    vi.useFakeTimers();
+    const send = vi.fn();
+    const orchestrator = new Orchestrator(makePi({ sendUserMessage: send }));
+    orchestrator.active = makeActiveTask(null);
+    orchestrator.activeTaskToken = 5;
+    orchestrator.lastCtx = { isIdle: () => false };
+    orchestrator.sendUserMessageWhenIdle("[PI-PI] go", 5);
+    orchestrator.pendingRetryTimer = setTimeout(() => send("retry"), 1000) as any;
+
+    orchestrator.cancelPendingRetry();
+
+    expect(orchestrator.pendingRetryTimer).toBeNull();
+    expect(orchestrator.idlePollTimer).toBeNull();
+    vi.advanceTimersByTime(5000);
+    expect(send).not.toHaveBeenCalled();
+    vi.useRealTimers();
   });
 });
 
