@@ -1,6 +1,12 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { Orchestrator } from "./orchestrator.js";
-import { formatModeIndicator } from "./state.js";
+import { phasePipeline } from "./phases/machine.js";
+import {
+  formatModeIndicator,
+  type Phase,
+  type TaskState,
+  type TaskType,
+} from "./state.js";
 import { getLogger } from "./log.js";
 
 export const PP_ACP_STATE_TYPE = "pp:state";
@@ -9,6 +15,7 @@ export type AcpRunStatus =
   "idle" | "running" | "waiting" | "completed" | "failed";
 export type AcpSubagentStatus =
   "pending" | "in_progress" | "completed" | "failed";
+export type AcpPhaseStatus = "pending" | "in_progress" | "completed";
 
 export interface AcpSubagent {
   id: string;
@@ -16,8 +23,16 @@ export interface AcpSubagent {
   status: AcpSubagentStatus;
 }
 
+export interface AcpPhase {
+  id: string;
+  label: string;
+  status: AcpPhaseStatus;
+  detail?: string;
+}
+
 export interface AcpState {
   phase?: string;
+  phases?: AcpPhase[];
   mode?: string;
   status: AcpRunStatus;
   subagents: AcpSubagent[];
@@ -68,6 +83,66 @@ function listSubagents(): AcpSubagent[] {
   return subagents;
 }
 
+const PHASE_LABELS: Record<Phase, string> = {
+  brainstorm: "Brainstorm",
+  review: "Review",
+  plan: "Plan",
+  implement: "Implement",
+  quick: "Quick",
+  done: "Done",
+};
+
+// Only the closed set of orchestrator steps is rendered: an unrecognised step is
+// dropped rather than surfaced raw, so an internal rename can never leak noise
+// into a client's task list.
+const STEP_LABELS: Record<string, string> = {
+  spawn_planners: "spawning planners",
+  await_planners: "awaiting planners",
+  synthesize: "synthesizing plans",
+  await_reviewers: "awaiting reviewers",
+  apply_feedback: "applying review feedback",
+  user_gate: "awaiting user",
+};
+
+function currentPhaseDetail(state: TaskState): string | undefined {
+  const parts: string[] = [];
+  const pass = state.reviewCycle?.pass;
+  if (typeof pass === "number" && pass > 0) parts.push(`review pass ${pass}`);
+  const step = state.step ? STEP_LABELS[state.step] : undefined;
+  if (step) parts.push(step);
+  return parts.length ? parts.join(" · ") : undefined;
+}
+
+function listPhases(type: TaskType, state: TaskState): AcpPhase[] {
+  const pipeline: Phase[] = phasePipeline(type).filter(
+    (phase) => phase !== "done",
+  );
+  const current = pipeline.indexOf(state.phase);
+  // A phase outside the pipeline is either "done" (everything behind it is
+  // finished) or a state this build does not know, which must not be reported
+  // as progress.
+  const fallback: AcpPhaseStatus =
+    state.phase === "done" ? "completed" : "pending";
+  return pipeline.map((phase, index) => {
+    if (current === -1) {
+      return { id: phase, label: PHASE_LABELS[phase], status: fallback };
+    }
+    if (index < current) {
+      return { id: phase, label: PHASE_LABELS[phase], status: "completed" };
+    }
+    if (index > current) {
+      return { id: phase, label: PHASE_LABELS[phase], status: "pending" };
+    }
+    const detail = currentPhaseDetail(state);
+    return {
+      id: phase,
+      label: PHASE_LABELS[phase],
+      status: "in_progress",
+      ...(detail ? { detail } : {}),
+    };
+  });
+}
+
 export function buildAcpState(orchestrator: Orchestrator): AcpState {
   const subagents = listSubagents();
   if (orchestrator.configError || orchestrator.duplicateExtensionError) {
@@ -90,6 +165,7 @@ export function buildAcpState(orchestrator: Orchestrator): AcpState {
 
   return {
     phase: active.state.phase,
+    phases: listPhases(active.type, active.state),
     ...(mode ? { mode } : {}),
     status,
     subagents,

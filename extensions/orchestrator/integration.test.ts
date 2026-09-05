@@ -28,6 +28,7 @@ vi.mock("../../3p/pi-ask-user/index.js", () => {
 import { Orchestrator } from "./orchestrator.js";
 import { registerCommandHandlers } from "./command-handlers.js";
 import { enterReviewCycle, finalizeReviewCycle, registerEventHandlers } from "./event-handlers.js";
+import { resetAcpStateCache } from "./acp.js";
 import { createTask, getActiveTask, loadTask, saveTask } from "./state.js";
 import { registerAgentDefinitions } from "./agents/registry.js";
 import { taskLogsDir } from "./log.js";
@@ -240,6 +241,7 @@ function makePi() {
     getCommands: vi.fn().mockReturnValue([]),
     sendMessage: vi.fn(),
     sendUserMessage: vi.fn(),
+    appendEntry: vi.fn(),
     setModel: vi.fn().mockResolvedValue(true),
     setThinkingLevel: vi.fn(),
     setSessionName: vi.fn(),
@@ -5309,5 +5311,86 @@ describe("full user flows", () => {
 
     expect(orchestrator.active).toBeNull();
     expect(loadTask(taskDir).phase).toBe("done");
+  });
+});
+
+describe("ACP state publication points", () => {
+  beforeEach(() => {
+    process.env.PI_ACP = "1";
+    resetAcpStateCache();
+  });
+
+  afterEach(() => {
+    delete process.env.PI_ACP;
+    resetAcpStateCache();
+  });
+
+  const published = (pi: ReturnType<typeof makePi>) =>
+    (pi.appendEntry as any).mock.calls.map((c: any[]) => c[1]);
+
+  it("publishes the review-cycle spawn and apply_feedback transitions", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx({ cwd });
+
+    await orchestrator.startTask(ctx as any, "implement", "acp review cycle");
+    const taskDir = orchestrator.active!.dir;
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+    mkdirSync(join(taskDir, "brainstorm-reviews"), { recursive: true });
+    writeFileSync(
+      join(taskDir, "brainstorm-reviews", `${Math.floor(Date.now() / 1000)}_test_round-1.md`),
+      "Brainstorm review feedback",
+      "utf-8",
+    );
+
+    (pi.appendEntry as any).mockClear();
+    await enterReviewCycle(orchestrator, ctx, "regular");
+    await new Promise((r) => setTimeout(r, 10));
+
+    const details = published(pi).map(
+      (state: any) => state.phases.find((p: any) => p.status === "in_progress").detail,
+    );
+    expect(details).toEqual([
+      "review pass 1 · awaiting reviewers",
+      "review pass 1 · applying review feedback",
+    ]);
+  });
+
+  it("publishes the step the last subagent's completion moved the phase into", async () => {
+    const cwd = makeTempDir();
+    const { pi, orchestrator } = await setupOrchestrator(cwd);
+    const ctx = makeCtx();
+
+    await orchestrator.startTask(ctx as any, "implement", "acp planners");
+    const taskDir = orchestrator.active!.dir;
+    writeFileSync(join(taskDir, "USER_REQUEST.md"), VALID_USER_REQUEST, "utf-8");
+    writeFileSync(join(taskDir, "RESEARCH.md"), VALID_RESEARCH, "utf-8");
+
+    expectBrainstormToPlan(menu);
+    await completePhase(getTool(pi, "pp_phase_complete"), "acp-1", "done", ctx);
+    await new Promise((r) => setTimeout(r, 10));
+
+    emitSubagentCreated(pi, "planner-1", "Planner (test)");
+    const plansDir = join(taskDir, "plans");
+    mkdirSync(plansDir, { recursive: true });
+    writeFileSync(
+      join(plansDir, `${Math.floor(Date.now() / 1000)}_test.md`),
+      makeValidPlan(["- [ ] P1. Plan content item — Done when: planner plan is written"]),
+      "utf-8",
+    );
+
+    (pi.appendEntry as any).mockClear();
+    emitSubagentCompleted(pi, "planner-1", "Planner (test)");
+
+    expect(orchestrator.active!.state.step).toBe("synthesize");
+    expect(
+      published(pi).at(-1).phases.find((p: any) => p.status === "in_progress"),
+    ).toEqual({
+      id: "plan",
+      label: "Plan",
+      status: "in_progress",
+      detail: "synthesizing plans",
+    });
   });
 });

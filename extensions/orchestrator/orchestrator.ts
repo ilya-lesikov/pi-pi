@@ -904,6 +904,7 @@ export class Orchestrator {
       }
     }
     this.active = null;
+    publishAcpState(this);
   }
 
   registerAgents(): void {

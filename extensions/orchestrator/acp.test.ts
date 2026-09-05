@@ -33,6 +33,12 @@ function makeActive(phase: string, type = "implement", mode?: string): any {
   return { dir: "/tmp/t", type, state: { phase, step: "llm_work", mode } };
 }
 
+function phaseList(
+  state: { phases?: Array<{ id: string; status: string; detail?: string }> },
+): Array<[string, string]> {
+  return (state.phases ?? []).map((p) => [p.id, p.status]);
+}
+
 beforeEach(() => {
   delete process.env.PI_ACP;
   setSubagents(undefined);
@@ -80,6 +86,11 @@ describe("buildAcpState", () => {
     });
     expect(buildAcpState(orchestrator)).toEqual({
       phase: "implement",
+      phases: [
+        { id: "brainstorm", label: "Brainstorm", status: "completed" },
+        { id: "plan", label: "Plan", status: "completed" },
+        { id: "implement", label: "Implement", status: "in_progress" },
+      ],
       mode: "autonomous",
       status: "running",
       subagents: [],
@@ -92,6 +103,7 @@ describe("buildAcpState", () => {
     });
     expect(buildAcpState(orchestrator)).toEqual({
       phase: "quick",
+      phases: [{ id: "quick", label: "Quick", status: "in_progress" }],
       status: "running",
       subagents: [],
     });
@@ -128,6 +140,128 @@ describe("buildAcpState", () => {
     expect(
       buildAcpState(makeOrchestrator({ duplicateExtensionError: true })).status,
     ).toBe("failed");
+  });
+
+  it("omits the phase list when there is no active task", () => {
+    expect(buildAcpState(makeOrchestrator())).not.toHaveProperty("phases");
+    expect(
+      buildAcpState(makeOrchestrator({ configError: "bad json" })),
+    ).not.toHaveProperty("phases");
+  });
+});
+
+describe("buildAcpState phase list", () => {
+  it("orders an implement task's phases and excludes done", () => {
+    const state = buildAcpState(
+      makeOrchestrator({ active: makeActive("brainstorm") }),
+    );
+    expect(phaseList(state)).toEqual([
+      ["brainstorm", "in_progress"],
+      ["plan", "pending"],
+      ["implement", "pending"],
+    ]);
+  });
+
+  it("orders a review task's phases, which start at review", () => {
+    const state = buildAcpState(
+      makeOrchestrator({ active: makeActive("plan", "review") }),
+    );
+    expect(phaseList(state)).toEqual([
+      ["review", "completed"],
+      ["plan", "in_progress"],
+      ["implement", "pending"],
+    ]);
+  });
+
+  it("gives a quick task its single phase", () => {
+    const state = buildAcpState(
+      makeOrchestrator({ active: makeActive("quick", "quick") }),
+    );
+    expect(phaseList(state)).toEqual([["quick", "in_progress"]]);
+  });
+
+  it("marks every phase completed once the task reaches done", () => {
+    const state = buildAcpState(
+      makeOrchestrator({ active: makeActive("done") }),
+    );
+    expect(phaseList(state)).toEqual([
+      ["brainstorm", "completed"],
+      ["plan", "completed"],
+      ["implement", "completed"],
+    ]);
+    expect(state.status).toBe("completed");
+  });
+
+  it("reports an unknown phase as no progress rather than guessing", () => {
+    const state = buildAcpState(
+      makeOrchestrator({ active: makeActive("nonsense") }),
+    );
+    expect(phaseList(state)).toEqual([
+      ["brainstorm", "pending"],
+      ["plan", "pending"],
+      ["implement", "pending"],
+    ]);
+  });
+
+  it("details the current phase's step and review pass", () => {
+    const active = makeActive("plan");
+    active.state.step = "await_reviewers";
+    active.state.reviewCycle = { kind: "auto", step: "await_reviewers", pass: 2 };
+    const state = buildAcpState(makeOrchestrator({ active }));
+    expect(state.phases?.[1]).toEqual({
+      id: "plan",
+      label: "Plan",
+      status: "in_progress",
+      detail: "review pass 2 · awaiting reviewers",
+    });
+  });
+
+  it("carries detail only on the current phase", () => {
+    const active = makeActive("plan");
+    active.state.step = "synthesize";
+    const state = buildAcpState(makeOrchestrator({ active }));
+    expect(state.phases?.filter((p) => p.detail)).toEqual([
+      {
+        id: "plan",
+        label: "Plan",
+        status: "in_progress",
+        detail: "synthesizing plans",
+      },
+    ]);
+  });
+
+  it("omits detail for steps that carry no information", () => {
+    const active = makeActive("implement");
+    active.state.step = "llm_work";
+    expect(buildAcpState(makeOrchestrator({ active })).phases?.[2]).toEqual({
+      id: "implement",
+      label: "Implement",
+      status: "in_progress",
+    });
+  });
+
+  it("drops an unrecognised step instead of leaking it verbatim", () => {
+    const active = makeActive("implement");
+    active.state.step = "some_internal_step";
+    expect(
+      buildAcpState(makeOrchestrator({ active })).phases?.[2],
+    ).not.toHaveProperty("detail");
+  });
+
+  it("omits a zeroed review pass", () => {
+    const active = makeActive("implement");
+    active.state.step = "apply_feedback";
+    active.state.reviewCycle = {
+      kind: "auto",
+      step: "apply_feedback",
+      pass: 0,
+    };
+    expect(buildAcpState(makeOrchestrator({ active })).phases?.[2]).toEqual({
+      id: "implement",
+      label: "Implement",
+      status: "in_progress",
+      detail: "applying review feedback",
+    });
   });
 
   it("maps every pi-subagents status onto the approved subagent statuses", () => {
@@ -186,6 +320,11 @@ describe("publishAcpState", () => {
       PP_ACP_STATE_TYPE,
       {
         phase: "implement",
+        phases: [
+          { id: "brainstorm", label: "Brainstorm", status: "completed" },
+          { id: "plan", label: "Plan", status: "completed" },
+          { id: "implement", label: "Implement", status: "in_progress" },
+        ],
         mode: "guided",
         status: "running",
         subagents: [],
@@ -212,6 +351,27 @@ describe("publishAcpState", () => {
     publishAcpState(orchestrator);
     expect(orchestrator.pi.appendEntry).toHaveBeenCalledTimes(2);
     expect(orchestrator.pi.appendEntry.mock.calls[1][1].status).toBe("waiting");
+  });
+
+  it("deduplicates a step change that does not alter the payload", () => {
+    process.env.PI_ACP = "1";
+    const orchestrator = makeOrchestrator({ active: makeActive("implement") });
+    publishAcpState(orchestrator);
+    orchestrator.active.state.step = "some_internal_step";
+    publishAcpState(orchestrator);
+    expect(orchestrator.pi.appendEntry).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-emits when only the current phase's detail changes", () => {
+    process.env.PI_ACP = "1";
+    const orchestrator = makeOrchestrator({ active: makeActive("plan") });
+    publishAcpState(orchestrator);
+    orchestrator.active.state.step = "await_reviewers";
+    publishAcpState(orchestrator);
+    expect(orchestrator.pi.appendEntry).toHaveBeenCalledTimes(2);
+    expect(
+      orchestrator.pi.appendEntry.mock.calls[1][1].phases[1].detail,
+    ).toBe("awaiting reviewers");
   });
 
   it("re-emits when a subagent changes status", () => {
@@ -255,6 +415,34 @@ describe("publishAcpState", () => {
       ["implement", "running"],
       ["done", "completed"],
       [undefined, "idle"],
+    ]);
+    expect(
+      orchestrator.pi.appendEntry.mock.calls.map((c: any[]) =>
+        phaseList(c[1]),
+      ),
+    ).toEqual([
+      [],
+      [
+        ["brainstorm", "completed"],
+        ["plan", "in_progress"],
+        ["implement", "pending"],
+      ],
+      [
+        ["brainstorm", "completed"],
+        ["plan", "in_progress"],
+        ["implement", "pending"],
+      ],
+      [
+        ["brainstorm", "completed"],
+        ["plan", "completed"],
+        ["implement", "in_progress"],
+      ],
+      [
+        ["brainstorm", "completed"],
+        ["plan", "completed"],
+        ["implement", "completed"],
+      ],
+      [],
     ]);
   });
 

@@ -328,6 +328,7 @@ function tryCompleteReviewCycle(orchestrator: Orchestrator, spawnedReviewers?: n
   cycle.step = "apply_feedback";
   orchestrator.active.state.step = "apply_feedback";
   saveTask(orchestrator.active.dir, orchestrator.active.state);
+  publishAcpState(orchestrator);
 
   const rendered = outputs.length
     ? outputs.map((o) => `=== ${o.name} ===\n${o.content}`).join("\n\n")
@@ -514,6 +515,7 @@ export async function enterReviewCycle(
   orchestrator.active.state.reviewCycle.step = "await_reviewers";
   orchestrator.active.state.step = "await_reviewers";
   saveTask(orchestrator.active.dir, orchestrator.active.state);
+  publishAcpState(orchestrator);
   return `Started review cycle pass ${pass} (auto, preset: ${presetName}). Awaiting reviewers.`;
 }
 
@@ -2398,6 +2400,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
 
     checkPlannerCompletion();
     checkReviewCycleCompletion();
+    publishAcpState(orchestrator);
   });
 
   pi.events.on("subagents:failed", (data: any) => {
@@ -2412,6 +2415,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (data.status === "stopped" || data.status === "aborted") {
       checkPlannerCompletion();
       checkReviewCycleCompletion();
+      publishAcpState(orchestrator);
       return;
     }
 
@@ -2456,6 +2460,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
 
     checkPlannerCompletion();
     checkReviewCycleCompletion();
+    publishAcpState(orchestrator);
   });
 
   pi.on("session_before_switch" as any, async () => {

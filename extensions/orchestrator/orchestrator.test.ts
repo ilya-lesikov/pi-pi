@@ -749,6 +749,18 @@ describe("Orchestrator ACP state publishing", () => {
     expect(appendEntry.mock.calls[0][1]).toMatchObject({ phase: "brainstorm", status: "running" });
   });
 
+  it("publishes the idle state once the active task is cleaned up", async () => {
+    process.env.PI_ACP = "1";
+    const { orchestrator, appendEntry } = setup();
+    orchestrator.updateStatus({ ui: { setStatus: () => {} } } as any);
+    await orchestrator.cleanupActive();
+    expect(appendEntry.mock.calls.map((c) => c[1].status)).toEqual([
+      "running",
+      "idle",
+    ]);
+    expect(appendEntry.mock.calls[1][1]).not.toHaveProperty("phases");
+  });
+
   it("publishes nothing outside ACP, and still toggles the prompt flag", () => {
     const { orchestrator, appendEntry } = setup();
     orchestrator.interactivePromptOpen = true;
