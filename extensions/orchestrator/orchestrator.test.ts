@@ -4,6 +4,7 @@ import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Orchestrator, ensureGitignore, type ActiveTask } from "./orchestrator.js";
 import { getDefaultConfig, resolvePreset } from "./config.js";
+import { resetAcpStateCache } from "./acp.js";
 
 const tempDirs: string[] = [];
 
@@ -707,6 +708,53 @@ describe("Orchestrator.cleanupActive", () => {
     await orchestrator.cleanupActive();
 
     expect(switchModel).not.toHaveBeenCalled();
+  });
+});
+
+describe("Orchestrator ACP state publishing", () => {
+  afterEach(() => {
+    delete process.env.PI_ACP;
+    resetAcpStateCache();
+  });
+
+  function setup(): { orchestrator: Orchestrator; appendEntry: ReturnType<typeof vi.fn> } {
+    resetAcpStateCache();
+    const appendEntry = vi.fn();
+    const orchestrator = new Orchestrator(makePi({ appendEntry }));
+    orchestrator.active = makeActiveTask(null);
+    return { orchestrator, appendEntry };
+  }
+
+  it("publishes on every open/close of an interactive prompt under ACP", () => {
+    process.env.PI_ACP = "1";
+    const { orchestrator, appendEntry } = setup();
+    orchestrator.interactivePromptOpen = true;
+    orchestrator.interactivePromptOpen = false;
+    expect(appendEntry.mock.calls.map((c) => c[1].status)).toEqual(["waiting", "running"]);
+  });
+
+  it("does not re-publish when the prompt flag is set to its current value", () => {
+    process.env.PI_ACP = "1";
+    const { orchestrator, appendEntry } = setup();
+    orchestrator.interactivePromptOpen = true;
+    orchestrator.interactivePromptOpen = true;
+    expect(appendEntry).toHaveBeenCalledTimes(1);
+  });
+
+  it("publishes from updateStatus under ACP", () => {
+    process.env.PI_ACP = "1";
+    const { orchestrator, appendEntry } = setup();
+    orchestrator.updateStatus({ ui: { setStatus: () => {} } } as any);
+    expect(appendEntry).toHaveBeenCalledTimes(1);
+    expect(appendEntry.mock.calls[0][1]).toMatchObject({ phase: "brainstorm", status: "running" });
+  });
+
+  it("publishes nothing outside ACP, and still toggles the prompt flag", () => {
+    const { orchestrator, appendEntry } = setup();
+    orchestrator.interactivePromptOpen = true;
+    orchestrator.updateStatus({ ui: { setStatus: () => {} } } as any);
+    expect(orchestrator.interactivePromptOpen).toBe(true);
+    expect(appendEntry).not.toHaveBeenCalled();
   });
 });
 

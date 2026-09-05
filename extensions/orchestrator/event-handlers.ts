@@ -41,6 +41,7 @@ import { advanceBanner } from "./messages.js";
 import { registerBillingHook } from "./billing-spoof.js";
 import { Orchestrator, type ActiveTask } from "./orchestrator.js";
 import { createCustomFooter, setFooterContext, setFooterTracker, setFooterOrchestrator } from "./custom-footer.js";
+import { publishAcpState } from "./acp.js";
 import { createUsageTracker, dumpUsageSummary, loadUsageSummary, isSubscriptionRouted, type UsageTracker } from "./usage-tracker.js";
 import { askUser, isCancel } from "../../3p/pi-ask-user/index.js";
 import { registerRecallTool, compile as vccCompile } from "../../3p/pi-vcc/index.js";
@@ -1814,6 +1815,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       toolName: data.toolName ?? null,
       turnCount: data.turnCount ?? null,
     }, "subagent lifecycle event");
+    publishAcpState(orchestrator);
   }
 
   function startStaleAgentWatchdog(): void {

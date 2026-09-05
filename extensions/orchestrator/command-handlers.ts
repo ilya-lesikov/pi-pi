@@ -9,6 +9,7 @@ import { getEffectiveMode, saveTask } from "./state.js";
 import { terminalAssumptionsSummary } from "./assumptions.js";
 import { getLogger } from "./log.js";
 import { handleSpawnResult } from "./spawn-cleanup.js";
+import { publishAcpState } from "./acp.js";
 
 function isEnabled(value: { enabled?: boolean }): boolean {
   return value.enabled !== false;
@@ -109,6 +110,7 @@ export async function transitionToNextPhase(
   if (next === "done") {
     const name = orchestrator.active.description;
     const type = orchestrator.active.type;
+    publishAcpState(orchestrator);
 
     // Terminal assumptions summary (#B/e): an autonomous run can reach done without
     // ever hitting a /pp gate (where the banner surfaces), so emit the full list of

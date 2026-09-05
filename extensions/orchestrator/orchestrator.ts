@@ -34,6 +34,7 @@ import { getLogger, addTaskDestination, removeTaskDestination, setLogLevel } fro
 import { handleSpawnResult } from "./spawn-cleanup.js";
 import { getTracer } from "./tracer.js";
 import { TransitionController, type TransitionHost } from "./transition-controller.js";
+import { publishAcpState } from "./acp.js";
 
 function isEnabled(value: { enabled?: boolean } | undefined): boolean {
   return value?.enabled !== false;
@@ -208,7 +209,15 @@ export class Orchestrator {
   // selectOption) is open. The main-turn watchdog skips while set so a turn
   // legitimately parked on a human is not aborted. Set on dialogue open, cleared
   // in finally on every exit (resolve, ESC/cancel, error).
-  interactivePromptOpen = false;
+  private _interactivePromptOpen = false;
+  get interactivePromptOpen(): boolean {
+    return this._interactivePromptOpen;
+  }
+  set interactivePromptOpen(open: boolean) {
+    if (this._interactivePromptOpen === open) return;
+    this._interactivePromptOpen = open;
+    publishAcpState(this);
+  }
   // One-shot review-ready instruction (item 9). While a menu/ask turn is live,
   // the review-ready banner must NOT be queued as a followUp (ESC/abort flushes
   // the queue into the editor input — the stray-banner bug). Instead it is
@@ -512,6 +521,7 @@ export class Orchestrator {
   // sets a hidden "pp-phase" status whose value changes per transition so the host repaints
   // the footer. Nothing renders this string (footer line 3 was removed), so it stays terse.
   updateStatus(ctx: ExtensionContext): void {
+    publishAcpState(this);
     if (!this.active || this.active.state.phase === "done") {
       ctx.ui.setStatus("pp-phase", undefined);
       return;
