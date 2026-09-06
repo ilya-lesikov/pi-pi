@@ -360,7 +360,9 @@ export function validateConfig(config: Record<string, any>): void {
       const afterEdit = requireObject(commands.afterEdit, "config.commands.afterEdit");
       for (const [id, entry] of Object.entries(afterEdit)) {
         const cmd = requireObject(entry, `config.commands.afterEdit.${id}`);
-        ensureString(cmd.run, `config.commands.afterEdit.${id}.run`);
+        if (typeof cmd.run !== "string" || cmd.run.length === 0) {
+          throw new Error(`config.commands.afterEdit.${id}.run must be a non-empty string`);
+        }
         ensureBool(cmd.enabled, `config.commands.afterEdit.${id}.enabled`);
         if (cmd.globs !== undefined && (!Array.isArray(cmd.globs) || cmd.globs.some((g) => typeof g !== "string" || g.length === 0))) {
           throw new Error(`config.commands.afterEdit.${id}.globs must be an array of non-empty strings`);

@@ -1,3 +1,4 @@
+import { relative, resolve } from "path";
 import { Type } from "@sinclair/typebox";
 import { estimateTokens, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { loadConfig, getDefaultConfig, normalizeConfigDurations } from "./config.js";
@@ -121,11 +122,14 @@ export function renderGenericPrompt(orchestrator: Orchestrator, ctx: any, toolNa
   ].filter(Boolean).join("\n\n");
 }
 
-export function registerLoadSkill(pi: ExtensionAPI, cwd: string, enabled?: Orchestrator["config"]["skills"]): void {
-  const available = () => listLayeredSkills(cwd).filter((skill) => !enabled
-    || (skill.layer === "bundled" && enabled.loadBundled)
-    || (skill.layer === "global" && enabled.loadGlobal)
-    || (skill.layer === "project" && enabled.loadProject));
+export function registerLoadSkill(pi: ExtensionAPI, cwd: string, getEnabled?: () => Orchestrator["config"]["skills"] | undefined): void {
+  const available = () => {
+    const enabled = getEnabled?.();
+    return listLayeredSkills(cwd).filter((skill) => !enabled
+      || (skill.layer === "bundled" && enabled.loadBundled)
+      || (skill.layer === "global" && enabled.loadGlobal)
+      || (skill.layer === "project" && enabled.loadProject));
+  };
   pi.registerTool({
     name: "load_skill",
     label: "Load Skill",
@@ -149,7 +153,7 @@ export function registerFeatureToolsAndAgents(orchestrator: Orchestrator): void 
   registerExaTools(pi);
   registerAstSearchTool(pi, orchestrator.cwd);
   registerRecallTool(pi);
-  registerLoadSkill(pi, orchestrator.cwd, orchestrator.config.skills);
+  registerLoadSkill(pi, orchestrator.cwd, () => orchestrator.config?.skills);
   setExtensionOnlyMode(pi);
   orchestrator.registerAgents();
 }
@@ -381,7 +385,9 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     const input = event.input as { file_path?: string; filePath?: string; path?: string };
     const filePath = input?.file_path || input?.filePath || input?.path;
     if (!filePath) return;
-    const results = runAfterEdit(filePath, commands, orchestrator.config.performance.commands.afterEdit, orchestrator.cwd);
+    const fileInProject = relative(orchestrator.cwd, resolve(orchestrator.cwd, filePath));
+    if (fileInProject.startsWith("..")) return;
+    const results = runAfterEdit(fileInProject, commands, orchestrator.config.performance.commands.afterEdit, orchestrator.cwd);
     const failures = results.filter((result) => !result.ok);
     if (failures.length === 0) return;
     const failureText = failures.map((failure) => `afterEdit command failed: ${failure.command}\n${failure.output}`).join("\n\n");

@@ -27,7 +27,7 @@ export function runAfterEdit(
 ): CommandResult[] {
   const results: CommandResult[] = [];
   for (const cmd of Object.values(commands)) {
-    if (cmd.enabled === false) continue;
+    if (cmd.enabled === false || typeof cmd.run !== "string" || cmd.run.length === 0) continue;
     const globs = cmd.globs ?? [];
     const matches = globs.length === 0 || globs.some((glob) => minimatch(file, glob, { matchBase: true }));
     if (!matches) continue;

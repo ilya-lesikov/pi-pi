@@ -300,14 +300,8 @@ function applyScopeChoice(orchestrator: Orchestrator, keyPath: string[], value: 
         return mergeConfigLayers(globalConfig, projectConfig);
       })();
     if (isDeepStrictEqual(value, getNestedValue(mergedWithoutScope, keyPath))) {
-      if (scope === "global") {
-        clearConfigOverride(orchestrator, "global", keyPath);
-        return;
-      }
-      if (!hasLayerOverride(orchestrator, "global", keyPath)) {
-        clearConfigOverride(orchestrator, "project", keyPath);
-        return;
-      }
+      clearConfigOverride(orchestrator, scope, keyPath);
+      return;
     }
   } catch {}
   applyConfigChange(orchestrator, scope, keyPath, value);
@@ -623,10 +617,18 @@ async function showAgentEditor(orchestrator: Orchestrator, ctx: any, basePath: s
   }
 }
 
+// Pools are arrays: deepMerge replaces them wholesale, so every edit rewrites
+// the WHOLE effective array into the chosen scope. A global write under an
+// existing project override would be silently masked — surface that instead.
 async function writePool(orchestrator: Orchestrator, ctx: any, pool: PoolKey, next: PoolEntry[]): Promise<boolean> {
+  const keyPath = ["agents", "subagents", "pools", pool];
   const scope = await pickScope(ctx, orchestrator);
   if (!scope) return false;
-  applyConfigChange(orchestrator, scope, ["agents", "subagents", "pools", pool], next);
+  if (scope === "global" && hasLayerOverride(orchestrator, "project", keyPath)) {
+    ctx.ui?.notify?.(`A project override for this pool exists and would mask the global edit. Edit the project scope instead, or reset the project override first.`, "warning");
+    return false;
+  }
+  applyConfigChange(orchestrator, scope, keyPath, next);
   return true;
 }
 

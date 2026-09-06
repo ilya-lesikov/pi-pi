@@ -103,6 +103,51 @@ describe("/pp session control panel", () => {
     expect(orchestrator.config.skills.loadBundled).toBe(false);
   });
 
+  it("clears a project override when the chosen value matches the inherited one", async () => {
+    const { writeFileSync, mkdirSync } = await import("node:fs");
+    mkdirSync(join(cwd, ".pp"), { recursive: true });
+    writeFileSync(join(cwd, ".pp", "config.json"), JSON.stringify({ skills: { loadBundled: false } }), "utf-8");
+    select("Settings");
+    select("Skills");
+    select("Load bundled skills: OFF");
+    select("Yes (default)");
+    select("Set for project");
+    select("Back");
+    select("Back");
+    select("Back");
+    select("Close");
+    const orchestrator = makeOrchestrator(cwd);
+    orchestrator.config.skills.loadBundled = false;
+    const { showPpMenu } = await import("./pp-menu.js");
+    await showPpMenu(orchestrator, { model: null, sessionManager: {}, ui: {} });
+    const written = JSON.parse(readFileSync(join(cwd, ".pp", "config.json"), "utf-8"));
+    expect(written.skills?.loadBundled).toBeUndefined();
+    expect(orchestrator.config.skills.loadBundled).toBe(true);
+  });
+
+  it("warns and refuses a global pool edit masked by a project override", async () => {
+    const { writeFileSync, mkdirSync } = await import("node:fs");
+    const pool = getDefaultConfig().agents.subagents.pools.advisors;
+    mkdirSync(join(cwd, ".pp"), { recursive: true });
+    writeFileSync(join(cwd, ".pp", "config.json"), JSON.stringify({ agents: { subagents: { pools: { advisors: pool } } } }), "utf-8");
+    select("Settings");
+    select("Agents");
+    select("Advisors");
+    select(pool[0]!.model);
+    select("Enabled: Yes");
+    select("Set globally");
+    select("Back");
+    select("Back");
+    select("Back");
+    select("Back");
+    select("Close");
+    const orchestrator = makeOrchestrator(cwd);
+    const notify = vi.fn();
+    const { showPpMenu } = await import("./pp-menu.js");
+    await showPpMenu(orchestrator, { model: null, sessionManager: {}, ui: { notify } });
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("project override"), "warning");
+  });
+
   it("re-registers agent definitions after a pool edit", async () => {
     select("Settings");
     select("Agents");
