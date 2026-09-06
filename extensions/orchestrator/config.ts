@@ -44,10 +44,19 @@ export interface CompactionConfig {
   perModel: Record<string, { fraction?: number; floorTokens?: number; headroomFraction?: number; headroomFloorTokens?: number }>;
 }
 
+export interface AfterEditCommandConfig {
+  run: string;
+  globs?: string[];
+  enabled?: boolean;
+}
+
 export interface PiPiConfig {
   general: {
     logLevel: LogLevel;
     tracing: boolean;
+  };
+  commands: {
+    afterEdit: Record<string, AfterEditCommandConfig>;
   };
   // Global/ancestor/project AGENTS.md + CLAUDE.md injection. Six independent
   // toggles = 3 scopes × 2 file types.
@@ -89,6 +98,9 @@ export interface PiPiConfig {
     };
   };
   performance: {
+    commands: {
+      afterEdit: DurationValue;
+    };
     internals: {
       subagentStale: DurationValue;
       mainTurnStale: DurationValue;
@@ -98,6 +110,9 @@ export interface PiPiConfig {
 
 export interface NormalizedPiPiConfig extends PiPiConfig {
   performance: {
+    commands: {
+      afterEdit: number;
+    };
     internals: {
       subagentStale: number;
       mainTurnStale: number;
@@ -113,6 +128,9 @@ const DEFAULT_CONFIG: PiPiConfig = {
   general: {
     logLevel: "info",
     tracing: false,
+  },
+  commands: {
+    afterEdit: {},
   },
   contextInjection: {
     // All scopes/types ON by default, matching the framework's default breadth
@@ -176,6 +194,9 @@ const DEFAULT_CONFIG: PiPiConfig = {
     },
   },
   performance: {
+    commands: {
+      afterEdit: "30s",
+    },
     internals: {
       subagentStale: "5m",
       mainTurnStale: "10m",
@@ -333,6 +354,21 @@ export function validateConfig(config: Record<string, any>): void {
   if (config.compaction !== undefined) validateCompaction(config.compaction);
   if (config.flant !== undefined) validateFlant(config.flant);
 
+  if (config.commands !== undefined) {
+    const commands = requireObject(config.commands, "config.commands");
+    if (commands.afterEdit !== undefined) {
+      const afterEdit = requireObject(commands.afterEdit, "config.commands.afterEdit");
+      for (const [id, entry] of Object.entries(afterEdit)) {
+        const cmd = requireObject(entry, `config.commands.afterEdit.${id}`);
+        ensureString(cmd.run, `config.commands.afterEdit.${id}.run`);
+        ensureBool(cmd.enabled, `config.commands.afterEdit.${id}.enabled`);
+        if (cmd.globs !== undefined && (!Array.isArray(cmd.globs) || cmd.globs.some((g) => typeof g !== "string" || g.length === 0))) {
+          throw new Error(`config.commands.afterEdit.${id}.globs must be an array of non-empty strings`);
+        }
+      }
+    }
+  }
+
   if (config.agents !== undefined) {
     const agents = requireObject(config.agents, "config.agents");
 
@@ -370,6 +406,10 @@ export function validateConfig(config: Record<string, any>): void {
 
   if (config.performance !== undefined) {
     const performance = requireObject(config.performance, "config.performance");
+    if (performance.commands !== undefined) {
+      const commands = requireObject(performance.commands, "config.performance.commands");
+      ensureDuration(commands.afterEdit, "config.performance.commands.afterEdit");
+    }
     if (performance.internals !== undefined) {
       const internals = requireObject(performance.internals, "config.performance.internals");
       ensureDuration(internals.subagentStale, "config.performance.internals.subagentStale");
@@ -426,6 +466,9 @@ export function validateMergedConfig(config: Record<string, any>): void {
     pool.forEach((entry, i) => ensureMergedAgent(entry, `config.agents.subagents.pools.${poolKey}[${i}]`));
   }
 
+  if (parseDuration(typed.performance.commands.afterEdit) === null) {
+    throw new Error("config.performance.commands.afterEdit must be a valid duration");
+  }
   if (parseDuration(typed.performance.internals.subagentStale) === null) {
     throw new Error("config.performance.internals.subagentStale must be a valid duration");
   }
@@ -437,13 +480,15 @@ export function validateMergedConfig(config: Record<string, any>): void {
 export function normalizeConfigDurations(config: PiPiConfig): NormalizedPiPiConfig {
   const next = structuredClone(config) as NormalizedPiPiConfig;
 
+  const afterEdit = parseDuration(next.performance.commands.afterEdit);
   const subagentStale = parseDuration(next.performance.internals.subagentStale);
   const mainTurnStale = parseDuration(next.performance.internals.mainTurnStale);
 
-  if (subagentStale === null || mainTurnStale === null) {
+  if (afterEdit === null || subagentStale === null || mainTurnStale === null) {
     throw new Error("Failed to normalize config durations");
   }
 
+  next.performance.commands.afterEdit = afterEdit;
   next.performance.internals.subagentStale = subagentStale;
   next.performance.internals.mainTurnStale = mainTurnStale;
   return next;

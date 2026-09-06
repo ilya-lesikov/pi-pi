@@ -29,6 +29,8 @@ export class Orchestrator {
   mainTurnRecovering = false;
   mainTurnToolInFlight = 0;
   requestHadTools = false;
+  requestToolCallCount = 0;
+  requestHadFileMutation = false;
   continuationGeneration = 0;
   continuationCount = 0;
   objectiveContinuationCount = 0;
@@ -45,6 +47,8 @@ export class Orchestrator {
     window: number | null;
   } = { nextThreshold: null, inFlight: false, pendingProactiveMeasure: false, disabled: false, modelKey: null, window: null };
   manualCompactionUseBuiltin = false;
+  manualCompactionPending = false;
+  manualCompactionRequestId = 0;
   idlePollTimer: ReturnType<typeof setTimeout> | null = null;
   subFallbackActive = false;
   subFallbackModelId: string | null = null;

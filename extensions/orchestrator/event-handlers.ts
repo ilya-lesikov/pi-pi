@@ -18,6 +18,7 @@ import { getModelInfo, resolveModel, setSubscriptionFallbackActive, updateRegist
 import { createCustomFooter, setFooterContext, setFooterTracker, setFooterOrchestrator } from "./custom-footer.js";
 import { createUsageTracker, dumpUsageSummary, loadUsageSummary, type UsageTracker } from "./usage-tracker.js";
 import { publishAcpState, resetAcpStateCache } from "./acp.js";
+import { runAfterEdit } from "./commands.js";
 import { checkDuplicateExtensions } from "./duplicate-extension-guard.js";
 import { handleMainRateLimit, handleSubagentRateLimit, isRateLimitError } from "./rate-limit-fallback.js";
 import { SUBAGENT_SESSION_KEY } from "./index.js";
@@ -34,14 +35,27 @@ const CONTINUE_STALLED = "[PI-PI] The previous turn stalled without completing. 
 
 export type ContinuationDecision = "none" | "objective" | "adjudicate";
 
-export function classifyContinuation(message: any, turnHadTools: boolean): ContinuationDecision {
+export interface RequestActivity {
+  hadTools: boolean;
+  toolCallCount: number;
+  hadFileMutation: boolean;
+}
+
+// Trivial informational exchanges (a couple of read-only tool calls followed by
+// a prose answer) must not be nudged: adjudication is only worth a model turn
+// when the request actually changed something or did enough work that an
+// unfinished objective is plausible.
+const ADJUDICATE_TOOL_THRESHOLD = 4;
+
+export function classifyContinuation(message: any, activity: RequestActivity): ContinuationDecision {
   if (message?.stopReason === "aborted" || message?.stopReason === "error") return "none";
   if (message?.stopReason === "length") return "objective";
   const parts = Array.isArray(message?.content) ? message.content : [];
   const hasText = parts.some((part: any) => part?.type === "text" && part.text?.trim());
   const hasToolCall = parts.some((part: any) => part?.type === "toolCall");
   if (!hasText && !hasToolCall) return "objective";
-  if (message?.stopReason === "stop" && hasText && turnHadTools) return "adjudicate";
+  const substantial = activity.hadFileMutation || activity.toolCallCount >= ADJUDICATE_TOOL_THRESHOLD;
+  if (message?.stopReason === "stop" && hasText && activity.hadTools && substantial) return "adjudicate";
   return "none";
 }
 
@@ -59,6 +73,12 @@ export function isMainTurnStalled(orchestrator: Orchestrator, now = Date.now()):
 
 function tracker(): UsageTracker | undefined {
   return (globalThis as any)[USAGE_TRACKER_KEY];
+}
+
+function resetRequestActivity(orchestrator: Orchestrator): void {
+  orchestrator.requestHadTools = false;
+  orchestrator.requestToolCallCount = 0;
+  orchestrator.requestHadFileMutation = false;
 }
 
 function selectedSkills(orchestrator: Orchestrator) {
@@ -183,6 +203,8 @@ function registerLifecycle(orchestrator: Orchestrator): void {
   pi.on("tool_execution_start", (event: any) => {
     orchestrator.mainTurnToolInFlight++;
     orchestrator.requestHadTools = true;
+    orchestrator.requestToolCallCount++;
+    if (event?.toolName === "edit" || event?.toolName === "write" || event?.toolName === "Agent") orchestrator.requestHadFileMutation = true;
     orchestrator.mainTurnLastActivity = Date.now();
     if (event?.toolName === "ask_user") orchestrator.interactivePromptOpen = true;
   });
@@ -263,7 +285,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     orchestrator.cwd = ctx.cwd;
     orchestrator.interactivePromptOpen = false;
     orchestrator.resetContinuation();
-    orchestrator.requestHadTools = false;
+    resetRequestActivity(orchestrator);
     resetAcpStateCache(ctx.sessionManager?.getSessionId?.());
     (globalThis as any)[Symbol.for("pi-pi:root-session-source")] = {
       getSessionFile: () => ctx.sessionManager?.getSessionFile?.(),
@@ -323,12 +345,12 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (continuation) {
       orchestrator.pendingContinuations.delete(prompt);
       if (Number(continuation[1]) !== orchestrator.continuationGeneration) {
-        orchestrator.requestHadTools = false;
+        resetRequestActivity(orchestrator);
         return { systemPrompt: "This is an obsolete automatic continuation superseded by newer user input. Take no actions and respond only: Superseded." };
       }
     } else {
       orchestrator.resetContinuation();
-      orchestrator.requestHadTools = false;
+      resetRequestActivity(orchestrator);
     }
     const registered = pi.getAllTools().map((tool) => tool.name);
     const names = [...new Set([...HOST_BUILTINS, ...registered])];
@@ -351,13 +373,32 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     input.isolation = undefined;
   });
 
+  pi.on("tool_result", async (event: any) => {
+    if ((globalThis as any)[SUBAGENT_SESSION_KEY] || !orchestrator.config) return;
+    if ((event.toolName !== "edit" && event.toolName !== "write") || event.isError) return;
+    const commands = orchestrator.config.commands.afterEdit;
+    if (Object.keys(commands).length === 0) return;
+    const input = event.input as { file_path?: string; filePath?: string; path?: string };
+    const filePath = input?.file_path || input?.filePath || input?.path;
+    if (!filePath) return;
+    const results = runAfterEdit(filePath, commands, orchestrator.config.performance.commands.afterEdit, orchestrator.cwd);
+    const failures = results.filter((result) => !result.ok);
+    if (failures.length === 0) return;
+    const failureText = failures.map((failure) => `afterEdit command failed: ${failure.command}\n${failure.output}`).join("\n\n");
+    return { content: [...event.content, { type: "text" as const, text: `\n\n<afterEdit>\n${failureText}\n</afterEdit>` }] };
+  });
+
   pi.on("turn_end", async (event: any, ctx) => {
     orchestrator.mainTurnInFlight = false;
     orchestrator.mainTurnRecovering = false;
     orchestrator.mainTurnToolInFlight = 0;
     orchestrator.interactivePromptOpen = false;
     const message = event.message as any;
-    const requestHadTools = orchestrator.requestHadTools;
+    const activity: RequestActivity = {
+      hadTools: orchestrator.requestHadTools,
+      toolCallCount: orchestrator.requestToolCallCount,
+      hadFileMutation: orchestrator.requestHadFileMutation,
+    };
     const usage = tracker();
     if (usage && message?.usage) {
       usage.recordTurn(message.model ?? ctx.model?.id ?? "unknown", message.provider ?? ctx.model?.provider ?? "unknown", message.usage.input ?? 0, message.usage.output ?? 0, message.usage.cacheRead ?? 0, message.usage.cacheWrite ?? 0, message.usage.cost?.total ?? 0, typeof message.usage.cacheRead === "number" || typeof message.usage.cacheWrite === "number");
@@ -369,7 +410,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       return;
     }
     if ((globalThis as any)[SUBAGENT_SESSION_KEY] || orchestrator.interactivePromptOpen || orchestrator.spawnedAgentIds.size > 0) return;
-    const decision = classifyContinuation(message, requestHadTools);
+    const decision = classifyContinuation(message, activity);
     if (decision === "none" || orchestrator.continuationHalted) return;
     if (decision === "objective") {
       if (orchestrator.objectiveContinuationCount >= MAX_OBJECTIVE_CONTINUATIONS) {
@@ -387,7 +428,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       return;
     }
     orchestrator.continuationCount++;
-    orchestrator.requestHadTools = false;
+    resetRequestActivity(orchestrator);
     orchestrator.queueContinuation(CONTINUE_AMBIGUOUS);
   });
 

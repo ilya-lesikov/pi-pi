@@ -137,13 +137,21 @@ describe("validateConfig", () => {
 
   it("no longer knows about removed sections", () => {
     const d = getDefaultConfig() as Record<string, any>;
-    expect(d.commands).toBeUndefined();
     expect(d.agents.orchestrators).toBeUndefined();
     expect(d.agents.subagents.presetGroups).toBeUndefined();
-    expect(d.performance.commands).toBeUndefined();
+    expect(d.commands.afterImplement).toBeUndefined();
+    expect(d.performance.commands.afterImplement).toBeUndefined();
     expect(d.performance.internals.taskLockStale).toBeUndefined();
     expect(d.performance.internals.taskLockRefresh).toBeUndefined();
     expect((d.skills as Record<string, unknown>).disabled).toBeUndefined();
+  });
+
+  it("validates afterEdit command entries", () => {
+    expect(() => validateConfig({ commands: { afterEdit: { fmt: { run: "prettier -w ${file}", globs: ["*.ts"], enabled: true } } } })).not.toThrow();
+    expect(() => validateConfig({ commands: { afterEdit: { fmt: { run: "" } } } })).toThrow();
+    expect(() => validateConfig({ commands: { afterEdit: { fmt: { run: "x", globs: [""] } } } })).toThrow();
+    expect(() => validateConfig({ performance: { commands: { afterEdit: "30s" } } })).not.toThrow();
+    expect(() => validateConfig({ performance: { commands: { afterEdit: "bogus" } } })).toThrow();
   });
 });
 

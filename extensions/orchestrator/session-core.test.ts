@@ -62,12 +62,18 @@ describe("session-first core", () => {
     expect(buildAcpState(orchestrator)).toEqual({ status: "waiting", subagents: [] });
   });
 
-  it("classifies only objective stops and action-backed prose stops for continuation", () => {
-    expect(classifyContinuation({ stopReason: "length", content: [{ type: "text", text: "cut" }] }, false)).toBe("objective");
-    expect(classifyContinuation({ stopReason: "stop", content: [] }, false)).toBe("objective");
-    expect(classifyContinuation({ stopReason: "stop", content: [{ type: "text", text: "answer" }] }, false)).toBe("none");
-    expect(classifyContinuation({ stopReason: "stop", content: [{ type: "text", text: "done" }] }, true)).toBe("adjudicate");
-    expect(classifyContinuation({ stopReason: "error", content: [] }, true)).toBe("none");
+  it("classifies only objective stops and substantial action-backed prose stops for continuation", () => {
+    const idle = { hadTools: false, toolCallCount: 0, hadFileMutation: false };
+    const trivial = { hadTools: true, toolCallCount: 2, hadFileMutation: false };
+    const manyTools = { hadTools: true, toolCallCount: 4, hadFileMutation: false };
+    const mutated = { hadTools: true, toolCallCount: 1, hadFileMutation: true };
+    expect(classifyContinuation({ stopReason: "length", content: [{ type: "text", text: "cut" }] }, idle)).toBe("objective");
+    expect(classifyContinuation({ stopReason: "stop", content: [] }, idle)).toBe("objective");
+    expect(classifyContinuation({ stopReason: "stop", content: [{ type: "text", text: "answer" }] }, idle)).toBe("none");
+    expect(classifyContinuation({ stopReason: "stop", content: [{ type: "text", text: "it is 5pm" }] }, trivial)).toBe("none");
+    expect(classifyContinuation({ stopReason: "stop", content: [{ type: "text", text: "done" }] }, manyTools)).toBe("adjudicate");
+    expect(classifyContinuation({ stopReason: "stop", content: [{ type: "text", text: "done" }] }, mutated)).toBe("adjudicate");
+    expect(classifyContinuation({ stopReason: "error", content: [] }, mutated)).toBe("none");
   });
 
   it("recognizes a stalled main turn only when recovery is safe", () => {
@@ -120,8 +126,8 @@ describe("session-first core", () => {
     };
     await emit(pi, "before_agent_start", { prompt: "Implement the change" }, ctx);
     await emit(pi, "turn_start", {}, ctx);
-    await emit(pi, "tool_execution_start", {}, ctx);
-    await emit(pi, "tool_execution_end", {}, ctx);
+    await emit(pi, "tool_execution_start", { toolName: "edit" }, ctx);
+    await emit(pi, "tool_execution_end", { toolName: "edit" }, ctx);
     await emit(pi, "turn_end", { message: { stopReason: "toolUse", content: [{ type: "toolCall", name: "edit" }] } }, ctx);
     expect(pi.sendUserMessage).not.toHaveBeenCalled();
     await emit(pi, "turn_start", {}, ctx);
