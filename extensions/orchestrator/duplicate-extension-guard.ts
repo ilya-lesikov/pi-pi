@@ -3,7 +3,7 @@ import { dirname, resolve, sep } from "node:path";
 import { getLogger } from "./log.js";
 
 // Install issue 8b: pi-pi VENDORS several upstream extensions (pi-lsp,
-// pi-plannotator, pi-subagents, pi-tasks, pi-ask-user, and the vendored pi-vcc
+// pi-subagents, pi-lsp, pi-ask-user, and the vendored pi-vcc engine.
 // engine). If the user ALSO installs any of them STANDALONE, both copies load
 // and their tools/commands collide — the framework only prints a non-fatal
 // warning ("Tool \"lsp\" conflicts with ..."). This guard HARD-FAILS instead,
@@ -25,21 +25,14 @@ export const PI_PI_OWNED_TOOL_NAMES: readonly string[] = [
   "vcc_recall", // vendored pi-vcc
 ];
 
-export const PI_PI_OWNED_COMMAND_NAMES: readonly string[] = [
-  // pi-tasks
-  "task", "tasks",
-  // pi-plannotator
-  "plannotator",
-];
+export const PI_PI_OWNED_COMMAND_NAMES: readonly string[] = [];
 
 // Upstream package ids pi-pi vendors. A loaded extension whose source path
 // contains one of these package ids but lives OUTSIDE pi-pi's tree is a
 // standalone install of something pi-pi already bundles (signal B).
 export const PI_PI_VENDORED_PACKAGE_IDS: readonly string[] = [
   "pi-lsp",
-  "pi-plannotator",
   "pi-subagents",
-  "pi-tasks",
   "pi-ask-user",
   "@monotykamary/pi-vcc",
   "pi-vcc",

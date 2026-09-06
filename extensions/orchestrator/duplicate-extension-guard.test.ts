@@ -46,16 +46,6 @@ describe("detectDuplicateExtensions", () => {
     expect(detectDuplicateExtensions(tools, [], ROOT)).toHaveLength(0);
   });
 
-  it("flags a pi-pi-owned command name owned by an outside extension", () => {
-    const commands = [
-      { name: "task", sourceInfo: { path: "/usr/lib/node_modules/some-tasks/index.js" } },
-    ];
-    const findings = detectDuplicateExtensions([], commands, ROOT);
-    expect(findings).toHaveLength(1);
-    expect(findings[0].signal).toBe("command-name-collision");
-    expect(findings[0].detail).toContain("task");
-  });
-
   it("flags a vendored package id appearing in an outside extension path", () => {
     const tools = [
       // A tool with a NON-owned name but from a standalone pi-vcc install.

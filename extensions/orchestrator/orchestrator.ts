@@ -1,74 +1,25 @@
-import { existsSync, copyFileSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from "fs";
-import { join, basename, relative } from "path";
-import type { ExtensionAPI, ExtensionContext, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { loadConfig, resolvePreset, type NormalizedPiPiConfig } from "./config.js";
-import {
-  createTask,
-  loadTask,
-  saveTask,
-  lockTask,
-  validateFromPath,
-  getEffectivePhaseMode,
-  type TaskType,
-  type TaskMode,
-  type TaskState,
-  type Phase,
-} from "./state.js";
-import { getContextDirs, loadAllContextFiles, getPhaseArtifacts, getLatestSynthesizedPlan } from "./context.js";
-import { classifyPlanVariants } from "./plan-files.js";
-import { brainstormSystemPrompt } from "./phases/brainstorm.js";
-import { planningSystemPrompt, spawnPlanners } from "./phases/planning.js";
-import { implementationSystemPrompt } from "./phases/implementation.js";
-import { reviewSystemPrompt as reviewCycleSystemPrompt } from "./phases/review.js";
-import { reviewSystemPrompt as reviewTaskSystemPrompt } from "./phases/review-task.js";
-import { registerAgentDefinitions, unregisterAgentDefinitions, encodePoolVariant } from "./agents/registry.js";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { NormalizedPiPiConfig, PoolEntry, PoolKey } from "./config.js";
+import { getModelInfo, resolveModel } from "./model-registry.js";
 import { createExploreAgent } from "./agents/explore.js";
 import { createLibrarianAgent } from "./agents/librarian.js";
 import { createTaskAgent } from "./agents/task.js";
 import { createAdvisorAgent } from "./agents/advisor.js";
-import { createDeepDebuggerAgent } from "./agents/deep-debugger.js";
 import { createReviewerAgent } from "./agents/reviewer.js";
-import { resolveModel, getModelInfo, findLatestFamilyMatch, setSubscriptionFallbackActive, clearAllTierDemotions } from "./model-registry.js";
-import { buildRepoContext } from "./agents/repo-context.js";
-import { getLogger, addTaskDestination, removeTaskDestination, setLogLevel } from "./log.js";
-import { handleSpawnResult } from "./spawn-cleanup.js";
-import { getTracer } from "./tracer.js";
-import { TransitionController, type TransitionHost } from "./transition-controller.js";
+import { createDeepDebuggerAgent } from "./agents/deep-debugger.js";
+import { encodePoolVariant, registerAgentDefinitions } from "./agents/registry.js";
 import { publishAcpState } from "./acp.js";
 
 function isEnabled(value: { enabled?: boolean } | undefined): boolean {
   return value?.enabled !== false;
 }
 
-const BUNDLED_TOOLS = new Set([
-  "Agent", "get_subagent_result", "steer_subagent",
-  "TaskCreate", "TaskList", "TaskGet", "TaskUpdate", "TaskOutput", "TaskStop", "TaskExecute",
-  "ask_user",
-]);
-
-export interface ActiveTask {
-  dir: string;
-  type: TaskType;
-  state: TaskState;
-  release: (() => Promise<void>) | null;
-  taskId: string;
-  modifiedFiles: Set<string>;
-  reviewPass: number;
-  description: string;
-}
-
 export class Orchestrator {
-  active: ActiveTask | null = null;
   config!: NormalizedPiPiConfig;
-  // Non-null when loadConfig threw on session_start. While set, only a minimal
-  // read-only /pp path is available and `config` holds a rendering-only default
-  // fallback (NOT the user's config, which is invalid).
   configError: string | null = null;
-  // True when a standalone duplicate of a pi-pi-bundled extension was detected at
-  // session_start (install 8b). While set, pi-pi refused to register its feature
-  // tools/agents and does not operate until the standalone copy is removed.
   duplicateExtensionError = false;
   cwd = "";
+  lastCtx: any = null;
   spawnedAgentIds = new Set<string>();
   agentDescriptions = new Map<string, string>();
   agentSpawnTimes = new Map<string, number>();
@@ -80,45 +31,15 @@ export class Orchestrator {
     lastEventAt?: number;
     type?: string;
     description?: string;
-    phase?: string;
-    step?: string;
   }>();
   staleAgentTimer: ReturnType<typeof setInterval> | null = null;
-  // Main-turn stall watchdog (BUG-2). A main turn that starts but never emits a
-  // terminal turn_end/error can wedge the session ("Working…" forever). Unlike
-  // staleAgentTimer (subagents only), this watches the MAIN session: any main-
-  // session stream/tool/turn activity refreshes mainTurnLastActivity; when a turn
-  // is in flight with no activity beyond config.performance.internals.mainTurnStale,
-  // the watchdog recovers via the idle-gated single-send path.
   mainTurnTimer: ReturnType<typeof setInterval> | null = null;
   mainTurnLastActivity = 0;
   mainTurnInFlight = false;
   mainTurnRecovering = false;
-  // Count of main-session tool executions currently in flight (item 12). A
-  // long-running FOREGROUND tool call (e.g. a >10m Agent subagent invoked as a
-  // tool) emits tool_execution_start but no further activity until it ends, so
-  // mainTurnLastActivity would go stale mid-call and the watchdog would wrongly
-  // abort a legitimately-busy turn. While this is > 0 (or a subagent is live)
-  // the watchdog treats the turn as active.
   mainTurnToolInFlight = 0;
-  // Hysteresis arm state for proactive in-phase compaction (item 1). Armed =
-  // eligible to fire on the next threshold crossing; disarmed after firing until
-  // context drops back below the re-arm band.
-  compactionArm: { armed: boolean } = { armed: true };
-  // Self-computed context estimate from the last `context` event, used only when
-  // the host reports tokens:null (it does so until a SUCCESSFUL assistant reply
-  // follows a compaction, so an error storm leaves the real trigger blind).
   lastEstimatedTokens: number | null = null;
-  // Adaptive proactive-compaction state (item 6). In-memory per session:
-  //  - nextThreshold: the adaptive threshold override (null = use the fixed base)
-  //  - pendingProactiveMeasure: true after WE fired a proactive compaction and
-  //    are waiting to measure the post-compaction baseline (transition/manual
-  //    compactions never set it)
-  //  - disabled: proactive compaction disabled for this session after a thrash
-  //  - modelKey/window: the provider-qualified model spec + window the current
-  //    adaptive state was computed for; a change resets the adaptive state
-  //  - inFlight: WE just called ctx.compact() proactively and are waiting for the
-  //    session_compact event to confirm it (cleared if compact throws/declines)
+  compactionArm = { armed: true };
   adaptiveCompaction: {
     nextThreshold: number | null;
     inFlight: boolean;
@@ -127,982 +48,164 @@ export class Orchestrator {
     modelKey: string | null;
     window: number | null;
   } = { nextThreshold: null, inFlight: false, pendingProactiveMeasure: false, disabled: false, modelKey: null, window: null };
-  // Single consecutive-nudge guard (replaces the old multi-tier throttle). Reset
-  // to 0 on any productive turn; once it reaches the cap the nudges halt with one
-  // user notification.
-  consecutiveNudges = 0;
-  nudgeHalted = false;
-  // Separate, smaller budget for the apply_feedback stall (a review pass the
-  // model summarized instead of re-calling pp_phase_complete). Kept off
-  // consecutiveNudges so an unrelated earlier stall that already latched
-  // nudgeHalted cannot starve the one nudge that names the owed tool call.
-  applyFeedbackNudges = 0;
-  // Latches once the apply_feedback cap is reported, mirroring nudgeHalted, so
-  // the halt message is sent once instead of on every subsequent stop.
-  applyFeedbackHalted = false;
-  // One-shot summarizer choice for a user-triggered compaction. ctx.compact() is
-  // fire-and-forget, so the menu handler returns long before
-  // session_before_compact runs — the choice cannot live in the menu closure.
-  // CONSUMED (read and cleared) by the in-phase branch of that hook, and cleared
-  // again from the same compact() call's callbacks: the "Already compacted" /
-  // "Nothing to compact" no-ops throw BEFORE the hook is emitted, so without
-  // that a stale selection would silently downgrade the next AUTOMATIC
-  // compaction to the host summarizer.
   manualCompactionUseBuiltin = false;
   manualCompactionPending = false;
-  // Identifies WHICH manual request the shared flags above belong to. compact()
-  // resolves asynchronously, so a callback from an abandoned request can outlive
-  // its task; without this it would settle (and silently de-select) a newer
-  // task's request. Bumped on every request and on task reset.
   manualCompactionRequestId = 0;
-  pendingSubagentSpawns = 0;
-  // Wall-clock timestamp (ms) of the LAST reviewer-lifecycle activity for the
-  // current review cycle (set at cycle entry, refreshed on each
-  // subagents:created and whenever a reviewer is still live). The wedge
-  // reconciler finalizes only after a grace window has elapsed since this
-  // instant, so a long-dead reviewer heals on the first /pp open while a
-  // transiently-missing manager record (recent activity) does not.
-  reviewReconcileActivityAt: number | null = null;
-  errorRetryCount = 0;
-  // Wall-clock timestamp (ms) of the first transient-error retry in the current
-  // retry streak. The near-indefinite retry is bounded by a ~24h ceiling from
-  // this instant (not an attempt count). Reset (null) whenever a turn succeeds
-  // or the user re-engages, so a fresh outage starts a new 24h window.
-  errorRetryFirstAt: number | null = null;
-  // Halts the API-error auto-retry once errorRetryCount exceeds its cap, mirroring
-  // nudgeHalted. Without this, a benign intervening turn (e.g. the retried turn
-  // ends as a text-only "I'll wait") reset errorRetryCount to 0, so the 5-retry
-  // cap never accumulated and the "Previous request failed" nudge could fire
-  // unbounded (hundreds of times) against transient errors. Cleared only on
-  // genuine (non-[PI-PI]) user re-engagement, like nudgeHalted.
-  errorNudgeHalted = false;
-  commitReminderSent = false;
-  phaseStartTime = 0;
   pendingRetryTimer: ReturnType<typeof setTimeout> | null = null;
-  // Separate from pendingRetryTimer: the idle-delivery poll runs while the
-  // session is BUSY (up to ~2min), whereas a retry backoff runs while it is
-  // idle. Sharing one field armed the ESC guard during streaming, so a bare ESC
-  // was consumed before the editor could abort the running tool call.
   idlePollTimer: ReturnType<typeof setTimeout> | null = null;
-  // Unsubscribe for the direct ESC interrupt armed while pendingRetryTimer is
-  // live. pi-pi's own post-error retry is NOT covered by any SDK/interactive ESC
-  // binding (the turn already ended in error, the session is not streaming), so
-  // without this ESC would not cancel it.
   pendingRetryEscUnsub: (() => void) | null = null;
-  activeTaskToken = 0;
-  // Side-channel for stale-nudge re-validation. A continuation nudge is delivered
-  // as a followUp whose prompt STRING carries no phase/task token, and the SDK
-  // queue only surfaces the string in before_agent_start. So at nudge-generation
-  // time we record {phase, taskToken} keyed by the exact nudge string; at delivery
-  // we re-check both against the live phase/token and drop the nudge on mismatch
-  // (a nudge generated for an old phase/task must not drive a turn in the new one).
-  // Last-wins per distinct string; a stale entry only ever fails-closed to drop.
-  pendingNudges = new Map<string, { phase: Phase; taskToken: number }>();
-  // Subscription rate-limit fallback (Issue 5). subFallbackActive mirrors the
-  // model-registry override flag; subFallbackDialogPending guards against
-  // opening more than one switch dialogue at a time (across main + subagents);
-  // subFallbackModelId records the sub model that hit the limit (used by the
-  // switch-back probe); subSwitchBackTimer is the fixed-interval probe timer.
+  errorRetryCount = 0;
+  errorRetryFirstAt: number | null = null;
+  errorNudgeHalted = false;
   subFallbackActive = false;
   subFallbackDialogPending = false;
-  // True while a user-facing dialogue (ask_user / the /pp menu / any interactive
-  // selectOption) is open. The main-turn watchdog skips while set so a turn
-  // legitimately parked on a human is not aborted. Set on dialogue open, cleared
-  // in finally on every exit (resolve, ESC/cancel, error).
+  subFallbackPendingDecision = false;
+  subFallbackModelId: string | null = null;
+  subSwitchBackTimer: ReturnType<typeof setTimeout> | null = null;
+  subFallbackMainPriorSpec: string | null = null;
   private _interactivePromptOpen = false;
+
+  static current: Orchestrator | null = null;
+
+  constructor(readonly pi: ExtensionAPI) {
+    Orchestrator.current = this;
+  }
+
   get interactivePromptOpen(): boolean {
     return this._interactivePromptOpen;
   }
+
   set interactivePromptOpen(open: boolean) {
     if (this._interactivePromptOpen === open) return;
     this._interactivePromptOpen = open;
     publishAcpState(this);
   }
-  // One-shot review-ready instruction (item 9). While a menu/ask turn is live,
-  // the review-ready banner must NOT be queued as a followUp (ESC/abort flushes
-  // the queue into the editor input — the stray-banner bug). Instead it is
-  // stashed here and delivered as a FRESH idle-gated turn once the dialogue
-  // closes. Cleared after delivery so it fires exactly once.
-  pendingReviewReady: string | null = null;
-  // Set SYNCHRONOUSLY the moment a sub-429 is detected (before any async dialog),
-  // and cleared once the decision resolves. The autonomous planner/reviewer
-  // auto-retry consults this to avoid re-spawning a failed variant on the still-
-  // sub-routed model while the fallback decision is in flight.
-  subFallbackPendingDecision = false;
-  subFallbackModelId: string | null = null;
-  subSwitchBackTimer: ReturnType<typeof setTimeout> | null = null;
-  // When fallback actually switched the LIVE MAIN model, this records the prior
-  // main spec so switch-back can restore EXACTLY that (and only when it changed
-  // it). null means the main model was NOT switched by the fallback (e.g. a
-  // subagent-origin limit on an unrelated/already-paid main) — switch-back must
-  // then leave the main model untouched. The delayed timer callback cannot
-  // reconstruct this, so it is captured at activateFallback time.
-  subFallbackMainPriorSpec: string | null = null;
-  userGatePending = false;
-  lastCtx: any = null;
-  failedPlannerVariants: string[] = [];
-  failedReviewerVariants: string[] = [];
-  plannerFailureDialogPending = false;
-  reviewerFailureDialogPending = false;
-  plannotatorReject: ((reason: Error) => void) | null = null;
-  plannotatorUnsub: (() => void) | null = null;
-  plannotatorTimer: ReturnType<typeof setTimeout> | null = null;
-  transitionToNextPhase: (ctx: any, plannerPreset?: string) => Promise<{ ok: boolean; error?: string }> = async () => ({ ok: false, error: "not initialized" });
-  // Assigned by registerEventHandlers. Wired into planner spawn onSettled as the
-  // safety net the deleted 5s poller used to provide: when a spawn settles having
-  // produced ZERO agents (zero enabled planners, or all spawns failed before any
-  // subagents:completed/failed event), nothing else would advance await_planners.
-  // For spawned>0 the lifecycle events drive completion, so onSettled passes the
-  // spawned count and this only force-checks the zero case.
-  checkPlannerCompletion: () => void = () => {};
-  readonly transitionController: TransitionController;
 
-  // The single live instance, so module-level dialogue wrappers (selectOption in
-  // event-handlers/pp-menu) can toggle interactivePromptOpen without threading a
-  // reference through ~70 call sites.
-  static current: Orchestrator | null = null;
-
-  constructor(readonly pi: ExtensionAPI) {
-    // The controller calls pi (the main session) directly for sends, and uses the
-    // host only for live-ctx-dependent bits (compact/isIdle/currentStep).
-    this.transitionController = new TransitionController(this.makeTransitionHost(), this.pi);
-    Orchestrator.current = this;
-  }
-
-  // Live-session host the TransitionController uses for compaction/idle/step.
-  private makeTransitionHost(): TransitionHost {
-    return {
-      compact: (options) => {
-        const compact = this.lastCtx?.compact;
-        if (!compact) return false;
-        compact(options);
-        return true;
-      },
-      isIdle: () => {
-        const idle = this.lastCtx?.isIdle;
-        return typeof idle === "function" ? !!idle.call(this.lastCtx) : false;
-      },
-      currentStep: () => this.active?.state.step ?? null,
-    };
-  }
-
-  // Arm a direct ESC interrupt for the post-error retry window. Idempotent: a
-  // single onTerminalInput handler stays registered until the retry is delivered,
-  // cancelled, or the task is reset. While pendingRetryTimer is live, ESC cancels
-  // the pending retry (no other binding covers this window).
   armRetryEscInterrupt(ctx: any): void {
     if (this.pendingRetryEscUnsub) return;
     const onTerminalInput = ctx?.ui?.onTerminalInput;
     if (typeof onTerminalInput !== "function") return;
     const unsub = onTerminalInput.call(ctx.ui, (data: string) => {
-      if (!this.pendingRetryTimer) return undefined;
-      // Match a STANDALONE ESC only. Arrow/function/mouse sequences also start
-      // with 0x1b (e.g. "\x1b[A"), so `includes` would misfire on navigation
-      // keys and swallow them; a bare ESC is exactly the one-byte string.
-      if (data === "\x1b") {
-        // Extension input listeners run BEFORE the focused editor and a
-        // {consume:true} short-circuits it entirely. The editor's onEscape is
-        // the ONLY path to restoreQueuedMessagesToEditor({abort:true}) ->
-        // agent.abort() -> killProcessTree, so consuming while a turn is
-        // streaming strands the running tool call. Cancel our retry but fall
-        // THROUGH (undefined) unless the session is positively known idle;
-        // unknown idle state fails open for the same reason.
-        //
-        // Prefer the ctx that OWNS this listener over the orchestrator's
-        // most-recent one: lastCtx is reassigned across sessions, so it may
-        // describe a different session than the UI this handler is bound to.
-        // (Both are live views — the host defines isIdle as `() => !isStreaming`
-        // — so neither goes stale within a session.) Any source reporting
-        // non-idle vetoes consumption.
-        const idle = [ctx, this.lastCtx].some((c: any) => typeof c?.isIdle === "function")
-          && [ctx, this.lastCtx].every((c: any) => typeof c?.isIdle !== "function" || !!c.isIdle.call(c));
-        this.cancelPendingRetry();
-        if (!idle) return undefined;
-        ctx?.ui?.notify?.("Retry cancelled.", "info");
-        return { consume: true };
-      }
-      return undefined;
+      if (data !== "\x1b" || !this.pendingRetryTimer) return undefined;
+      this.cancelPendingRetry();
+      ctx.ui?.notify?.("Automatic retry cancelled.", "info");
+      return { consume: true };
     });
-    this.pendingRetryEscUnsub = typeof unsub === "function" ? unsub : null;
+    if (typeof unsub === "function") this.pendingRetryEscUnsub = unsub;
   }
 
   disarmRetryEscInterrupt(): void {
-    if (this.pendingRetryEscUnsub) {
-      try {
-        this.pendingRetryEscUnsub();
-      } catch {
-        // ignore unsubscribe failures
-      }
-      this.pendingRetryEscUnsub = null;
-    }
+    this.pendingRetryEscUnsub?.();
+    this.pendingRetryEscUnsub = null;
   }
 
-  // Cancel a pending post-error retry (timer + ESC interrupt) and reset the retry
-  // counter. Used by the ESC interrupt handler and by abort paths. Also drops any
-  // in-flight idle-delivery poll so an abort leaves no orphan behind.
   cancelPendingRetry(): void {
-    this.errorRetryFirstAt = null;
-    if (this.pendingRetryTimer) {
-      clearTimeout(this.pendingRetryTimer);
-      this.pendingRetryTimer = null;
-    }
-    this.cancelIdlePoll();
+    if (this.pendingRetryTimer) clearTimeout(this.pendingRetryTimer);
+    if (this.idlePollTimer) clearTimeout(this.idlePollTimer);
+    this.pendingRetryTimer = null;
+    this.idlePollTimer = null;
     this.disarmRetryEscInterrupt();
     this.errorRetryCount = 0;
-    this.errorNudgeHalted = false;
+    this.errorRetryFirstAt = null;
   }
 
-  // Drop only the idle-delivery poll. Deliberately does NOT touch the
-  // error-retry budget: cancelling a delivery poll is not evidence the error
-  // streak resolved, and resetting it there would re-open the retry floodgate.
-  cancelIdlePoll(): void {
-    if (this.idlePollTimer) {
-      clearTimeout(this.idlePollTimer);
-      this.idlePollTimer = null;
-    }
-  }
-
-  // Deliver a queued message only once the main session is idle. Firing a
-  // followUp while the SDK still has an active run triggers an async, runtime-
-  // swallowed "Agent is already processing" rejection (surfaces as
-  // Extension "<runtime>" error), so we PRE-CHECK idle and DEFER (bounded poll)
-  // rather than dropping the nudge. Guarded by activeTaskToken; the poll owns
-  // idlePollTimer, which abort paths clear alongside the retry timer.
-  sendUserMessageWhenIdle(text: string, taskToken: number, attempt = 0): void {
-    const log = getLogger();
-    if (this.activeTaskToken !== taskToken || !this.active) {
-      this.disarmRetryEscInterrupt();
-      return;
-    }
-    const idleFn = this.lastCtx?.isIdle;
-    const idle = typeof idleFn === "function" ? !!idleFn.call(this.lastCtx) : true;
-    if (idle) {
+  sendUserMessageWhenIdle(text: string, _token = 0, attempt = 0): void {
+    const ctx = this.lastCtx;
+    if (!ctx) return;
+    if (typeof ctx.isIdle !== "function" || ctx.isIdle()) {
       this.disarmRetryEscInterrupt();
       this.safeSendUserMessage(text);
       return;
     }
-    const MAX_ATTEMPTS = 120; // ~2min at 1s poll
-    if (attempt >= MAX_ATTEMPTS) {
-      log.warn({ s: "orchestrator", attempt }, "sendUserMessageWhenIdle gave up waiting for idle");
-      this.disarmRetryEscInterrupt();
-      this.lastCtx?.ui?.notify?.(
-        "pi-pi stopped waiting for the agent to go idle; auto-continuation was dropped. Send any message to resume.",
-        "warning",
-      );
-      return;
-    }
+    if (attempt >= 120) return;
     this.idlePollTimer = setTimeout(() => {
       this.idlePollTimer = null;
-      this.sendUserMessageWhenIdle(text, taskToken, attempt + 1);
+      this.sendUserMessageWhenIdle(text, 0, attempt + 1);
     }, 1000);
   }
 
   safeSendUserMessage(text: string): void {
-    const log = getLogger();
-    const attempt = (retries: number) => {
+    try {
+      this.pi.sendUserMessage(text, { deliverAs: "followUp" });
+    } catch {
       try {
-        // Route through the controller's single send path. "instruction" maps to
-        // followUp: queues the message and triggers a turn once the current one
-        // settles (or runs immediately when idle), so it never throws "Agent is
-        // already processing" when called mid-tool (e.g. during a transition).
-        this.transitionController.send(text, "instruction");
-        log.debug({ s: "orchestrator", retries, text: text.slice(0, 200) }, "safeSend sent");
-      } catch (err: any) {
-        if (retries < 30) {
-          log.debug({ s: "orchestrator", retries, err: err?.message }, "safeSend retry");
-          setTimeout(() => attempt(retries + 1), 1000);
-        } else {
-          log.error({ s: "orchestrator", retries, err: err?.message ?? String(err), text: text.slice(0, 200) }, "safeSend failed after max retries");
-          this.lastCtx?.ui?.notify?.(
-            "pi-pi could not deliver a message to the agent; the task may be stalled. See logs.",
-            "error",
-          );
-        }
-      }
-    };
-    attempt(0);
-  }
-
-  // Deliver the review-ready instruction WITHOUT leaking it into the editor on
-  // ESC/abort (item 9). If a menu/ask dialogue is live, the followUp queue would
-  // be dumped into the prompt input by restoreQueuedMessagesToEditor on abort —
-  // so stash the message and deliver it as a fresh idle-gated turn once the
-  // dialogue closes (flushPendingReviewReady). If nothing is open, deliver now.
-  deliverReviewReady(text: string): void {
-    if (this.interactivePromptOpen) {
-      this.pendingReviewReady = text;
-      return;
+        this.pi.sendUserMessage(text);
+      } catch {}
     }
-    this.pendingReviewReady = null;
-    this.sendUserMessageWhenIdle(text, this.activeTaskToken);
-  }
-
-  // Deliver a stashed review-ready instruction (if any) as a fresh idle-gated
-  // turn. One-shot: cleared before sending so it never re-fires on a later idle.
-  // Called when a menu/ask dialogue closes (including ESC/abort).
-  flushPendingReviewReady(): void {
-    const text = this.pendingReviewReady;
-    if (!text || !this.active) return;
-    this.pendingReviewReady = null;
-    this.sendUserMessageWhenIdle(text, this.activeTaskToken);
-  }
-
-  truncateResult(result: string): string {
-    const trimmed = result.trim();
-    if (!trimmed) return "";
-    const lines = trimmed.split("\n");
-    if (lines.length <= 20 && trimmed.length <= 2000) return trimmed;
-    const truncated = lines.slice(0, 20).join("\n").slice(0, 2000);
-    return truncated + "\n…(truncated)";
   }
 
   async switchModel(ctx: ExtensionContext, modelSpec: string, thinking: string): Promise<boolean> {
-    const log = getLogger();
-    const registry = ctx.modelRegistry;
-    const allModels = registry.getAvailable();
-
-    const requestedSpecs = [resolveModel(modelSpec), modelSpec].filter((value, index, arr) => arr.indexOf(value) === index);
-    log.debug({ s: "model", requestedSpecs, thinking, availableCount: allModels.length }, "switchModel");
-    let resolved;
-    for (const spec of requestedSpecs) {
-      const slashIdx = spec.indexOf("/");
-      if (slashIdx !== -1) {
-        const provider = spec.substring(0, slashIdx).trim().toLowerCase();
-        const modelId = spec.substring(slashIdx + 1).trim().toLowerCase();
-        resolved = allModels.find(
-          (m) => m.provider.toLowerCase() === provider && m.id.toLowerCase() === modelId,
-        );
-      }
-      if (!resolved) {
-        const allSpecs = allModels.map((m) => `${m.provider}/${m.id}`);
-        const familyMatch = findLatestFamilyMatch(spec, allSpecs);
-        if (familyMatch) {
-          const fmLower = familyMatch.toLowerCase();
-          resolved = allModels.find(
-            (m) => `${m.provider.toLowerCase()}/${m.id.toLowerCase()}` === fmLower,
-          );
-        }
-      }
-      if (!resolved) {
-        const pattern = spec.toLowerCase();
-        const matches = allModels.filter(
-          (m) => m.id.toLowerCase() === pattern || m.id.toLowerCase().includes(pattern),
-        );
-        if (matches.length === 1) resolved = matches[0];
-      }
-      if (resolved) break;
+    const resolved = resolveModel(modelSpec);
+    const separator = resolved.indexOf("/");
+    if (separator < 1) return false;
+    const provider = resolved.slice(0, separator);
+    const id = resolved.slice(separator + 1);
+    const model = (ctx as any).modelRegistry?.find?.(provider, id)
+      ?? (ctx as any).modelRegistry?.getAvailable?.().find((entry: any) => entry.provider === provider && entry.id === id);
+    if (!model || typeof (this.pi as any).setModel !== "function") return false;
+    await (this.pi as any).setModel(model);
+    if (typeof (this.pi as any).setThinkingLevel === "function") {
+      await (this.pi as any).setThinkingLevel(thinking);
     }
-
-    if (!resolved) {
-      log.warn({ s: "model", requestedSpecs }, "model not found");
-      return false;
-    }
-
-    const ok = await this.pi.setModel(resolved);
-    if (!ok) {
-      log.warn({ s: "model", resolved: `${resolved.provider}/${resolved.id}` }, "setModel returned false");
-      return false;
-    }
-
-    const VALID_THINKING = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
-    const thinkingLevel = (VALID_THINKING.has(thinking) ? thinking : "high") as
-      | "off"
-      | "minimal"
-      | "low"
-      | "medium"
-      | "high"
-      | "xhigh";
-    this.pi.setThinkingLevel(thinkingLevel);
-    log.debug({ s: "model", model: `${resolved.provider}/${resolved.id}`, thinking: thinkingLevel }, "model switched");
     return true;
   }
 
-  // The footer's phase/mode display (line 1) reads orchestrator state directly; this only
-  // sets a hidden "pp-phase" status whose value changes per transition so the host repaints
-  // the footer. Nothing renders this string (footer line 3 was removed), so it stays terse.
-  updateStatus(ctx: ExtensionContext): void {
-    publishAcpState(this);
-    if (!this.active || this.active.state.phase === "done") {
-      ctx.ui.setStatus("pp-phase", undefined);
-      return;
-    }
-    const s = this.active.state;
-    const cycle = s.reviewCycle ? `:${s.reviewCycle.kind}#${s.reviewCycle.pass}` : "";
-    ctx.ui.setStatus("pp-phase", `${this.active.type}:${s.phase}:${s.step}:${getEffectivePhaseMode(s)}${cycle}`);
-  }
-
-  getPlanStartState(taskDir: string, plannerPresetName?: string): { step: string; shouldSpawnPlanners: boolean } {
-    const plansDir = join(taskDir, "plans");
-    const presetName = plannerPresetName ?? this.config.agents.subagents.presetGroups.planners.default;
-    const plannerVariants = resolvePreset(this.config, "planners", presetName);
-    const enabledPlannerVariants = Object.entries(plannerVariants)
-      .filter(([, v]) => isEnabled(v))
-      .map(([name]) => name);
-    // Content-aware: a variant that wrote only its INCOMPLETE stub has not
-    // finished, so synthesizing over it would synthesize over nothing.
-    const hasAllEnabledVariants = classifyPlanVariants(plansDir, enabledPlannerVariants).incompleteVariants.length === 0;
-
-    if (enabledPlannerVariants.length === 0 || hasAllEnabledVariants || getLatestSynthesizedPlan(taskDir)) {
-      return { step: "synthesize", shouldSpawnPlanners: false };
-    }
-
-    return { step: "await_planners", shouldSpawnPlanners: true };
-  }
-
-  getPhasePrompt(_ctx: ExtensionContext): string {
-    if (!this.active) return "";
-
-    const mode: TaskMode = getEffectivePhaseMode(this.active.state);
-
-    if (this.active.state.reviewCycle?.step === "apply_feedback") {
-      const pass = this.active.state.reviewCycle.pass;
-      return reviewCycleSystemPrompt(this.active.dir, pass, this.active.state.phase, mode);
-    }
-
-    switch (this.active.state.phase) {
-      case "brainstorm":
-        return brainstormSystemPrompt(this.active.description, this.active.dir, this.cwd);
-      case "plan":
-        return planningSystemPrompt(this.active.dir, mode);
-      case "implement":
-        return implementationSystemPrompt(this.active.dir, this.cwd);
-      case "review":
-        return reviewTaskSystemPrompt(this.active.dir, this.cwd);
-      case "quick":
-        return "Work on the user's request directly. There are no phases, planning, or reviews.";
-      default:
-        return "";
-    }
-  }
-
-  taskIdFromDir(dir: string): string {
-    const name = basename(dir);
-    return name.split("_")[0];
-  }
-
-  persistReviewPass(): void {
-    if (!this.active) return;
-    this.active.state.reviewPass = this.active.reviewPass;
-    saveTask(this.active.dir, this.active.state);
-  }
-
-  async startTask(
-    ctx: ExtensionCommandContext,
-    type: TaskType,
-    description: string,
-    fromTaskDir?: string,
-    skipBrainstorm?: boolean,
-    mode?: TaskMode,
-  ): Promise<void> {
-    const log = getLogger();
-    log.info({ s: "task", type, description, fromTaskDir: fromTaskDir ?? null, skipBrainstorm: skipBrainstorm ?? false, mode: mode ?? null }, "startTask");
-    const hadActive = !!this.active;
-    if (this.active) {
-      ctx.ui.notify(
-        `Pausing previous task "${this.active.description}" (phase: ${this.active.state.phase})…`,
-        "info",
-      );
-      this.abortAllSubagents();
-      saveTask(this.active.dir, this.active.state);
-      unregisterAgentDefinitions(this.pi);
-      await this.cleanupActive();
-    }
-
-    if (hadActive) {
-      // Route new-task compaction through the controller as a "done" target.
-      this.lastCtx = ctx;
-      await this.transitionController.requestTransition({
-        kind: "done",
-        discard: true,
-        summary: `A new, unrelated ${type} task is starting. The previous task is finished — DISCARD its entire conversation. Do NOT carry forward, reference, or act on any prior task's messages, phase, plan, or aborted turns; treat the new task as a clean slate.`,
-      });
-    }
-
-    try {
-      this.config = loadConfig(this.cwd);
-    } catch (err: any) {
-      ctx.ui.notify(`Config error: ${err.message}`, "error");
-      return;
-    }
-
-    setLogLevel(this.config.general.logLevel);
-    ensureGitignore(this.cwd);
-
-    // Validate the fork source BEFORE creating the new task so an invalid or
-    // escaping path cannot leave a half-created task behind. validateFromPath
-    // resolves against .pp/state/, so feed it the stateDir-relative form (the
-    // same shape stored in state.from) rather than the absolute dir.
-    let validatedFromDir: string | undefined;
-    if (fromTaskDir) {
-      const fromRel = relative(join(this.cwd, ".pp", "state"), fromTaskDir);
-      const validation = validateFromPath(this.cwd, fromRel);
-      if (!validation.ok) {
-        ctx.ui.notify(validation.reason, "error");
-        return;
-      }
-      validatedFromDir = validation.dir;
-    }
-
-    const dir = createTask(this.cwd, type, description, mode);
-    const state = loadTask(dir);
-
-    if (validatedFromDir) {
-      const srcUr = join(validatedFromDir, "USER_REQUEST.md");
-      const srcRes = join(validatedFromDir, "RESEARCH.md");
-      const srcArtifacts = join(validatedFromDir, "artifacts");
-      if (existsSync(srcUr)) {
-        const originalUr = readFileSync(srcUr, "utf-8");
-        const implNote =
-          "# IMPLEMENTATION TASK\n\n" +
-          "This is now an **implement** task — the previous brainstorm/debug/review task is over.\n" +
-          "The user request, research, and artifacts below are carried over as context for implementation.\n" +
-          "Your job is to plan and implement actual code changes based on this research.\n" +
-          "Any prior instructions in the text below saying \"brainstorm only\", \"review only\",\n" +
-          "\"do not implement\", \"no code changes\", or similar DO NOT APPLY — they were for the previous task.\n\n" +
-          "---\n\n";
-        writeFileSync(join(dir, "USER_REQUEST.md"), implNote + originalUr, "utf-8");
-      }
-      if (existsSync(srcRes)) copyFileSync(srcRes, join(dir, "RESEARCH.md"));
-      if (existsSync(srcArtifacts)) {
-        const destArtifacts = join(dir, "artifacts");
-        mkdirSync(destArtifacts, { recursive: true });
-        for (const f of readdirSync(srcArtifacts).filter((f) => f.endsWith(".md"))) {
-          copyFileSync(join(srcArtifacts, f), join(destArtifacts, f));
-        }
-      }
-      state.from = relative(join(this.cwd, ".pp", "state"), validatedFromDir);
-      if (skipBrainstorm && type === "implement") {
-        state.phase = "plan";
-        state.initialPhase = "plan";
-        state.activePlannerPreset = this.config.agents.subagents.presetGroups.planners.default;
-        state.step = this.getPlanStartState(dir, state.activePlannerPreset).step;
-      }
-      saveTask(dir, state);
-    }
-
-    let release: (() => Promise<void>) | null = null;
-    try {
-      release = await lockTask(dir, this.config.performance.internals);
-    } catch (err: any) {
-      try {
-        rmSync(dir, { recursive: true, force: true });
-      } catch {
-        log.warn({ s: "task", dir }, "failed to clean up orphaned task dir");
-      }
-      ctx.ui.notify(`Failed to lock task: ${err.message}`, "error");
-      return;
-    }
-
-    this.resetTaskScopedState();
-    this.activeTaskToken++;
-
-    this.active = {
-      dir,
-      type,
-      state,
-      release,
-      taskId: this.taskIdFromDir(dir),
-      modifiedFiles: new Set(),
-      reviewPass: state.reviewPass,
-      description: state.description,
-    };
-
-    addTaskDestination(dir);
-    log.info({ s: "task", dir, taskId: this.active.taskId, phase: state.phase, step: state.step }, "task activated");
-
-    const modelConfig = this.config.agents.orchestrators[
-      type === "review" ? "review"
-      : type === "quick" ? "quick"
-      : "implement"
-    ];
-    const modelOk = await this.switchModel(ctx, modelConfig.model, modelConfig.thinking);
-    if (!modelOk) {
-      ctx.ui.notify(`Model "${modelConfig.model}" not found — using current model`, "warning");
-    }
-
-    this.registerAgents();
-    this.pi.setSessionName(this.active.description.slice(0, 50));
+  updateStatus(ctx: any): void {
     this.lastCtx = ctx;
-    this.updateStatus(ctx);
+    publishAcpState(this);
+    ctx?.ui?.requestRender?.();
+  }
 
-    this.injectContextAndArtifacts(this.active.dir, this.active.state.phase);
-
-    this.phaseStartTime = Date.now();
-    const isGenericDescription = ["implement", "review"].includes(this.active.description);
-    const isGenericQuickDescription = this.active.description === "quick";
-    const hasInheritedTaskContext = Boolean(fromTaskDir && type === "implement");
-    const isWaitingForPlanners = this.active.state.phase === "plan" && this.active.state.step === "await_planners";
-    if ((isGenericDescription || isGenericQuickDescription) && !hasInheritedTaskContext) {
-      ctx.ui.notify("Task created. Describe what you'd like to do.", "info");
-    } else if (isWaitingForPlanners) {
-      ctx.ui.notify("Entered plan phase. Waiting for planners to complete before synthesis.", "info");
-    } else {
-      const desc = this.active.description;
-      const descSuffix = !isGenericDescription ? `\n\nTask: ${desc}` : "";
-      this.safeSendUserMessage(`[PI-PI] Entered ${this.active.state.phase} phase. Begin working.${descSuffix}`);
-    }
-
-    if (this.active.state.phase === "plan" && this.active.state.step === "await_planners") {
-      const requestedPlannerPresetName = this.active.state.activePlannerPreset ?? this.config.agents.subagents.presetGroups.planners.default;
-      const plannerPresetExists = Object.prototype.hasOwnProperty.call(this.config.agents.subagents.presetGroups.planners.presets ?? {}, requestedPlannerPresetName);
-      const plannerPresetName = plannerPresetExists
-        ? requestedPlannerPresetName
-        : (Object.keys(this.config.agents.subagents.presetGroups.planners.presets ?? {})[0] ?? requestedPlannerPresetName);
-      if (this.active.state.activePlannerPreset !== plannerPresetName) {
-        this.active.state.activePlannerPreset = plannerPresetName;
-        saveTask(this.active.dir, this.active.state);
-      }
-      if (!plannerPresetExists && plannerPresetName !== requestedPlannerPresetName) {
-        ctx.ui.notify(
-          `Planner preset "${requestedPlannerPresetName}" not found. Falling back to "${plannerPresetName}".`,
-          "warning",
-        );
-      }
-      const plannerVariants = resolvePreset(this.config, "planners", plannerPresetName);
-      this.pendingSubagentSpawns = Object.values(plannerVariants).filter((v) => isEnabled(v)).length;
-      this.failedPlannerVariants = [];
-      handleSpawnResult(
-        this,
-        spawnPlanners(
-          this.pi,
-          this.cwd,
-          this.active.dir,
-          this.active.taskId,
-          this.config,
-          this.transitionController.phaseSend,
-          plannerVariants,
-          this.active?.state.repos ?? [],
-        ),
-        { kind: "planner", logScope: "planner", logMessage: "spawnPlanners failed", onSettled: (result) => { if (!result?.spawned) this.checkPlannerCompletion(); } },
-      );
-    }
+  resetAdaptiveCompaction(): void {
+    this.adaptiveCompaction = {
+      nextThreshold: null,
+      inFlight: false,
+      pendingProactiveMeasure: false,
+      disabled: false,
+      modelKey: null,
+      window: null,
+    };
+    this.compactionArm.armed = true;
   }
 
   abortAllSubagents(): void {
-    for (const agentId of this.spawnedAgentIds) {
-      this.pi.events.emit("subagents:rpc:stop", {
-        requestId: crypto.randomUUID(),
-        agentId,
-      });
-    }
+    const manager = (globalThis as any)[Symbol.for("pi-subagents:manager")];
+    manager?.abortAll?.();
     this.spawnedAgentIds.clear();
-    this.pendingSubagentSpawns = 0;
-  }
-
-  // Returns clearSubscriptionFallback's restore spec so the teardown caller can
-  // put the live model back on the subscription; activation callers ignore it.
-  resetTaskScopedState(): string | null {
-    this.spawnedAgentIds.clear();
-    this.agentDescriptions.clear();
-    this.agentSpawnTimes.clear();
-    this.agentLifecycle.clear();
-    this.pendingSubagentSpawns = 0;
-    this.errorRetryCount = 0;
-    this.errorRetryFirstAt = null;
-    this.errorNudgeHalted = false;
-    this.commitReminderSent = false;
-    this.consecutiveNudges = 0;
-    this.applyFeedbackNudges = 0;
-    this.applyFeedbackHalted = false;
-    this.nudgeHalted = false;
-    // A manual compaction requested but not yet resolved (its hook and its
-    // compact() callbacks both run later) must not survive the task it was
-    // requested in: the selector would downgrade the NEXT task's first
-    // automatic compaction, and a stuck gate would block its manual entry.
-    this.manualCompactionUseBuiltin = false;
-    this.manualCompactionPending = false;
-    this.manualCompactionRequestId += 1;
-    this.pendingNudges.clear();
-    this.phaseStartTime = 0;
-    this.userGatePending = false;
-    this.pendingReviewReady = null;
-    this.failedPlannerVariants = [];
-    this.failedReviewerVariants = [];
-    this.plannerFailureDialogPending = false;
-    this.reviewerFailureDialogPending = false;
-    if (this.pendingRetryTimer) {
-      clearTimeout(this.pendingRetryTimer);
-      this.pendingRetryTimer = null;
-    }
-    this.cancelIdlePoll();
-    this.disarmRetryEscInterrupt();
-    if (this.staleAgentTimer) {
-      clearInterval(this.staleAgentTimer);
-      this.staleAgentTimer = null;
-    }
-    if (this.mainTurnTimer) {
-      clearInterval(this.mainTurnTimer);
-      this.mainTurnTimer = null;
-    }
-    this.mainTurnInFlight = false;
-    this.mainTurnRecovering = false;
-    this.resetAdaptiveCompaction();
-    return this.clearSubscriptionFallback();
-  }
-
-  // Reset the adaptive proactive-compaction state (item 6). Called on task
-  // teardown and whenever the model or context window changes, so a stale
-  // baseline never drives the threshold for a different model/window.
-  resetAdaptiveCompaction(): void {
-    this.adaptiveCompaction = { nextThreshold: null, inFlight: false, pendingProactiveMeasure: false, disabled: false, modelKey: null, window: null };
-    this.compactionArm = { armed: true };
-  }
-
-  // Reset the subscription rate-limit fallback: cancel the switch-back probe
-  // timer, clear the model-registry override, and reset guards. Called on task
-  // reset/cleanup so the sticky override never leaks across tasks.
-  //
-  // Returns the main model's pre-fallback spec when a fallback had switched it,
-  // so a teardown caller can put the LIVE model back on the subscription. This
-  // is returned rather than switched here because the task-ACTIVATION path also
-  // calls this and then switches to the new task's own model — restoring here
-  // would race and clobber that.
-  clearSubscriptionFallback(): string | null {
-    if (this.subSwitchBackTimer) {
-      clearTimeout(this.subSwitchBackTimer);
-      this.subSwitchBackTimer = null;
-    }
-    const priorSpec = this.subFallbackActive ? this.subFallbackMainPriorSpec : null;
-    this.subFallbackActive = false;
-    this.subFallbackMainPriorSpec = null;
-    this.subFallbackDialogPending = false;
-    this.interactivePromptOpen = false;
-    this.subFallbackPendingDecision = false;
-    this.subFallbackModelId = null;
-    setSubscriptionFallbackActive(false);
-    // Monthly-cap tier demotions are session/task-scoped; clear them on teardown
-    // alongside the subscription override so a one-way demotion never leaks
-    // across tasks (the only other recovery is the manual /pp menu action).
-    clearAllTierDemotions();
-    return priorSpec;
-  }
-
-  async cleanupActive(): Promise<void> {
-    if (!this.active) return;
-    const dir = this.active.dir;
-    getLogger().info({ s: "task", dir }, "cleaning up active task");
-    removeTaskDestination();
-    const restoreSpec = this.resetTaskScopedState();
-    // Put the live model back on the subscription when a rate-limit fallback had
-    // moved it: the override is cleared above, so without this the session would
-    // silently keep billing regular (paid) Claude after the task ends.
-    // Never let a restore failure escape: the lock release below must still run.
-    if (restoreSpec && this.lastCtx) {
-      try {
-        const thinking = this.config?.agents?.orchestrators?.implement?.thinking ?? "high";
-        const ok = await this.switchModel(this.lastCtx, restoreSpec, thinking);
-        if (!ok) getLogger().warn({ s: "model", spec: restoreSpec }, "failed to restore subscription model on task cleanup");
-      } catch (err: any) {
-        getLogger().warn({ s: "model", spec: restoreSpec, err: err?.message }, "failed to restore subscription model on task cleanup");
-      }
-    }
-    if (this.active.release) {
-      try {
-        await this.active.release();
-      } catch (err: any) {
-        getLogger().error({ s: "task", dir, err: err.message }, "failed to release lock");
-      }
-    }
-    this.active = null;
     publishAcpState(this);
   }
 
-  registerAgents(): void {
-    const log = getLogger();
-    const explore = createExploreAgent(this.config);
-    const librarian = createLibrarianAgent(this.config);
-    const taskAgent = createTaskAgent(this.config);
-    const phase = this.active?.state.phase;
-    const repos = this.active?.state.repos ?? [];
-    log.debug({ s: "agents", phase, repoCount: repos.length }, "registering agent definitions");
-    const contextDirs = getContextDirs(this.cwd, repos, this.config.general.loadExtraRepoConfigs);
-    const repoContext = buildRepoContext(repos);
-
-    const appendContext = (agentType: string, prompt: string, modelInfo: { vendor: string; family: string; tier: string }): string => {
-      const contextFiles = loadAllContextFiles(contextDirs, agentType as any, "system", phase, modelInfo);
-      if (contextFiles.length === 0 && !repoContext) return prompt;
-      const parts = [prompt];
-      if (repoContext) parts.push(repoContext.trimEnd());
-      if (contextFiles.length === 0) return parts.join("\n\n");
-      const contextBlock = contextFiles.map((f) => f.content).join("\n\n");
-      parts.push("# Project Context\n\n" + contextBlock);
-      return parts.join("\n\n");
-    };
-
-    registerAgentDefinitions(this.pi, [
-      {
-        type: "explore",
-        variant: null,
-        ...explore,
-        prompt: appendContext("explore", explore.prompt, getModelInfo(resolveModel(this.config.agents.subagents.simple.explore.model))),
-      },
-      {
-        type: "librarian",
-        variant: null,
-        ...librarian,
-        prompt: appendContext("librarian", librarian.prompt, getModelInfo(resolveModel(this.config.agents.subagents.simple.librarian.model))),
-      },
-      {
-        type: "task",
-        variant: null,
-        ...taskAgent,
-        prompt: appendContext("task", taskAgent.prompt, getModelInfo(resolveModel(this.config.agents.subagents.simple.task.model))),
-      },
-      ...this.buildPoolAgentDefinitions(appendContext),
-    ]);
-  }
-
-  // Register one model-named subagent per ENABLED entry in each on-demand pool
-  // (advisors / reviewers / deep-debuggers). The variant token encodes the
-  // model+thinking so the caller can see exactly what each is; the base `type`
-  // (advisor/reviewer/deep-debugger) drives context-file lookup. A collision
-  // after name sanitization is skipped (do not silently merge two entries).
-  private buildPoolAgentDefinitions(
-    appendContext: (agentType: string, prompt: string, modelInfo: { vendor: string; family: string; tier: string }) => string,
-  ): Array<{ type: string; variant: string; frontmatter: any; prompt: string }> {
-    const pools = this.config.agents.subagents.pools;
-    const defs: Array<{ type: string; variant: string; frontmatter: any; prompt: string }> = [];
-    const seen = new Set<string>();
-    const add = (
-      baseType: "advisor" | "reviewer" | "deep-debugger",
-      entry: { model: string; thinking: string; enabled?: boolean },
-      make: (e: { model: string; thinking: string }) => { frontmatter: any; prompt: string },
-    ) => {
-      if (entry.enabled === false) return;
-      const variant = encodePoolVariant(resolveModel(entry.model), entry.thinking);
-      const name = `${baseType}_${variant}`;
-      if (seen.has(name)) {
-        getLogger().warn({ s: "agents", name }, "pool entry collides after sanitization; skipping");
-        return;
-      }
-      seen.add(name);
-      const agent = make(entry);
-      defs.push({
-        type: baseType,
-        variant,
-        frontmatter: agent.frontmatter,
-        prompt: appendContext(baseType, agent.prompt, getModelInfo(resolveModel(entry.model))),
-      });
-    };
-    for (const e of pools.advisors) add("advisor", e, createAdvisorAgent);
-    for (const e of pools.reviewers) add("reviewer", e, createReviewerAgent);
-    for (const e of pools.deepDebuggers) add("deep-debugger", e, createDeepDebuggerAgent);
-    return defs;
-  }
-
-  // The orchestrator (main-agent) model config that applies to a phase — the
-  // source of truth for the thinking level shown in the main agent's identity
-  // block. Mirrors the phase→model selection in injectContextAndArtifacts.
-  mainAgentConfigForPhase(phase: Phase | undefined): { model: string; thinking: string } {
-    const o = this.config.agents.orchestrators;
-    if (phase === "review" && this.active?.type === "review") return o.review;
-    if (phase === "plan") return o.plan;
-    return o.implement;
-  }
-
-  injectContextAndArtifacts(taskDir: string, phase: Phase): void {
-    const log = getLogger();
-    log.debug({ s: "context", taskDir, phase }, "injecting context and artifacts");
-    const modelSpec =
-      phase === "review" && this.active?.type === "review"
-        ? this.config.agents.orchestrators.review.model
-      : phase === "plan"
-        ? this.config.agents.orchestrators.plan.model
-      : this.config.agents.orchestrators.implement.model;
-    const activeModelSpec = this.lastCtx?.model
-      ? `${this.lastCtx.model.provider}/${this.lastCtx.model.id}`
-      : modelSpec;
-    const repos = this.active?.state.repos ?? [];
-    const contextDirs = getContextDirs(this.cwd, repos, this.config.general.loadExtraRepoConfigs);
-    const contextFiles = loadAllContextFiles(
-      contextDirs,
-      "main",
-      "context",
-      phase,
-      getModelInfo(activeModelSpec),
-    );
-    for (const cf of contextFiles) {
-      this.transitionController.sendCustom(
-        { customType: "pp-context", content: cf.content, display: false },
-        "context",
-      );
-    }
-    const artifacts = getPhaseArtifacts(taskDir, phase);
-    for (const artifact of artifacts) {
-      this.transitionController.sendCustom(
-        { customType: "pp-artifact", content: `=== ${artifact.name} ===\n${artifact.content}`, display: false },
-        "context",
-      );
-    }
-  }
-
-  compactAndTransition(ctx: ExtensionContext, taskDir: string, phase: Phase, onReady?: () => void, summary?: string): void {
-    getLogger().info({ s: "phase", taskDir, phase }, "compact and transition");
-    // Ensure the controller's host can reach this live ctx for compact/isIdle.
-    this.lastCtx = ctx;
-    // Notify-only case: entering plan and immediately awaiting planners. No
-    // "Begin working" instruction is sent — the agent waits for onSubagentsDone.
-    const notifyOnly = this.active?.state.phase === "plan" && this.active.state.step === "await_planners";
-    void this.transitionController.requestTransition({
-      kind: "phase",
-      summary: summary || "Phase transition — previous phase completed.",
-      onResume: async () => {
-        this.phaseStartTime = Date.now();
-        if (this.active && (phase === "plan" || phase === "implement")) {
-          const modelConfig = phase === "plan" ? this.config.agents.orchestrators.plan : this.config.agents.orchestrators.implement;
-          await this.switchModel(ctx, modelConfig.model, modelConfig.thinking);
-        }
-        this.injectContextAndArtifacts(taskDir, phase);
-        onReady?.();
-        if (notifyOnly) {
-          ctx.ui.notify("Entered plan phase. Waiting for planners to complete before synthesis.", "info");
-        }
-      },
-      instruction: notifyOnly ? undefined : `[PI-PI] Entered ${phase} phase. Begin working.`,
-    });
-  }
-
-  checkForConflictingExtensions(): string[] {
-    const allTools = this.pi.getAllTools();
-    const seen = new Map<string, number>();
-    for (const tool of allTools) {
-      if (BUNDLED_TOOLS.has(tool.name)) {
-        seen.set(tool.name, (seen.get(tool.name) ?? 0) + 1);
-      }
-    }
-    return [...seen.entries()].filter(([, count]) => count > 1).map(([name]) => name);
-  }
-
   applySubagentConcurrency(): void {
-    const mgr = (globalThis as any)[Symbol.for("pi-subagents:manager")];
-    const limit = this.config?.agents?.maxConcurrentSubagents;
-    if (typeof mgr?.setMaxConcurrent !== "function" || typeof limit !== "number") {
-      getLogger().debug({ s: "config", limit }, "subagents manager unavailable; skipped concurrency apply");
-      return;
-    }
-    mgr.setMaxConcurrent(limit);
-    getLogger().debug({ s: "config", limit }, "applied subagent concurrency limit");
-  }
-}
-
-export function ensureGitignore(cwd: string): void {
-  const ppDir = join(cwd, ".pp");
-  if (!existsSync(ppDir)) {
-    mkdirSync(ppDir, { recursive: true });
+    this.pi.events.emit("subagents:set-max-concurrent", { maxConcurrent: this.config.agents.maxConcurrentSubagents });
   }
 
-  const gitignorePath = join(ppDir, ".gitignore");
-  const requiredEntries = ["state/", "config.json", "logs/"];
-
-  if (!existsSync(gitignorePath)) {
-    writeFileSync(gitignorePath, requiredEntries.join("\n") + "\n", "utf-8");
-  } else {
-    let content = readFileSync(gitignorePath, "utf-8");
-    for (const entry of requiredEntries) {
-      if (!content.includes(entry)) {
-        content = content.trimEnd() + "\n" + entry + "\n";
+  registerAgents(): void {
+    const definitions: Array<{ type: string; variant: string | null; frontmatter: any; prompt: string }> = [];
+    const add = (type: string, value: { frontmatter: any; prompt: string }, variant: string | null = null) => {
+      definitions.push({ type, variant, frontmatter: value.frontmatter, prompt: value.prompt });
+    };
+    add("explore", createExploreAgent(this.config));
+    add("librarian", createLibrarianAgent(this.config));
+    add("task", createTaskAgent(this.config));
+    const factories: Record<PoolKey, { type: string; create: (entry: PoolEntry) => { frontmatter: any; prompt: string } }> = {
+      advisors: { type: "advisor", create: createAdvisorAgent },
+      reviewers: { type: "reviewer", create: createReviewerAgent },
+      deepDebuggers: { type: "deep-debugger", create: createDeepDebuggerAgent },
+    };
+    for (const [pool, factory] of Object.entries(factories) as Array<[PoolKey, typeof factories[PoolKey]]>) {
+      for (const entry of this.config.agents.subagents.pools[pool]) {
+        if (!isEnabled(entry)) continue;
+        add(factory.type, factory.create(entry), encodePoolVariant(resolveModel(entry.model), entry.thinking));
       }
     }
-    writeFileSync(gitignorePath, content, "utf-8");
+    registerAgentDefinitions(this.pi, definitions);
+  }
+
+  mainAgentConfig(): { model: string; thinking: string } {
+    return this.config.agents.main;
+  }
+
+  mainModelInfo(): ReturnType<typeof getModelInfo> {
+    return getModelInfo(resolveModel(this.config.agents.main.model));
   }
 }

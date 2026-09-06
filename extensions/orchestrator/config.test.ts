@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import { tmpdir } from "os";
-import { deepMerge, getDefaultConfig, loadConfig, readRawConfig, readScopedFlantSettings, removeConfigValue, resolvePreset, reviewPresetGroupForPhase, validateConfig, writeConfigValue } from "./config.js";
+import { deepMerge, getDefaultConfig, loadConfig, readRawConfig, readScopedFlantSettings, removeConfigValue, validateConfig, writeConfigValue } from "./config.js";
 
 const tempDirs: string[] = [];
 
@@ -46,86 +46,15 @@ describe("deepMerge", () => {
 });
 
 describe("validateConfig", () => {
-  it("throws for empty orchestrator model string", () => {
-    expect(() =>
-      validateConfig({
-        agents: {
-          orchestrators: {
-            implement: { model: "", thinking: "high" },
-          },
-        },
-      }),
-    ).toThrow("config.agents.orchestrators.implement.model must be a non-empty string");
-  });
-
-  it("throws for invalid preset names", () => {
-    expect(() =>
-      validateConfig({
-        agents: {
-          subagents: {
-            presetGroups: {
-              planners: {
-                presets: {
-                  "bad name": { agents: {} },
-                },
-              },
-            },
-          },
-        },
-      }),
-    ).toThrow("config.agents.subagents.presetGroups.planners.presets.bad name has invalid name");
-  });
-
-  it("throws for invalid variant names", () => {
-    expect(() =>
-      validateConfig({
-        agents: {
-          subagents: {
-            presetGroups: {
-              planners: {
-                presets: {
-                  regular: {
-                    agents: {
-                      "bad name": { enabled: true, model: "provider/model", thinking: "high" },
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      }),
-    ).toThrow("config.agents.subagents.presetGroups.planners.presets.regular.agents.bad name has invalid name");
-  });
-
-  it("throws when commands.afterEdit is not an object", () => {
-    expect(() => validateConfig({ commands: { afterEdit: [] } as any })).toThrow(
-      "config.commands.afterEdit must be an object",
+  it("throws for empty main agent model string", () => {
+    expect(() => validateConfig({ agents: { main: { model: "", thinking: "high" } } })).toThrow(
+      "config.agents.main.model must be a non-empty string",
     );
   });
 
-  it("throws when commands.afterEdit entry has no run", () => {
-    expect(() => validateConfig({ commands: { afterEdit: { cmd: { run: "", globs: ["*.ts"] } } } })).toThrow(
-      "config.commands.afterEdit.cmd.run must be a non-empty string",
-    );
-  });
-
-  it("throws when commands.afterImplement entry has no run", () => {
-    expect(() => validateConfig({ commands: { afterImplement: { cmd: { run: "" } } } })).toThrow(
-      "config.commands.afterImplement.cmd.run must be a non-empty string",
-    );
-  });
-
-  it("throws for invalid duration values", () => {
-    expect(() => validateConfig({ performance: { commands: { afterEdit: -1 } } })).toThrow(
-      "config.performance.commands.afterEdit must be a valid duration",
-    );
-  });
-
-  it("throws for invalid injectAgentsMd value", () => {
-    expect(() => validateConfig({ general: { injectAgentsMd: "yes" } })).toThrow(
-      "config.general.injectAgentsMd",
-    );
+  it("throws for an invalid logLevel and tracing value", () => {
+    expect(() => validateConfig({ general: { logLevel: "loud" } })).toThrow("config.general.logLevel");
+    expect(() => validateConfig({ general: { tracing: "yes" } as any })).toThrow("config.general.tracing");
   });
 
   it("defaults compaction to enabled 30%/250K and accepts a valid override", () => {
@@ -167,40 +96,27 @@ describe("validateConfig", () => {
     expect(() => validateConfig({ contextInjection: { globalClaude: "yes" } as any })).toThrow("config.contextInjection.globalClaude");
   });
 
-  it("defaults skills to discovery-on for both scopes and validates its shape", () => {
+  it("defaults skills to discovery-on for all three layers and validates its shape", () => {
     const d = getDefaultConfig();
-    expect(d.skills).toEqual({ loadProject: true, loadGlobal: true, disabled: [] });
-    expect(() => validateConfig({ skills: { loadProject: true, loadGlobal: false, disabled: ["project:x"] } })).not.toThrow();
-    expect(() => validateConfig({ skills: { loadProject: "yes" } as any })).toThrow("config.skills.loadProject");
-    expect(() => validateConfig({ skills: { disabled: [1] } as any })).toThrow("config.skills.disabled");
+    expect(d.skills).toEqual({ loadBundled: true, loadGlobal: true, loadProject: true });
+    expect(() => validateConfig({ skills: { loadBundled: false, loadGlobal: false, loadProject: true } })).not.toThrow();
+    expect(() => validateConfig({ skills: { loadBundled: "yes" } as any })).toThrow("config.skills.loadBundled");
+    expect(() => validateConfig({ skills: { loadProject: 1 } as any })).toThrow("config.skills.loadProject");
   });
 
-  it("ships quick, regular and deep presets in every preset group", () => {
-    const groups = getDefaultConfig().agents.subagents.presetGroups as Record<string, any>;
-    for (const name of ["planners", "planReviewers", "codeReviewers", "brainstormReviewers"]) {
-      const g = groups[name];
-      expect(g, name).toBeDefined();
-      expect(g.default).toBe("regular");
-      expect(Object.keys(g.presets).sort()).toEqual(["deep", "quick", "regular"]);
-    }
-  });
-
-  it("round-trips the compaction section through loadConfig deep-merge", () => {
+  it("round-trips the compaction section through deep-merge", () => {
     const merged = deepMerge(getDefaultConfig() as any, { compaction: { fraction: 0.25 } });
     expect(merged.compaction.fraction).toBe(0.25);
     expect(merged.compaction.floorTokens).toBe(250000);
     expect(merged.compaction.enabled).toBe(true);
   });
 
-  it("accepts valid partial config", () => {
+  it("accepts a valid partial config", () => {
     expect(() =>
       validateConfig({
-        general: { autoCommit: false, injectAgentsMd: false },
-        commands: {
-          afterEdit: { fmt: { run: "npm run fmt", globs: ["**/*.ts"] } },
-          afterImplement: { test: { run: "npm test" } },
-        },
-        performance: { commands: { afterEdit: "30s" } },
+        general: { logLevel: "debug", tracing: true },
+        agents: { main: { model: "provider/model", thinking: "xhigh" } },
+        performance: { internals: { subagentStale: "30s" } },
       }),
     ).not.toThrow();
   });
@@ -217,6 +133,17 @@ describe("validateConfig", () => {
     for (const good of [1, 7, 1024]) {
       expect(() => validateConfig({ agents: { maxConcurrentSubagents: good } })).not.toThrow();
     }
+  });
+
+  it("no longer knows about removed sections", () => {
+    const d = getDefaultConfig() as Record<string, any>;
+    expect(d.commands).toBeUndefined();
+    expect(d.agents.orchestrators).toBeUndefined();
+    expect(d.agents.subagents.presetGroups).toBeUndefined();
+    expect(d.performance.commands).toBeUndefined();
+    expect(d.performance.internals.taskLockStale).toBeUndefined();
+    expect(d.performance.internals.taskLockRefresh).toBeUndefined();
+    expect((d.skills as Record<string, unknown>).disabled).toBeUndefined();
   });
 });
 
@@ -268,118 +195,75 @@ describe("loadConfig", () => {
       configPath,
       JSON.stringify({
         agents: {
-          orchestrators: {
-            implement: { model: "custom/implement", thinking: "low" },
-          },
+          main: { model: "custom/main", thinking: "low" },
           subagents: {
-            presetGroups: {
-              planners: {
-                presets: {
-                  regular: {
-                    agents: {
-                      opus: { enabled: false, model: "anthropic/claude-opus-latest", thinking: "high" },
-                    },
-                  },
-                },
-              },
-            },
+            simple: { explore: { model: "custom/explore", thinking: "medium" } },
+            pools: { advisors: [{ enabled: true, model: "custom/advisor", thinking: "high" }] },
           },
         },
-        commands: {
-          afterImplement: { lint: { run: "npm run lint" } },
-        },
-        performance: {
-          commands: {
-            afterEdit: 1234,
-          },
-        },
-        general: {
-          autoCommit: false,
-        },
+        general: { logLevel: "debug" },
       }),
       "utf-8",
     );
 
     const config = loadConfig(cwd, "/nonexistent/global/config.json");
 
-    expect(config.agents.orchestrators.implement.model).toBe("custom/implement");
-    expect(config.agents.orchestrators.plan.model).toBe("anthropic/claude-opus-latest");
-    const planners = resolvePreset(config, "planners");
-    expect(planners.opus.enabled).toBe(false);
-    expect(planners.opus.model).toBe("anthropic/claude-opus-latest");
-    expect(config.commands.afterEdit).toEqual({});
-    expect(config.commands.afterImplement).toEqual({ lint: { run: "npm run lint" } });
-    expect(config.performance.commands.afterEdit).toBe(1234);
-    expect(config.performance.commands.afterImplement).toBe(300000);
-    expect(config.general.autoCommit).toBe(false);
-    expect(config.general.injectAgentsMd).toBe(true);
+    expect(config.agents.main).toEqual({ model: "custom/main", thinking: "low" });
+    expect(config.agents.subagents.simple.explore).toEqual({ model: "custom/explore", thinking: "medium" });
+    expect(config.agents.subagents.simple.task.model).toBe("anthropic/claude-opus-latest");
+    expect(config.agents.subagents.pools.advisors).toEqual([{ enabled: true, model: "custom/advisor", thinking: "high" }]);
+    expect(config.agents.subagents.pools.reviewers.length).toBe(3);
+    expect(config.general.logLevel).toBe("debug");
+    expect(config.general.tracing).toBe(false);
   });
 
-  it("defaults injectAgentsMd to true and honors an explicit override", () => {
-    const cwd = makeTempDir();
-    const defaults = loadConfig(cwd, "/nonexistent/global/config.json");
-    expect(defaults.general.injectAgentsMd).toBe(true);
-
-    const cwd2 = makeTempDir();
-    const ppDir = join(cwd2, ".pp");
-    mkdirSync(ppDir, { recursive: true });
-    writeFileSync(join(ppDir, "config.json"), JSON.stringify({ general: { injectAgentsMd: false } }), "utf-8");
-    const overridden = loadConfig(cwd2, "/nonexistent/global/config.json");
-    expect(overridden.general.injectAgentsMd).toBe(false);
-  });
-
-  it("migrates legacy injectAgentsMd into contextInjection.projectAgents", () => {
-    // A user config that set the OLD injectAgentsMd:false and never touched the
-    // new toggle should have projectAgents migrated to false.
+  it("merges global under project scope", () => {
     const cwd = makeTempDir();
     const ppDir = join(cwd, ".pp");
+    const globalConfigPath = join(cwd, "global-config.json");
+
     mkdirSync(ppDir, { recursive: true });
-    writeFileSync(join(ppDir, "config.json"), JSON.stringify({ general: { injectAgentsMd: false } }), "utf-8");
-    const migrated = loadConfig(cwd, "/nonexistent/global/config.json");
-    expect(migrated.contextInjection.projectAgents).toBe(false);
+    writeFileSync(globalConfigPath, JSON.stringify({ agents: { main: { model: "global/model", thinking: "high" }, maxConcurrentSubagents: 3 } }), "utf-8");
+    writeFileSync(join(ppDir, "config.json"), JSON.stringify({ agents: { main: { thinking: "xhigh" } } }), "utf-8");
 
-    // An explicit contextInjection.projectAgents wins over the legacy field.
-    const cwd2 = makeTempDir();
-    const ppDir2 = join(cwd2, ".pp");
-    mkdirSync(ppDir2, { recursive: true });
-    writeFileSync(join(ppDir2, "config.json"), JSON.stringify({ general: { injectAgentsMd: false }, contextInjection: { projectAgents: true } }), "utf-8");
-    const explicit = loadConfig(cwd2, "/nonexistent/global/config.json");
-    expect(explicit.contextInjection.projectAgents).toBe(true);
+    const config = loadConfig(cwd, globalConfigPath);
 
-    // A fresh config (no legacy field) keeps the default projectAgents:true.
-    const cwd3 = makeTempDir();
-    const fresh = loadConfig(cwd3, "/nonexistent/global/config.json");
-    expect(fresh.contextInjection.projectAgents).toBe(true);
+    expect(config.agents.main).toEqual({ model: "global/model", thinking: "xhigh" });
+    expect(config.agents.maxConcurrentSubagents).toBe(3);
   });
 
-  it("defaults mainTurnStale to 10m and normalizes an override to ms", () => {
+  it("defaults the internals durations and normalizes overrides to ms", () => {
     const cwd = makeTempDir();
     const defaults = loadConfig(cwd, "/nonexistent/global/config.json");
     expect(defaults.performance.internals.mainTurnStale).toBe(600000);
+    expect(defaults.performance.internals.subagentStale).toBe(300000);
 
     const cwd2 = makeTempDir();
     const ppDir = join(cwd2, ".pp");
     mkdirSync(ppDir, { recursive: true });
-    writeFileSync(join(ppDir, "config.json"), JSON.stringify({ performance: { internals: { mainTurnStale: "90s" } } }), "utf-8");
+    writeFileSync(join(ppDir, "config.json"), JSON.stringify({ performance: { internals: { mainTurnStale: "90s", subagentStale: 1234 } } }), "utf-8");
     const overridden = loadConfig(cwd2, "/nonexistent/global/config.json");
     expect(overridden.performance.internals.mainTurnStale).toBe(90000);
+    expect(overridden.performance.internals.subagentStale).toBe(1234);
   });
 
-  it("rejects an invalid mainTurnStale duration", () => {
+  it("rejects invalid internals durations", () => {
     expect(() => validateConfig({ performance: { internals: { mainTurnStale: "soon" } } })).toThrow(
       "config.performance.internals.mainTurnStale",
     );
+    expect(() => validateConfig({ performance: { internals: { subagentStale: -1 } } })).toThrow(
+      "config.performance.internals.subagentStale",
+    );
   });
 
-  it("creates default config when config.json does not exist", () => {
+  it("creates no config file when config.json does not exist", () => {
     const cwd = makeTempDir();
     const configPath = join(cwd, ".pp", "config.json");
 
     const config = loadConfig(cwd, "/nonexistent/global/config.json");
 
     expect(existsSync(configPath)).toBe(false);
-    expect(config.agents.orchestrators.implement.model).toBe("anthropic/claude-opus-latest");
-    expect(config.agents.orchestrators.plan.model).toBe("anthropic/claude-opus-latest");
+    expect(config.agents.main.model).toBe("anthropic/claude-opus-latest");
   });
 
   it("throws parse errors with config file path", () => {
@@ -399,109 +283,19 @@ describe("loadConfig", () => {
     const configPath = join(ppDir, "config.json");
 
     mkdirSync(ppDir, { recursive: true });
-    writeFileSync(configPath, JSON.stringify({ performance: { commands: { afterEdit: -1 } } }), "utf-8");
+    writeFileSync(configPath, JSON.stringify({ performance: { internals: { subagentStale: -1 } } }), "utf-8");
 
-    expect(() => loadConfig(cwd, "/nonexistent/global/config.json")).toThrow("config.performance.commands.afterEdit must be a valid duration");
+    expect(() => loadConfig(cwd, "/nonexistent/global/config.json")).toThrow("config.performance.internals.subagentStale");
   });
 
-  it("allows project default preset that exists in global presets", () => {
+  it("rejects a merged config whose pool entry lost its model", () => {
     const cwd = makeTempDir();
     const ppDir = join(cwd, ".pp");
-    const projectConfigPath = join(ppDir, "config.json");
-    const globalConfigPath = join(cwd, "global-config.json");
-
     mkdirSync(ppDir, { recursive: true });
-    writeFileSync(
-      globalConfigPath,
-      JSON.stringify({
-        agents: {
-          subagents: {
-            presetGroups: {
-              planners: {
-                presets: {
-                  deep: {
-                    enabled: true,
-                    agents: {
-                      custom: { enabled: true, model: "provider/model-deep", thinking: "high" },
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      }),
-      "utf-8",
-    );
-    writeFileSync(
-      projectConfigPath,
-      JSON.stringify({
-        agents: {
-          subagents: {
-            presetGroups: {
-              planners: {
-                default: "deep",
-              },
-            },
-          },
-        },
-      }),
-      "utf-8",
-    );
+    writeFileSync(join(ppDir, "config.json"), JSON.stringify({ agents: { subagents: { pools: { reviewers: [{ enabled: true, thinking: "high" }] } } } }), "utf-8");
 
-    const config = loadConfig(cwd, globalConfigPath);
-
-    expect(config.agents.subagents.presetGroups.planners.default).toBe("deep");
-    expect(resolvePreset(config, "planners")).toEqual(config.agents.subagents.presetGroups.planners.presets.deep.agents);
-  });
-
-  it("throws when merged default preset points to missing preset", () => {
-    const cwd = makeTempDir();
-    const ppDir = join(cwd, ".pp");
-    const projectConfigPath = join(ppDir, "config.json");
-    const globalConfigPath = join(cwd, "global-config.json");
-
-    mkdirSync(ppDir, { recursive: true });
-    writeFileSync(
-      globalConfigPath,
-      JSON.stringify({
-        agents: {
-          subagents: {
-            presetGroups: {
-              planners: {
-                presets: {
-                  regular: {
-                    enabled: true,
-                    agents: {
-                      custom: { enabled: true, model: "provider/model-regular", thinking: "high" },
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      }),
-      "utf-8",
-    );
-    writeFileSync(
-      projectConfigPath,
-      JSON.stringify({
-        agents: {
-          subagents: {
-            presetGroups: {
-              planners: {
-                default: "missing",
-              },
-            },
-          },
-        },
-      }),
-      "utf-8",
-    );
-
-    expect(() => loadConfig(cwd, globalConfigPath)).toThrow(
-      'config.agents.subagents.presetGroups.planners.default "missing" does not exist',
+    expect(() => loadConfig(cwd, "/nonexistent/global/config.json")).toThrow(
+      "config.agents.subagents.pools.reviewers[0].model must be a non-empty string",
     );
   });
 });
@@ -593,6 +387,7 @@ describe("config regressions", () => {
             pools: {
               advisors: [{ enabled: true, model: "anthropic/claude-fable-latest", thinking: "high" }],
               reviewers: [{ enabled: false, model: "openai/gpt-latest", thinking: "high" }],
+              deepDebuggers: [{ enabled: true, model: "openai/gpt-latest", thinking: "high" }],
             },
           },
         },
@@ -618,11 +413,11 @@ describe("config write helpers", () => {
     const first = getDefaultConfig();
     const second = getDefaultConfig();
 
-    first.agents.orchestrators.implement.model = "custom/model";
-    first.commands.afterEdit["cmd-1"] = { run: "echo test", globs: ["*.ts"] };
+    first.agents.main.model = "custom/model";
+    first.agents.subagents.pools.advisors.push({ model: "extra/model", thinking: "low" });
 
-    expect(second.agents.orchestrators.implement.model).toBe("anthropic/claude-opus-latest");
-    expect(second.commands.afterEdit).toEqual({});
+    expect(second.agents.main.model).toBe("anthropic/claude-opus-latest");
+    expect(second.agents.subagents.pools.advisors.length).toBe(3);
   });
 
   it("readRawConfig returns empty object when file does not exist", () => {
@@ -632,17 +427,9 @@ describe("config write helpers", () => {
 
   it("writeConfigValue creates parent dirs and writes nested key", () => {
     const filePath = join(makeTempDir(), ".pp", "config.json");
-    writeConfigValue(filePath, ["agents", "subagents", "presetGroups", "planners", "presets", "regular", "agents", "custom"], {
-      enabled: true,
-      model: "x/y",
-      thinking: "high",
-    });
+    writeConfigValue(filePath, ["agents", "subagents", "pools", "advisors"], [{ enabled: true, model: "x/y", thinking: "high" }]);
     const raw = JSON.parse(readFileSync(filePath, "utf-8"));
-    expect(raw.agents.subagents.presetGroups.planners.presets.regular.agents.custom).toEqual({
-      enabled: true,
-      model: "x/y",
-      thinking: "high",
-    });
+    expect(raw.agents.subagents.pools.advisors).toEqual([{ enabled: true, model: "x/y", thinking: "high" }]);
   });
 
   it("removeConfigValue removes nested key, prunes empty parents, and keeps file", () => {
@@ -653,41 +440,17 @@ describe("config write helpers", () => {
       JSON.stringify({
         agents: {
           subagents: {
-            presetGroups: {
-              planners: {
-                presets: {
-                  regular: {
-                    agents: {
-                      a: { enabled: true },
-                    },
-                  },
-                },
-              },
+            simple: {
+              explore: { model: "x/y", thinking: "low" },
             },
           },
         },
       }),
       "utf-8",
     );
-    removeConfigValue(filePath, ["agents", "subagents", "presetGroups", "planners", "presets", "regular", "agents", "a"]);
+    removeConfigValue(filePath, ["agents", "subagents", "simple", "explore"]);
     const raw = JSON.parse(readFileSync(filePath, "utf-8"));
     expect(raw).toEqual({});
     expect(existsSync(filePath)).toBe(true);
-  });
-});
-
-describe("reviewPresetGroupForPhase", () => {
-  it("routes brainstorm to brainstormReviewers", () => {
-    expect(reviewPresetGroupForPhase("brainstorm")).toBe("brainstormReviewers");
-  });
-
-  it("routes plan to planReviewers", () => {
-    expect(reviewPresetGroupForPhase("plan")).toBe("planReviewers");
-  });
-
-  it("routes implement, review, and unknown phases to codeReviewers", () => {
-    expect(reviewPresetGroupForPhase("implement")).toBe("codeReviewers");
-    expect(reviewPresetGroupForPhase("review")).toBe("codeReviewers");
-    expect(reviewPresetGroupForPhase("")).toBe("codeReviewers");
   });
 });

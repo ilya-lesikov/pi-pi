@@ -908,13 +908,6 @@ function disabledByDefault(
   return { ...variant, enabled: false };
 }
 
-function buildPresetGroup(
-  presets: Record<string, { enabled?: boolean; agents: Record<string, { enabled: boolean; model: string; thinking: string }> }>,
-  defaultPreset = "regular",
-): { default: string; presets: typeof presets } {
-  return { default: defaultPreset, presets };
-}
-
 export function generateFlantConfig(models: string[], subscriptionActive = false): Partial<PiPiConfig> {
   const uniqueModels = [...new Set(models)];
   if (uniqueModels.length === 0) return {};
@@ -955,10 +948,8 @@ export function generateFlantConfig(models: string[], subscriptionActive = false
   const fastest = pickCheapestFastModel(uniqueModels);
 
   const fallback = latestOpus ?? latestClaude ?? latestGpt ?? latestGeminiPro ?? latestDeepseek ?? latestGrok ?? uniqueModels[0];
-  const implementModel = latestOpus ?? latestClaude ?? fallback;
-  // Orchestrator gpt-fallback uses the smart tier (gpt-sol).
+  const mainModel = latestOpus ?? latestClaude ?? fallback;
   const debugModel = gptSmart ?? latestGeminiPro ?? latestDeepseek ?? fallback;
-  const brainstormModel = latestOpus ?? latestClaude ?? fallback;
   const taskModel = latestOpus ?? latestClaude ?? fallback;
   // Fast simple-subagents (explore/librarian) prefer a cheap gemini/haiku, then
   // the fast gpt tier (gpt-luna), before the smart gpt fallback.
@@ -966,14 +957,8 @@ export function generateFlantConfig(models: string[], subscriptionActive = false
 
   return {
     agents: {
+      main: { model: modelSpec(mainModel, sub(mainModel)), thinking: "high" },
       maxConcurrentSubagents: getDefaultConfig().agents.maxConcurrentSubagents,
-      orchestrators: {
-        implement: { model: modelSpec(implementModel, sub(implementModel)), thinking: "high" },
-        plan: { model: modelSpec(implementModel, sub(implementModel)), thinking: "high" },
-        brainstorm: { model: modelSpec(brainstormModel, sub(brainstormModel)), thinking: "high" },
-        review: { model: modelSpec(implementModel, sub(implementModel)), thinking: "high" },
-        quick: { model: modelSpec(implementModel, sub(implementModel)), thinking: "high" },
-      },
       subagents: {
         simple: {
           explore: { model: modelSpec(fastModel, sub(fastModel)), thinking: "low" },
@@ -981,13 +966,11 @@ export function generateFlantConfig(models: string[], subscriptionActive = false
           task: { model: modelSpec(taskModel, sub(taskModel)), thinking: "medium" },
         },
         pools: {
-          // High-effort pools get the -pro reasoning tier (gpt-sol-pro).
           advisors: [
             makeVariant(latestFable, fallback, sub),
             makeVariant(gptSmartPro, fallback, sub),
             disabledByDefault(makeVariant(latestGeminiPro, fallback, sub)),
           ],
-          // Everyday reviewers use the plain smart tier (gpt-sol).
           reviewers: [
             makeVariant(gptSmart, fallback, sub),
             makeVariantWithThinking(latestFable, fallback, "medium", sub),
@@ -998,118 +981,6 @@ export function generateFlantConfig(models: string[], subscriptionActive = false
             makeVariant(latestFable, fallback, sub),
             disabledByDefault(makeVariant(latestGeminiPro, fallback, sub)),
           ],
-        },
-        presetGroups: {
-          planners: buildPresetGroup({
-            regular: {
-              agents: {
-                fable: makeVariant(latestFable, fallback, sub),
-                opus: disabledByDefault(makeVariant(latestOpus, fallback, sub)),
-                gpt: makeVariant(gptSmart, fallback, sub),
-                gemini: disabledByDefault(makeVariant(latestGeminiPro, fallback, sub)),
-              },
-            },
-            deep: {
-              agents: {
-                fable: makeVariantWithThinking(latestFable, fallback, "xhigh", sub),
-                opus: disabledByDefault(makeVariantWithThinking(latestOpus, fallback, "xhigh", sub)),
-                gpt: makeVariantWithThinking(gptSmartPro, fallback, "xhigh", sub),
-                gemini: disabledByDefault(makeVariantWithThinking(latestGeminiPro, fallback, "xhigh", sub)),
-              },
-            },
-            // GPT-only lightweight planner roster (balanced gpt-terra tier).
-            quick: {
-              agents: {
-                fable: disabledByDefault(makeVariant(latestFable, fallback, sub)),
-                opus: disabledByDefault(makeVariant(latestOpus, fallback, sub)),
-                gpt: makeVariant(gptBalanced, fallback, sub),
-                gemini: disabledByDefault(makeVariant(latestGeminiPro, fallback, sub)),
-              },
-            },
-          }),
-          planReviewers: buildPresetGroup({
-            regular: {
-              agents: {
-                fable: makeVariant(latestFable, fallback, sub),
-                opus: disabledByDefault(makeVariant(latestOpus, fallback, sub)),
-                gpt: makeVariant(gptSmart, fallback, sub),
-                gemini: disabledByDefault(makeVariantWithThinking(latestGeminiPro, fallback, "xhigh", sub)),
-              },
-            },
-            deep: {
-              agents: {
-                fable: makeVariantWithThinking(latestFable, fallback, "xhigh", sub),
-                opus: disabledByDefault(makeVariantWithThinking(latestOpus, fallback, "xhigh", sub)),
-                gpt: makeVariantWithThinking(gptSmartPro, fallback, "xhigh", sub),
-                gemini: disabledByDefault(makeVariantWithThinking(latestGeminiPro, fallback, "xhigh", sub)),
-              },
-            },
-            // GPT-only lightweight plan-review roster (balanced gpt-terra tier).
-            quick: {
-              agents: {
-                fable: disabledByDefault(makeVariant(latestFable, fallback, sub)),
-                opus: disabledByDefault(makeVariant(latestOpus, fallback, sub)),
-                gpt: makeVariant(gptBalanced, fallback, sub),
-                gemini: disabledByDefault(makeVariant(latestGeminiPro, fallback, sub)),
-              },
-            },
-          }),
-          codeReviewers: buildPresetGroup({
-            regular: {
-              agents: {
-                fable: makeVariantWithThinking(latestFable, fallback, "medium", sub),
-                opus: disabledByDefault(makeVariant(latestOpus, fallback, sub)),
-                gpt: makeVariant(gptSmart, fallback, sub),
-                gemini: disabledByDefault(makeVariantWithThinking(latestGeminiPro, fallback, "xhigh", sub)),
-              },
-            },
-            deep: {
-              agents: {
-                fable: makeVariantWithThinking(latestFable, fallback, "high", sub),
-                opus: disabledByDefault(makeVariantWithThinking(latestOpus, fallback, "xhigh", sub)),
-                gpt: makeVariantWithThinking(gptSmartPro, fallback, "xhigh", sub),
-                gemini: disabledByDefault(makeVariantWithThinking(latestGeminiPro, fallback, "xhigh", sub)),
-              },
-            },
-            // GPT-only lightweight review roster: a single balanced gpt-terra
-            // reviewer for cheap/fast passes. codeReviewers ONLY (not planners/
-            // planReviewers/brainstormReviewers).
-            quick: {
-              agents: {
-                fable: disabledByDefault(makeVariantWithThinking(latestFable, fallback, "medium", sub)),
-                opus: disabledByDefault(makeVariant(latestOpus, fallback, sub)),
-                gpt: makeVariant(gptBalanced, fallback, sub),
-                gemini: disabledByDefault(makeVariant(latestGeminiPro, fallback, sub)),
-              },
-            },
-          }),
-          brainstormReviewers: buildPresetGroup({
-            regular: {
-              agents: {
-                fable: makeVariant(latestFable, fallback, sub),
-                opus: disabledByDefault(makeVariant(latestOpus, fallback, sub)),
-                gpt: makeVariant(gptSmart, fallback, sub),
-                gemini: disabledByDefault(makeVariantWithThinking(latestGeminiPro, fallback, "xhigh", sub)),
-              },
-            },
-            deep: {
-              agents: {
-                fable: makeVariantWithThinking(latestFable, fallback, "xhigh", sub),
-                opus: disabledByDefault(makeVariantWithThinking(latestOpus, fallback, "xhigh", sub)),
-                gpt: makeVariantWithThinking(gptSmartPro, fallback, "xhigh", sub),
-                gemini: disabledByDefault(makeVariantWithThinking(latestGeminiPro, fallback, "xhigh", sub)),
-              },
-            },
-            // GPT-only lightweight brainstorm-review roster (balanced gpt-terra tier).
-            quick: {
-              agents: {
-                fable: disabledByDefault(makeVariant(latestFable, fallback, sub)),
-                opus: disabledByDefault(makeVariant(latestOpus, fallback, sub)),
-                gpt: makeVariant(gptBalanced, fallback, sub),
-                gemini: disabledByDefault(makeVariant(latestGeminiPro, fallback, sub)),
-              },
-            },
-          }),
         },
       },
     },

@@ -1,12 +1,14 @@
 {
   "name": "@ilya-lesikov/pi-pi",
-  "version": "0.17.0",
-  "description": "Pi-Pi Coding Agent: based on Pi Coding Agent, but twice as good",
+  "version": "1.0.0",
+  "description": "Pi-Pi: a persistent, general-purpose Pi agent with adaptive tools, workers, skills, and memory",
   "keywords": [
     "pi-package",
     "pi",
-    "coding-agent",
-    "orchestration"
+    "agent",
+    "general-purpose",
+    "skills",
+    "subagents"
   ],
   "license": "Apache-2.0",
   "repository": {
@@ -17,18 +19,11 @@
     "extensions/",
     "3p/pi-subagents/src/",
     "3p/pi-subagents/package.json",
-    "3p/pi-tasks/src/",
-    "3p/pi-tasks/package.json",
     "3p/pi-lsp/extensions/",
     "3p/pi-lsp/package.json",
     "3p/pi-ask-user/index.ts",
     "3p/pi-ask-user/single-select-layout.ts",
     "3p/pi-ask-user/package.json",
-    "3p/pi-plannotator/apps/pi-extension/",
-    "3p/pi-plannotator/packages/shared/",
-    "3p/pi-plannotator/packages/server/",
-    "3p/pi-plannotator/packages/ai/",
-    "3p/pi-plannotator/package.json",
     "3p/pi-vcc/index.ts",
     "3p/pi-vcc/src/",
     "3p/pi-vcc/package.json",
@@ -48,10 +43,8 @@
     "extensions": [
       "./extensions/orchestrator",
       "./3p/pi-subagents/src/index.ts",
-      "./3p/pi-tasks/src/index.ts",
       "./3p/pi-lsp/extensions/lsp",
-      "./3p/pi-ask-user",
-      "./3p/pi-plannotator/apps/pi-extension"
+      "./3p/pi-ask-user"
     ]
   },
   "dependencies": {

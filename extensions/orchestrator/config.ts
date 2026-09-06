@@ -6,12 +6,10 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { isValidLogLevel, getLogger, type LogLevel } from "./log.js";
 
 export type DurationValue = string | number;
-export type OrchestratorRole = "implement" | "plan" | "brainstorm" | "review" | "quick";
 export type SimpleSubagentRole = "explore" | "librarian" | "task";
-export type PresetGroupKey = "planners" | "codeReviewers" | "planReviewers" | "brainstormReviewers";
-// Dynamic on-demand subagent pools (item 2): advisor / reviewer / deep-debugger
-// are no longer fixed roles but configurable lists of models. Each enabled entry
-// registers one model-named subagent.
+// Dynamic on-demand subagent pools: advisor / reviewer / deep-debugger are
+// configurable lists of models. Each enabled entry registers one model-named
+// subagent.
 export type PoolKey = "advisors" | "reviewers" | "deepDebuggers";
 export const POOL_KEYS = ["advisors", "reviewers", "deepDebuggers"] as const;
 
@@ -26,33 +24,8 @@ export interface PoolEntry {
   enabled?: boolean;
 }
 
-export interface PresetAgentConfig extends AgentConfig {
-  enabled?: boolean;
-}
-
-export interface PresetConfig {
-  enabled?: boolean;
-  agents: Record<string, PresetAgentConfig>;
-}
-
-export interface PresetGroupConfig {
-  default: string;
-  presets: Record<string, PresetConfig>;
-}
-
-export interface AfterEditCommandConfig {
-  run: string;
-  globs?: string[];
-  enabled?: boolean;
-}
-
-export interface AfterImplementCommandConfig {
-  run: string;
-  enabled?: boolean;
-}
-
 export interface CompactionConfig {
-  /** Enable proactive in-phase compaction (item 1). Off = never auto-compact. */
+  /** Enable proactive compaction. Off = never auto-compact. */
   enabled: boolean;
   /** Trigger fraction of the model's context window (default 0.30 = 30%). */
   fraction: number;
@@ -73,15 +46,11 @@ export interface CompactionConfig {
 
 export interface PiPiConfig {
   general: {
-    autoCommit: boolean;
-    injectAgentsMd: boolean;
-    loadExtraRepoConfigs: boolean;
     logLevel: LogLevel;
     tracing: boolean;
   };
-  // Global/ancestor/project AGENTS.md + CLAUDE.md injection (item 10). Six
-  // independent toggles = 3 scopes × 2 file types. Supersedes the single
-  // cwd-only general.injectAgentsMd (which is migrated into projectAgents).
+  // Global/ancestor/project AGENTS.md + CLAUDE.md injection. Six independent
+  // toggles = 3 scopes × 2 file types.
   contextInjection: {
     globalAgents: boolean;
     globalClaude: boolean;
@@ -90,15 +59,15 @@ export interface PiPiConfig {
     projectAgents: boolean;
     projectClaude: boolean;
   };
-  // Skills manifest injection (item 11). loadProject/loadGlobal gate discovery
-  // per scope; `disabled` lists per-skill ids ("<scope>:<name>") to exclude.
+  // Skill discovery per source layer. Precedence when names collide is
+  // project > global > bundled.
   skills: {
-    loadProject: boolean;
+    loadBundled: boolean;
     loadGlobal: boolean;
-    disabled: string[];
+    loadProject: boolean;
   };
   compaction: CompactionConfig;
-  // Durable Flant settings (item 8). These used to live in the regenerable
+  // Durable Flant settings. These used to live in the regenerable
   // model-metadata cache file (cache/flant-models.json); they are user policy
   // and belong in scoped config. Only cachedFlantModels/cachedOpenRouterData/
   // lastUpdated remain in the cache file.
@@ -112,67 +81,36 @@ export interface PiPiConfig {
     cacheTTLDays: number;
   };
   agents: {
+    main: AgentConfig;
     maxConcurrentSubagents: number;
-    orchestrators: Record<OrchestratorRole, AgentConfig>;
     subagents: {
       simple: Record<SimpleSubagentRole, AgentConfig>;
       pools: Record<PoolKey, PoolEntry[]>;
-      presetGroups: Record<PresetGroupKey, PresetGroupConfig>;
     };
-  };
-  commands: {
-    afterEdit: Record<string, AfterEditCommandConfig>;
-    afterImplement: Record<string, AfterImplementCommandConfig>;
   };
   performance: {
-    commands: {
-      afterEdit: DurationValue;
-      afterImplement: DurationValue;
-    };
     internals: {
       subagentStale: DurationValue;
       mainTurnStale: DurationValue;
-      taskLockStale: DurationValue;
-      taskLockRefresh: DurationValue;
     };
   };
 }
 
 export interface NormalizedPiPiConfig extends PiPiConfig {
   performance: {
-    commands: {
-      afterEdit: number;
-      afterImplement: number;
-    };
     internals: {
       subagentStale: number;
       mainTurnStale: number;
-      taskLockStale: number;
-      taskLockRefresh: number;
     };
   };
 }
 
-export type PresetGroup = PresetGroupKey;
-export type VariantConfig = PresetAgentConfig;
-
-export function reviewPresetGroupForPhase(phase: string): PresetGroupKey {
-  if (phase === "brainstorm") return "brainstormReviewers";
-  if (phase === "plan") return "planReviewers";
-  return "codeReviewers";
-}
 export type TimeoutConfig = NormalizedPiPiConfig["performance"]["internals"];
 
-export const PRESET_GROUPS = ["planners", "codeReviewers", "planReviewers", "brainstormReviewers"] as const;
-
-const ORCHESTRATOR_ROLES: OrchestratorRole[] = ["implement", "plan", "brainstorm", "review", "quick"];
 const SIMPLE_SUBAGENT_ROLES: SimpleSubagentRole[] = ["explore", "librarian", "task"];
 
 const DEFAULT_CONFIG: PiPiConfig = {
   general: {
-    autoCommit: true,
-    injectAgentsMd: true,
-    loadExtraRepoConfigs: true,
     logLevel: "info",
     tracing: false,
   },
@@ -188,9 +126,9 @@ const DEFAULT_CONFIG: PiPiConfig = {
     projectClaude: true,
   },
   skills: {
-    loadProject: true,
+    loadBundled: true,
     loadGlobal: true,
-    disabled: [],
+    loadProject: true,
   },
   compaction: {
     enabled: true,
@@ -210,14 +148,8 @@ const DEFAULT_CONFIG: PiPiConfig = {
     cacheTTLDays: 3,
   },
   agents: {
+    main: { model: "anthropic/claude-opus-latest", thinking: "high" },
     maxConcurrentSubagents: 7,
-    orchestrators: {
-      implement: { model: "anthropic/claude-opus-latest", thinking: "high" },
-      plan: { model: "anthropic/claude-opus-latest", thinking: "high" },
-      brainstorm: { model: "anthropic/claude-opus-latest", thinking: "high" },
-      review: { model: "anthropic/claude-opus-latest", thinking: "high" },
-      quick: { model: "anthropic/claude-opus-latest", thinking: "high" },
-    },
     subagents: {
       simple: {
         explore: { model: "google/gemini-flash-latest", thinking: "low" },
@@ -241,150 +173,17 @@ const DEFAULT_CONFIG: PiPiConfig = {
           { enabled: false, model: "google/gemini-pro-latest", thinking: "high" },
         ],
       },
-      presetGroups: {
-        planners: {
-          default: "regular",
-          presets: {
-            regular: {
-              agents: {
-                fable: { enabled: true, model: "anthropic/claude-fable-latest", thinking: "high" },
-                opus: { enabled: false, model: "anthropic/claude-opus-latest", thinking: "high" },
-                gpt: { enabled: true, model: "openai/gpt-latest", thinking: "high" },
-                gemini: { enabled: false, model: "google/gemini-pro-latest", thinking: "high" },
-              },
-            },
-            deep: {
-              agents: {
-                fable: { enabled: true, model: "anthropic/claude-fable-latest", thinking: "xhigh" },
-                opus: { enabled: false, model: "anthropic/claude-opus-latest", thinking: "xhigh" },
-                gpt: { enabled: true, model: "openai/gpt-latest", thinking: "xhigh" },
-                gemini: { enabled: false, model: "google/gemini-pro-latest", thinking: "xhigh" },
-              },
-            },
-            // GPT-only lightweight planner roster.
-            quick: {
-              agents: {
-                fable: { enabled: false, model: "anthropic/claude-fable-latest", thinking: "high" },
-                opus: { enabled: false, model: "anthropic/claude-opus-latest", thinking: "high" },
-                gpt: { enabled: true, model: "openai/gpt-terra-latest", thinking: "high" },
-                gemini: { enabled: false, model: "google/gemini-pro-latest", thinking: "high" },
-              },
-            },
-          },
-        },
-        codeReviewers: {
-          default: "regular",
-          presets: {
-            regular: {
-              agents: {
-                fable: { enabled: true, model: "anthropic/claude-fable-latest", thinking: "medium" },
-                opus: { enabled: false, model: "anthropic/claude-opus-latest", thinking: "high" },
-                gpt: { enabled: true, model: "openai/gpt-latest", thinking: "high" },
-                gemini: { enabled: false, model: "google/gemini-pro-latest", thinking: "xhigh" },
-              },
-            },
-            deep: {
-              agents: {
-                fable: { enabled: true, model: "anthropic/claude-fable-latest", thinking: "high" },
-                opus: { enabled: false, model: "anthropic/claude-opus-latest", thinking: "xhigh" },
-                gpt: { enabled: true, model: "openai/gpt-latest", thinking: "xhigh" },
-                gemini: { enabled: false, model: "google/gemini-pro-latest", thinking: "xhigh" },
-              },
-            },
-            // GPT-only lightweight review roster (codeReviewers only).
-            quick: {
-              agents: {
-                fable: { enabled: false, model: "anthropic/claude-fable-latest", thinking: "medium" },
-                opus: { enabled: false, model: "anthropic/claude-opus-latest", thinking: "high" },
-                gpt: { enabled: true, model: "openai/gpt-terra-latest", thinking: "high" },
-                gemini: { enabled: false, model: "google/gemini-pro-latest", thinking: "high" },
-              },
-            },
-          },
-        },
-        planReviewers: {
-          default: "regular",
-          presets: {
-            regular: {
-              agents: {
-                fable: { enabled: true, model: "anthropic/claude-fable-latest", thinking: "high" },
-                opus: { enabled: false, model: "anthropic/claude-opus-latest", thinking: "high" },
-                gpt: { enabled: true, model: "openai/gpt-latest", thinking: "high" },
-                gemini: { enabled: false, model: "google/gemini-pro-latest", thinking: "xhigh" },
-              },
-            },
-            deep: {
-              agents: {
-                fable: { enabled: true, model: "anthropic/claude-fable-latest", thinking: "xhigh" },
-                opus: { enabled: false, model: "anthropic/claude-opus-latest", thinking: "xhigh" },
-                gpt: { enabled: true, model: "openai/gpt-latest", thinking: "xhigh" },
-                gemini: { enabled: false, model: "google/gemini-pro-latest", thinking: "xhigh" },
-              },
-            },
-            // GPT-only lightweight plan-review roster.
-            quick: {
-              agents: {
-                fable: { enabled: false, model: "anthropic/claude-fable-latest", thinking: "high" },
-                opus: { enabled: false, model: "anthropic/claude-opus-latest", thinking: "high" },
-                gpt: { enabled: true, model: "openai/gpt-terra-latest", thinking: "high" },
-                gemini: { enabled: false, model: "google/gemini-pro-latest", thinking: "high" },
-              },
-            },
-          },
-        },
-        brainstormReviewers: {
-          default: "regular",
-          presets: {
-            regular: {
-              agents: {
-                fable: { enabled: true, model: "anthropic/claude-fable-latest", thinking: "high" },
-                opus: { enabled: false, model: "anthropic/claude-opus-latest", thinking: "high" },
-                gpt: { enabled: true, model: "openai/gpt-latest", thinking: "high" },
-                gemini: { enabled: false, model: "google/gemini-pro-latest", thinking: "xhigh" },
-              },
-            },
-            deep: {
-              agents: {
-                fable: { enabled: true, model: "anthropic/claude-fable-latest", thinking: "xhigh" },
-                opus: { enabled: false, model: "anthropic/claude-opus-latest", thinking: "xhigh" },
-                gpt: { enabled: true, model: "openai/gpt-latest", thinking: "xhigh" },
-                gemini: { enabled: false, model: "google/gemini-pro-latest", thinking: "xhigh" },
-              },
-            },
-            // GPT-only lightweight brainstorm-review roster.
-            quick: {
-              agents: {
-                fable: { enabled: false, model: "anthropic/claude-fable-latest", thinking: "high" },
-                opus: { enabled: false, model: "anthropic/claude-opus-latest", thinking: "high" },
-                gpt: { enabled: true, model: "openai/gpt-terra-latest", thinking: "high" },
-                gemini: { enabled: false, model: "google/gemini-pro-latest", thinking: "high" },
-              },
-            },
-          },
-        },
-      },
     },
-  },
-  commands: {
-    afterEdit: {},
-    afterImplement: {},
   },
   performance: {
-    commands: {
-      afterEdit: "30s",
-      afterImplement: "5m",
-    },
     internals: {
       subagentStale: "5m",
       mainTurnStale: "10m",
-      taskLockStale: "1m",
-      taskLockRefresh: "30s",
     },
   },
 };
 
 const DANGEROUS_KEYS = new Set(["__proto__", "constructor", "prototype"]);
-const VALID_NAME_RE = /^[A-Za-z0-9-]+$/;
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -501,65 +300,16 @@ function validateAgentPartial(value: unknown, path: string): void {
   ensureString(agent.thinking, `${path}.thinking`);
 }
 
-function validatePresetAgentPartial(value: unknown, path: string): void {
-  const agent = requireObject(value, path);
-  ensureBool(agent.enabled, `${path}.enabled`);
-  ensureString(agent.model, `${path}.model`);
-  ensureString(agent.thinking, `${path}.thinking`);
-}
-
-function validateCommandAfterEditPartial(value: unknown, path: string): void {
-  const command = requireObject(value, path);
-  ensureBool(command.enabled, `${path}.enabled`);
-  ensureString(command.run, `${path}.run`);
-  if (command.globs !== undefined) {
-    if (!Array.isArray(command.globs) || command.globs.some((g) => typeof g !== "string" || g.length === 0)) {
-      throw new Error(`${path}.globs must be an array of non-empty strings`);
-    }
-  }
-}
-
-function validateCommandAfterImplementPartial(value: unknown, path: string): void {
-  const command = requireObject(value, path);
-  ensureBool(command.enabled, `${path}.enabled`);
-  ensureString(command.run, `${path}.run`);
-}
-
-function validatePresetPartial(value: unknown, path: string): void {
-  const preset = requireObject(value, path);
-  ensureBool(preset.enabled, `${path}.enabled`);
-  if (preset.agents !== undefined) {
-    const agents = requireObject(preset.agents, `${path}.agents`);
-    for (const [agentName, agentCfg] of Object.entries(agents)) {
-      if (!VALID_NAME_RE.test(agentName)) throw new Error(`${path}.agents.${agentName} has invalid name`);
-      validatePresetAgentPartial(agentCfg, `${path}.agents.${agentName}`);
-    }
-  }
-}
-
-function validatePresetGroupPartial(value: unknown, path: string): void {
-  const group = requireObject(value, path);
-  if (group.default !== undefined) {
-    ensureString(group.default, `${path}.default`);
-    if (typeof group.default === "string" && !VALID_NAME_RE.test(group.default)) {
-      throw new Error(`${path}.default has invalid name`);
-    }
-  }
-  if (group.presets !== undefined) {
-    const presets = requireObject(group.presets, `${path}.presets`);
-    for (const [presetName, presetCfg] of Object.entries(presets)) {
-      if (!VALID_NAME_RE.test(presetName)) throw new Error(`${path}.presets.${presetName} has invalid name`);
-      validatePresetPartial(presetCfg, `${path}.presets.${presetName}`);
-    }
-  }
+function validatePoolEntryPartial(value: unknown, path: string): void {
+  const entry = requireObject(value, path);
+  ensureBool(entry.enabled, `${path}.enabled`);
+  ensureString(entry.model, `${path}.model`);
+  ensureString(entry.thinking, `${path}.thinking`);
 }
 
 export function validateConfig(config: Record<string, any>): void {
   if (config.general !== undefined) {
     const general = requireObject(config.general, "config.general");
-    ensureBool(general.autoCommit, "config.general.autoCommit");
-    ensureBool(general.injectAgentsMd, "config.general.injectAgentsMd");
-    ensureBool(general.loadExtraRepoConfigs, "config.general.loadExtraRepoConfigs");
     ensureBool(general.tracing, "config.general.tracing");
     if (general.logLevel !== undefined && !isValidLogLevel(general.logLevel)) {
       throw new Error("config.general.logLevel must be one of: debug, info, warn, error");
@@ -575,13 +325,9 @@ export function validateConfig(config: Record<string, any>): void {
 
   if (config.skills !== undefined) {
     const sk = requireObject(config.skills, "config.skills");
-    ensureBool(sk.loadProject, "config.skills.loadProject");
+    ensureBool(sk.loadBundled, "config.skills.loadBundled");
     ensureBool(sk.loadGlobal, "config.skills.loadGlobal");
-    if (sk.disabled !== undefined) {
-      if (!Array.isArray(sk.disabled) || !sk.disabled.every((x) => typeof x === "string")) {
-        throw new Error("config.skills.disabled must be an array of strings");
-      }
-    }
+    ensureBool(sk.loadProject, "config.skills.loadProject");
   }
 
   if (config.compaction !== undefined) validateCompaction(config.compaction);
@@ -592,14 +338,7 @@ export function validateConfig(config: Record<string, any>): void {
 
     ensureMaxConcurrentSubagents(agents.maxConcurrentSubagents);
 
-    if (agents.orchestrators !== undefined) {
-      const orchestrators = requireObject(agents.orchestrators, "config.agents.orchestrators");
-      for (const role of ORCHESTRATOR_ROLES) {
-        if (orchestrators[role] !== undefined) {
-          validateAgentPartial(orchestrators[role], `config.agents.orchestrators.${role}`);
-        }
-      }
-    }
+    if (agents.main !== undefined) validateAgentPartial(agents.main, "config.agents.main");
 
     if (agents.subagents !== undefined) {
       const subagents = requireObject(agents.subagents, "config.agents.subagents");
@@ -621,54 +360,20 @@ export function validateConfig(config: Record<string, any>): void {
               throw new Error(`config.agents.subagents.pools.${poolKey} must be an array`);
             }
             pools[poolKey].forEach((entry: unknown, i: number) => {
-              validatePresetAgentPartial(entry, `config.agents.subagents.pools.${poolKey}[${i}]`);
+              validatePoolEntryPartial(entry, `config.agents.subagents.pools.${poolKey}[${i}]`);
             });
           }
         }
-      }
-
-      if (subagents.presetGroups !== undefined) {
-        const presetGroups = requireObject(subagents.presetGroups, "config.agents.subagents.presetGroups");
-        for (const groupName of PRESET_GROUPS) {
-          if (presetGroups[groupName] !== undefined) {
-            validatePresetGroupPartial(presetGroups[groupName], `config.agents.subagents.presetGroups.${groupName}`);
-          }
-        }
-      }
-    }
-  }
-
-  if (config.commands !== undefined) {
-    const commands = requireObject(config.commands, "config.commands");
-
-    if (commands.afterEdit !== undefined) {
-      const afterEdit = requireObject(commands.afterEdit, "config.commands.afterEdit");
-      for (const [commandId, commandCfg] of Object.entries(afterEdit)) {
-        validateCommandAfterEditPartial(commandCfg, `config.commands.afterEdit.${commandId}`);
-      }
-    }
-
-    if (commands.afterImplement !== undefined) {
-      const afterImplement = requireObject(commands.afterImplement, "config.commands.afterImplement");
-      for (const [commandId, commandCfg] of Object.entries(afterImplement)) {
-        validateCommandAfterImplementPartial(commandCfg, `config.commands.afterImplement.${commandId}`);
       }
     }
   }
 
   if (config.performance !== undefined) {
     const performance = requireObject(config.performance, "config.performance");
-    if (performance.commands !== undefined) {
-      const cmdPerf = requireObject(performance.commands, "config.performance.commands");
-      ensureDuration(cmdPerf.afterEdit, "config.performance.commands.afterEdit");
-      ensureDuration(cmdPerf.afterImplement, "config.performance.commands.afterImplement");
-    }
     if (performance.internals !== undefined) {
       const internals = requireObject(performance.internals, "config.performance.internals");
       ensureDuration(internals.subagentStale, "config.performance.internals.subagentStale");
       ensureDuration(internals.mainTurnStale, "config.performance.internals.mainTurnStale");
-      ensureDuration(internals.taskLockStale, "config.performance.internals.taskLockStale");
-      ensureDuration(internals.taskLockRefresh, "config.performance.internals.taskLockRefresh");
     }
   }
 }
@@ -690,16 +395,12 @@ function ensureMaxConcurrentSubagents(value: unknown): void {
 }
 
 function ensureMergedAgent(agent: AgentConfig, path: string): void {
-  if (typeof agent.model !== "string" || agent.model.length === 0) {
+  if (typeof agent?.model !== "string" || agent.model.length === 0) {
     throw new Error(`${path}.model must be a non-empty string`);
   }
   if (typeof agent.thinking !== "string" || agent.thinking.length === 0) {
     throw new Error(`${path}.thinking must be a non-empty string`);
   }
-}
-
-function isEnabled(value: { enabled?: boolean } | undefined): boolean {
-  return value?.enabled !== false;
 }
 
 export function validateMergedConfig(config: Record<string, any>): void {
@@ -711,9 +412,7 @@ export function validateMergedConfig(config: Record<string, any>): void {
 
   ensureMaxConcurrentSubagents(typed.agents?.maxConcurrentSubagents);
 
-  for (const role of ORCHESTRATOR_ROLES) {
-    ensureMergedAgent(typed.agents.orchestrators[role], `config.agents.orchestrators.${role}`);
-  }
+  ensureMergedAgent(typed.agents.main, "config.agents.main");
 
   for (const role of SIMPLE_SUBAGENT_ROLES) {
     ensureMergedAgent(typed.agents.subagents.simple[role], `config.agents.subagents.simple.${role}`);
@@ -727,119 +426,26 @@ export function validateMergedConfig(config: Record<string, any>): void {
     pool.forEach((entry, i) => ensureMergedAgent(entry, `config.agents.subagents.pools.${poolKey}[${i}]`));
   }
 
-  for (const groupName of PRESET_GROUPS) {
-    const group = typed.agents.subagents.presetGroups[groupName];
-    if (!group || typeof group !== "object") {
-      throw new Error(`config.agents.subagents.presetGroups.${groupName} must be an object`);
-    }
-
-    if (typeof group.default !== "string" || group.default.length === 0) {
-      throw new Error(`config.agents.subagents.presetGroups.${groupName}.default must be a non-empty string`);
-    }
-
-    const defaultPreset = group.presets[group.default];
-    if (!defaultPreset) {
-      throw new Error(`config.agents.subagents.presetGroups.${groupName}.default "${group.default}" does not exist`);
-    }
-    if (!isEnabled(defaultPreset)) {
-      throw new Error(`config.agents.subagents.presetGroups.${groupName}.default "${group.default}" is disabled`);
-    }
-
-    for (const [presetName, preset] of Object.entries(group.presets)) {
-      if (!VALID_NAME_RE.test(presetName)) {
-        throw new Error(`config.agents.subagents.presetGroups.${groupName}.presets.${presetName} has invalid name`);
-      }
-      if (!preset || typeof preset !== "object" || Array.isArray(preset)) {
-        throw new Error(`config.agents.subagents.presetGroups.${groupName}.presets.${presetName} must be an object`);
-      }
-
-      const agents = preset.agents;
-      if (!agents || typeof agents !== "object" || Array.isArray(agents)) {
-        throw new Error(`config.agents.subagents.presetGroups.${groupName}.presets.${presetName}.agents must be an object`);
-      }
-
-      let enabledAgents = 0;
-      for (const [agentName, agentCfg] of Object.entries(agents)) {
-        if (!VALID_NAME_RE.test(agentName)) {
-          throw new Error(`config.agents.subagents.presetGroups.${groupName}.presets.${presetName}.agents.${agentName} has invalid name`);
-        }
-        if (!agentCfg || typeof agentCfg !== "object" || Array.isArray(agentCfg)) {
-          throw new Error(`config.agents.subagents.presetGroups.${groupName}.presets.${presetName}.agents.${agentName} must be an object`);
-        }
-        if (isEnabled(agentCfg)) enabledAgents += 1;
-        ensureMergedAgent(agentCfg as AgentConfig, `config.agents.subagents.presetGroups.${groupName}.presets.${presetName}.agents.${agentName}`);
-      }
-
-      if (isEnabled(preset) && enabledAgents === 0) {
-        throw new Error(`config.agents.subagents.presetGroups.${groupName}.presets.${presetName} has no enabled agents`);
-      }
-    }
-  }
-
-  for (const [id, cmd] of Object.entries(typed.commands.afterEdit)) {
-    if (!cmd || typeof cmd !== "object") throw new Error(`config.commands.afterEdit.${id} must be an object`);
-    if (isEnabled(cmd) && (typeof cmd.run !== "string" || cmd.run.length === 0)) {
-      throw new Error(`config.commands.afterEdit.${id}.run must be a non-empty string`);
-    }
-    if (cmd.globs !== undefined && (!Array.isArray(cmd.globs) || cmd.globs.some((g) => typeof g !== "string" || g.length === 0))) {
-      throw new Error(`config.commands.afterEdit.${id}.globs must be an array of non-empty strings`);
-    }
-  }
-
-  for (const [id, cmd] of Object.entries(typed.commands.afterImplement)) {
-    if (!cmd || typeof cmd !== "object") throw new Error(`config.commands.afterImplement.${id} must be an object`);
-    if (isEnabled(cmd) && (typeof cmd.run !== "string" || cmd.run.length === 0)) {
-      throw new Error(`config.commands.afterImplement.${id}.run must be a non-empty string`);
-    }
-  }
-
-  if (parseDuration(typed.performance.commands.afterEdit) === null) {
-    throw new Error("config.performance.commands.afterEdit must be a valid duration");
-  }
-  if (parseDuration(typed.performance.commands.afterImplement) === null) {
-    throw new Error("config.performance.commands.afterImplement must be a valid duration");
-  }
   if (parseDuration(typed.performance.internals.subagentStale) === null) {
     throw new Error("config.performance.internals.subagentStale must be a valid duration");
   }
   if (parseDuration(typed.performance.internals.mainTurnStale) === null) {
     throw new Error("config.performance.internals.mainTurnStale must be a valid duration");
   }
-  if (parseDuration(typed.performance.internals.taskLockStale) === null) {
-    throw new Error("config.performance.internals.taskLockStale must be a valid duration");
-  }
-  if (parseDuration(typed.performance.internals.taskLockRefresh) === null) {
-    throw new Error("config.performance.internals.taskLockRefresh must be a valid duration");
-  }
 }
 
 export function normalizeConfigDurations(config: PiPiConfig): NormalizedPiPiConfig {
   const next = structuredClone(config) as NormalizedPiPiConfig;
 
-  const afterEdit = parseDuration(next.performance.commands.afterEdit);
-  const afterImplement = parseDuration(next.performance.commands.afterImplement);
   const subagentStale = parseDuration(next.performance.internals.subagentStale);
   const mainTurnStale = parseDuration(next.performance.internals.mainTurnStale);
-  const taskLockStale = parseDuration(next.performance.internals.taskLockStale);
-  const taskLockRefresh = parseDuration(next.performance.internals.taskLockRefresh);
 
-  if (
-    afterEdit === null ||
-    afterImplement === null ||
-    subagentStale === null ||
-    mainTurnStale === null ||
-    taskLockStale === null ||
-    taskLockRefresh === null
-  ) {
+  if (subagentStale === null || mainTurnStale === null) {
     throw new Error("Failed to normalize config durations");
   }
 
-  next.performance.commands.afterEdit = afterEdit;
-  next.performance.commands.afterImplement = afterImplement;
   next.performance.internals.subagentStale = subagentStale;
   next.performance.internals.mainTurnStale = mainTurnStale;
-  next.performance.internals.taskLockStale = taskLockStale;
-  next.performance.internals.taskLockRefresh = taskLockRefresh;
   return next;
 }
 
@@ -882,30 +488,13 @@ export function mergeConfigLayers(
     log.debug({ s: "config", layer: "project" }, "merged project config layer");
   }
 
-  // Migrate the legacy cwd-only general.injectAgentsMd (item 10): when a user
-  // layer set injectAgentsMd but did NOT explicitly configure the new
-  // contextInjection.projectAgents toggle, carry the old value into
-  // projectAgents so an existing config keeps its AGENTS.md behavior. Explicit
-  // contextInjection settings always win.
-  const userSetInjectAgentsMd =
-    (globalConfig?.general && Object.prototype.hasOwnProperty.call(globalConfig.general, "injectAgentsMd")) ||
-    (projectConfig?.general && Object.prototype.hasOwnProperty.call(projectConfig.general, "injectAgentsMd"));
-  const userSetProjectAgents =
-    (globalConfig?.contextInjection && Object.prototype.hasOwnProperty.call(globalConfig.contextInjection, "projectAgents")) ||
-    (projectConfig?.contextInjection && Object.prototype.hasOwnProperty.call(projectConfig.contextInjection, "projectAgents"));
-  if (userSetInjectAgentsMd && !userSetProjectAgents) {
-    merged.contextInjection.projectAgents = !!merged.general.injectAgentsMd;
-    log.debug({ s: "config", projectAgents: merged.contextInjection.projectAgents }, "migrated injectAgentsMd -> contextInjection.projectAgents");
-  }
-
   validateMergedConfig(merged);
   const normalized = normalizeConfigDurations(merged as PiPiConfig);
   log.debug(
     {
       s: "config",
       logLevel: normalized.general.logLevel,
-      autoCommit: normalized.general.autoCommit,
-      loadExtraRepoConfigs: normalized.general.loadExtraRepoConfigs,
+      model: normalized.agents.main.model,
     },
     "config merge complete",
   );
@@ -914,12 +503,12 @@ export function mergeConfigLayers(
 
 export type FlantConfigSection = PiPiConfig["flant"];
 
-// Side-effect-free read of the scoped `flant` section (item 8). Unlike
-// loadConfig, this NEVER mkdirs: it reads the absolute global config JSON
-// always and <cwd>/.pp/config.json only if it already exists, then folds the
-// `flant` sections over the defaults (defaults -> global -> project). Used at
-// extension init and in subagents, where the real project cwd is not yet known
-// and creating a stray .pp in the launch dir must be avoided.
+// Side-effect-free read of the scoped `flant` section. Unlike loadConfig, this
+// NEVER mkdirs: it reads the absolute global config JSON always and
+// <cwd>/.pp/config.json only if it already exists, then folds the `flant`
+// sections over the defaults (defaults -> global -> project). Used at extension
+// init and in subagents, where the real project cwd is not yet known and
+// creating a stray .pp in the launch dir must be avoided.
 export function readScopedFlantSettings(cwd?: string, globalConfigPath = GLOBAL_CONFIG_PATH): FlantConfigSection {
   const result = { ...(getDefaultConfig().flant) };
   const apply = (raw: Record<string, any> | null) => {
@@ -935,41 +524,6 @@ export function readScopedFlantSettings(cwd?: string, globalConfigPath = GLOBAL_
     if (existsSync(projectConfigPath)) apply(loadJsonFile(projectConfigPath));
   }
   return result;
-}
-
-export function resolvePreset(
-  config: PiPiConfig,
-  group: PresetGroup,
-  presetName?: string,
-): Record<string, PresetAgentConfig> {
-  const log = getLogger();
-  const groupConfig = config.agents.subagents.presetGroups[group];
-  const requestedName = presetName ?? groupConfig.default;
-
-  const isPresetEnabled = (p: PresetConfig | undefined): boolean => !!p && p.enabled !== false;
-  const normalizeAgents = (preset: PresetConfig): Record<string, PresetAgentConfig> => {
-    const out: Record<string, PresetAgentConfig> = {};
-    for (const [name, agent] of Object.entries(preset.agents)) {
-      out[name] = { ...agent, enabled: agent.enabled !== false };
-    }
-    return out;
-  };
-
-  const direct = groupConfig.presets[requestedName];
-  if (isPresetEnabled(direct)) {
-    log.debug({ s: "preset", group, name: requestedName, variants: Object.keys(direct!.agents) }, "preset resolved");
-    return normalizeAgents(direct!);
-  }
-
-  const fallbackName = Object.keys(groupConfig.presets).find((name) => isPresetEnabled(groupConfig.presets[name]));
-  if (fallbackName) {
-    const fallback = groupConfig.presets[fallbackName]!;
-    log.debug({ s: "preset", group, requested: requestedName, resolved: fallbackName, fallback: true }, "preset fallback");
-    return normalizeAgents(fallback);
-  }
-
-  log.debug({ s: "preset", group, requested: requestedName, resolved: null, fallback: true }, "preset fallback empty");
-  return {};
 }
 
 export function readRawConfig(path: string): Record<string, any> {

@@ -208,115 +208,29 @@ describe("flant-infra", () => {
     }
   });
 
-  it("generateFlantConfig routes via sub/ only for gateway-confirmed models", async () => {
+  it("generateFlantConfig emits session-first main and bounded worker routing", async () => {
     const dir = makeTempDir();
     const mod = await loadFlantInfraModule(dir);
-
-    // opus-4-9 is the latest claude but has NO sub/ group; opus-4-8 does.
     const config = mod.generateFlantConfig(
-      ["claude-opus-4-9", "claude-opus-4-8", "sub/claude-opus-4-8", "gpt-5-4"],
-      true,
-    ) as any;
-
-    // The chosen claude model (opus-4-9) is not sub-confirmed — it must stay
-    // on the company provider instead of pointing at an unregistered sub spec.
-    expect(config.agents.orchestrators.implement.model).toBe("pp-flant-anthropic/claude-opus-4-9");
-    const specs = collectModelSpecs(config);
-    expect(specs.some((s) => s.includes("sub/claude-opus-4-9"))).toBe(false);
-  });
-
-  it("generateFlantConfig enables fable+gpt, disables opus+gemini by default in all parallel preset groups", async () => {
-    const dir = makeTempDir();
-    const mod = await loadFlantInfraModule(dir);
-
-    const config = mod.generateFlantConfig(
-      ["claude-fable-5", "claude-opus-4-8", "gpt-5-4", "gemini-3-1-pro", "gemini-3-1-flash"],
+      ["claude-fable-5", "claude-opus-4-9", "gpt-5.6-sol", "gpt-5.6-sol-pro", "gemini-3-1-pro"],
       false,
     ) as any;
-
-    const groups = config.agents.subagents.presetGroups;
-    for (const group of ["planners", "planReviewers", "codeReviewers", "brainstormReviewers"]) {
-      for (const [presetName, preset] of Object.entries(groups[group].presets) as [string, any][]) {
-        // The gpt-only "quick" code-review preset intentionally enables ONLY
-        // gpt (a single lightweight reviewer); the shared fable+gpt invariant
-        // applies to every other preset.
-        if (presetName === "quick") continue;
-        expect(preset.agents.fable.enabled).toBe(true);
-        expect(preset.agents.opus.enabled).toBe(false);
-        expect(preset.agents.gemini.enabled).toBe(false);
-        expect(preset.agents.gpt.enabled).toBe(true);
-      }
-    }
-  });
-
-  it("adds a gpt-only 'quick' preset (gpt-terra) to EVERY group and 'deep' to planners, with flant-mapped specs", async () => {
-    const dir = makeTempDir();
-    const mod = await loadFlantInfraModule(dir);
-
-    const config = mod.generateFlantConfig(
-      ["claude-fable-5", "claude-opus-4-8", "gpt-5.6-sol", "gpt-5.6-sol-pro", "gpt-5.6-terra", "gpt-5.6-luna"],
-      false,
-    ) as any;
-    const groups = config.agents.subagents.presetGroups;
-
-    // quick + regular + deep now exist in ALL four generated groups.
-    for (const g of ["planners", "planReviewers", "codeReviewers", "brainstormReviewers"] as const) {
-      expect(groups[g].presets.quick).toBeDefined();
-      expect(groups[g].presets.regular).toBeDefined();
-      expect(groups[g].presets.deep).toBeDefined();
-      // Regression for "quick leaks into a Flant session with default specs":
-      // the flant-generated quick roster must carry a flant-mapped (pp-flant-*)
-      // spec, never a bare DEFAULT_CONFIG model id.
-      expect(groups[g].presets.quick.agents.gpt.model).toMatch(/^pp-flant-openai\//);
-    }
-
-    // Roster for each quick preset: only gpt enabled, balanced gpt-terra tier.
-    for (const g of ["planners", "planReviewers", "codeReviewers", "brainstormReviewers"] as const) {
-      const q = groups[g].presets.quick.agents;
-      expect(q.gpt.enabled).toBe(true);
-      expect(q.gpt.model).toBe("pp-flant-openai/gpt-5.6-terra");
-      expect(q.fable.enabled).toBe(false);
-      expect(q.opus.enabled).toBe(false);
-      expect(q.gemini.enabled).toBe(false);
-    }
-
-    // planners.deep mirrors the deep-review shape (gpt-sol-pro at xhigh).
-    expect(groups.planners.presets.deep.agents.gpt.model).toBe("pp-flant-openai/gpt-5.6-sol-pro");
-    expect(groups.planners.presets.deep.agents.gpt.thinking).toBe("xhigh");
-    expect(groups.planners.presets.deep.agents.fable.enabled).toBe(true);
-
-    // Tier mapping for the high-effort pools/presets: advisors + deepDebuggers
-    // + deep review presets get gpt-sol-pro; everyday reviewers get gpt-sol.
+    expect(config.agents.main.model).toBe("pp-flant-anthropic/claude-opus-4-9");
+    expect(config.agents.subagents.simple.task.model).toBe("pp-flant-anthropic/claude-opus-4-9");
+    expect(config.agents.subagents.pools.advisors[0].model).toBe("pp-flant-anthropic/claude-fable-5");
     expect(config.agents.subagents.pools.advisors[1].model).toBe("pp-flant-openai/gpt-5.6-sol-pro");
-    expect(config.agents.subagents.pools.deepDebuggers[0].model).toBe("pp-flant-openai/gpt-5.6-sol-pro");
     expect(config.agents.subagents.pools.reviewers[0].model).toBe("pp-flant-openai/gpt-5.6-sol");
-    expect(groups.codeReviewers.presets.regular.agents.gpt.model).toBe("pp-flant-openai/gpt-5.6-sol");
-    expect(groups.codeReviewers.presets.deep.agents.gpt.model).toBe("pp-flant-openai/gpt-5.6-sol-pro");
+    expect(config.agents.subagents.presetGroups).toBeUndefined();
+    expect(config.agents.orchestrators).toBeUndefined();
   });
 
-  it("routes fable exactly like opus (flant + subscription specs) and points advisor at fable", async () => {
+  it("routes only subscription-confirmed Claude models through sub", async () => {
     const dir = makeTempDir();
     const mod = await loadFlantInfraModule(dir);
-
-    // Non-sub: both route through pp-flant-anthropic/claude-<family>-*.
-    const flant = mod.generateFlantConfig(["claude-fable-5", "claude-opus-4-8", "gpt-5-4"], false) as any;
-    const fFable = flant.agents.subagents.presetGroups.planners.presets.regular.agents.fable.model;
-    const fOpus = flant.agents.subagents.presetGroups.planners.presets.regular.agents.opus.model;
-    expect(fFable).toBe("pp-flant-anthropic/claude-fable-5");
-    expect(fOpus).toBe("pp-flant-anthropic/claude-opus-4-8");
-    expect(flant.agents.subagents.pools.advisors[0].model).toBe("pp-flant-anthropic/claude-fable-5");
-
-    // Subscription-confirmed (bare + sub/ variants present): both route through
-    // pp-flant-anthropic-sub/sub/claude-<family>-*.
-    const subCfg = mod.generateFlantConfig(
-      ["claude-fable-5", "claude-opus-4-8", "sub/claude-fable-5", "sub/claude-opus-4-8", "gpt-5-4"],
-      true,
-    ) as any;
-    const sFable = subCfg.agents.subagents.presetGroups.planners.presets.regular.agents.fable.model;
-    const sOpus = subCfg.agents.subagents.presetGroups.planners.presets.regular.agents.opus.model;
-    expect(sFable).toBe("pp-flant-anthropic-sub/sub/claude-fable-5");
-    expect(sOpus).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
-    expect(subCfg.agents.subagents.pools.advisors[0].model).toBe("pp-flant-anthropic-sub/sub/claude-fable-5");
+    const company = mod.generateFlantConfig(["claude-opus-4-9", "sub/claude-opus-4-8", "gpt-5.6-sol"], true) as any;
+    expect(company.agents.main.model).toBe("pp-flant-anthropic/claude-opus-4-9");
+    const subscription = mod.generateFlantConfig(["claude-opus-4-9", "sub/claude-opus-4-9", "gpt-5.6-sol"], true) as any;
+    expect(subscription.agents.main.model).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-9");
   });
 
   it("skips the sub provider when subscription enabled but OAuth token missing", async () => {
@@ -502,15 +416,10 @@ describe("flant-infra", () => {
       "grok-4",
     ]) as any;
 
-    expect(config.agents.orchestrators.implement.model).toBe("pp-flant-anthropic/claude-opus-4-6");
-    expect(config.agents.orchestrators.plan.model).toBe("pp-flant-anthropic/claude-opus-4-6");
-    expect(config.agents.orchestrators.brainstorm.model).toBe("pp-flant-anthropic/claude-opus-4-6");
-    expect(config.agents.orchestrators.review.model).toBe("pp-flant-anthropic/claude-opus-4-6");
+    expect(config.agents.main.model).toBe("pp-flant-anthropic/claude-opus-4-6");
     expect(config.agents.subagents.simple.explore.model).toBe("pp-flant-openai/gemini-3-1-flash");
     expect(config.agents.subagents.simple.librarian.model).toBe("pp-flant-openai/gemini-3-1-flash");
-    expect(config.agents.subagents.presetGroups.planners.presets.regular.agents.opus.model).toBe("pp-flant-anthropic/claude-opus-4-6");
-    expect(config.agents.subagents.presetGroups.planners.presets.regular.agents.gpt.model).toBe("pp-flant-openai/gpt-5-4");
-    expect(config.agents.subagents.presetGroups.planners.presets.regular.agents.gemini.model).toBe("pp-flant-openai/gemini-3-1-pro");
+    expect(config.agents.subagents.pools.advisors[1].model).toBe("pp-flant-openai/gpt-5-4");
   });
 
   it("generateFlantConfig routes Claude roles through subs when subscription active", async () => {
@@ -523,14 +432,11 @@ describe("flant-infra", () => {
     ) as any;
 
     // Claude roles -> sub provider
-    expect(config.agents.orchestrators.implement.model).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
-    expect(config.agents.orchestrators.plan.model).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
-    expect(config.agents.orchestrators.brainstorm.model).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
+    expect(config.agents.main.model).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
     expect(config.agents.subagents.simple.task.model).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
-    expect(config.agents.subagents.presetGroups.planners.presets.regular.agents.opus.model).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
     // Non-Claude roles stay on the openai (company-billed) provider
     expect(config.agents.subagents.simple.explore.model).toBe("pp-flant-openai/gemini-3-1-flash");
-    expect(config.agents.subagents.presetGroups.planners.presets.regular.agents.gpt.model).toBe("pp-flant-openai/gpt-5-4");
+    expect(config.agents.subagents.pools.reviewers[0].model).toBe("pp-flant-openai/gpt-5-4");
   });
 
   it("generateFlantConfig keeps Claude roles on the company provider when subscription inactive", async () => {
@@ -538,7 +444,7 @@ describe("flant-infra", () => {
     const mod = await loadFlantInfraModule(dir);
 
     const config = mod.generateFlantConfig(["claude-opus-4-8", "gpt-5-4"], false) as any;
-    expect(config.agents.orchestrators.implement.model).toBe("pp-flant-anthropic/claude-opus-4-8");
+    expect(config.agents.main.model).toBe("pp-flant-anthropic/claude-opus-4-8");
   });
 
   it("isSubscriptionActive requires flag + oauth token + gateway key", async () => {
@@ -651,9 +557,8 @@ describe("flant-infra", () => {
       "gemini-3-1-flash-lite",
     ]) as any;
 
-    expect(config.agents.orchestrators.implement.model).toBe("pp-flant-anthropic/claude-opus-4-7");
-    expect(config.agents.orchestrators.plan.model).toBe("pp-flant-anthropic/claude-opus-4-7");
-    expect(config.agents.subagents.presetGroups.planners.presets.regular.agents.gemini.model).toBe("pp-flant-openai/gemini-3-1-pro");
+    expect(config.agents.main.model).toBe("pp-flant-anthropic/claude-opus-4-7");
+    expect(config.agents.subagents.pools.advisors[2].model).toBe("pp-flant-openai/gemini-3-1-pro");
     expect(config.agents.subagents.simple.explore.model).toBe("pp-flant-openai/gemini-3-1-flash-lite");
   });
 

@@ -1,14 +1,14 @@
 import type { PoolEntry } from "../config.js";
 import { getModelInfo, resolveModel } from "../model-registry.js";
-import { toolsBlock, parseToolNames, identityBlock, ALL_CBM_TOOLS, EXA_TOOLS, PRINCIPLES_BLOCK } from "./tool-routing.js";
+import { toolsBlock, parseToolNames, identityBlock, ALL_CBM_TOOLS, EXA_TOOLS, principlesBlock } from "./tool-routing.js";
 
 export function createReviewerAgent(entry: PoolEntry) {
   const model = resolveModel(entry.model);
-  const tools = `read, bash, grep, find, ls, lsp, ast_search, ${ALL_CBM_TOOLS}, ${EXA_TOOLS}`;
+  const tools = `read, bash, grep, find, ls, lsp, ast_search, vcc_recall, ${ALL_CBM_TOOLS}, ${EXA_TOOLS}`;
   const info = getModelInfo(model);
   return {
     frontmatter: {
-      description: "Read-only code reviewer that inspects a change/diff and returns severity-rated findings with file:line anchors (never edits) — best for a focused review of completed work; spawn only when the user asks for a review, not as a routine step (pi-pi)",
+      description: "Read-only reviewer that inspects finished work — a diff, a document, a config or data change — and returns severity-rated findings anchored to exact locations (never edits); best when fresh independent scrutiny materially reduces risk, not as a routine step (pi-pi)",
       tools,
       model,
       thinking: entry.thinking,
@@ -19,31 +19,30 @@ export function createReviewerAgent(entry: PoolEntry) {
       identityBlock({ displayName: info.displayName, family: info.family, tier: info.tier, thinking: entry.thinking }),
       "",
       "<constraints>",
-      "You are a code REVIEWER. You review implementation changes for bugs, correctness, and quality.",
-      "You are READ-ONLY: you MUST NOT implement, fix, or modify any source code.",
-      "Do NOT run test suites, builds, linters, e2e, or any long-running command. Use bash only for `git diff`/`git status` and small read-only inspection. The `afterImplement` command is the single authoritative build/test step — do not duplicate it.",
+      "You are a REVIEWER. You review finished work — code changes, documents, configuration, data, or a described outcome — for correctness, soundness, and quality against its stated intent.",
+      "You are READ-ONLY: you MUST NOT implement, fix, or modify anything.",
+      "Do NOT run test suites, builds, linters, long-running jobs, or anything with side effects. Use bash only for read-only inspection such as `git diff`/`git status`. Verification runs are the caller's job — do not duplicate them.",
       "Begin your review with the verdict on the VERY FIRST LINE: `VERDICT: APPROVE` or `VERDICT: NEEDS_CHANGES`.",
       "</constraints>",
       "",
-      PRINCIPLES_BLOCK,
+      principlesBlock(),
       "",
       toolsBlock(parseToolNames(tools)),
       "",
       "<task>",
       "Steps:",
-      "1. Run `git diff` to see all changes (try HEAD~1, main, or the appropriate base).",
-      "2. Run cbm_changes for symbol-level impact and blast radius.",
-      "3. Read changed files for full context; run lsp diagnostics on them.",
-      "4. Use lsp findReferences to check callers of modified functions.",
+      "1. Establish what actually changed: `git diff` against the appropriate base (try HEAD~1 or the base branch), or read the artifact under review directly when it is not version-controlled.",
+      "2. Establish the intent it must satisfy. If the goal, constraints, or accepted tradeoffs were settled earlier and are not in your prompt, recall the main session's history — reviewing against a goal you guessed is worthless.",
+      "3. Read the changed material in full context; for code, run cbm_changes for blast radius, lsp diagnostics on changed files, and lsp findReferences on modified symbols.",
       "",
-      "Review criteria: logic errors, off-by-ones, null/edge handling, race conditions; correctness vs intent; error handling and type safety; missing or untested paths.",
+      "Review criteria: correctness against the stated intent; logic, edge, and failure handling; unhandled or untested paths; internal consistency and consistency with surrounding conventions; risk introduced elsewhere. For non-code material, judge accuracy, completeness, and whether claims are supported.",
       "",
-      "Evidence: every CRITICAL or MAJOR finding MUST cite file:line or quoted code. Never assert a problem without reading the code. You are read-only and MUST NOT run tests/builds, so support each finding ONLY with what your granted tools can produce — the diff, the code you read, and lsp diagnostics. If a concern cannot be proven with those (it would need a test run, build, or runtime output you cannot obtain), do NOT assert it as a finding: move it to OPEN QUESTIONS and state what evidence would settle it.",
+      "Evidence: every CRITICAL or MAJOR finding MUST cite an exact anchor — file:line, a quoted excerpt, or diff output. Never assert a problem without reading the thing. You are read-only and MUST NOT run tests, builds, or side-effecting commands, so support each finding ONLY with what your granted tools can produce — the diff, what you read, cited sources, and lsp diagnostics. If a concern cannot be proven with those (it would need a run you cannot perform), do NOT assert it as a finding: move it to OPEN QUESTIONS and state what evidence would settle it.",
       "",
       "Format — verdict on the FIRST LINE, then:",
       "VERDICT: APPROVE | NEEDS_CHANGES",
-      "- CRITICAL: (must fix — file:line evidence)",
-      "- MAJOR: (should fix — evidence)",
+      "- CRITICAL: (must fix — with anchored evidence)",
+      "- MAJOR: (should fix — with evidence)",
       "- MINOR: (nice to have)",
       "- OPEN QUESTIONS: (low-confidence / speculative)",
       "",

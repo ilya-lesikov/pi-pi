@@ -1,24 +1,33 @@
 export const ALL_CBM_TOOLS = "cbm_search, cbm_search_code, cbm_trace, cbm_changes, cbm_query, cbm_architecture";
 export const EXA_TOOLS = "exa_search, exa_fetch";
 
-export const PRINCIPLES_BLOCK = [
+// Domain-neutral operating principles. Always active for every agent, so this block
+// must stay free of coding-specific rules — work may be research, ops, writing, data,
+// or code. Anything that only makes sense while editing source belongs in
+// IMPLEMENTATION_PRINCIPLES_BLOCK, which is injected opt-in.
+const PRINCIPLES = [
   "<principles>",
-  "- Verify, don't assume. Check actual state with tools before making changes. Never guess paths, types, or APIs.",
-  "- Evidence over claims. 'It should work' is not proof. Show fresh tool output (lsp diagnostics, test results, build output).",
-  "- Match existing patterns. Before adding a type, function, or user-facing value, find how the codebase already solves the most similar problem — search by behavior, not by filename — and mirror its shape, naming, error handling, and conventions. Reading one neighboring file is not enough.",
+  "- Verify, don't assume. Establish the actual state with tools before acting on it. Never guess a path, name, API, number, or fact you could check.",
+  "- Evidence over claims. 'It should work' is not proof. Cite fresh tool output — command output, file contents, test results, a fetched source.",
+  "- Match what already exists. Before introducing anything new, find how this project or domain already handles the closest case and mirror its shape, naming, and conventions.",
+  "- Recall before assuming. Prior decisions, constraints, and tool output may already exist earlier in the session — search history instead of re-deriving or contradicting them.",
   "- Be concise and dense: minimum words, no preamble/filler/restatement. Don't narrate what you're about to do or just did.",
-  "- Think critically. Push back when something seems wrong, and state concerns before implementing.",
+  "- Think critically. Push back when something seems wrong, and state concerns before acting.",
   "</principles>",
 ].join("\n");
 
-// Implementation-only code-style rules. Injected ONLY into agents that edit project
-// source (the task subagent, and the main agent in edit-capable phases). Read-only
-// judges (explore, librarian, advisor, reviewer, code-reviewer, plan-reviewer,
-// brainstorm-reviewer, planner, deep-debugger) do NOT carry these — the deep-debugger
-// has write/edit for throwaway diagnostics only, so it is intentionally read-only for
+export function principlesBlock(): string {
+  return PRINCIPLES;
+}
+
+// Code-editing-only rules. Injected ONLY into agents that edit project source, and
+// only for work that is actually code. Never always-active: a research, ops, writing,
+// or data task must not carry them. Read-only agents never receive this block — the
+// deep-debugger has write/edit for throwaway diagnostics only, so it is read-only for
 // PROJECT-SOURCE purposes and receives only the shared block above.
 export const IMPLEMENTATION_PRINCIPLES_BLOCK = [
   "<implementation_principles>",
+  "These rules govern edits to project SOURCE CODE only. They are inactive for research, operations, writing, and data work — do not let them constrain non-code output.",
   "- Understand before modifying. Read the code, trace callers, check types BEFORE editing. Compiling ≠ correct.",
   "- Smallest viable change. Do what was asked, nothing more. Don't broaden scope, don't refactor adjacent code.",
   "- No temporary artifacts. No console.log, TODO, HACK, debugger, or commented-out code left behind.",
@@ -32,10 +41,10 @@ export const IMPLEMENTATION_PRINCIPLES_BLOCK = [
 export const FAILURE_RECOVERY = [
   "# Failure recovery",
   "",
-  "If a fix attempt fails, analyze root cause before retrying — don't repeat the same approach.",
+  "If an attempt fails, analyze root cause before retrying — don't repeat the same approach.",
   "After 3 failed attempts at the same issue:",
-  "1. STOP editing immediately",
-  "2. Revert to last working state if possible",
+  "1. STOP immediately",
+  "2. Revert to the last known-good state if possible",
   "3. Document what you tried and why it failed",
   "4. Report the blocker — do not keep pushing",
 ].join("\n");
@@ -74,6 +83,26 @@ const TOOL_SEGMENTS: ToolSegment[] = [
           "HALTS and returns a message to relay to the user. Do NOT call it for a " +
           "branch/commit-range/uncommitted-changes review, and never run `git checkout` yourself.",
       },
+    ],
+  },
+  {
+    header: "Recall earlier session context:",
+    items: [
+      {
+        tools: ["vcc_recall"],
+        text:
+          "- vcc_recall: search the main session's history — what was already decided, tried, ruled out, or observed in tool output. " +
+          "Search it BEFORE re-deriving anything a prior turn may already have settled, and whenever your instructions reference " +
+          "a decision, constraint, or result you cannot see. Your own context starts empty; the main session's does not.",
+      },
+    ],
+  },
+  {
+    header: "Inspect files and run commands:",
+    items: [
+      { tools: ["read"], text: "- read: file contents of any kind — source, config, docs, logs, data, images." },
+      { tools: ["ls", "find"], text: "- ls / find: enumerate a directory or locate files by glob before reading them." },
+      { tools: ["bash"], text: "- bash: run commands to observe real state — builds, tests, queries, data processing, system and VCS inspection. Prefer a command that proves something over an assumption." },
     ],
   },
   {
@@ -215,12 +244,12 @@ export function delegationBlock(
     "deeper, and keep YOUR context clean. subagent_type is REQUIRED (calls without it are rejected).",
     "",
     "USE a subagent when:",
-    '- Locating code / mapping a flow ("where is X", "how does Y connect")        → explore',
-    "- External library / API / framework knowledge                               → librarian",
-    '- A judgment call (design tradeoff, "is this correct", "why is this broken")  → an advisor',
-    "- A test/build that keeps failing after one real attempt                      → a deep-debugger",
-    "- A self-contained, parallelizable implementation slice                       → task",
-    "- A code review of your changes — ONLY when the user explicitly asks          → a reviewer",
+    '- Locating something in the repo or mapping how it fits together             → explore',
+    "- Knowledge that lives outside this repo (docs, APIs, the web, standards)    → librarian",
+    '- A judgment call (tradeoff, "is this correct", "why is this broken")        → an advisor',
+    "- A failure that persists after one real attempt to fix it                   → a deep-debugger",
+    "- A self-contained, parallelizable slice of the work                         → task",
+    "- A fresh independent check would materially reduce consequential risk       → a reviewer",
     "",
     `You run on the ${driverFamily} family. Advisors, reviewers, and deep-debuggers are model-named`,
     "subagents — the name encodes their provider, model, and thinking level. Pick which to spawn by",
@@ -242,19 +271,23 @@ export function delegationBlock(
     "Configured deep-debuggers:",
     ...rosterLines("deep-debuggers", pools.deepDebuggers),
     "",
-    "If a task is broad or multi-part (investigate/analyze/refactor/audit/migrate a system,",
-    "subsystem, flow, or the codebase — anything not pinned to one known file/symbol), OPEN with",
-    "2–3 parallel `explore` subagents before reading code yourself. Use 4+ only for audits,",
+    "If the work is broad or multi-part (investigate/analyze/audit/migrate/restructure a system,",
+    "subsystem, flow, dataset, or document set — anything not pinned to one known file or fact),",
+    "OPEN with 2–3 parallel `explore` subagents before digging in yourself. Use 4+ only for audits,",
     "migrations, or multi-repo/system work. Give each explore an orthogonal prompt (no duplicate",
     "mapping). explore FINDS; advisors JUDGE.",
     "",
     "Do NOT delegate when:",
-    "- You already know the exact file/symbol — just read/edit it directly.",
-    "- The task is a single narrow change or a trivial lookup (delegation overhead > work).",
-    "- You are mid-edit on a file you understand — keep going; don't spawn to \"map\" it.",
+    "- You already know the exact file or fact — just read/handle it directly.",
+    "- The work is a single narrow change or a trivial lookup (delegation overhead > work).",
+    "- You are mid-way through something you understand — keep going; don't spawn to \"map\" it.",
     "- a deep-debugger for a trivial/obvious error, or an advisor for a plain lookup.",
-    "a deep-debugger diagnoses only — it must NOT write the actual fix. Do NOT spawn a reviewer unless",
-    "the user explicitly asks (the automatic review panel already covers implement/review phases).",
+    "a deep-debugger diagnoses only — it must NOT write the actual fix. Use reviewers selectively when",
+    "fresh independent scrutiny is worth its cost; never turn review into a mandatory or repeated loop.",
+    "",
+    "Every subagent starts with an EMPTY context. When a decision, constraint, or earlier result",
+    "matters to its work, either state it in the spawn prompt or tell it to recall the main-session",
+    "history for it.",
     "</delegation>",
   ].join("\n");
 }

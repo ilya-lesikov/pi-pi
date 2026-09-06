@@ -1,33 +1,65 @@
-## Quick start
+# pi-pi
+
+A persistent, general-purpose agent configuration for Pi.
+
+## Install
 
 ```shell
 pi install npm:@ilya-lesikov/pi-pi
 ```
 
-Recommended extensions:
+Recommended optional extension:
+
 ```shell
-pi install npm:pi-tool-display
 pi install npm:pi-mcp-adapter
 ```
 
-Open `pi`, check health:
-```
-/pp > Settings > Info > Doctor
-```
+Start Pi and talk to it normally. The initial Pi session owns all work; pi-pi does not create a second task context or impose research, planning, implementation, or review phases.
 
-Implement something:
-```
-/pp > Task > Implement > New
-```
+## `/pp`
 
-There is only one `/pp` command, nothing else. It will let you start tasks, progress through them and pick the next action, display useful info and configure pi-pi.
+`/pp` remains the control panel for:
 
-## ACP clients (Zed)
+- session and context status;
+- bounded background workers;
+- reloadable skills;
+- VCC compaction and recall;
+- main and worker model routing;
+- provider configuration.
 
-pi-pi works in ACP clients through the [pi-acp fork](https://github.com/ilya-lesikov/pi-acp), which spawns `pi --mode rpc` with `PI_ACP=1`. There, every pi-pi interaction (`/pp`, the `pp_phase_complete` gate, `ask_user`) degrades from the rich terminal dialogue to the client's own select/confirm/input dialogs; the terminal experience is unchanged.
+## Memory
 
-The footer pi-pi draws in the terminal cannot render in an ACP client, so instead pi-pi publishes the same task state — mode, run status, the live subagent fleet, and the task's whole phase pipeline with each phase marked pending/in-progress/completed and the current one annotated with its step and review pass — as a `pp:state` session entry that the adapter turns into a client-side task list. The entry never enters the model's context, and nothing is published outside `PI_ACP=1`.
+Automatic compaction uses the bundled VCC engine. `vcc_recall` searches durable session history, including messages, tool calls, and tool results. Native Pi session restoration remains authoritative; pi-pi does not duplicate conversation state in task files.
+
+## Skills
+
+The main prompt contains a compact catalog. Full skill guidance is loaded through `load_skill` and appears as a tagged tool result, so it remains searchable and can be loaded again when no longer salient.
+
+Skill precedence is:
+
+1. `<project>/.pi/skills`
+2. `~/.pi/skills`
+3. bundled pi-pi skills
+
+A skill may be `<name>/SKILL.md` or a Markdown file directly inside a skills directory. It needs frontmatter with `name` and `description`.
+
+## Workers
+
+The main session owns long-running and interactive work. Functional workers are optional and bounded:
+
+- `explore` for local retrieval and mapping;
+- `librarian` for external sources;
+- `advisor_*` for independent judgment;
+- `deep-debugger_*` for difficult diagnosis;
+- `reviewer_*` for fresh read-only review;
+- `task` for a self-contained parallel slice.
+
+Workers receive no duplicated task artifact bundle. They can search the owning session with `vcc_recall` when prior decisions or tool results matter.
+
+## ACP clients
+
+The pi-acp fork can expose `/pp`, usage, workers, elicitation, and session status in clients such as Zed. pi-pi no longer publishes a phase pipeline because there is none.
 
 ## Flant
 
-`/pp > Settings > Flant` enables Flant AI Infrastructure integration.
+Flant model discovery and provider routing remain available through scoped `.pp/config.json` configuration.

@@ -111,21 +111,16 @@ describe("vendored pi-subagents contract — spawn options", () => {
 });
 
 describe("vendored pi-subagents contract — manager handle", () => {
-  it("exposes every method the orchestrator calls on the global manager handle", () => {
-    // The handle is reached via Symbol.for("pi-subagents:manager"), usually
-    // called optionally (mgr?.foo?.()), so a removed method is a silent no-op.
-    for (const method of ["getRecord", "refreshWidget", "setMaxConcurrent"]) {
+  it("exposes the bounded-worker operations used by the session control panel", () => {
+    for (const method of ["listAgents", "abortAll"]) {
       expect(orchestratorCode).toMatch(new RegExp(`${method}\\??\\.?\\(`));
-      expect(vendoredCode, `the orchestrator calls ${method}() on the manager handle but the vendored code does not define it`).toMatch(
-        new RegExp(`${method}[(:]`),
-      );
+      expect(vendoredCode).toMatch(new RegExp(`${method}[(:]`));
     }
   });
 
-  it("still publishes the global handles the orchestrator reaches for", () => {
-    for (const key of ["pi-subagents:manager", "pi-subagents:menu"]) {
-      expect(orchestratorCode).toContain(`Symbol.for("${key}")`);
-      expect(vendoredCode, `${key} is read by the orchestrator but never published by the vendored code`).toContain(`Symbol.for("${key}")`);
-    }
+  it("publishes the manager handle consumed by pi-pi", () => {
+    const key = "pi-subagents:manager";
+    expect(orchestratorCode).toContain(`Symbol.for("${key}")`);
+    expect(vendoredCode).toContain(`Symbol.for("${key}")`);
   });
 });

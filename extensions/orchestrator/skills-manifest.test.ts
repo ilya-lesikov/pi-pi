@@ -1,82 +1,74 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs";
-import { tmpdir } from "os";
-import { join } from "path";
-import {
-  discoverSkills,
-  enabledSkills,
-  renderSkillsManifest,
-  skillId,
-  type SkillsConfig,
-} from "./skills-manifest.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { bundledSkillsDir, listLayeredSkills, loadLayeredSkill, resolveLayeredSkill } from "./skills-manifest.js";
 
-const OFF: SkillsConfig = { loadProject: false, loadGlobal: false, disabled: [] };
-
-// Write a SKILL.md with YAML frontmatter into <dir>/<name>/SKILL.md.
-function writeSkill(root: string, name: string, description: string) {
+function writeSkill(root: string, name: string, description: string, body = "body"): void {
   const dir = join(root, name);
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: ${description}\n---\n\n# ${name}\nbody\n`);
+  writeFileSync(join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: ${description}\n---\n\n${body}\n`);
 }
 
-describe("skills-manifest", () => {
+describe("layered skills", () => {
   let root: string;
   let cwd: string;
-  const prevEnv = process.env.PI_CODING_AGENT_DIR;
+  let global: string;
+  let previous: string | undefined;
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), "skills-"));
-    cwd = join(root, "proj");
+    root = mkdtempSync(join(tmpdir(), "pi-pi-skills-"));
+    cwd = join(root, "project");
+    global = join(root, "global");
     mkdirSync(join(cwd, ".pi", "skills"), { recursive: true });
-    mkdirSync(join(root, "agent", "skills"), { recursive: true });
-    process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+    mkdirSync(global, { recursive: true });
+    previous = process.env.PI_SKILLS_DIR;
+    process.env.PI_SKILLS_DIR = global;
   });
+
   afterEach(() => {
-    if (prevEnv === undefined) delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = prevEnv;
+    if (previous === undefined) delete process.env.PI_SKILLS_DIR;
+    else process.env.PI_SKILLS_DIR = previous;
     rmSync(root, { recursive: true, force: true });
   });
 
-  it("discovers nothing when both scopes are off", () => {
-    writeSkill(join(cwd, ".pi", "skills"), "alpha", "does alpha");
-    expect(discoverSkills(cwd, OFF)).toHaveLength(0);
+  it("ships bundled guidance", () => {
+    const bundled = listLayeredSkills(cwd).filter((skill) => skill.layer === "bundled");
+    expect(bundled.length).toBeGreaterThan(0);
+    expect(bundled.every((skill) => skill.filePath.startsWith(bundledSkillsDir()))).toBe(true);
   });
 
-  it("discovers project skills when loadProject is on", () => {
-    writeSkill(join(cwd, ".pi", "skills"), "alpha", "does alpha");
-    const found = discoverSkills(cwd, { ...OFF, loadProject: true });
-    expect(found).toHaveLength(1);
-    expect(found[0]).toMatchObject({ scope: "project", name: "alpha", description: "does alpha" });
-    expect(found[0].id).toBe(skillId("project", "alpha"));
+  it("resolves project over global over bundled", () => {
+    const name = listLayeredSkills(cwd).find((skill) => skill.layer === "bundled")!.name;
+    writeSkill(global, name, "global");
+    expect(resolveLayeredSkill(name, cwd)).toMatchObject({ layer: "global", shadows: ["bundled"] });
+    writeSkill(join(cwd, ".pi", "skills"), name, "project");
+    expect(resolveLayeredSkill(name, cwd)).toMatchObject({ layer: "project", description: "project", shadows: ["global", "bundled"] });
   });
 
-  it("discovers global skills when loadGlobal is on", () => {
-    writeSkill(join(root, "agent", "skills"), "beta", "does beta");
-    const found = discoverSkills(cwd, { ...OFF, loadGlobal: true });
-    expect(found.some((s) => s.scope === "global" && s.name === "beta")).toBe(true);
+  it("supports flat markdown files as well as skill directories", () => {
+    writeFileSync(join(global, "research.md"), "---\nname: research\ndescription: Source-backed research\n---\n\nVerify sources.\n");
+    expect(resolveLayeredSkill("research", cwd)).toMatchObject({ layer: "global" });
   });
 
-  it("enabledSkills excludes ids in the disabled list", () => {
-    writeSkill(join(cwd, ".pi", "skills"), "alpha", "a");
-    writeSkill(join(cwd, ".pi", "skills"), "gamma", "g");
-    const cfg = { loadProject: true, loadGlobal: false, disabled: [skillId("project", "alpha")] };
-    const enabled = enabledSkills(cwd, cfg);
-    expect(enabled.map((s) => s.name).sort()).toEqual(["gamma"]);
-    // discoverSkills still returns BOTH (the List submenu needs the full set).
-    expect(discoverSkills(cwd, cfg)).toHaveLength(2);
+  it("loads a canonical tagged document without activation state", () => {
+    writeSkill(join(cwd, ".pi", "skills"), "alpha", "Alpha guidance", "Do alpha.");
+    const first = loadLayeredSkill("alpha", cwd);
+    const second = loadLayeredSkill("alpha", cwd);
+    expect(first.document).toBe('<skill name="alpha" source="project">\nDo alpha.\n</skill>');
+    expect(second.document).toBe(first.document);
+    expect(first.document).not.toContain("description:");
   });
 
-  it("renders a name+description+path manifest, bodies not inlined", () => {
-    writeSkill(join(cwd, ".pi", "skills"), "alpha", "does alpha");
-    const manifest = renderSkillsManifest(discoverSkills(cwd, { ...OFF, loadProject: true }));
-    expect(manifest).toContain("<skills>");
-    expect(manifest).toContain("alpha");
-    expect(manifest).toContain("does alpha");
-    expect(manifest).toContain("SKILL.md");
-    expect(manifest).not.toContain("body"); // full body is loaded on demand, not inlined
+  it("reloads edited guidance", () => {
+    writeSkill(global, "alpha", "Alpha guidance", "old");
+    expect(loadLayeredSkill("alpha", cwd).document).toContain("old");
+    writeSkill(global, "alpha", "Alpha guidance", "new");
+    expect(loadLayeredSkill("alpha", cwd).document).toContain("new");
   });
 
-  it("renders empty string when there are no enabled skills", () => {
-    expect(renderSkillsManifest([])).toBe("");
+  it("lists available names for unknown skills", () => {
+    writeSkill(global, "alpha", "Alpha guidance");
+    expect(() => loadLayeredSkill("missing", cwd)).toThrow(/Available skills: alpha/);
   });
 });

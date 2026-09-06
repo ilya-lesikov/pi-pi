@@ -1,95 +1,103 @@
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { loadSkillsFromDir, type Skill } from "@earendil-works/pi-coding-agent";
-import { getLogger } from "./log.js";
+import { basename, extname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 
-// Skills manifest injection (item 11). pi-pi owns its system prompt, so the
-// framework's skill discovery never reaches the agent. This module discovers
-// project + global skills and injects a NAME + DESCRIPTION manifest (bodies are
-// loaded on demand by the agent via the skill file), gated by two scope toggles
-// plus a per-skill enable list.
+export type SkillLayer = "project" | "global" | "bundled";
 
-export interface SkillsConfig {
-  loadProject: boolean;
-  loadGlobal: boolean;
-  /** Skill identifiers (see skillId) explicitly DISABLED by the user. */
-  disabled: string[];
-}
-
-export interface DiscoveredSkill {
-  scope: "project" | "global";
+export interface LayeredSkill {
   name: string;
   description: string;
+  layer: SkillLayer;
   filePath: string;
-  id: string;
+  shadows: SkillLayer[];
 }
 
-function resolveGlobalAgentDir(): string {
-  const envDir = process.env.PI_CODING_AGENT_DIR;
-  if (envDir) {
-    if (envDir === "~") return homedir();
-    if (envDir.startsWith("~/")) return homedir() + envDir.slice(1);
-    return envDir;
+export interface LoadedLayeredSkill extends LayeredSkill {
+  document: string;
+}
+
+const LAYERS: readonly SkillLayer[] = ["project", "global", "bundled"];
+const VALID_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+export function bundledSkillsDir(): string {
+  return fileURLToPath(new URL("./skills/", import.meta.url));
+}
+
+function globalSkillsDir(): string {
+  const configured = process.env.PI_SKILLS_DIR;
+  if (configured === "~") return homedir();
+  if (configured?.startsWith("~/")) return homedir() + configured.slice(1);
+  if (configured) return configured;
+  return join(homedir(), ".pi", "skills");
+}
+
+function layerDir(layer: SkillLayer, cwd: string): string {
+  if (layer === "project") return join(cwd, ".pi", "skills");
+  if (layer === "global") return globalSkillsDir();
+  return bundledSkillsDir();
+}
+
+function skillFiles(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  const files: string[] = [];
+  for (const entry of readdirSync(dir)) {
+    const path = join(dir, entry);
+    const stat = statSync(path);
+    if (stat.isFile() && extname(entry).toLowerCase() === ".md") files.push(path);
+    if (stat.isDirectory()) {
+      const nested = join(path, "SKILL.md");
+      if (existsSync(nested)) files.push(nested);
+    }
   }
-  return join(homedir(), ".pi", "agent");
+  return files.sort();
 }
 
-// Stable identifier for a skill (used for per-skill enable/disable). Scope-
-// qualified name keeps a project and global skill of the same name distinct.
-export function skillId(scope: "project" | "global", name: string): string {
-  return `${scope}:${name}`;
-}
-
-function loadDir(dir: string, source: string): Skill[] {
+function readMetadata(filePath: string): { name: string; description: string } | null {
   try {
-    return loadSkillsFromDir({ dir, source }).skills;
-  } catch (err: any) {
-    getLogger().debug({ s: "skills", dir, err: err?.message }, "skill discovery failed for dir");
-    return [];
+    const parsed = parseFrontmatter(readFileSync(filePath, "utf8"));
+    const frontmatter = parsed.frontmatter as Record<string, unknown>;
+    const fallbackName = basename(filePath, extname(filePath));
+    const name = String(frontmatter.name ?? (fallbackName === "SKILL" ? basename(join(filePath, "..")) : fallbackName));
+    const description = String(frontmatter.description ?? "").trim();
+    if (!VALID_NAME.test(name) || !description) return null;
+    return { name, description };
+  } catch {
+    return null;
   }
 }
 
-/**
- * Discover all skills across the enabled scopes (regardless of the per-skill
- * disable list — the "List" submenu needs the full set). Project scope =
- * <cwd>/.pi/skills; global scope = <agentDir>/skills.
- */
-export function discoverSkills(cwd: string, config: SkillsConfig): DiscoveredSkill[] {
-  const out: DiscoveredSkill[] = [];
-  if (config.loadProject) {
-    for (const s of loadDir(join(cwd, ".pi", "skills"), "project")) {
-      out.push({ scope: "project", name: s.name, description: s.description, filePath: s.filePath, id: skillId("project", s.name) });
+export function listLayeredSkills(cwd: string): LayeredSkill[] {
+  const resolved = new Map<string, LayeredSkill>();
+  for (const layer of LAYERS) {
+    for (const filePath of skillFiles(layerDir(layer, cwd))) {
+      const metadata = readMetadata(filePath);
+      if (!metadata) continue;
+      const existing = resolved.get(metadata.name);
+      if (existing) {
+        if (!existing.shadows.includes(layer)) existing.shadows.push(layer);
+      } else {
+        resolved.set(metadata.name, { ...metadata, layer, filePath, shadows: [] });
+      }
     }
   }
-  if (config.loadGlobal) {
-    for (const s of loadDir(join(resolveGlobalAgentDir(), "skills"), "global")) {
-      out.push({ scope: "global", name: s.name, description: s.description, filePath: s.filePath, id: skillId("global", s.name) });
-    }
-  }
-  return out;
+  return [...resolved.values()].sort((left, right) => left.name.localeCompare(right.name));
 }
 
-/** The subset of discovered skills that are ENABLED (not in the disable list). */
-export function enabledSkills(cwd: string, config: SkillsConfig): DiscoveredSkill[] {
-  const disabled = new Set(config.disabled);
-  return discoverSkills(cwd, config).filter((s) => !disabled.has(s.id));
+export function resolveLayeredSkill(name: string, cwd: string): LayeredSkill | undefined {
+  return listLayeredSkills(cwd).find((skill) => skill.name === name);
 }
 
-/**
- * Render the manifest injected into the system prompt: name + description +
- * on-demand path per enabled skill. Bodies are NOT inlined — the agent reads the
- * file when it decides to use a skill. Returns "" when there are none.
- */
-export function renderSkillsManifest(skills: DiscoveredSkill[]): string {
-  if (skills.length === 0) return "";
-  const lines = [
-    "<skills>",
-    "The following skills are available. Each lists a name, what it's for, and a file path.",
-    "When a task matches a skill, READ its file for the full instructions before proceeding.",
-  ];
-  for (const s of skills) {
-    lines.push(`- ${s.name} (${s.scope}): ${s.description} [load: ${s.filePath}]`);
-  }
-  lines.push("</skills>");
-  return lines.join("\n");
+function escapeAttribute(value: string): string {
+  return value.replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
+export function loadLayeredSkill(name: string, cwd: string): LoadedLayeredSkill {
+  const skills = listLayeredSkills(cwd);
+  const skill = skills.find((candidate) => candidate.name === name);
+  if (!skill) throw new Error(`Unknown skill "${name}". Available skills: ${skills.map((candidate) => candidate.name).join(", ") || "<none>"}`);
+  const body = parseFrontmatter(readFileSync(skill.filePath, "utf8")).body.trim();
+  const document = `<skill name="${escapeAttribute(skill.name)}" source="${skill.layer}">\n${body}\n</skill>`;
+  return { ...skill, document };
 }

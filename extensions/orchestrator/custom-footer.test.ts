@@ -64,57 +64,15 @@ describe("createCustomFooter", () => {
     expect(lines).toHaveLength(2);
   });
 
-  it("line 1 combines task/phase/mode/name on one line when a task is active", () => {
-    setFooterContext(makeCtx());
-    setFooterOrchestrator({
-      active: { type: "implement", dir: "/tmp/task", state: { phase: "plan", mode: "autonomous", description: "build the widget" } },
-    } as any);
+  it("line 1 uses the native session name and never renders workflow metadata", () => {
+    const ctx = makeCtx();
+    ctx.sessionManager.getSessionName = () => "persistent session";
+    setFooterContext(ctx);
+    setFooterOrchestrator({} as any);
     const [line1] = render();
-    expect(line1).toContain("task: implement");
-    expect(line1).toContain("phase: plan");
-    expect(line1).toContain("autonomous");
-    expect(line1).not.toContain("mode:");
-    expect(line1).toContain('"build the widget"');
-  });
-
-  it("renders exactly two lines even when a task is active (no separate name line)", () => {
-    setFooterContext(makeCtx());
-    setFooterOrchestrator({
-      active: { type: "implement", dir: "/tmp/task", state: { phase: "plan", mode: "autonomous", description: "build the widget" } },
-    } as any);
-    const lines = render();
-    expect(lines).toHaveLength(2);
-    expect(lines[0]).toContain('"build the widget"');
-  });
-
-  it("line 1 shows autonomous mode value (no label) in a read-only phase for an autonomous task", () => {
-    setFooterContext(makeCtx());
-    setFooterOrchestrator({
-      active: { type: "implement", dir: "/tmp/task", state: { phase: "brainstorm", mode: "autonomous", description: "build the widget" } },
-    } as any);
-    const [line1] = render();
-    expect(line1).toContain("phase: brainstorm");
-    expect(line1).toContain("autonomous");
-    expect(line1).not.toContain("mode:");
-  });
-
-  it("line 1 shows guided mode value (no label) for a guided task", () => {
-    setFooterContext(makeCtx());
-    setFooterOrchestrator({
-      active: { type: "implement", dir: "/tmp/task", state: { phase: "implement", mode: "guided", description: "build the widget" } },
-    } as any);
-    const [line1] = render();
-    expect(line1).toContain("guided");
-    expect(line1).not.toContain("mode:");
-  });
-
-  it("line 1 omits the mode segment for a quick task", () => {
-    setFooterContext(makeCtx());
-    setFooterOrchestrator({
-      active: { type: "quick", dir: "/tmp/task", state: { phase: "quick", mode: "autonomous", description: "build the widget" } },
-    } as any);
-    const [line1] = render();
-    expect(line1).toContain("task: quick");
+    expect(line1).toContain("persistent session");
+    expect(line1).not.toContain("task:");
+    expect(line1).not.toContain("phase:");
     expect(line1).not.toContain("mode:");
   });
 

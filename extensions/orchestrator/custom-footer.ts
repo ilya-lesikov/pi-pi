@@ -6,7 +6,6 @@ import type { ExtensionContext, ReadonlyFooterDataProvider, Theme } from "@earen
 import { truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 import type { UsageTracker } from "./usage-tracker.js";
 import type { Orchestrator } from "./orchestrator.js";
-import { formatModeIndicator, taskNameFromState } from "./state.js";
 
 // Resolve the pi-pi package version once at module load. ESM-safe: resolve
 // package.json relative to this module's URL (never __dirname or a fixed
@@ -180,17 +179,8 @@ function renderPathLine(width: number, theme: Theme, branch: string | null): str
   let line = path;
   if (branch) line += ` (${branch})`;
 
-  const task = footerOrchestrator?.active;
-  if (task && task.state.phase !== "done") {
-    line += ` • task: ${task.type} • phase: ${task.state.phase}`;
-    const mode = formatModeIndicator(task.state, task.type);
-    if (mode) line += ` • ${mode}`;
-    const name = taskNameFromState(task.dir, task.state);
-    if (name) line += ` • "${name}"`;
-  } else {
-    const sessionName = ctx?.sessionManager.getSessionName();
-    if (sessionName) line += ` • ${sessionName}`;
-  }
+  const sessionName = ctx?.sessionManager.getSessionName();
+  if (sessionName) line += ` • ${sessionName}`;
 
   line += ` • pp v${PP_VERSION}`;
 
