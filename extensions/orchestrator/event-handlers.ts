@@ -1,4 +1,4 @@
-import { relative, resolve } from "path";
+import { isAbsolute, relative, resolve, sep } from "path";
 import { Type } from "@sinclair/typebox";
 import { estimateTokens, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { loadConfig, getDefaultConfig, normalizeConfigDurations } from "./config.js";
@@ -386,7 +386,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     const filePath = input?.file_path || input?.filePath || input?.path;
     if (!filePath) return;
     const fileInProject = relative(orchestrator.cwd, resolve(orchestrator.cwd, filePath));
-    if (fileInProject.startsWith("..")) return;
+    if (fileInProject === ".." || fileInProject.startsWith(`..${sep}`) || isAbsolute(fileInProject)) return;
     const results = runAfterEdit(fileInProject, commands, orchestrator.config.performance.commands.afterEdit, orchestrator.cwd);
     const failures = results.filter((result) => !result.ok);
     if (failures.length === 0) return;
