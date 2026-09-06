@@ -13,6 +13,8 @@ const setTierEnabledMock = vi.fn();
 vi.mock("./model-registry.js", () => ({
   updateRegistryFromAvailableModels: (...args: unknown[]) => updateRegistryMock(...args),
   setTierEnabled: (...args: unknown[]) => setTierEnabledMock(...args),
+  listRegisteredSpecs: () => [],
+  isSubscriptionFallbackActive: () => false,
 }));
 
 const tempDirs: string[] = [];

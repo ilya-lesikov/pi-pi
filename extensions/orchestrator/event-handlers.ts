@@ -196,14 +196,17 @@ function registerLifecycle(orchestrator: Orchestrator): void {
       publishAcpState(orchestrator);
     }, 30000);
   };
-  pi.on("turn_start", (_event, ctx) => {
+  pi.on("turn_start", async (_event, ctx) => {
     orchestrator.lastCtx = ctx;
     orchestrator.mainTurnInFlight = true;
     orchestrator.mainTurnRecovering = false;
     orchestrator.mainTurnToolInFlight = 0;
     orchestrator.mainTurnLastActivity = Date.now();
     startMainTurnWatchdog();
-    void refreshSubProvider(pi).catch(() => {});
+    // Awaited: the request must not race a stale provider registration. Cheap
+    // when the token is fresh (a file read + compare); a network refresh only
+    // happens near expiry, exactly when waiting is required.
+    try { await refreshSubProvider(pi); } catch {}
     publishAcpState(orchestrator);
   });
   pi.on("tool_execution_start", (event: any) => {

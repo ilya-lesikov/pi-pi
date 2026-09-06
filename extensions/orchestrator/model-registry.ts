@@ -448,7 +448,9 @@ function applyTierResolution(spec: string): string {
   if (currentTier === "flant-api" && isClaudeFamily(family) && isTierUsable("flant-sub", family)) {
     const exact = specForTier("flant-sub", family, bareId);
     if (registeredSpecs.size === 0 || registeredSpecs.has(exact)) return exact;
-    return registeredSpecForTier("flant-sub", family) ?? exact;
+    const real = registeredSpecForTier("flant-sub", family);
+    if (real) return real;
+    return spec;
   }
 
   // If the current tier is still usable, keep the spec (catalog-safe): for
@@ -544,6 +546,10 @@ export function getModelInfo(modelId: string): ModelInfo {
     tier: family.tier,
     displayName: family.displayName,
   };
+}
+
+export function listRegisteredSpecs(): string[] {
+  return [...registeredSpecs];
 }
 
 export function updateRegistryFromAvailableModels(availableModels: string[]): void {

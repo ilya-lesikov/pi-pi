@@ -53,6 +53,22 @@ afterEach(() => {
 });
 
 describe("flant-infra", () => {
+  it("registerFlantProviders preserves foreign (copilot/native) catalog specs", async () => {
+    const dir = makeTempDir();
+    const mod = await loadFlantInfraModule(dir);
+    const registry = await import("./model-registry.js");
+    const pi = { registerProvider: vi.fn(), unregisterProvider: vi.fn() } as any;
+
+    registry.updateRegistryFromAvailableModels(["github-copilot/claude-opus-4.5", "anthropic/claude-opus-4-8"]);
+    mod.registerFlantProviders(pi, ["sub/claude-opus-4-8", "gpt-5"], {});
+
+    const specs = registry.listRegisteredSpecs();
+    expect(specs).toContain("github-copilot/claude-opus-4.5");
+    expect(specs).toContain("anthropic/claude-opus-4-8");
+    expect(specs).toContain("pp-flant-openai/gpt-5");
+    registry.updateRegistryFromAvailableModels([]);
+  });
+
   it("registerFlantProviders is idempotent across repeated calls", async () => {
     const dir = makeTempDir();
     const mod = await loadFlantInfraModule(dir);

@@ -5,7 +5,7 @@ import lockfile from "proper-lockfile";
 import { refreshAnthropicToken } from "@earendil-works/pi-ai/oauth";
 import type { ExtensionAPI, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 import { getDefaultConfig, type PiPiConfig, readScopedFlantSettings, GLOBAL_CONFIG_PATH, writeConfigValue } from "./config.js";
-import { updateRegistryFromAvailableModels, setTierEnabled, isSubscriptionFallbackActive } from "./model-registry.js";
+import { listRegisteredSpecs, updateRegistryFromAvailableModels, setTierEnabled, isSubscriptionFallbackActive } from "./model-registry.js";
 import { compareModelVersion } from "./model-version.js";
 import { getLogger } from "./log.js";
 import { buildUserAgent, injectBillingHeader, CC_IDENTITY } from "./billing-spoof.js";
@@ -779,7 +779,13 @@ export function registerFlantProviders(
 
   log.debug({ s: "flant", total: uniqueModels.length, sub: subModels.length, openai: openaiModels.length }, "registering flant providers");
 
-  updateRegistryFromAvailableModels(availableSpecs);
+  // updateRegistryFromAvailableModels REPLACES the catalog. Keep the non-flant
+  // specs (github-copilot, native anthropic/openai) that session_start already
+  // registered, or tier resolution loses the Copilot fallback right after this
+  // re-registration.
+  const foreignSpecs = listRegisteredSpecs().filter((spec) =>
+    !spec.startsWith("pp-flant-anthropic/") && !spec.startsWith("pp-flant-openai/") && !spec.startsWith(`${SUB_PROVIDER}/`));
+  updateRegistryFromAvailableModels([...foreignSpecs, ...availableSpecs]);
 }
 
 /**

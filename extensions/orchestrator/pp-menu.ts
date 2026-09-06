@@ -1109,7 +1109,7 @@ async function showFlantMenu(orchestrator: Orchestrator, ctx: any): Promise<void
         result.ok
           ? eff.subscription
             ? "Personal Claude subscription ON — Claude roles now route through sub/claude-* (billed to your subscription)."
-            : "Personal Claude subscription OFF — Claude roles reverted to pp-flant-anthropic."
+            : "Personal Claude subscription OFF — Claude models are unavailable (the paid gateway no longer serves Claude)."
           : `Personal subscription ${eff.subscription ? "enable" : "disable"} failed: ${result.error ?? "unknown error"}`,
         result.ok ? "info" : "error",
       );
@@ -1194,11 +1194,11 @@ async function showCopilotMenu(orchestrator: Orchestrator, ctx: any): Promise<vo
     const enableLabel = `Enable Copilot tier: ${settings.copilotEnabled ? "ON" : "OFF"}`;
     const statusLine = settings.copilotEnabled
       ? tokenPresent
-        ? "Active — Claude falls here when the subscription is unusable, and paid flant-api Claude is promoted here."
+        ? "Active — Claude falls here when the subscription is rate-limited (its only automatic fallback)."
         : "Enabled but COPILOT_GITHUB_TOKEN is missing — tier is skipped until the token is set."
-      : "Disabled — Claude falls straight from the subscription to paid flant-api.";
+      : "Disabled — a rate-limited Claude subscription has no automatic fallback and waits for the limit to clear.";
     const choice = await selectOption(ctx, "Copilot", [
-      opt(enableLabel, "Use Copilot as the tier between the Claude subscription and paid flant-api"),
+      opt(enableLabel, "Use Copilot as the automatic fallback when the Claude subscription is rate-limited"),
       opt("Current status", statusLine),
       opt(BACK, "Return to the previous menu"),
     ]);
@@ -1217,7 +1217,7 @@ async function showCopilotMenu(orchestrator: Orchestrator, ctx: any): Promise<vo
     const eff = loadFlantSettings(orchestrator.cwd);
     syncProviderTiers(eff);
     if (warnIfFlantEditMasked(ctx, "Copilot", scope, turningOn, eff.copilotEnabled)) continue;
-    ctx.ui?.notify?.(turningOn ? "Copilot tier ON — Claude now falls to Copilot before paid flant-api." : "Copilot tier OFF — Claude falls straight from the subscription to paid flant-api.", "info");
+    ctx.ui?.notify?.(turningOn ? "Copilot tier ON — a rate-limited Claude subscription now falls back to Copilot." : "Copilot tier OFF — a rate-limited Claude subscription waits for the limit to clear.", "info");
   }
 }
 
@@ -1572,7 +1572,7 @@ function sessionStatus(orchestrator: Orchestrator, ctx: any): string {
     `Model: ${ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "none"} · thinking ${orchestrator.config.agents.main.thinking}`,
     `Context: ${contextLine}`,
     ...(typeof cost === "number" && cost > 0 ? [`Session cost: $${cost.toFixed(2)}`] : []),
-    `Flant: ${settings.enabled ? `on · subscription ${settings.subscription ? (readClaudeOAuthToken() ? "active" : "MISSING TOKEN") : "off"}` : "off"}`,
+    `Flant: ${settings.enabled ? `on · subscription ${settings.subscription ? (readClaudeOAuthToken() ? (readGatewayApiKey() ? "active" : "MISSING GATEWAY KEY") : "MISSING TOKEN") : "off"}` : "off"}`,
     ...(orchestrator.subFallbackActive ? ["⚠ Subscription rate-limited — waiting for the limit to clear"] : []),
     ...(orchestrator.continuationHalted ? ["⚠ Automatic continuation paused (repeated stalls) — send a message to resume"] : []),
     ...(orchestrator.configError ? [`⚠ Config error: ${orchestrator.configError}`] : []),

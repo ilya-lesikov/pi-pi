@@ -512,6 +512,16 @@ describe("model-registry", () => {
       expect(resolveModel("pp-flant-anthropic/claude-opus-4-8")).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
     });
 
+    it("never fabricates an unregistered sub model for a family the sub catalog lacks", () => {
+      updateRegistryFromAvailableModels([
+        "pp-flant-anthropic-sub/sub/claude-sonnet-4-6",
+        "pp-flant-openai/gpt-5.6-sol",
+      ]);
+      // Stale api-born opus: exact sub twin unregistered and no sub opus exists
+      // — the spec must stay as-is rather than invent sub/claude-opus-….
+      expect(resolveModel("pp-flant-anthropic/claude-opus-4-8")).toBe("pp-flant-anthropic/claude-opus-4-8");
+    });
+
     it("respects an explicit copilot pin against the real catalog (no rewrite to flant)", () => {
       setTierEnabled({ "copilot": true });
       expect(resolveModel("github-copilot/claude-opus-4.5")).toBe("github-copilot/claude-opus-4.5");
