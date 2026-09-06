@@ -147,10 +147,10 @@ describe("principles degrees-of-freedom split", () => {
     }
   });
 
-  it("the edit-capable task factory DOES carry code-editing rules", () => {
+  it("the edit-capable task factory leaves code-editing rules to skills", () => {
     const t = createTaskAgent(config);
-    expect(t.prompt).toContain("Keep everything as private as possible");
-    expect(t.prompt).toContain("NEVER comment a private (non-exported) symbol");
+    expect(t.prompt).not.toContain("Keep everything as private as possible");
+    expect(t.prompt).not.toContain("NEVER comment a private (non-exported) symbol");
   });
 });
 
@@ -237,6 +237,15 @@ describe("task stays a bounded, self-contained worker", () => {
     expect(t.prompt).toMatch(/STOP and report that back/);
     expect(t.frontmatter.description).toMatch(/not for open-ended design, whole-task ownership/);
   });
+
+  it("keeps domain-specific software policy out of the generic worker", () => {
+    const prompt = createTaskAgent(config).prompt;
+    for (const phrase of ["SOURCE CODE", "Test-first policy", "Keep everything as private", "NEVER comment a private"]) {
+      expect(prompt).not.toContain(phrase);
+    }
+    expect(prompt).toContain("fresh evidence");
+    expect(prompt).toContain("vcc_recall");
+  });
 });
 
 describe("routing-contract descriptions (what / when / exclusion)", () => {
@@ -276,9 +285,8 @@ describe("affordance-aligned evidence gates", () => {
   it("the edit-capable task delegate carries the evidence gate + N/A path", () => {
     const t = createTaskAgent(config);
     expect(t.prompt).toContain("Verification gate");
-    expect(t.prompt).toContain("not applicable");
-    expect(t.prompt).toMatch(/in any language/i);
-    expect(t.prompt).toMatch(/for any kind of work/i);
+    expect(t.prompt).toContain("what remains unverified and why");
+    expect(t.prompt).toMatch(/fresh evidence/i);
   });
 
   it("the read-only reviewer restricts evidence to what its tools can produce", () => {

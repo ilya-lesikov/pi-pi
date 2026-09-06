@@ -14,7 +14,7 @@ Recommended optional extension:
 pi install npm:pi-mcp-adapter
 ```
 
-Start Pi and talk to it normally. The initial Pi session owns all work; pi-pi does not create a second task context or impose research, planning, implementation, or review phases.
+Start Pi and talk to it normally. The initial Pi session owns all work; pi-pi does not create a second task context or impose research, planning, implementation, or review phases. It continues interrupted work autonomously, recovers stalled turns, and asks for user input only when unavailable information or preference controls a consequential decision.
 
 ## `/pp`
 
@@ -42,6 +42,8 @@ Skill precedence is:
 3. bundled pi-pi skills
 
 A skill may be `<name>/SKILL.md` or a Markdown file directly inside a skills directory. It needs frontmatter with `name` and `description`.
+
+Bundled guidance covers software engineering, repository work, research and design, and skill authoring. The agent decides when to load it; `/pp` only shows the catalog and source settings.
 
 ## Workers
 

@@ -24,6 +24,37 @@ import type { Orchestrator } from "./orchestrator.js";
 
 const USAGE_TRACKER_KEY = Symbol.for("pi-pi:usage-tracker");
 const HOST_BUILTINS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
+const MAX_CONTINUATIONS = 3;
+const MAX_OBJECTIVE_CONTINUATIONS = 5;
+const CONTINUE_TRUNCATED = "[PI-PI] The previous response was truncated. Continue exactly where you stopped and complete the request.";
+const CONTINUE_EMPTY = "[PI-PI] The previous turn ended without a result. Continue with the next action and complete the request.";
+const CONTINUE_AMBIGUOUS = "[PI-PI] You stopped with a prose reply after taking actions. If the user's request is fully complete, state that concisely and stop. Otherwise continue with the next action without re-explaining.";
+const CONTINUE_STALLED = "[PI-PI] The previous turn stalled without completing. Continue where you left off and complete the request.";
+
+export type ContinuationDecision = "none" | "objective" | "adjudicate";
+
+export function classifyContinuation(message: any, turnHadTools: boolean): ContinuationDecision {
+  if (message?.stopReason === "aborted" || message?.stopReason === "error") return "none";
+  if (message?.stopReason === "length") return "objective";
+  const parts = Array.isArray(message?.content) ? message.content : [];
+  const hasText = parts.some((part: any) => part?.type === "text" && part.text?.trim());
+  const hasToolCall = parts.some((part: any) => part?.type === "toolCall");
+  if (!hasText && !hasToolCall) return "objective";
+  if (message?.stopReason === "stop" && hasText && turnHadTools) return "adjudicate";
+  return "none";
+}
+
+export function isMainTurnStalled(orchestrator: Orchestrator, now = Date.now()): boolean {
+  const staleMs = orchestrator.config?.performance?.internals?.mainTurnStale;
+  return Number.isFinite(staleMs)
+    && staleMs > 0
+    && orchestrator.mainTurnInFlight
+    && !orchestrator.mainTurnRecovering
+    && orchestrator.mainTurnToolInFlight === 0
+    && !orchestrator.interactivePromptOpen
+    && orchestrator.spawnedAgentIds.size === 0
+    && now - orchestrator.mainTurnLastActivity >= staleMs;
+}
 
 function tracker(): UsageTracker | undefined {
   return (globalThis as any)[USAGE_TRACKER_KEY];
@@ -55,7 +86,7 @@ export function renderGenericPrompt(orchestrator: Orchestrator, ctx: any, toolNa
   const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
   return [
     identityBlock({ displayName: info.displayName, family: info.family, tier: info.tier, thinking: orchestrator.config.agents.main.thinking }),
-    "<constraints>\nWork directly in this initial, restorable session. There are no task modes, phases, mandatory plans, artifacts, or automatic review loops. Own long-running work here. Use specialists only for bounded parallel work, independent judgment, focused retrieval, or isolation. Do not invent domain-specific workflow; load relevant skills and use the capabilities available.\n</constraints>",
+    "<constraints>\nWork directly in this initial, restorable session. There are no task modes, phases, mandatory plans, artifacts, or automatic review loops. Own long-running work here and continue autonomously until the request is actually complete. Minimize user intervention: ask only when unavailable information or user preference controls a consequential decision, primarily during clarification, research, or design. Use specialists only for bounded parallel work, independent judgment, focused retrieval, or isolation. Do not invent domain-specific workflow; let the work determine which skills and capabilities to load.\n</constraints>",
     principlesBlock(),
     toolsBlock(toolNames),
     delegationBlock(info.family, {
@@ -69,16 +100,20 @@ export function renderGenericPrompt(orchestrator: Orchestrator, ctx: any, toolNa
   ].filter(Boolean).join("\n\n");
 }
 
-function registerLoadSkill(orchestrator: Orchestrator): void {
-  orchestrator.pi.registerTool({
+export function registerLoadSkill(pi: ExtensionAPI, cwd: string, enabled?: Orchestrator["config"]["skills"]): void {
+  const available = () => listLayeredSkills(cwd).filter((skill) => !enabled
+    || (skill.layer === "bundled" && enabled.loadBundled)
+    || (skill.layer === "global" && enabled.loadGlobal)
+    || (skill.layer === "project" && enabled.loadProject));
+  pi.registerTool({
     name: "load_skill",
     label: "Load Skill",
-    description: "Load specialized guidance by name. Skill documents are stateless, reloadable, and searchable in session history.",
+    description: `Load specialized guidance by name. Available: ${available().map((skill) => `${skill.name} — ${skill.description}`).join("; ") || "none"}. Skill documents are stateless, reloadable, and searchable in session history.`,
     parameters: Type.Object({ name: Type.String({ description: "Skill name from the available-skills catalog." }) }),
     async execute(_id, params) {
       try {
-        const skill = loadLayeredSkill(params.name, orchestrator.cwd);
-        if (!selectedSkills(orchestrator).some((candidate) => candidate.name === skill.name)) throw new Error(`Skill "${params.name}" is disabled by its source-layer setting.`);
+        const skill = loadLayeredSkill(params.name, cwd);
+        if (!available().some((candidate) => candidate.name === skill.name)) throw new Error(`Skill "${params.name}" is disabled by its source-layer setting.`);
         return { content: [{ type: "text" as const, text: skill.document }], details: { name: skill.name, source: skill.layer, path: skill.filePath } };
       } catch (error: any) {
         return { content: [{ type: "text" as const, text: error?.message ?? String(error) }], details: undefined, isError: true };
@@ -94,7 +129,7 @@ export function registerFeatureToolsAndAgents(orchestrator: Orchestrator): void 
   registerExaTools(pi);
   registerAstSearchTool(pi, orchestrator.cwd);
   registerRecallTool(pi);
-  registerLoadSkill(orchestrator);
+  registerLoadSkill(pi, orchestrator.cwd, orchestrator.config.skills);
   setExtensionOnlyMode(pi);
   orchestrator.registerAgents();
 }
@@ -115,21 +150,45 @@ function registerLifecycle(orchestrator: Orchestrator): void {
   };
   pi.on("subagents:completed" as any, settle);
   pi.on("subagents:failed" as any, settle);
+  const startMainTurnWatchdog = () => {
+    if (orchestrator.mainTurnTimer) return;
+    orchestrator.mainTurnTimer = setInterval(() => {
+      if (!isMainTurnStalled(orchestrator)) return;
+      if (orchestrator.objectiveContinuationCount >= MAX_OBJECTIVE_CONTINUATIONS) {
+        orchestrator.continuationHalted = true;
+        orchestrator.lastCtx?.ui?.notify?.("Automatic continuation paused after repeated stalled turns.", "warning");
+        return;
+      }
+      orchestrator.objectiveContinuationCount++;
+      orchestrator.mainTurnRecovering = true;
+      orchestrator.lastCtx?.ui?.notify?.("Main turn stalled with no activity; recovering.", "warning");
+      try { orchestrator.lastCtx?.abort?.(); } catch {}
+      orchestrator.mainTurnInFlight = false;
+      orchestrator.queueContinuation(CONTINUE_STALLED);
+      publishAcpState(orchestrator);
+    }, 30000);
+  };
   pi.on("turn_start", (_event, ctx) => {
     orchestrator.lastCtx = ctx;
     orchestrator.mainTurnInFlight = true;
+    orchestrator.mainTurnRecovering = false;
     orchestrator.mainTurnToolInFlight = 0;
+    orchestrator.mainTurnHadTools = false;
     orchestrator.mainTurnLastActivity = Date.now();
+    startMainTurnWatchdog();
     publishAcpState(orchestrator);
   });
-  pi.on("tool_execution_start", () => {
+  pi.on("tool_execution_start", (event: any) => {
     orchestrator.mainTurnToolInFlight++;
+    orchestrator.mainTurnHadTools = true;
     orchestrator.mainTurnLastActivity = Date.now();
+    if (event?.toolName === "ask_user") orchestrator.interactivePromptOpen = true;
   });
   pi.on("tool_execution_update", () => { orchestrator.mainTurnLastActivity = Date.now(); });
-  pi.on("tool_execution_end", () => {
+  pi.on("tool_execution_end", (event: any) => {
     orchestrator.mainTurnToolInFlight = Math.max(0, orchestrator.mainTurnToolInFlight - 1);
     orchestrator.mainTurnLastActivity = Date.now();
+    if (event?.toolName === "ask_user") orchestrator.interactivePromptOpen = false;
   });
   pi.on("message_update", () => { orchestrator.mainTurnLastActivity = Date.now(); });
 }
@@ -239,9 +298,12 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     publishAcpState(orchestrator);
   });
 
-  pi.on("before_agent_start", async (_event, ctx) => {
+  pi.on("before_agent_start", async (event: any, ctx) => {
     if ((globalThis as any)[SUBAGENT_SESSION_KEY] || !orchestrator.config) return;
     orchestrator.lastCtx = ctx;
+    const prompt = typeof event?.prompt === "string" ? event.prompt : "";
+    if (orchestrator.pendingContinuations.has(prompt)) orchestrator.pendingContinuations.delete(prompt);
+    else orchestrator.resetContinuation();
     const registered = pi.getAllTools().map((tool) => tool.name);
     const names = [...new Set([...HOST_BUILTINS, ...registered])];
     return { systemPrompt: renderGenericPrompt(orchestrator, ctx, names) };
@@ -265,14 +327,37 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
 
   pi.on("turn_end", async (event: any, ctx) => {
     orchestrator.mainTurnInFlight = false;
+    orchestrator.mainTurnRecovering = false;
     orchestrator.mainTurnToolInFlight = 0;
     const message = event.message as any;
+    const turnHadTools = orchestrator.mainTurnHadTools;
+    orchestrator.mainTurnHadTools = false;
     const usage = tracker();
     if (usage && message?.usage) {
       usage.recordTurn(message.model ?? ctx.model?.id ?? "unknown", message.provider ?? ctx.model?.provider ?? "unknown", message.usage.input ?? 0, message.usage.output ?? 0, message.usage.cacheRead ?? 0, message.usage.cacheWrite ?? 0, message.usage.cost?.total ?? 0, typeof message.usage.cacheRead === "number" || typeof message.usage.cacheWrite === "number");
     }
     publishAcpState(orchestrator);
     await maybeCompact(orchestrator, ctx);
+    if ((globalThis as any)[SUBAGENT_SESSION_KEY] || orchestrator.interactivePromptOpen || orchestrator.spawnedAgentIds.size > 0) return;
+    const decision = classifyContinuation(message, turnHadTools);
+    if (decision === "none" || orchestrator.continuationHalted) return;
+    if (decision === "objective") {
+      if (orchestrator.objectiveContinuationCount >= MAX_OBJECTIVE_CONTINUATIONS) {
+        orchestrator.continuationHalted = true;
+        ctx.ui?.notify?.("Automatic continuation paused after repeated empty or truncated turns.", "warning");
+        return;
+      }
+      orchestrator.objectiveContinuationCount++;
+      orchestrator.queueContinuation(message?.stopReason === "length" ? CONTINUE_TRUNCATED : CONTINUE_EMPTY);
+      return;
+    }
+    if (orchestrator.continuationCount >= MAX_CONTINUATIONS) {
+      orchestrator.continuationHalted = true;
+      ctx.ui?.notify?.("Automatic continuation paused after repeated prose-only stops.", "warning");
+      return;
+    }
+    orchestrator.continuationCount++;
+    orchestrator.queueContinuation(CONTINUE_AMBIGUOUS);
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
@@ -283,5 +368,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     flushLogs();
     finalizeTracer();
     delete (globalThis as any)[USAGE_TRACKER_KEY];
+    if (orchestrator.mainTurnTimer) clearInterval(orchestrator.mainTurnTimer);
+    orchestrator.mainTurnTimer = null;
   });
 }

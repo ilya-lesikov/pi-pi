@@ -38,6 +38,11 @@ export class Orchestrator {
   mainTurnInFlight = false;
   mainTurnRecovering = false;
   mainTurnToolInFlight = 0;
+  mainTurnHadTools = false;
+  continuationCount = 0;
+  objectiveContinuationCount = 0;
+  continuationHalted = false;
+  pendingContinuations = new Set<string>();
   lastEstimatedTokens: number | null = null;
   compactionArm = { armed: true };
   adaptiveCompaction: {
@@ -122,6 +127,18 @@ export class Orchestrator {
       this.idlePollTimer = null;
       this.sendUserMessageWhenIdle(text, 0, attempt + 1);
     }, 1000);
+  }
+
+  resetContinuation(): void {
+    this.continuationCount = 0;
+    this.objectiveContinuationCount = 0;
+    this.continuationHalted = false;
+    this.pendingContinuations.clear();
+  }
+
+  queueContinuation(text: string): void {
+    this.pendingContinuations.add(text);
+    this.sendUserMessageWhenIdle(text);
   }
 
   safeSendUserMessage(text: string): void {

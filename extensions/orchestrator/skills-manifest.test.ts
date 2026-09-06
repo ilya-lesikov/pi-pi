@@ -32,10 +32,17 @@ describe("layered skills", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  it("ships bundled guidance", () => {
+  it("ships a focused general-purpose catalog", () => {
     const bundled = listLayeredSkills(cwd).filter((skill) => skill.layer === "bundled");
-    expect(bundled.length).toBeGreaterThan(0);
+    expect(bundled.map((skill) => skill.name)).toEqual([
+      "repository-work",
+      "research-and-design",
+      "skill-authoring",
+      "software-engineering",
+    ]);
     expect(bundled.every((skill) => skill.filePath.startsWith(bundledSkillsDir()))).toBe(true);
+    expect(loadLayeredSkill("software-engineering", cwd).document).toContain("## Prove behavior");
+    expect(loadLayeredSkill("repository-work", cwd).document).toContain("## Establish repository state");
   });
 
   it("resolves project over global over bundled", () => {
@@ -65,6 +72,15 @@ describe("layered skills", () => {
     expect(loadLayeredSkill("alpha", cwd).document).toContain("old");
     writeSkill(global, "alpha", "Alpha guidance", "new");
     expect(loadLayeredSkill("alpha", cwd).document).toContain("new");
+  });
+
+  it("ignores invalid metadata without hiding valid skills", () => {
+    writeFileSync(join(global, "bad.md"), "---\nname: Bad Name\ndescription: invalid\n---\n\nbody\n");
+    writeFileSync(join(global, "empty.md"), "---\nname: empty\n---\n\nbody\n");
+    writeSkill(global, "valid", "Valid guidance");
+    expect(resolveLayeredSkill("Bad Name", cwd)).toBeUndefined();
+    expect(resolveLayeredSkill("empty", cwd)).toBeUndefined();
+    expect(resolveLayeredSkill("valid", cwd)).toMatchObject({ layer: "global" });
   });
 
   it("lists available names for unknown skills", () => {

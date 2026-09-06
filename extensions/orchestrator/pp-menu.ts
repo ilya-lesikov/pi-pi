@@ -1,6 +1,6 @@
 import { askUser, isCancel } from "../../3p/pi-ask-user/index.js";
 import { GLOBAL_CONFIG_PATH, loadConfig, writeConfigValue } from "./config.js";
-import { listLayeredSkills, loadLayeredSkill } from "./skills-manifest.js";
+import { listLayeredSkills } from "./skills-manifest.js";
 import { buildPoolRoster } from "./agents/registry.js";
 import type { Orchestrator } from "./orchestrator.js";
 
@@ -59,7 +59,7 @@ async function showSkills(orchestrator: Orchestrator, ctx: any): Promise<void> {
       || (skill.layer === "global" && enabled.loadGlobal)
       || (skill.layer === "project" && enabled.loadProject));
     const choice = await select(orchestrator, ctx, "Skills", [
-      ...skills.map((skill) => ({ title: skill.name, description: `${skill.description} · ${skill.layer}` })),
+      { title: "Catalog", description: `${skills.length} skills available to the agent` },
       { title: "Source settings", description: `bundled ${enabled.loadBundled ? "on" : "off"} · global ${enabled.loadGlobal ? "on" : "off"} · project ${enabled.loadProject ? "on" : "off"}` },
       { title: BACK },
     ]);
@@ -68,8 +68,7 @@ async function showSkills(orchestrator: Orchestrator, ctx: any): Promise<void> {
       await showSkillSettings(orchestrator, ctx);
       continue;
     }
-    const skill = loadLayeredSkill(choice, orchestrator.cwd);
-    ctx.ui?.notify?.(`${skill.name} (${skill.layer})\n${skill.filePath}\n\nReload in the conversation with: load_skill({ name: "${skill.name}" })`, "info");
+    if (choice === "Catalog") ctx.ui?.notify?.(skills.map((skill) => `${skill.name} (${skill.layer}): ${skill.description}`).join("\n") || "No skills available.", "info");
   }
 }
 
@@ -89,32 +88,12 @@ async function showSkillSettings(orchestrator: Orchestrator, ctx: any): Promise<
   }
 }
 
-async function showMemory(orchestrator: Orchestrator, ctx: any): Promise<void> {
-  for (;;) {
-    const usage = ctx.getContextUsage?.();
-    const context = usage && typeof usage.contextWindow === "number"
-      ? `${usage.tokens ?? "?"} / ${usage.contextWindow} tokens${typeof usage.percent === "number" ? ` (${usage.percent.toFixed(1)}%)` : ""}`
-      : "Context usage unavailable";
-    const choice = await select(orchestrator, ctx, "Memory", [
-      { title: "Compact with VCC", description: context },
-      { title: "Compact with built-in summarizer", description: "One compaction only; subsequent automatic compactions use VCC." },
-      { title: "Recall help", description: "Search messages, tool calls, and tool results with vcc_recall." },
-      { title: BACK },
-    ]);
-    if (!choice || choice === BACK) return;
-    if (choice === "Recall help") {
-      ctx.ui?.notify?.("Use vcc_recall with a query, or omit query for recent history. expand returns full entries; scope can be lineage, all, or compaction:N.", "info");
-      continue;
-    }
-    orchestrator.manualCompactionUseBuiltin = choice === "Compact with built-in summarizer";
-    try {
-      ctx.compact?.({ onComplete: () => ctx.ui?.notify?.("Compaction complete.", "info"), onError: (error: any) => ctx.ui?.notify?.(error?.message ?? String(error), "error") });
-    } catch (error: any) {
-      orchestrator.manualCompactionUseBuiltin = false;
-      ctx.ui?.notify?.(error?.message ?? String(error), "error");
-    }
-    return;
-  }
+function showMemory(orchestrator: Orchestrator, ctx: any): void {
+  const usage = ctx.getContextUsage?.();
+  const context = usage && typeof usage.contextWindow === "number"
+    ? `${usage.tokens ?? "?"} / ${usage.contextWindow} tokens${typeof usage.percent === "number" ? ` (${usage.percent.toFixed(1)}%)` : ""}`
+    : "Context usage unavailable";
+  ctx.ui?.notify?.(`${context}\nAutomatic compaction: ${orchestrator.config.compaction.enabled ? "VCC enabled" : "disabled"}\nSession history is searchable by the agent with vcc_recall.`, "info");
 }
 
 async function showAgents(orchestrator: Orchestrator, ctx: any): Promise<void> {
@@ -151,8 +130,8 @@ export async function showPpMenu(orchestrator: Orchestrator, ctx: any): Promise<
     const choice = await select(orchestrator, ctx, "/pp · session control panel", [
       { title: "Status", description: "Session, model, context, workers, and skills" },
       { title: "Workers", description: "Inspect or stop bounded background workers" },
-      { title: "Skills", description: "Inspect reloadable bundled, global, and project guidance" },
-      { title: "Memory", description: "Compaction and recall controls" },
+      { title: "Skills", description: "Inspect available bundled, global, and project guidance" },
+      { title: "Memory", description: "Automatic compaction and recall status" },
       { title: "Agents", description: "Current main and worker model configuration" },
       { title: "Provider settings", description: "Use /model for the live model; scoped config remains in .pp/config.json" },
       { title: CLOSE },
@@ -161,7 +140,7 @@ export async function showPpMenu(orchestrator: Orchestrator, ctx: any): Promise<
     if (choice === "Status") ctx.ui?.notify?.(sessionStatus(orchestrator, ctx), "info");
     else if (choice === "Workers") await showWorkers(orchestrator, ctx);
     else if (choice === "Skills") await showSkills(orchestrator, ctx);
-    else if (choice === "Memory") await showMemory(orchestrator, ctx);
+    else if (choice === "Memory") showMemory(orchestrator, ctx);
     else if (choice === "Agents") await showAgents(orchestrator, ctx);
     else if (choice === "Provider settings") ctx.ui?.notify?.("Use /model to change the live model. Configure persistent main/worker routing in global or project .pp/config.json.", "info");
   }

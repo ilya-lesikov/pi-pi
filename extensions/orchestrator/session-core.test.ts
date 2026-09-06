@@ -2,14 +2,26 @@ import { describe, expect, it, vi } from "vitest";
 import { getDefaultConfig, normalizeConfigDurations } from "./config.js";
 import { Orchestrator } from "./orchestrator.js";
 import { buildAcpState } from "./acp.js";
-import { renderGenericPrompt } from "./event-handlers.js";
+import { classifyContinuation, isMainTurnStalled, registerEventHandlers, registerLoadSkill, renderGenericPrompt } from "./event-handlers.js";
 
 function makePi(): any {
+  const handlers = new Map<string, Array<(...args: any[]) => any>>();
   return {
+    handlers,
     events: { emit: vi.fn(), on: vi.fn() },
+    on: vi.fn((name: string, handler: (...args: any[]) => any) => {
+      handlers.set(name, [...(handlers.get(name) ?? []), handler]);
+    }),
+    getAllTools: vi.fn(() => []),
+    registerTool: vi.fn(),
+    registerCommand: vi.fn(),
     sendUserMessage: vi.fn(),
     appendEntry: vi.fn(),
   };
+}
+
+async function emit(pi: any, name: string, event: any, ctx: any): Promise<void> {
+  for (const handler of pi.handlers.get(name) ?? []) await handler(event, ctx);
 }
 
 describe("session-first core", () => {
@@ -47,6 +59,99 @@ describe("session-first core", () => {
     expect(buildAcpState(orchestrator)).toEqual({ status: "running", subagents: [] });
     orchestrator.interactivePromptOpen = true;
     expect(buildAcpState(orchestrator)).toEqual({ status: "waiting", subagents: [] });
+  });
+
+  it("classifies only objective stops and action-backed prose stops for continuation", () => {
+    expect(classifyContinuation({ stopReason: "length", content: [{ type: "text", text: "cut" }] }, false)).toBe("objective");
+    expect(classifyContinuation({ stopReason: "stop", content: [] }, false)).toBe("objective");
+    expect(classifyContinuation({ stopReason: "stop", content: [{ type: "text", text: "answer" }] }, false)).toBe("none");
+    expect(classifyContinuation({ stopReason: "stop", content: [{ type: "text", text: "done" }] }, true)).toBe("adjudicate");
+    expect(classifyContinuation({ stopReason: "error", content: [] }, true)).toBe("none");
+  });
+
+  it("recognizes a stalled main turn only when recovery is safe", () => {
+    const orchestrator = new Orchestrator(makePi());
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    orchestrator.config.performance.internals.mainTurnStale = 1000;
+    orchestrator.mainTurnInFlight = true;
+    orchestrator.mainTurnLastActivity = 1000;
+    expect(isMainTurnStalled(orchestrator, 2000)).toBe(true);
+    orchestrator.interactivePromptOpen = true;
+    expect(isMainTurnStalled(orchestrator, 3000)).toBe(false);
+    orchestrator.interactivePromptOpen = false;
+    orchestrator.spawnedAgentIds.add("worker");
+    expect(isMainTurnStalled(orchestrator, 3000)).toBe(false);
+    orchestrator.spawnedAgentIds.clear();
+    orchestrator.mainTurnToolInFlight = 1;
+    expect(isMainTurnStalled(orchestrator, 3000)).toBe(false);
+  });
+
+  it("marks ask_user execution as waiting and suppresses stall recovery", async () => {
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi);
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    registerEventHandlers(orchestrator);
+    const ctx = { ui: { notify: vi.fn() } };
+    await emit(pi, "turn_start", {}, ctx);
+    await emit(pi, "tool_execution_start", { toolName: "ask_user" }, ctx);
+    expect(orchestrator.interactivePromptOpen).toBe(true);
+    expect(buildAcpState(orchestrator).status).toBe("waiting");
+    expect(isMainTurnStalled(orchestrator, Date.now() + orchestrator.config.performance.internals.mainTurnStale)).toBe(false);
+    await emit(pi, "tool_execution_end", { toolName: "ask_user" }, ctx);
+    expect(orchestrator.interactivePromptOpen).toBe(false);
+    await emit(pi, "session_shutdown", {}, ctx);
+  });
+
+  it("self-adjudicates action-backed prose once and resets on genuine user input", async () => {
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi);
+    orchestrator.cwd = "/tmp/project";
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    registerEventHandlers(orchestrator);
+    const ctx = {
+      cwd: orchestrator.cwd,
+      model: { provider: "test", id: "model" },
+      isIdle: () => true,
+      getContextUsage: () => null,
+      ui: { notify: vi.fn() },
+    };
+    await emit(pi, "turn_start", {}, ctx);
+    await emit(pi, "tool_execution_start", {}, ctx);
+    await emit(pi, "tool_execution_end", {}, ctx);
+    await emit(pi, "turn_end", { message: { stopReason: "stop", content: [{ type: "text", text: "I changed it." }] } }, ctx);
+    expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
+    const nudge = pi.sendUserMessage.mock.calls[0][0];
+    expect(nudge).toContain("If the user's request is fully complete");
+    expect(orchestrator.continuationCount).toBe(1);
+    await emit(pi, "before_agent_start", { prompt: nudge }, ctx);
+    expect(orchestrator.continuationCount).toBe(1);
+    await emit(pi, "before_agent_start", { prompt: "New user request" }, ctx);
+    expect(orchestrator.continuationCount).toBe(0);
+    expect(orchestrator.continuationHalted).toBe(false);
+    await emit(pi, "session_shutdown", {}, ctx);
+  });
+
+  it("does not nudge a pure prose answer", async () => {
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi);
+    orchestrator.cwd = "/tmp/project";
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    registerEventHandlers(orchestrator);
+    const ctx = { getContextUsage: () => null, ui: { notify: vi.fn() } };
+    await emit(pi, "turn_start", {}, ctx);
+    await emit(pi, "turn_end", { message: { stopReason: "stop", content: [{ type: "text", text: "The answer is 42." }] } }, ctx);
+    expect(pi.sendUserMessage).not.toHaveBeenCalled();
+    await emit(pi, "session_shutdown", {}, ctx);
+  });
+
+  it("makes layered skills loadable in worker processes", async () => {
+    const pi = makePi();
+    registerLoadSkill(pi, "/tmp/project");
+    const registration = pi.registerTool.mock.calls.find((call: any[]) => call[0].name === "load_skill")[0];
+    expect(registration.description).toContain("software-engineering");
+    const result = await registration.execute("id", { name: "software-engineering" });
+    expect(result.isError).not.toBe(true);
+    expect(result.content[0].text).toContain('<skill name="software-engineering" source="bundled">');
   });
 
   it("registers workers without context inheritance or worktree isolation", () => {

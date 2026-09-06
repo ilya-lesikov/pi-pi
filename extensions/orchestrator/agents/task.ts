@@ -1,6 +1,6 @@
 import type { PiPiConfig } from "../config.js";
 import { getModelInfo, resolveModel } from "../model-registry.js";
-import { toolsBlock, parseToolNames, identityBlock, ALL_CBM_TOOLS, EXA_TOOLS, principlesBlock, IMPLEMENTATION_PRINCIPLES_BLOCK, FAILURE_RECOVERY } from "./tool-routing.js";
+import { toolsBlock, parseToolNames, identityBlock, ALL_CBM_TOOLS, EXA_TOOLS, principlesBlock, FAILURE_RECOVERY } from "./tool-routing.js";
 
 export function createTaskAgent(config: PiPiConfig) {
   const model = resolveModel(config.agents.subagents.simple.task.model);
@@ -29,8 +29,6 @@ export function createTaskAgent(config: PiPiConfig) {
       "",
       principlesBlock(),
       "",
-      IMPLEMENTATION_PRINCIPLES_BLOCK,
-      "",
       toolsBlock(parseToolNames(tools)),
       "",
       FAILURE_RECOVERY,
@@ -41,10 +39,9 @@ export function createTaskAgent(config: PiPiConfig) {
       '  Agent(subagent_type="librarian", ...) — knowledge from outside the tree: docs, APIs, standards, the web.',
       "  Do NOT spawn task, advisor, deep-debugger, or reviewer subagents.",
       "- Your context starts EMPTY. When a prior decision, constraint, or tool result would change how you do this slice — and it is not in your spawn message — recall the main session's history for it before proceeding.",
-      "- Understand the blast radius before you change anything: who or what consumes the thing you are about to modify (lsp findReferences for code, a grep or a read for everything else).",
-      "- After changing something, check it with the tool that can actually prove it: lsp diagnostics for code, a re-read of the file, or a command that exercises the result.",
-      "- Verification gate: before reporting your subtask done, produce fresh tool output that proves it (a passing test, clean diagnostics, expected command output, the re-read artifact) and cite it. The gate is on whether that proving evidence EXISTS, not on wording, so it holds in any language and for any kind of work. If a claim cannot be proven with your granted tools, say so and state why (\"not applicable — <reason>\") rather than implying verification.",
-      "- Test-first policy (conditional): for a behavior change or bug fix where an automated test is feasible, write/reproduce the FAILING test first, then make it pass; otherwise state the verification method before you start. No universal test-first mandate and no delete-untested-code rule — choose the path that produces real evidence.",
+      "- Understand impact before changing anything: identify who or what consumes the material you will modify and what must remain true.",
+      "- After changing something, check it with a tool that can actually prove the intended result.",
+      "- Verification gate: before reporting your subtask done, produce fresh evidence that proves it and cite that evidence. If a claim cannot be proven with your granted tools, say exactly what remains unverified and why rather than implying verification.",
       "- The spawn message defines your subtask. Use vcc_recall when earlier main-session decisions or tool results are relevant but omitted.",
       "</task>",
     ].join("\n"),

@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Orchestrator } from "./orchestrator.js";
 import { registerCommandHandlers } from "./command-handlers.js";
-import { registerEventHandlers } from "./event-handlers.js";
+import { registerEventHandlers, registerLoadSkill } from "./event-handlers.js";
 import { registerCbmTools } from "./cbm.js";
 import { registerExaTools } from "./exa.js";
 import { registerAstSearchTool } from "./ast-search.js";
@@ -54,4 +54,5 @@ function registerSubagentTools(pi: ExtensionAPI): void {
   registerExaTools(pi);
   registerAstSearchTool(pi, cwd);
   registerRecallTool(pi);
+  registerLoadSkill(pi, cwd);
 }
