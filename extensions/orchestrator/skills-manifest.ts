@@ -1,6 +1,6 @@
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, extname, join } from "node:path";
+import { basename, extname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 
@@ -41,15 +41,23 @@ function layerDir(layer: SkillLayer, cwd: string): string {
 
 function skillFiles(dir: string): string[] {
   if (!existsSync(dir)) return [];
+  const root = realpathSync(dir);
   const files: string[] = [];
+  const insideRoot = (path: string) => {
+    const rel = relative(root, realpathSync(path));
+    return rel === "" || (!rel.startsWith("..") && !rel.startsWith("/"));
+  };
   for (const entry of readdirSync(dir)) {
     const path = join(dir, entry);
-    const stat = statSync(path);
-    if (stat.isFile() && extname(entry).toLowerCase() === ".md") files.push(path);
-    if (stat.isDirectory()) {
-      const nested = join(path, "SKILL.md");
-      if (existsSync(nested)) files.push(nested);
-    }
+    try {
+      if (!insideRoot(path)) continue;
+      const stat = statSync(path);
+      if (stat.isFile() && extname(entry).toLowerCase() === ".md") files.push(path);
+      if (stat.isDirectory()) {
+        const nested = join(path, "SKILL.md");
+        if (existsSync(nested) && insideRoot(nested)) files.push(nested);
+      }
+    } catch {}
   }
   return files.sort();
 }

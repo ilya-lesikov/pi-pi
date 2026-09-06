@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { getDefaultConfig, normalizeConfigDurations } from "./config.js";
 import { Orchestrator } from "./orchestrator.js";
 import { buildAcpState } from "./acp.js";
+import { isSubscriptionFallbackActive, setSubscriptionFallbackActive } from "./model-registry.js";
 import { classifyContinuation, isMainTurnStalled, registerEventHandlers, registerLoadSkill, renderGenericPrompt } from "./event-handlers.js";
 
 function makePi(): any {
@@ -86,7 +87,7 @@ describe("session-first core", () => {
     expect(isMainTurnStalled(orchestrator, 3000)).toBe(false);
   });
 
-  it("marks ask_user execution as waiting and suppresses stall recovery", async () => {
+  it("marks ask_user execution as waiting, suppresses recovery, and clears abnormal terminal state", async () => {
     const pi = makePi();
     const orchestrator = new Orchestrator(pi);
     orchestrator.config = normalizeConfigDurations(getDefaultConfig());
@@ -97,9 +98,11 @@ describe("session-first core", () => {
     expect(orchestrator.interactivePromptOpen).toBe(true);
     expect(buildAcpState(orchestrator).status).toBe("waiting");
     expect(isMainTurnStalled(orchestrator, Date.now() + orchestrator.config.performance.internals.mainTurnStale)).toBe(false);
-    await emit(pi, "tool_execution_end", { toolName: "ask_user" }, ctx);
+    await emit(pi, "turn_end", { message: { stopReason: "aborted", content: [] } }, ctx);
     expect(orchestrator.interactivePromptOpen).toBe(false);
+    await emit(pi, "tool_execution_start", { toolName: "ask_user" }, ctx);
     await emit(pi, "session_shutdown", {}, ctx);
+    expect(orchestrator.interactivePromptOpen).toBe(false);
   });
 
   it("self-adjudicates action-backed prose once and resets on genuine user input", async () => {
@@ -115,9 +118,13 @@ describe("session-first core", () => {
       getContextUsage: () => null,
       ui: { notify: vi.fn() },
     };
+    await emit(pi, "before_agent_start", { prompt: "Implement the change" }, ctx);
     await emit(pi, "turn_start", {}, ctx);
     await emit(pi, "tool_execution_start", {}, ctx);
     await emit(pi, "tool_execution_end", {}, ctx);
+    await emit(pi, "turn_end", { message: { stopReason: "toolUse", content: [{ type: "toolCall", name: "edit" }] } }, ctx);
+    expect(pi.sendUserMessage).not.toHaveBeenCalled();
+    await emit(pi, "turn_start", {}, ctx);
     await emit(pi, "turn_end", { message: { stopReason: "stop", content: [{ type: "text", text: "I changed it." }] } }, ctx);
     expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
     const nudge = pi.sendUserMessage.mock.calls[0][0];
@@ -128,7 +135,41 @@ describe("session-first core", () => {
     await emit(pi, "before_agent_start", { prompt: "New user request" }, ctx);
     expect(orchestrator.continuationCount).toBe(0);
     expect(orchestrator.continuationHalted).toBe(false);
+    const stale = await (pi.handlers.get("before_agent_start")?.[0] as any)({ prompt: nudge }, ctx);
+    expect(stale.systemPrompt).toContain("obsolete automatic continuation");
     await emit(pi, "session_shutdown", {}, ctx);
+  });
+
+  it("recovers a stalled turn once and suppresses repeated watchdog ticks", async () => {
+    vi.useFakeTimers();
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi);
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    orchestrator.config.performance.internals.mainTurnStale = 1000;
+    registerEventHandlers(orchestrator);
+    const ctx = { abort: vi.fn(), isIdle: () => true, getContextUsage: () => null, ui: { notify: vi.fn() } };
+    await emit(pi, "turn_start", {}, ctx);
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(ctx.abort).toHaveBeenCalledTimes(1);
+    expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(ctx.abort).toHaveBeenCalledTimes(1);
+    await emit(pi, "session_shutdown", {}, ctx);
+    vi.useRealTimers();
+  });
+
+  it("resets process-global provider fallback during shutdown", async () => {
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi);
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    orchestrator.subFallbackActive = true;
+    orchestrator.subFallbackModelId = "sub/model";
+    setSubscriptionFallbackActive(true);
+    registerEventHandlers(orchestrator);
+    await emit(pi, "session_shutdown", {}, { sessionManager: {}, ui: {} });
+    expect(orchestrator.subFallbackActive).toBe(false);
+    expect(orchestrator.subFallbackModelId).toBeNull();
+    expect(isSubscriptionFallbackActive()).toBe(false);
   });
 
   it("does not nudge a pure prose answer", async () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { getDefaultConfig } from "../config.js";
-import { delegationBlock, toolsBlock, parseToolNames, principlesBlock, IMPLEMENTATION_PRINCIPLES_BLOCK } from "./tool-routing.js";
+import { delegationBlock, toolsBlock, parseToolNames, principlesBlock } from "./tool-routing.js";
 import { createAdvisorAgent } from "./advisor.js";
 import { createDeepDebuggerAgent } from "./deep-debugger.js";
 import { createReviewerAgent } from "./reviewer.js";
@@ -97,33 +97,11 @@ describe("toolsBlock only advertises granted tools", () => {
   });
 });
 
-describe("principles degrees-of-freedom split", () => {
-  it("code-editing rules live in the implementation block, not the always-active block", () => {
-    for (const phrase of [
-      "NEVER comment a private (non-exported) symbol",
-      "volatile detail",
-      "Prefer fewer, larger functions",
-      "inline it",
-      "Keep everything as private as possible",
-      "DO NOT WRITE COMMENTS",
-      "No temporary artifacts",
-      "Smallest viable change",
-      "Understand before modifying",
-    ]) {
-      expect(IMPLEMENTATION_PRINCIPLES_BLOCK).toContain(phrase);
-      expect(principlesBlock()).not.toContain(phrase);
-    }
-  });
-
-  it("the always-active block is domain-neutral — no coding-only vocabulary", () => {
+describe("domain-neutral principles", () => {
+  it("the always-active block has no coding-only vocabulary", () => {
     for (const phrase of ["codebase", "the code", "compil", "lsp", "refactor", "source code"]) {
       expect(principlesBlock().toLowerCase()).not.toContain(phrase);
     }
-  });
-
-  it("the implementation block scopes itself to source-code work", () => {
-    expect(IMPLEMENTATION_PRINCIPLES_BLOCK).toMatch(/SOURCE CODE only/);
-    expect(IMPLEMENTATION_PRINCIPLES_BLOCK).toMatch(/inactive for research, operations, writing, and data work/);
   });
 
   it("shared reasoning/evidence rules stay in the shared block", () => {

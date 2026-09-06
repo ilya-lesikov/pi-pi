@@ -23,22 +23,13 @@ export class Orchestrator {
   spawnedAgentIds = new Set<string>();
   agentDescriptions = new Map<string, string>();
   agentSpawnTimes = new Map<string, number>();
-  agentLifecycle = new Map<string, {
-    createdAt?: number;
-    startedAt?: number;
-    firstToolAt?: number;
-    firstTurnAt?: number;
-    lastEventAt?: number;
-    type?: string;
-    description?: string;
-  }>();
-  staleAgentTimer: ReturnType<typeof setInterval> | null = null;
   mainTurnTimer: ReturnType<typeof setInterval> | null = null;
   mainTurnLastActivity = 0;
   mainTurnInFlight = false;
   mainTurnRecovering = false;
   mainTurnToolInFlight = 0;
-  mainTurnHadTools = false;
+  requestHadTools = false;
+  continuationGeneration = 0;
   continuationCount = 0;
   objectiveContinuationCount = 0;
   continuationHalted = false;
@@ -54,20 +45,11 @@ export class Orchestrator {
     window: number | null;
   } = { nextThreshold: null, inFlight: false, pendingProactiveMeasure: false, disabled: false, modelKey: null, window: null };
   manualCompactionUseBuiltin = false;
-  manualCompactionPending = false;
-  manualCompactionRequestId = 0;
-  pendingRetryTimer: ReturnType<typeof setTimeout> | null = null;
   idlePollTimer: ReturnType<typeof setTimeout> | null = null;
-  pendingRetryEscUnsub: (() => void) | null = null;
-  errorRetryCount = 0;
-  errorRetryFirstAt: number | null = null;
-  errorNudgeHalted = false;
   subFallbackActive = false;
-  subFallbackDialogPending = false;
-  subFallbackPendingDecision = false;
   subFallbackModelId: string | null = null;
-  subSwitchBackTimer: ReturnType<typeof setTimeout> | null = null;
   subFallbackMainPriorSpec: string | null = null;
+  subSwitchBackTimer: ReturnType<typeof setTimeout> | null = null;
   private _interactivePromptOpen = false;
 
   static current: Orchestrator | null = null;
@@ -86,50 +68,22 @@ export class Orchestrator {
     publishAcpState(this);
   }
 
-  armRetryEscInterrupt(ctx: any): void {
-    if (this.pendingRetryEscUnsub) return;
-    const onTerminalInput = ctx?.ui?.onTerminalInput;
-    if (typeof onTerminalInput !== "function") return;
-    const unsub = onTerminalInput.call(ctx.ui, (data: string) => {
-      if (data !== "\x1b" || !this.pendingRetryTimer) return undefined;
-      this.cancelPendingRetry();
-      ctx.ui?.notify?.("Automatic retry cancelled.", "info");
-      return { consume: true };
-    });
-    if (typeof unsub === "function") this.pendingRetryEscUnsub = unsub;
-  }
-
-  disarmRetryEscInterrupt(): void {
-    this.pendingRetryEscUnsub?.();
-    this.pendingRetryEscUnsub = null;
-  }
-
-  cancelPendingRetry(): void {
-    if (this.pendingRetryTimer) clearTimeout(this.pendingRetryTimer);
-    if (this.idlePollTimer) clearTimeout(this.idlePollTimer);
-    this.pendingRetryTimer = null;
-    this.idlePollTimer = null;
-    this.disarmRetryEscInterrupt();
-    this.errorRetryCount = 0;
-    this.errorRetryFirstAt = null;
-  }
-
-  sendUserMessageWhenIdle(text: string, _token = 0, attempt = 0): void {
+  sendUserMessageWhenIdle(text: string, generation: number, attempt = 0): void {
     const ctx = this.lastCtx;
-    if (!ctx) return;
+    if (!ctx || generation !== this.continuationGeneration) return;
     if (typeof ctx.isIdle !== "function" || ctx.isIdle()) {
-      this.disarmRetryEscInterrupt();
       this.safeSendUserMessage(text);
       return;
     }
     if (attempt >= 120) return;
     this.idlePollTimer = setTimeout(() => {
       this.idlePollTimer = null;
-      this.sendUserMessageWhenIdle(text, 0, attempt + 1);
+      this.sendUserMessageWhenIdle(text, generation, attempt + 1);
     }, 1000);
   }
 
   resetContinuation(): void {
+    this.continuationGeneration++;
     this.continuationCount = 0;
     this.objectiveContinuationCount = 0;
     this.continuationHalted = false;
@@ -137,8 +91,9 @@ export class Orchestrator {
   }
 
   queueContinuation(text: string): void {
-    this.pendingContinuations.add(text);
-    this.sendUserMessageWhenIdle(text);
+    const tagged = `${text}\n[continuation:${this.continuationGeneration}]`;
+    this.pendingContinuations.add(tagged);
+    this.sendUserMessageWhenIdle(tagged, this.continuationGeneration);
   }
 
   safeSendUserMessage(text: string): void {

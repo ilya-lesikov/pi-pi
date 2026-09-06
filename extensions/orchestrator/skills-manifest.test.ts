@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bundledSkillsDir, listLayeredSkills, loadLayeredSkill, resolveLayeredSkill } from "./skills-manifest.js";
@@ -81,6 +81,13 @@ describe("layered skills", () => {
     expect(resolveLayeredSkill("Bad Name", cwd)).toBeUndefined();
     expect(resolveLayeredSkill("empty", cwd)).toBeUndefined();
     expect(resolveLayeredSkill("valid", cwd)).toMatchObject({ layer: "global" });
+  });
+
+  it("ignores skill symlinks that escape their configured layer", () => {
+    const outside = join(root, "outside");
+    writeSkill(outside, "escaped", "Escaped guidance");
+    symlinkSync(join(outside, "escaped"), join(global, "escaped"), "dir");
+    expect(resolveLayeredSkill("escaped", cwd)).toBeUndefined();
   });
 
   it("lists available names for unknown skills", () => {

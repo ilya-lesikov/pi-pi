@@ -17,12 +17,29 @@ const pkg = JSON.parse(readFileSync(join(PKG_DIR, "package.json"), "utf8"));
 
 const extEntries = pkg?.pi?.extensions ?? [];
 if (extEntries.length === 0) fail("package.json has no pi.extensions entries");
+const extensionPaths = [];
 for (const entry of extEntries) {
-  if (existsSync(resolve(PKG_DIR, entry))) {
+  const path = resolve(PKG_DIR, entry);
+  if (existsSync(path)) {
+    extensionPaths.push(path);
     console.log(`  ✓ extension present: ${entry}`);
   } else {
     fail(`registered extension path missing from artifact: ${entry}`);
   }
+}
+
+try {
+  const { discoverAndLoadExtensions } = await import("@earendil-works/pi-coding-agent");
+  const isolatedAgentDir = join(PKG_DIR, ".smoke-agent");
+  const loaded = await discoverAndLoadExtensions(extensionPaths, PKG_DIR, isolatedAgentDir);
+  for (const error of loaded.errors) fail(`extension load failed (${error.path}): ${error.error}`);
+  if (loaded.extensions.length !== extensionPaths.length) {
+    fail(`loaded ${loaded.extensions.length}/${extensionPaths.length} declared extensions`);
+  } else {
+    console.log(`  ✓ loaded ${loaded.extensions.length} declared extensions through Pi`);
+  }
+} catch (err) {
+  fail(`cannot run Pi extension loader: ${err?.message ?? err}`);
 }
 
 // Bare specifiers pi itself supplies to loaded extensions — never mirrored into dependencies.

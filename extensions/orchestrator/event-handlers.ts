@@ -6,7 +6,6 @@ import { initTracer, finalizeTracer } from "./tracer.js";
 import { registerCbmTools } from "./cbm.js";
 import { registerExaTools } from "./exa.js";
 import { registerAstSearchTool } from "./ast-search.js";
-import { registerCommandHandlers } from "./command-handlers.js";
 import { registerBillingHook } from "./billing-spoof.js";
 import { registerRecallTool, compile as vccCompile } from "../../3p/pi-vcc/index.js";
 import { computeVccMessageRange, buildVccDetails } from "./compaction-dispatch.js";
@@ -15,10 +14,12 @@ import { collectContextFiles, renderContextInjection, summarizeContextInjectionS
 import { listLayeredSkills, loadLayeredSkill } from "./skills-manifest.js";
 import { identityBlock, principlesBlock, toolsBlock, delegationBlock } from "./agents/tool-routing.js";
 import { buildPoolRoster, getAgentConfigSnapshot, registeredAgentNames, setExtensionOnlyMode } from "./agents/registry.js";
-import { getModelInfo, resolveModel, updateRegistryFromAvailableModels } from "./model-registry.js";
+import { getModelInfo, resolveModel, setSubscriptionFallbackActive, updateRegistryFromAvailableModels } from "./model-registry.js";
 import { createCustomFooter, setFooterContext, setFooterTracker, setFooterOrchestrator } from "./custom-footer.js";
 import { createUsageTracker, dumpUsageSummary, loadUsageSummary, type UsageTracker } from "./usage-tracker.js";
-import { publishAcpState } from "./acp.js";
+import { publishAcpState, resetAcpStateCache } from "./acp.js";
+import { checkDuplicateExtensions } from "./duplicate-extension-guard.js";
+import { handleMainRateLimit, handleSubagentRateLimit, isRateLimitError } from "./rate-limit-fallback.js";
 import { SUBAGENT_SESSION_KEY } from "./index.js";
 import type { Orchestrator } from "./orchestrator.js";
 
@@ -124,7 +125,6 @@ export function registerLoadSkill(pi: ExtensionAPI, cwd: string, enabled?: Orche
 
 export function registerFeatureToolsAndAgents(orchestrator: Orchestrator): void {
   const pi = orchestrator.pi;
-  registerCommandHandlers(orchestrator);
   registerCbmTools(pi, orchestrator.cwd);
   registerExaTools(pi);
   registerAstSearchTool(pi, orchestrator.cwd);
@@ -149,7 +149,10 @@ function registerLifecycle(orchestrator: Orchestrator): void {
     publishAcpState(orchestrator);
   };
   pi.on("subagents:completed" as any, settle);
-  pi.on("subagents:failed" as any, settle);
+  pi.on("subagents:failed" as any, (data: any) => {
+    settle(data);
+    if (isRateLimitError(data?.error)) void handleSubagentRateLimit(orchestrator, orchestrator.lastCtx, data?.modelId);
+  });
   const startMainTurnWatchdog = () => {
     if (orchestrator.mainTurnTimer) return;
     orchestrator.mainTurnTimer = setInterval(() => {
@@ -173,14 +176,13 @@ function registerLifecycle(orchestrator: Orchestrator): void {
     orchestrator.mainTurnInFlight = true;
     orchestrator.mainTurnRecovering = false;
     orchestrator.mainTurnToolInFlight = 0;
-    orchestrator.mainTurnHadTools = false;
     orchestrator.mainTurnLastActivity = Date.now();
     startMainTurnWatchdog();
     publishAcpState(orchestrator);
   });
   pi.on("tool_execution_start", (event: any) => {
     orchestrator.mainTurnToolInFlight++;
-    orchestrator.mainTurnHadTools = true;
+    orchestrator.requestHadTools = true;
     orchestrator.mainTurnLastActivity = Date.now();
     if (event?.toolName === "ask_user") orchestrator.interactivePromptOpen = true;
   });
@@ -259,6 +261,14 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   pi.on("session_start", async (_event, ctx) => {
     orchestrator.lastCtx = ctx;
     orchestrator.cwd = ctx.cwd;
+    orchestrator.interactivePromptOpen = false;
+    orchestrator.resetContinuation();
+    orchestrator.requestHadTools = false;
+    resetAcpStateCache(ctx.sessionManager?.getSessionId?.());
+    (globalThis as any)[Symbol.for("pi-pi:root-session-source")] = {
+      getSessionFile: () => ctx.sessionManager?.getSessionFile?.(),
+      getSessionManager: () => ctx.sessionManager,
+    };
     (globalThis as any)[Symbol.for("pi-pi:orchestrator-cwd")] = ctx.cwd;
     initSessionLogger(`${ctx.cwd}/.pp`, "info");
     const available = (ctx as any).modelRegistry?.getAvailable?.();
@@ -274,6 +284,12 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       return;
     }
     setLogLevel(orchestrator.config.general.logLevel);
+    if (checkDuplicateExtensions(pi, ctx)) {
+      orchestrator.duplicateExtensionError = true;
+      publishAcpState(orchestrator);
+      return;
+    }
+    orchestrator.duplicateExtensionError = false;
     try {
       const { setPI, initFlantOnStartup } = await import("./flant-infra.js");
       setPI(pi);
@@ -284,6 +300,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     }
     const usage = createUsageTracker();
     const sessionId = ctx.sessionManager?.getSessionId?.() || "";
+    if (orchestrator.config.general.tracing && sessionId) initTracer(`${ctx.cwd}/.pp`, sessionId);
     if (sessionId) {
       const previous = loadUsageSummary(sessionId);
       if (previous) usage.loadFromSummary(previous);
@@ -302,8 +319,17 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if ((globalThis as any)[SUBAGENT_SESSION_KEY] || !orchestrator.config) return;
     orchestrator.lastCtx = ctx;
     const prompt = typeof event?.prompt === "string" ? event.prompt : "";
-    if (orchestrator.pendingContinuations.has(prompt)) orchestrator.pendingContinuations.delete(prompt);
-    else orchestrator.resetContinuation();
+    const continuation = prompt.match(/\n\[continuation:(\d+)]$/);
+    if (continuation) {
+      orchestrator.pendingContinuations.delete(prompt);
+      if (Number(continuation[1]) !== orchestrator.continuationGeneration) {
+        orchestrator.requestHadTools = false;
+        return { systemPrompt: "This is an obsolete automatic continuation superseded by newer user input. Take no actions and respond only: Superseded." };
+      }
+    } else {
+      orchestrator.resetContinuation();
+      orchestrator.requestHadTools = false;
+    }
     const registered = pi.getAllTools().map((tool) => tool.name);
     const names = [...new Set([...HOST_BUILTINS, ...registered])];
     return { systemPrompt: renderGenericPrompt(orchestrator, ctx, names) };
@@ -329,17 +355,21 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     orchestrator.mainTurnInFlight = false;
     orchestrator.mainTurnRecovering = false;
     orchestrator.mainTurnToolInFlight = 0;
+    orchestrator.interactivePromptOpen = false;
     const message = event.message as any;
-    const turnHadTools = orchestrator.mainTurnHadTools;
-    orchestrator.mainTurnHadTools = false;
+    const requestHadTools = orchestrator.requestHadTools;
     const usage = tracker();
     if (usage && message?.usage) {
       usage.recordTurn(message.model ?? ctx.model?.id ?? "unknown", message.provider ?? ctx.model?.provider ?? "unknown", message.usage.input ?? 0, message.usage.output ?? 0, message.usage.cacheRead ?? 0, message.usage.cacheWrite ?? 0, message.usage.cost?.total ?? 0, typeof message.usage.cacheRead === "number" || typeof message.usage.cacheWrite === "number");
     }
     publishAcpState(orchestrator);
     await maybeCompact(orchestrator, ctx);
+    if (message?.stopReason === "error" && isRateLimitError(message?.errorMessage)) {
+      await handleMainRateLimit(orchestrator, ctx, message?.model ?? ctx.model?.id, message?.provider ?? ctx.model?.provider);
+      return;
+    }
     if ((globalThis as any)[SUBAGENT_SESSION_KEY] || orchestrator.interactivePromptOpen || orchestrator.spawnedAgentIds.size > 0) return;
-    const decision = classifyContinuation(message, turnHadTools);
+    const decision = classifyContinuation(message, requestHadTools);
     if (decision === "none" || orchestrator.continuationHalted) return;
     if (decision === "objective") {
       if (orchestrator.objectiveContinuationCount >= MAX_OBJECTIVE_CONTINUATIONS) {
@@ -357,11 +387,13 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       return;
     }
     orchestrator.continuationCount++;
+    orchestrator.requestHadTools = false;
     orchestrator.queueContinuation(CONTINUE_AMBIGUOUS);
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
     if ((globalThis as any)[SUBAGENT_SESSION_KEY]) return;
+    orchestrator.interactivePromptOpen = false;
     const usage = tracker();
     const sessionId = ctx.sessionManager?.getSessionId?.();
     if (usage && sessionId) dumpUsageSummary(usage, sessionId);
@@ -369,6 +401,16 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     finalizeTracer();
     delete (globalThis as any)[USAGE_TRACKER_KEY];
     if (orchestrator.mainTurnTimer) clearInterval(orchestrator.mainTurnTimer);
+    if (orchestrator.subSwitchBackTimer) clearTimeout(orchestrator.subSwitchBackTimer);
+    if (orchestrator.idlePollTimer) clearTimeout(orchestrator.idlePollTimer);
     orchestrator.mainTurnTimer = null;
+    orchestrator.subSwitchBackTimer = null;
+    orchestrator.idlePollTimer = null;
+    setSubscriptionFallbackActive(false);
+    orchestrator.subFallbackActive = false;
+    orchestrator.subFallbackModelId = null;
+    orchestrator.subFallbackMainPriorSpec = null;
+    orchestrator.resetContinuation();
+    delete (globalThis as any)[Symbol.for("pi-pi:root-session-source")];
   });
 }

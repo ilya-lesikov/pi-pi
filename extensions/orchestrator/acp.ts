@@ -49,22 +49,28 @@ export function buildAcpState(orchestrator: Orchestrator): AcpState {
   return { status: orchestrator.mainTurnInFlight ? "running" : "idle", subagents };
 }
 
-let lastPayload: string | null = null;
+const lastPayloadBySession = new Map<string, string>();
 
-export function resetAcpStateCache(): void {
-  lastPayload = null;
+function sessionKey(orchestrator: Orchestrator): string {
+  return orchestrator.lastCtx?.sessionManager?.getSessionId?.() || "default";
+}
+
+export function resetAcpStateCache(sessionId?: string): void {
+  if (sessionId) lastPayloadBySession.delete(sessionId);
+  else lastPayloadBySession.clear();
 }
 
 export function publishAcpState(orchestrator: Orchestrator, pi: ExtensionAPI = orchestrator.pi): void {
   if (!isAcpMode()) return;
   const state = buildAcpState(orchestrator);
   const payload = JSON.stringify(state);
-  if (payload === lastPayload) return;
-  lastPayload = payload;
+  const key = sessionKey(orchestrator);
+  if (payload === lastPayloadBySession.get(key)) return;
+  lastPayloadBySession.set(key, payload);
   try {
     pi.appendEntry(PP_ACP_STATE_TYPE, state);
   } catch (err: any) {
-    lastPayload = null;
+    lastPayloadBySession.delete(key);
     getLogger().debug({ s: "acp", err: err?.message }, "failed to append pp:state entry");
   }
 }

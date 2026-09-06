@@ -53,6 +53,6 @@ function registerSubagentTools(pi: ExtensionAPI): void {
   registerCbmTools(pi, cwd);
   registerExaTools(pi);
   registerAstSearchTool(pi, cwd);
-  registerRecallTool(pi);
+  registerRecallTool(pi, (globalThis as any)[Symbol.for("pi-pi:root-session-source")]);
   registerLoadSkill(pi, cwd);
 }

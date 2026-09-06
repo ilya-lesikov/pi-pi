@@ -1,10 +1,7 @@
 export const ALL_CBM_TOOLS = "cbm_search, cbm_search_code, cbm_trace, cbm_changes, cbm_query, cbm_architecture";
 export const EXA_TOOLS = "exa_search, exa_fetch";
 
-// Domain-neutral operating principles. Always active for every agent, so this block
-// must stay free of coding-specific rules — work may be research, ops, writing, data,
-// or code. Anything that only makes sense while editing source belongs in
-// IMPLEMENTATION_PRINCIPLES_BLOCK, which is injected opt-in.
+// Domain-neutral operating principles shared by every agent.
 const PRINCIPLES = [
   "<principles>",
   "- Verify, don't assume. Establish the actual state with tools before acting on it. Never guess a path, name, API, number, or fact you could check.",
@@ -19,24 +16,6 @@ const PRINCIPLES = [
 export function principlesBlock(): string {
   return PRINCIPLES;
 }
-
-// Code-editing-only rules. Injected ONLY into agents that edit project source, and
-// only for work that is actually code. Never always-active: a research, ops, writing,
-// or data task must not carry them. Read-only agents never receive this block — the
-// deep-debugger has write/edit for throwaway diagnostics only, so it is read-only for
-// PROJECT-SOURCE purposes and receives only the shared block above.
-export const IMPLEMENTATION_PRINCIPLES_BLOCK = [
-  "<implementation_principles>",
-  "These rules govern edits to project SOURCE CODE only. They are inactive for research, operations, writing, and data work — do not let them constrain non-code output.",
-  "- Understand before modifying. Read the code, trace callers, check types BEFORE editing. Compiling ≠ correct.",
-  "- Smallest viable change. Do what was asked, nothing more. Don't broaden scope, don't refactor adjacent code.",
-  "- No temporary artifacts. No console.log, TODO, HACK, debugger, or commented-out code left behind.",
-  "- DO NOT WRITE COMMENTS. This is a hard rule, not a preference. Almost every comment an LLM writes is noise: it restates the code, repeats the function/variable name, narrates the obvious, or labels sections. NEVER write any of those. The ONLY allowed comments are (1) a genuine WHY that the code cannot express — a non-obvious constraint, workaround, or gotcha a reader would otherwise get wrong, or (2) required public-API/doc-comment syntax. If a comment restates WHAT the code does, delete it. When unsure, do not comment. Match the existing comment density of the surrounding code — if neighbors have none, add none.",
-  "- NEVER comment a private (non-exported) symbol. Also NEVER write a comment that embeds volatile detail that drifts out of date — flag/option names, constant values, or a restatement of what a flag/function does. A WHY comment survives refactors; a WHAT comment rots. If the only thing a comment adds is a name or a value already in the code, delete it.",
-  "- Prefer fewer, larger functions over many tiny ones. Do NOT extract a helper used in only one place just to name a step — inline it. Extract only when it removes real duplication or the extracted unit is independently meaningful and reused. A one-line or single-caller helper is usually noise.",
-  "- Keep everything as private as possible. Default to non-exported/file-local (or the language's most restricted visibility). Export or widen visibility ONLY when a symbol genuinely needs cross-module use — never 'just in case' or to make a test reach an internal.",
-  "</implementation_principles>",
-].join("\n");
 
 export const FAILURE_RECOVERY = [
   "# Failure recovery",

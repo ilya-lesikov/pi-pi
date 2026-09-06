@@ -78,7 +78,12 @@ const resolveCompactionMessageRange = (
   return [firstIdx, lastIdx];
 };
 
-export const registerRecallTool = (pi: ExtensionAPI) => {
+export interface RecallSessionSource {
+  getSessionFile(): string | undefined;
+  getSessionManager?(): any;
+}
+
+export const registerRecallTool = (pi: ExtensionAPI, source?: RecallSessionSource) => {
   pi.registerTool({
     name: "vcc_recall",
     label: "VCC Recall",
@@ -106,7 +111,8 @@ export const registerRecallTool = (pi: ExtensionAPI) => {
       ),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const sessionFile = ctx.sessionManager.getSessionFile();
+      const sessionManager = source?.getSessionManager?.() ?? ctx.sessionManager;
+      const sessionFile = source?.getSessionFile() ?? sessionManager?.getSessionFile?.();
       if (!sessionFile) {
         return {
           content: [{ type: "text", text: "No session file available." }],
@@ -136,7 +142,7 @@ export const registerRecallTool = (pi: ExtensionAPI) => {
       }
 
       const lineageEntryIds = rawScope === "lineage"
-        ? getActiveLineageEntryIds(ctx.sessionManager)
+        ? getActiveLineageEntryIds(sessionManager)
         : undefined;
       const expandSet = new Set(params.expand ?? []);
       const hasExpand = expandSet.size > 0;
