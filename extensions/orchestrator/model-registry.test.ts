@@ -21,7 +21,6 @@ import {
   restoreTierForFamily,
   setSubscriptionFallbackActive,
   setTierEnabled,
-  toNonSubSpec,
   updateRegistryFromAvailableModels,
 } from "./model-registry.js";
 
@@ -38,7 +37,7 @@ describe("model-registry", () => {
 
   it("resolveModel returns input unchanged for non-native aliases without available models", () => {
     expect(resolveModel("openai/gpt-mini-latest")).toBe("openai/gpt-mini-latest");
-    expect(resolveModel("pp-flant-anthropic/claude-opus-latest")).toBe("pp-flant-anthropic/claude-opus-latest");
+    expect(resolveModel("pp-flant-openai/gpt-latest")).toBe("pp-flant-openai/gpt-latest");
   });
 
   it("resolveModel passes through unknown aliases", () => {
@@ -47,7 +46,7 @@ describe("model-registry", () => {
 
   it("resolveModel resolves flant aliases after updateRegistry", () => {
     updateRegistryFromAvailableModels(["claude-opus-4-6", "gemini-3.1-pro"]);
-    expect(resolveModel("pp-flant-anthropic/claude-opus-latest")).toBe("pp-flant-anthropic/claude-opus-4-6");
+    expect(resolveModel("pp-flant-anthropic-sub/claude-opus-latest")).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-6");
     expect(resolveModel("pp-flant-openai/gemini-pro-latest")).toBe("pp-flant-openai/gemini-3.1-pro");
   });
 
@@ -151,7 +150,7 @@ describe("model-registry", () => {
 
     expect(resolveModel("openai/gpt-latest")).toBe("openai/gpt-5.6");
     expect(resolveModel("pp-flant-openai/gpt-mini-latest")).toBe("pp-flant-openai/gpt-5.6-mini");
-    expect(resolveModel("pp-flant-anthropic/claude-opus-latest")).toBe("pp-flant-anthropic/claude-opus-4-7");
+    expect(resolveModel("pp-flant-anthropic-sub/claude-opus-latest")).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-7");
   });
 
   it("updateRegistryFromAvailableModels picks latest version", () => {
@@ -172,7 +171,7 @@ describe("model-registry", () => {
       "gemini-3-2-pro",
     ]);
 
-    expect(resolveModel("pp-flant-anthropic/claude-sonnet-latest")).toBe("pp-flant-anthropic/claude-sonnet-4-7");
+    expect(resolveModel("pp-flant-anthropic-sub/claude-sonnet-latest")).toBe("pp-flant-anthropic-sub/sub/claude-sonnet-4-7");
     expect(resolveModel("pp-flant-openai/gpt-latest")).toBe("pp-flant-openai/gpt-5-6");
     expect(resolveModel("pp-flant-openai/gemini-pro-latest")).toBe("pp-flant-openai/gemini-3-2-pro");
   });
@@ -198,11 +197,11 @@ describe("model-registry", () => {
     updateRegistryFromAvailableModels([
       "openai/gpt-5.4",
       "openai/gpt-latest",
-      "pp-flant-anthropic/claude-opus-latest",
+      "pp-flant-openai/gemini-pro-latest",
     ]);
 
     expect(resolveModel("openai/gpt-latest")).toBe("openai/gpt-5.4");
-    expect(resolveModel("pp-flant-anthropic/claude-opus-latest")).toBe("pp-flant-anthropic/claude-opus-latest");
+    expect(resolveModel("pp-flant-openai/gemini-pro-latest")).toBe("pp-flant-openai/gemini-pro-latest");
   });
 
   it("updateRegistryFromAvailableModels handles empty input", () => {
@@ -334,43 +333,25 @@ describe("model-registry", () => {
     beforeEach(() => setSubscriptionFallbackActive(false));
     afterEach(() => setSubscriptionFallbackActive(false));
 
-    it("toNonSubSpec rewrites provider-prefixed sub specs", () => {
-      expect(toNonSubSpec("pp-flant-anthropic-sub/sub/claude-opus-4-8")).toBe("pp-flant-anthropic/claude-opus-4-8");
-    });
-
-    it("toNonSubSpec rewrites bare sub/ ids", () => {
-      expect(toNonSubSpec("sub/claude-haiku-4-5")).toBe("pp-flant-anthropic/claude-haiku-4-5");
-    });
-
-    it("toNonSubSpec leaves non-subscription specs unchanged", () => {
-      expect(toNonSubSpec("pp-flant-anthropic/claude-opus-4-8")).toBe("pp-flant-anthropic/claude-opus-4-8");
-      expect(toNonSubSpec("openai/gpt-5.4")).toBe("openai/gpt-5.4");
-    });
-
     it("resolveModel leaves sub specs unchanged while fallback inactive", () => {
       expect(isSubscriptionFallbackActive()).toBe(false);
       expect(resolveModel("pp-flant-anthropic-sub/sub/claude-opus-4-8")).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
     });
 
-    it("resolveModel rewrites sub specs to non-sub while fallback active", () => {
+    it("resolveModel never routes a rate-limited sub Claude spec onto the paid gateway", () => {
+      updateRegistryFromAvailableModels([
+        "pp-flant-anthropic-sub/sub/claude-opus-4-8",
+        "pp-flant-openai/gpt-5.6-sol",
+      ]);
       setSubscriptionFallbackActive(true);
       expect(isSubscriptionFallbackActive()).toBe(true);
-      expect(resolveModel("pp-flant-anthropic-sub/sub/claude-opus-4-8")).toBe("pp-flant-anthropic/claude-opus-4-8");
-      expect(resolveModel("sub/claude-haiku-4-5")).toBe("pp-flant-anthropic/claude-haiku-4-5");
+      const resolved = resolveModel("pp-flant-anthropic-sub/sub/claude-opus-4-8");
+      expect(resolved.startsWith("pp-flant-anthropic/")).toBe(false);
     });
 
     it("resolveModel does not touch non-sub specs while fallback active", () => {
       setSubscriptionFallbackActive(true);
       expect(resolveModel("pp-flant-openai/gpt-5-4")).toBe("pp-flant-openai/gpt-5-4");
-    });
-
-    it("resolveModel rewrites a subscription alias after registry update while fallback active", () => {
-      updateRegistryFromAvailableModels([
-        "pp-flant-anthropic-sub/sub/claude-opus-4-7",
-        "pp-flant-anthropic-sub/sub/claude-opus-4-8",
-      ]);
-      setSubscriptionFallbackActive(true);
-      expect(resolveModel("pp-flant-anthropic-sub/claude-opus-latest")).toBe("pp-flant-anthropic/claude-opus-4-8");
     });
   });
 
@@ -408,20 +389,20 @@ describe("model-registry", () => {
       expect(resolveModel("github-copilot/claude-opus-4-8")).toBe("github-copilot/claude-opus-4-8");
     });
 
-    it("demotes a copilot spec down when copilot is disabled", () => {
-      // copilot disabled (default) -> a copilot-generated Claude spec walks DOWN
-      // only. flant-sub now outranks copilot, so the sub tier is above the walk
-      // start and is never reached: the spec lands on the flant-api floor rather
-      // than being rerouted upward onto the subscription.
-      expect(resolveModel("github-copilot/claude-opus-4-8")).toBe("pp-flant-anthropic/claude-opus-4-8");
+    it("keeps a copilot Claude spec put when copilot is disabled (no Claude on the paid gateway)", () => {
+      // copilot disabled -> the walk DOWN finds no usable tier: flant-api no
+      // longer serves Claude at all, so the spec stays as pinned.
+      expect(resolveModel("github-copilot/claude-opus-4-8")).toBe("github-copilot/claude-opus-4-8");
     });
 
-    it("flant↔flant stays demote-only: a paid flant-api spec is never promoted to the subscription", () => {
+    it("a legacy flant-api Claude spec re-routes to the subscription (paid gateway serves no Claude)", () => {
       setTierEnabled({ "copilot": true });
-      // No catalog registered here, so copilot promotion no-ops (needs a real
-      // copilot model); the point is flant-api never routes UP to flant-sub
-      // (that would reroute a paid pin onto the subscription).
-      expect(resolveModel("pp-flant-anthropic/claude-opus-4-8")).toBe("pp-flant-anthropic/claude-opus-4-8");
+      expect(resolveModel("pp-flant-anthropic/claude-opus-4-8")).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
+    });
+
+    it("flant↔flant stays demote-only for non-Claude: a paid gpt spec is never promoted", () => {
+      setTierEnabled({ "copilot": true });
+      expect(resolveModel("pp-flant-openai/gpt-5.6-sol")).toBe("pp-flant-openai/gpt-5.6-sol");
     });
 
     it("flant-sub is Claude-only: a demoted-copilot gpt spec skips sub to flant-api", () => {
@@ -430,12 +411,12 @@ describe("model-registry", () => {
       expect(resolveModel("github-copilot/gpt-5.6-sol")).toBe("pp-flant-openai/gpt-5.6-sol");
     });
 
-    it("demoting copilot for a family falls that family to the next usable tier", () => {
+    it("demoting copilot for a family falls non-Claude to the next usable tier", () => {
       setTierEnabled({ "copilot": true });
-      // A copilot-born opus with copilot demoted walks DOWN past the (higher)
-      // sub tier to the flant-api floor.
+      // A copilot-born opus with copilot demoted has nowhere to fall (no Claude
+      // on the paid gateway) and stays as pinned.
       demoteTierForFamily("copilot", "opus");
-      expect(resolveModel("github-copilot/claude-opus-4-8")).toBe("pp-flant-anthropic/claude-opus-4-8");
+      expect(resolveModel("github-copilot/claude-opus-4-8")).toBe("github-copilot/claude-opus-4-8");
       // A gpt on copilot, demoted, skips Claude-only sub and lands on flant-api.
       demoteTierForFamily("copilot", "gpt-sol");
       expect(resolveModel("github-copilot/gpt-5.6-sol")).toBe("pp-flant-openai/gpt-5.6-sol");
@@ -443,18 +424,18 @@ describe("model-registry", () => {
 
     it("demotions are per-family: demoting opus on sub does not affect haiku", () => {
       demoteTierForFamily("flant-sub", "opus");
-      // opus sub demoted -> falls to flant-api.
-      expect(resolveModel("pp-flant-anthropic-sub/sub/claude-opus-4-8")).toBe("pp-flant-anthropic/claude-opus-4-8");
+      // opus sub demoted -> no Claude on the paid gateway, so the spec stays.
+      expect(resolveModel("pp-flant-anthropic-sub/sub/claude-opus-4-8")).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
       // haiku sub still usable.
       expect(resolveModel("pp-flant-anthropic-sub/sub/claude-haiku-4-5")).toBe("pp-flant-anthropic-sub/sub/claude-haiku-4-5");
     });
 
     it("restoring a demoted tier brings the family back up", () => {
       setTierEnabled({ "copilot": true });
-      demoteTierForFamily("copilot", "opus");
-      expect(resolveModel("github-copilot/claude-opus-4-8")).toBe("pp-flant-anthropic/claude-opus-4-8");
-      restoreTierForFamily("copilot", "opus");
-      expect(resolveModel("github-copilot/claude-opus-4-8")).toBe("github-copilot/claude-opus-4-8");
+      demoteTierForFamily("copilot", "gpt-sol");
+      expect(resolveModel("github-copilot/gpt-5.6-sol")).toBe("pp-flant-openai/gpt-5.6-sol");
+      restoreTierForFamily("copilot", "gpt-sol");
+      expect(resolveModel("github-copilot/gpt-5.6-sol")).toBe("github-copilot/gpt-5.6-sol");
     });
 
     it("setSubscriptionFallbackActive toggles the flant-sub tier enable flag", () => {
@@ -514,9 +495,10 @@ describe("model-registry", () => {
       expect(resolveModel("pp-flant-anthropic-sub/sub/claude-opus-4-8")).toBe("github-copilot/claude-opus-4.6");
     });
 
-    it("falls a sub-born Claude spec to flant-api when the subscription is disabled and copilot is not usable", () => {
+    it("keeps a sub-born Claude spec put when the subscription is limited and copilot is not usable", () => {
+      // No Claude on the paid gateway: without Copilot there is nowhere to fall.
       setSubscriptionFallbackActive(true);
-      expect(resolveModel("pp-flant-anthropic-sub/sub/claude-opus-4-8")).toBe("pp-flant-anthropic/claude-opus-4-8");
+      expect(resolveModel("pp-flant-anthropic-sub/sub/claude-opus-4-8")).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
     });
 
     it("does NOT promote a gpt flant spec to copilot (copilot has no gpt) — stays on flant", () => {
@@ -524,16 +506,10 @@ describe("model-registry", () => {
       expect(resolveModel("pp-flant-openai/gpt-5.6-sol")).toBe("pp-flant-openai/gpt-5.6-sol");
     });
 
-    it("does NOT promote to copilot when the copilot tier is disabled (default)", () => {
-      // copilot OFF (default): an api-born claude spec stays on flant-api.
-      expect(resolveModel("pp-flant-anthropic/claude-opus-4-8")).toBe("pp-flant-anthropic/claude-opus-4-8");
-    });
-
-    it("does NOT promote to copilot when that family is demoted for copilot (live rate-limit)", () => {
-      setTierEnabled({ "copilot": true });
-      demoteTierForFamily("copilot", "opus");
-      // opus copilot demoted -> the api-born spec stays on flant-api.
-      expect(resolveModel("pp-flant-anthropic/claude-opus-4-8")).toBe("pp-flant-anthropic/claude-opus-4-8");
+    it("routes a legacy flant-api Claude spec onto the subscription", () => {
+      // Claude no longer exists on the paid gateway; a stale api-born spec
+      // (old config) resolves to the sub tier.
+      expect(resolveModel("pp-flant-anthropic/claude-opus-4-8")).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
     });
 
     it("respects an explicit copilot pin against the real catalog (no rewrite to flant)", () => {
@@ -549,11 +525,10 @@ describe("model-registry", () => {
       expect(out.startsWith("github-copilot/")).toBe(true);
     });
 
-    it("demotes an explicit copilot pin to a real flant id when copilot is disabled", () => {
-      // copilot off (default) -> the pin can't be honored and walks DOWN only, so
-      // it lands on the flant-api floor. It is never rerouted UP onto the
-      // subscription, which now outranks copilot.
-      expect(resolveModel("github-copilot/claude-opus-4.5")).toBe("pp-flant-anthropic/claude-opus-4-8");
+    it("keeps an explicit copilot Claude pin put when copilot is disabled", () => {
+      // copilot off -> the pin can't be honored, and Claude has no flant-api
+      // floor anymore, so the pin stays as-is.
+      expect(resolveModel("github-copilot/claude-opus-4.5")).toBe("github-copilot/claude-opus-4.5");
     });
 
     it("never emits an unregistered copilot id when demoting a copilot spec whose family copilot lacks", () => {

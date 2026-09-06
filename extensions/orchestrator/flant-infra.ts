@@ -152,10 +152,12 @@ export async function refreshClaudeOAuthToken(): Promise<string | null> {
   }
   if (!anthropic || typeof anthropic.access !== "string" || !anthropic.access) return null;
 
+  // Refresh ahead of expiry so in-flight requests never race a dying token.
+  const REFRESH_MARGIN_MS = 5 * 60_000;
   const expires = typeof anthropic.expires === "number" ? anthropic.expires : 0;
-  if (expires > Date.now()) return anthropic.access;
+  if (expires > Date.now() + REFRESH_MARGIN_MS) return anthropic.access;
 
-  // Expired (or no expiry recorded): try to refresh.
+  // Expired (or expiring soon, or no expiry recorded): try to refresh.
   if (typeof anthropic.refresh !== "string" || !anthropic.refresh) {
     log.debug({ s: "flant" }, "claude oauth token expired and no refresh token available");
     return null;
@@ -188,7 +190,7 @@ export async function refreshClaudeOAuthToken(): Promise<string | null> {
         : {};
       // Another instance may have refreshed while we were waiting for the lock.
       const existingExpires = typeof existing.expires === "number" ? existing.expires : 0;
-      if (existingExpires > Date.now() && typeof existing.access === "string" && existing.access) {
+      if (existingExpires > Date.now() + 5 * 60_000 && typeof existing.access === "string" && existing.access) {
         return existing.access;
       }
       current.anthropic = {
@@ -695,11 +697,9 @@ export function isSubscriptionActive(settings?: FlantSettings): boolean {
   return s.subscription && !!readClaudeOAuthToken() && !!readGatewayApiKey();
 }
 
-function modelSpec(modelId: string, subscriptionActive = false): string {
+function modelSpec(modelId: string): string {
   if (modelId.startsWith("claude-")) {
-    return subscriptionActive
-      ? `${SUB_PROVIDER}/${SUB_MODEL_PREFIX}${modelId}`
-      : `pp-flant-anthropic/${modelId}`;
+    return `${SUB_PROVIDER}/${SUB_MODEL_PREFIX}${modelId}`;
   }
   return `pp-flant-openai/${modelId}`;
 }
@@ -739,22 +739,21 @@ export function registerFlantProviders(
 ): void {
   const log = getLogger();
   const uniqueModels = [...new Set(models)];
-  const anthropicModels = uniqueModels.filter((m) => m.startsWith("claude-"));
-  const subConfirmed = new Set(
-    uniqueModels.filter((m) => m.startsWith(SUB_MODEL_PREFIX)).map((m) => m.slice(SUB_MODEL_PREFIX.length)),
-  );
+  // The gateway no longer serves bare claude-* models over the paid API —
+  // Claude is available EXCLUSIVELY through the personal subscription's `sub/`
+  // groups. pp-flant-anthropic is not registered at all; every claude id in the
+  // catalog (bare from legacy caches, or `sub/`-prefixed from the live gateway)
+  // is a subscription candidate.
+  const subCandidates = [...new Set(
+    uniqueModels
+      .filter((m) => m.startsWith("claude-") || m.startsWith(`${SUB_MODEL_PREFIX}claude-`))
+      .map((m) => (m.startsWith(SUB_MODEL_PREFIX) ? m.slice(SUB_MODEL_PREFIX.length) : m)),
+  )];
   const openaiModels = uniqueModels.filter((m) => !m.startsWith("claude-") && !m.startsWith(SUB_MODEL_PREFIX));
 
   unregisterFlantProviders(pi);
 
   const gatewayKey = readGatewayApiKey() ?? "$FLANT_API_KEY";
-
-  pi.registerProvider("pp-flant-anthropic", {
-    api: "anthropic-messages",
-    baseUrl: "https://llm-api.flant.ru",
-    apiKey: gatewayKey,
-    models: anthropicModels.map((m) => buildProviderModelConfig(m, metadata)),
-  });
 
   pi.registerProvider("pp-flant-openai", {
     api: "openai-completions",
@@ -763,32 +762,22 @@ export function registerFlantProviders(
     models: openaiModels.map((m) => buildProviderModelConfig(m, metadata)),
   });
 
-  const availableSpecs = [
-    ...anthropicModels.map((id) => `pp-flant-anthropic/${id}`),
-    ...openaiModels.map((id) => `pp-flant-openai/${id}`),
-  ];
+  const availableSpecs = openaiModels.map((id) => `pp-flant-openai/${id}`);
 
   const subscription = options.subscription ?? loadFlantSettings().subscription;
   let subModels: string[] = [];
   if (subscription) {
-    // The gateway defines `sub/` model groups for only some claude models —
-    // registering unconfirmed ones yields "Invalid model name" 400s. Model
-    // lists cached before the gateway exposed `sub/…` ids have none; fall back
-    // to all claude models then.
-    const subEligible = subConfirmed.size > 0
-      ? anthropicModels.filter((m) => subConfirmed.has(m))
-      : anthropicModels;
     // Remember the models/metadata so refreshSubProvider can rebuild the
     // provider with a fresh OAuth token on each turn (see below).
-    subProviderContext = { anthropicModels: subEligible, metadata };
-    subModels = registerSubProvider(pi, subEligible, metadata);
+    subProviderContext = { anthropicModels: subCandidates, metadata };
+    subModels = registerSubProvider(pi, subCandidates, metadata);
     availableSpecs.push(...subModels.map((id) => `${SUB_PROVIDER}/${id}`));
   } else {
     subProviderContext = null;
     lastSubToken = null;
   }
 
-  log.debug({ s: "flant", total: uniqueModels.length, anthropic: anthropicModels.length, openai: openaiModels.length, sub: subModels.length }, "registering flant providers");
+  log.debug({ s: "flant", total: uniqueModels.length, sub: subModels.length, openai: openaiModels.length }, "registering flant providers");
 
   updateRegistryFromAvailableModels(availableSpecs);
 }
@@ -885,21 +874,18 @@ function pickCheapestFastModel(models: string[]): string | null {
   return pickLatest(models.filter((m) => /^claude-haiku-/.test(m)));
 }
 
-type SubPredicate = (modelId: string) => boolean;
-
-function makeVariant(modelId: string | null, fallbackModelId: string, sub: SubPredicate): { enabled: boolean; model: string; thinking: string } {
-  if (!modelId) return { enabled: false, model: modelSpec(fallbackModelId, sub(fallbackModelId)), thinking: "high" };
-  return { enabled: true, model: modelSpec(modelId, sub(modelId)), thinking: "high" };
+function makeVariant(modelId: string | null, fallbackModelId: string): { enabled: boolean; model: string; thinking: string } {
+  if (!modelId) return { enabled: false, model: modelSpec(fallbackModelId), thinking: "high" };
+  return { enabled: true, model: modelSpec(modelId), thinking: "high" };
 }
 
 function makeVariantWithThinking(
   modelId: string | null,
   fallbackModelId: string,
   thinking: string,
-  sub: SubPredicate,
 ): { enabled: boolean; model: string; thinking: string } {
-  if (!modelId) return { enabled: false, model: modelSpec(fallbackModelId, sub(fallbackModelId)), thinking };
-  return { enabled: true, model: modelSpec(modelId, sub(modelId)), thinking };
+  if (!modelId) return { enabled: false, model: modelSpec(fallbackModelId), thinking };
+  return { enabled: true, model: modelSpec(modelId), thinking };
 }
 
 function disabledByDefault(
@@ -909,17 +895,15 @@ function disabledByDefault(
 }
 
 export function generateFlantConfig(models: string[], subscriptionActive = false): Partial<PiPiConfig> {
-  const uniqueModels = [...new Set(models)];
+  const rawModels = [...new Set(models)];
+  if (rawModels.length === 0) return {};
+  // Claude is served EXCLUSIVELY through the subscription's `sub/` groups — the
+  // paid gateway has no Claude anymore. Normalize `sub/claude-*` ids to bare
+  // claude ids for the pickers, and drop Claude entirely when the subscription
+  // is inactive so generated roles never point at an unroutable model.
+  const uniqueModels = [...new Set(rawModels.map((m) => (m.startsWith(SUB_MODEL_PREFIX) ? m.slice(SUB_MODEL_PREFIX.length) : m)))]
+    .filter((m) => subscriptionActive || !m.startsWith("claude-"));
   if (uniqueModels.length === 0) return {};
-  // Mirror the sub-eligibility gate in registerFlantProviders: route a claude
-  // model through the sub provider only when the gateway confirms its `sub/`
-  // group (or the list predates `sub/` ids entirely) — otherwise the generated
-  // spec would point at a model the sub provider never registers.
-  const subConfirmed = new Set(
-    uniqueModels.filter((m) => m.startsWith(SUB_MODEL_PREFIX)).map((m) => m.slice(SUB_MODEL_PREFIX.length)),
-  );
-  const sub = (modelId: string): boolean =>
-    subscriptionActive && (subConfirmed.size === 0 || subConfirmed.has(modelId));
 
   const latestOpus = pickLatest(uniqueModels.filter((m) => /^claude-opus-/.test(m)));
   const latestFable = pickLatest(uniqueModels.filter((m) => /^claude-fable-/.test(m)));
@@ -957,29 +941,29 @@ export function generateFlantConfig(models: string[], subscriptionActive = false
 
   return {
     agents: {
-      main: { model: modelSpec(mainModel, sub(mainModel)), thinking: "high" },
+      main: { model: modelSpec(mainModel), thinking: "high" },
       maxConcurrentSubagents: getDefaultConfig().agents.maxConcurrentSubagents,
       subagents: {
         simple: {
-          explore: { model: modelSpec(fastModel, sub(fastModel)), thinking: "low" },
-          librarian: { model: modelSpec(fastModel, sub(fastModel)), thinking: "medium" },
-          task: { model: modelSpec(taskModel, sub(taskModel)), thinking: "medium" },
+          explore: { model: modelSpec(fastModel), thinking: "low" },
+          librarian: { model: modelSpec(fastModel), thinking: "medium" },
+          task: { model: modelSpec(taskModel), thinking: "medium" },
         },
         pools: {
           advisors: [
-            makeVariant(latestFable, fallback, sub),
-            makeVariant(gptSmartPro, fallback, sub),
-            disabledByDefault(makeVariant(latestGeminiPro, fallback, sub)),
+            makeVariant(latestFable, fallback),
+            makeVariant(gptSmartPro, fallback),
+            disabledByDefault(makeVariant(latestGeminiPro, fallback)),
           ],
           reviewers: [
-            makeVariant(gptSmart, fallback, sub),
-            makeVariantWithThinking(latestFable, fallback, "medium", sub),
-            disabledByDefault(makeVariant(latestGeminiPro, fallback, sub)),
+            makeVariant(gptSmart, fallback),
+            makeVariantWithThinking(latestFable, fallback, "medium"),
+            disabledByDefault(makeVariant(latestGeminiPro, fallback)),
           ],
           deepDebuggers: [
-            makeVariant(gptSmartPro, fallback, sub),
-            makeVariant(latestFable, fallback, sub),
-            disabledByDefault(makeVariant(latestGeminiPro, fallback, sub)),
+            makeVariant(gptSmartPro, fallback),
+            makeVariant(latestFable, fallback),
+            disabledByDefault(makeVariant(latestGeminiPro, fallback)),
           ],
         },
       },

@@ -22,6 +22,7 @@ import { publishAcpState, resetAcpStateCache } from "./acp.js";
 import { runAfterEdit } from "./commands.js";
 import { checkDuplicateExtensions } from "./duplicate-extension-guard.js";
 import { handleMainRateLimit, handleSubagentRateLimit, isRateLimitError } from "./rate-limit-fallback.js";
+import { refreshSubProvider } from "./flant-infra.js";
 import { SUBAGENT_SESSION_KEY } from "./index.js";
 import type { Orchestrator } from "./orchestrator.js";
 
@@ -202,6 +203,7 @@ function registerLifecycle(orchestrator: Orchestrator): void {
     orchestrator.mainTurnToolInFlight = 0;
     orchestrator.mainTurnLastActivity = Date.now();
     startMainTurnWatchdog();
+    void refreshSubProvider(pi).catch(() => {});
     publishAcpState(orchestrator);
   });
   pi.on("tool_execution_start", (event: any) => {
@@ -338,6 +340,13 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     ctx.ui?.setFooter?.(createCustomFooter);
     orchestrator.applySubagentConcurrency();
     registerFeatureToolsAndAgents(orchestrator);
+    // The Claude OAuth token expires within hours. Turn-start refreshes cover
+    // active work; this timer keeps the sub provider fresh through long idle
+    // stretches too, so the first request after a pause never rides a dead token.
+    if (!orchestrator.tokenRefreshTimer) {
+      orchestrator.tokenRefreshTimer = setInterval(() => { void refreshSubProvider(pi).catch(() => {}); }, 4 * 60_000);
+      orchestrator.tokenRefreshTimer.unref?.();
+    }
     publishAcpState(orchestrator);
   });
 
@@ -450,9 +459,11 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (orchestrator.mainTurnTimer) clearInterval(orchestrator.mainTurnTimer);
     if (orchestrator.subSwitchBackTimer) clearTimeout(orchestrator.subSwitchBackTimer);
     if (orchestrator.idlePollTimer) clearTimeout(orchestrator.idlePollTimer);
+    if (orchestrator.tokenRefreshTimer) clearInterval(orchestrator.tokenRefreshTimer);
     orchestrator.mainTurnTimer = null;
     orchestrator.subSwitchBackTimer = null;
     orchestrator.idlePollTimer = null;
+    orchestrator.tokenRefreshTimer = null;
     setSubscriptionFallbackActive(false);
     orchestrator.subFallbackActive = false;
     orchestrator.subFallbackModelId = null;

@@ -54,6 +54,7 @@ export class Orchestrator {
   subFallbackModelId: string | null = null;
   subFallbackMainPriorSpec: string | null = null;
   subSwitchBackTimer: ReturnType<typeof setTimeout> | null = null;
+  tokenRefreshTimer: ReturnType<typeof setInterval> | null = null;
   private _interactivePromptOpen = false;
 
   static current: Orchestrator | null = null;

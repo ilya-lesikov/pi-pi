@@ -960,12 +960,12 @@ function warnIfFlantEditMasked(ctx: any, label: string, scope: Scope, intended: 
   return true;
 }
 
-function countFlantProviders(settings: FlantSettings): { anthropic: number; openai: number; sub: number } {
+function countFlantProviders(settings: FlantSettings): { openai: number; sub: number } {
   const models = settings.cachedFlantModels ?? [];
-  const anthropic = models.filter((m) => m.startsWith("claude-")).length;
+  const bareClaude = models.filter((m) => m.startsWith("claude-")).length;
   const subConfirmed = models.filter((m) => m.startsWith(SUB_MODEL_PREFIX)).length;
-  const sub = subConfirmed > 0 ? subConfirmed : anthropic;
-  return { anthropic, openai: Math.max(0, models.length - anthropic - subConfirmed), sub };
+  const sub = subConfirmed > 0 ? subConfirmed : bareClaude;
+  return { openai: Math.max(0, models.length - bareClaude - subConfirmed), sub };
 }
 
 function collectRoleAssignments(config: Partial<PiPiConfig> | null): string[] {
@@ -995,7 +995,7 @@ function flantStatusText(settings: FlantSettings): string {
     `Enabled: ${settings.enabled ? "yes" : "no"}`,
     `Auto-update: ${settings.autoUpdate ? "yes" : "no"}`,
     `Last updated: ${settings.lastUpdated ?? "never"}`,
-    `Providers: pp-flant-anthropic (${providers.anthropic} models), pp-flant-openai (${providers.openai} models)`,
+    `Providers: pp-flant-openai (${providers.openai} models); Claude routes ONLY via the personal subscription (sub/)`,
   ];
   if (settings.subscription) {
     const hasOAuth = !!readClaudeOAuthToken();
@@ -1024,8 +1024,8 @@ function flantStatusText(settings: FlantSettings): string {
 function describeUpdateResult(result: { ok: boolean; error?: string; models?: string[] }): { text: string; kind: "info" | "error" } {
   if (!result.ok) return { text: `Flant update failed: ${result.error ?? "unknown error"}`, kind: "error" };
   const models = result.models ?? [];
-  const anthropic = models.filter((m) => m.startsWith("claude-")).length;
-  return { text: `Flant update completed: ${models.length} models (pp-flant-anthropic: ${anthropic}, pp-flant-openai: ${Math.max(0, models.length - anthropic)}).`, kind: "info" };
+  const sub = models.filter((m) => m.startsWith(SUB_MODEL_PREFIX) || m.startsWith("claude-")).length;
+  return { text: `Flant update completed: ${models.length} models (subscription Claude: ${sub}, pp-flant-openai: ${Math.max(0, models.length - sub)}).`, kind: "info" };
 }
 
 async function showFlantMenu(orchestrator: Orchestrator, ctx: any): Promise<void> {
@@ -1540,15 +1540,11 @@ async function showWorkers(orchestrator: Orchestrator, ctx: any): Promise<void> 
     ]);
     if (!choice || choice === BACK) return;
     if (choice === "Open worker dashboard") {
-      const menu = (globalThis as any)[Symbol.for("pi-subagents:menu")] as ((ctx: any) => Promise<void>) | undefined;
-      if (menu) {
-        await menu(ctx);
+      const menu = (globalThis as any)[Symbol.for("pi-subagents:menu")] as { showFleet?: (ctx: any) => Promise<void> } | undefined;
+      if (typeof menu?.showFleet === "function") {
+        await menu.showFleet(ctx);
       } else {
-        try {
-          await ctx.ui?.executeCommand?.("subagents");
-        } catch {
-          ctx.ui?.notify?.(records.length ? records.map((r) => `${r.status}: ${r.description ?? r.type ?? r.id}`).join("\n") : "No workers recorded.", "info");
-        }
+        ctx.ui?.notify?.(records.length ? records.map((r) => `${r.status}: ${r.description ?? r.type ?? r.id}`).join("\n") : "No workers recorded.", "info");
       }
       continue;
     }
@@ -1556,20 +1552,39 @@ async function showWorkers(orchestrator: Orchestrator, ctx: any): Promise<void> 
   }
 }
 
+function formatAge(ms: number): string {
+  if (ms < 60000) return `${Math.round(ms / 1000)}s`;
+  if (ms < 3600000) return `${Math.round(ms / 60000)}m`;
+  return `${(ms / 3600000).toFixed(1)}h`;
+}
+
 function sessionStatus(orchestrator: Orchestrator, ctx: any): string {
   const usage = ctx.getContextUsage?.();
-  const active = workerRecords().filter((record) => record.status === "running" || record.status === "queued").length;
-  return [
-    `Session: ${ctx.sessionManager?.getSessionName?.() || ctx.sessionManager?.getSessionId?.() || "current"}`,
-    `Directory: ${orchestrator.cwd}`,
-    `Model: ${ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "none"}`,
-    `Context: ${usage?.tokens ?? "?"} / ${usage?.contextWindow ?? "?"} tokens`,
-    `Workers: ${active} active`,
-    `Skills: ${listLayeredSkills(orchestrator.cwd).length} discovered`,
-    `Automatic compaction: ${orchestrator.config.compaction.enabled ? "on (VCC)" : "off"}`,
-    `Continuation: ${orchestrator.continuationHalted ? "paused" : "active"}`,
-    "Mode: direct session ownership (no phases or isolated tasks)",
-  ].join("\n");
+  const records = workerRecords();
+  const active = records.filter((record) => record.status === "running" || record.status === "queued");
+  const settings = loadFlantSettings(orchestrator.cwd);
+  const tracker = (globalThis as any)[Symbol.for("pi-pi:usage-tracker")] as { getTotalCost?: () => number } | undefined;
+  const cost = tracker?.getTotalCost?.();
+  const contextLine = usage && typeof usage.contextWindow === "number" && usage.contextWindow > 0
+    ? `${formatTokenCount(usage.tokens ?? 0)} / ${formatTokenCount(usage.contextWindow)} tokens (${Math.round(((usage.tokens ?? 0) / usage.contextWindow) * 100)}%)`
+    : "unavailable";
+  const lines = [
+    `Model: ${ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "none"} · thinking ${orchestrator.config.agents.main.thinking}`,
+    `Context: ${contextLine}`,
+    ...(typeof cost === "number" && cost > 0 ? [`Session cost: $${cost.toFixed(2)}`] : []),
+    `Flant: ${settings.enabled ? `on · subscription ${settings.subscription ? (readClaudeOAuthToken() ? "active" : "MISSING TOKEN") : "off"}` : "off"}`,
+    ...(orchestrator.subFallbackActive ? ["⚠ Subscription rate-limited — waiting for the limit to clear"] : []),
+    ...(orchestrator.continuationHalted ? ["⚠ Automatic continuation paused (repeated stalls) — send a message to resume"] : []),
+    ...(orchestrator.configError ? [`⚠ Config error: ${orchestrator.configError}`] : []),
+  ];
+  if (active.length > 0) {
+    lines.push(`Workers (${active.length} active):`);
+    for (const record of active.slice(0, 6)) {
+      const age = orchestrator.agentSpawnTimes.get(record.id);
+      lines.push(`  • ${record.status}: ${record.description ?? record.type ?? record.id}${age ? ` (${formatAge(Date.now() - age)})` : ""}`);
+    }
+  }
+  return lines.join("\n");
 }
 
 async function showReportMenu(orchestrator: Orchestrator, ctx: any): Promise<void> {
@@ -1602,32 +1617,39 @@ async function showReportMenu(orchestrator: Orchestrator, ctx: any): Promise<voi
   ctx.ui?.notify?.(`Report written to ${written.reportDir} (${written.captured.length} files). Nothing was sent anywhere.`, "info");
 }
 
-async function showSettingsMenu(orchestrator: Orchestrator, ctx: any): Promise<void> {
+export async function showPpMenu(orchestrator: Orchestrator, ctx: any): Promise<void> {
+  OrchestratorRef.current = orchestrator;
   for (;;) {
-    const choice = await selectOption(ctx, "Settings", [
-      opt("General", "Log level and tracing"),
+    const choice = await selectOption(ctx, "/pp · session control panel", [
+      opt("Status", "Model, context, providers, workers, and warnings"),
+      opt("Workers", "Inspect or stop bounded background workers"),
+      opt("Usage", "Session token usage and cost breakdown"),
       opt("Agents", "Main agent, worker models, pools, and concurrency"),
-      opt("Context", "AGENTS.md / CLAUDE.md injection (global/ancestor/project)"),
+      opt("Flant", "Provider routing and Claude subscription"),
+      opt("Copilot", "GitHub Copilot provider tier"),
       opt("Skills", "Bundled/global/project skill sources and catalog"),
+      opt("Context", "AGENTS.md / CLAUDE.md injection (global/ancestor/project)"),
       opt("Compaction", "Automatic compaction thresholds and manual compact"),
       opt("Commands", "Shell commands to run after file edits (formatters, linters)"),
-      opt("Flant", "Corporate AI model provider and Claude subscription routing"),
-      opt("Copilot", "GitHub Copilot provider tier"),
+      opt("General", "Log level and tracing"),
       opt("Performance", "Stale-turn and stale-worker time limits"),
       opt("LSP", "Language server controls"),
       opt("Report", "Bundle a local feedback report (note + logs)"),
       opt("Doctor", "Run diagnostic checks"),
-      opt(BACK, "Return to the previous menu"),
+      opt(CLOSE, "Return to the prompt"),
     ]);
-    if (!choice || choice === BACK) return;
-    if (choice === "General") await showGeneralSettings(orchestrator, ctx);
+    if (!choice || choice === CLOSE) return;
+    if (choice === "Status") ctx.ui?.notify?.(sessionStatus(orchestrator, ctx), "info");
+    else if (choice === "Workers") await showWorkers(orchestrator, ctx);
+    else if (choice === "Usage") showUsage(ctx);
     else if (choice === "Agents") await showAgentsSettings(orchestrator, ctx);
-    else if (choice === "Context") await showContextSettings(orchestrator, ctx);
-    else if (choice === "Skills") await showSkillsSettings(orchestrator, ctx);
-    else if (choice === "Compaction") await showCompactionSettings(orchestrator, ctx);
-    else if (choice === "Commands") await showCommandsSettings(orchestrator, ctx);
     else if (choice === "Flant") await showFlantMenu(orchestrator, ctx);
     else if (choice === "Copilot") await showCopilotMenu(orchestrator, ctx);
+    else if (choice === "Skills") await showSkillsSettings(orchestrator, ctx);
+    else if (choice === "Context") await showContextSettings(orchestrator, ctx);
+    else if (choice === "Compaction") await showCompactionSettings(orchestrator, ctx);
+    else if (choice === "Commands") await showCommandsSettings(orchestrator, ctx);
+    else if (choice === "General") await showGeneralSettings(orchestrator, ctx);
     else if (choice === "Performance") await showTimeoutsSettings(orchestrator, ctx);
     else if (choice === "LSP") await showLspSettings(ctx);
     else if (choice === "Report") await showReportMenu(orchestrator, ctx);
@@ -1635,23 +1657,5 @@ async function showSettingsMenu(orchestrator: Orchestrator, ctx: any): Promise<v
       const { runDoctor } = await import("./doctor.js");
       await runDoctor(orchestrator, ctx);
     }
-  }
-}
-
-export async function showPpMenu(orchestrator: Orchestrator, ctx: any): Promise<void> {
-  OrchestratorRef.current = orchestrator;
-  for (;;) {
-    const choice = await selectOption(ctx, "/pp · session control panel", [
-      opt("Status", "Session, model, context, workers, and skills"),
-      opt("Workers", "Inspect or stop bounded background workers"),
-      opt("Usage", "Session token usage and cost breakdown"),
-      opt("Settings", "Models, agents, skills, compaction, and providers"),
-      opt(CLOSE, "Return to the prompt"),
-    ]);
-    if (!choice || choice === CLOSE) return;
-    if (choice === "Status") ctx.ui?.notify?.(sessionStatus(orchestrator, ctx), "info");
-    else if (choice === "Workers") await showWorkers(orchestrator, ctx);
-    else if (choice === "Usage") showUsage(ctx);
-    else if (choice === "Settings") await showSettingsMenu(orchestrator, ctx);
   }
 }

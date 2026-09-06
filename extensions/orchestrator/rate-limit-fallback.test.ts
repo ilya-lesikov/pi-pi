@@ -1,7 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Orchestrator } from "./orchestrator.js";
 import { getDefaultConfig, normalizeConfigDurations } from "./config.js";
 import { handleMainRateLimit, isRateLimitError } from "./rate-limit-fallback.js";
+import { clearAllTierDemotions, setSubscriptionFallbackActive, setTierEnabled, updateRegistryFromAvailableModels } from "./model-registry.js";
 
 vi.mock("./flant-infra.js", async (original) => ({
   ...(await original<any>()),
@@ -9,51 +10,90 @@ vi.mock("./flant-infra.js", async (original) => ({
   probeSubscriptionCleared: vi.fn(async () => "rate_limited"),
 }));
 
+function makeOrchestrator(pi: any): Orchestrator {
+  const orchestrator = new Orchestrator(pi);
+  orchestrator.cwd = "/tmp/project";
+  orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+  orchestrator.lastCtx = { isIdle: () => true };
+  return orchestrator;
+}
+
+const subCtx = () => ({
+  abort: vi.fn(),
+  model: { provider: "pp-flant-anthropic-sub", id: "sub/claude-opus-4-8" },
+  ui: { notify: vi.fn() },
+});
+
 describe("session-first rate-limit fallback", () => {
+  beforeEach(() => {
+    setSubscriptionFallbackActive(false);
+    clearAllTierDemotions();
+    setTierEnabled({ "copilot": false, "flant-sub": true, "flant-api": true });
+    updateRegistryFromAvailableModels([]);
+  });
+  afterEach(() => {
+    setSubscriptionFallbackActive(false);
+    updateRegistryFromAvailableModels([]);
+  });
+
   it("recognizes subscription limit errors", () => {
     expect(isRateLimitError("HTTP 429 too many requests")).toBe(true);
     expect(isRateLimitError("third-party apps draw from extra usage")).toBe(true);
     expect(isRateLimitError("invalid request")).toBe(false);
   });
 
-  it("switches a subscription-routed main model and queues continuation", async () => {
+  it("waits without switching when Claude has no fallback tier", async () => {
     const pi = { sendUserMessage: vi.fn() } as any;
-    const orchestrator = new Orchestrator(pi);
-    orchestrator.cwd = "/tmp/project";
-    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
-    orchestrator.lastCtx = { isIdle: () => true };
+    const orchestrator = makeOrchestrator(pi);
     orchestrator.switchModel = vi.fn(async () => true);
-    const ctx = {
-      abort: vi.fn(),
-      model: { provider: "pp-flant-anthropic-sub", id: "sub/claude-opus-4-8" },
-      ui: { notify: vi.fn() },
-    };
+    const ctx = subCtx();
     await handleMainRateLimit(orchestrator, ctx, "sub/claude-opus-4-8", "pp-flant-anthropic-sub");
     expect(ctx.abort).toHaveBeenCalled();
     expect(orchestrator.subFallbackActive).toBe(true);
-    expect(orchestrator.switchModel).toHaveBeenCalled();
+    expect(orchestrator.subFallbackMainPriorSpec).toBeNull();
+    expect(orchestrator.switchModel).not.toHaveBeenCalled();
+    expect(pi.sendUserMessage).not.toHaveBeenCalled();
+    expect(orchestrator.subSwitchBackTimer).not.toBeNull();
+    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("no paid-gateway fallback"), "warning");
+    if (orchestrator.subSwitchBackTimer) clearTimeout(orchestrator.subSwitchBackTimer);
+  });
+
+  it("switches to Copilot and queues continuation when the tier is usable", async () => {
+    setTierEnabled({ "copilot": true });
+    updateRegistryFromAvailableModels([
+      "pp-flant-anthropic-sub/sub/claude-opus-4-8",
+      "github-copilot/claude-opus-4.5",
+    ]);
+    const pi = { sendUserMessage: vi.fn() } as any;
+    const orchestrator = makeOrchestrator(pi);
+    orchestrator.switchModel = vi.fn(async () => true);
+    const ctx = subCtx();
+    await handleMainRateLimit(orchestrator, ctx, "sub/claude-opus-4-8", "pp-flant-anthropic-sub");
+    expect(orchestrator.subFallbackActive).toBe(true);
+    expect(orchestrator.switchModel).toHaveBeenCalledWith(ctx, "github-copilot/claude-opus-4.5", expect.any(String));
+    expect(orchestrator.subFallbackMainPriorSpec).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
     expect(pi.sendUserMessage).toHaveBeenCalled();
     if (orchestrator.subSwitchBackTimer) clearTimeout(orchestrator.subSwitchBackTimer);
   });
 
-  it.each([false, "throw"] as const)("does not commit fallback when model switching returns %s", async (failure) => {
+  it.each([false, "throw"] as const)("still arms the probe when model switching returns %s", async (failure) => {
+    setTierEnabled({ "copilot": true });
+    updateRegistryFromAvailableModels([
+      "pp-flant-anthropic-sub/sub/claude-opus-4-8",
+      "github-copilot/claude-opus-4.5",
+    ]);
     const pi = { sendUserMessage: vi.fn() } as any;
-    const orchestrator = new Orchestrator(pi);
-    orchestrator.cwd = "/tmp/project";
-    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
-    orchestrator.lastCtx = { isIdle: () => true };
+    const orchestrator = makeOrchestrator(pi);
     orchestrator.switchModel = vi.fn(async () => {
       if (failure === "throw") throw new Error("unavailable");
       return false;
     });
-    const ctx = {
-      abort: vi.fn(),
-      model: { provider: "pp-flant-anthropic-sub", id: "sub/claude-opus-4-8" },
-      ui: { notify: vi.fn() },
-    };
+    const ctx = subCtx();
     await handleMainRateLimit(orchestrator, ctx, "sub/claude-opus-4-8", "pp-flant-anthropic-sub");
-    expect(orchestrator.subFallbackActive).toBe(false);
-    expect(orchestrator.subFallbackModelId).toBeNull();
+    expect(orchestrator.subFallbackActive).toBe(true);
+    expect(orchestrator.subFallbackMainPriorSpec).toBeNull();
     expect(pi.sendUserMessage).not.toHaveBeenCalled();
+    expect(orchestrator.subSwitchBackTimer).not.toBeNull();
+    if (orchestrator.subSwitchBackTimer) clearTimeout(orchestrator.subSwitchBackTimer);
   });
 });

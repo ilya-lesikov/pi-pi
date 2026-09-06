@@ -67,8 +67,8 @@ describe("flant-infra", () => {
     mod.registerFlantProviders(pi, models, {});
     mod.registerFlantProviders(pi, models, {});
 
-    expect(registered.size).toBe(2);
-    expect([...registered.keys()].sort()).toEqual(["pp-flant-anthropic", "pp-flant-openai"]);
+    expect(registered.size).toBe(1);
+    expect([...registered.keys()]).toEqual(["pp-flant-openai"]);
   });
 
   it("registers regular providers with the resolved gateway key", async () => {
@@ -87,7 +87,7 @@ describe("flant-infra", () => {
 
       mod.registerFlantProviders(pi, ["claude-opus-4-8", "gpt-5"], {}, { subscription: false });
 
-      expect(registered.get("pp-flant-anthropic").apiKey).toBe("llm-gateway-key");
+      expect(registered.has("pp-flant-anthropic")).toBe(false);
       expect(registered.get("pp-flant-openai").apiKey).toBe("llm-gateway-key");
     } finally {
       if (previousLlmKey === undefined) delete process.env.LLM_API_KEY;
@@ -107,7 +107,7 @@ describe("flant-infra", () => {
     } as any;
 
     mod.registerFlantProviders(pi, ["claude-opus-4-8", "gpt-5"], {}, { subscription: false });
-    expect([...registered.keys()].sort()).toEqual(["pp-flant-anthropic", "pp-flant-openai"]);
+    expect([...registered.keys()]).toEqual(["pp-flant-openai"]);
   });
 
   it("registers the sub provider with sub/ models when subscription enabled and credentials present", async () => {
@@ -130,7 +130,7 @@ describe("flant-infra", () => {
 
       mod.registerFlantProviders(pi, ["claude-opus-4-8", "claude-haiku-4-5", "gpt-5"], {}, { subscription: true });
 
-      expect([...registered.keys()].sort()).toEqual(["pp-flant-anthropic", "pp-flant-anthropic-sub", "pp-flant-openai"]);
+      expect([...registered.keys()].sort()).toEqual(["pp-flant-anthropic-sub", "pp-flant-openai"]);
       const sub = registered.get("pp-flant-anthropic-sub");
       expect(sub.api).toBe("anthropic-messages");
       expect(sub.baseUrl).toBe("https://llm-api.flant.ru");
@@ -143,7 +143,7 @@ describe("flant-infra", () => {
     }
   });
 
-  it("registers only gateway-confirmed sub/ models and keeps sub/ ids off the openai provider", async () => {
+  it("registers every catalog Claude id on the sub provider and keeps sub/ ids off the openai provider", async () => {
     const dir = makeTempDir();
     mkdirSync(dir, { recursive: true });
     writeFileSync(
@@ -169,9 +169,8 @@ describe("flant-infra", () => {
       );
 
       const sub = registered.get("pp-flant-anthropic-sub");
-      expect(sub.models.map((m: any) => m.id)).toEqual(["sub/claude-opus-4-8"]);
-      const anthropic = registered.get("pp-flant-anthropic");
-      expect(anthropic.models.map((m: any) => m.id).sort()).toEqual(["claude-fable-5", "claude-opus-4-8"]);
+      expect(sub.models.map((m: any) => m.id).sort()).toEqual(["sub/claude-fable-5", "sub/claude-opus-4-8"]);
+      expect(registered.has("pp-flant-anthropic")).toBe(false);
       const openai = registered.get("pp-flant-openai");
       expect(openai.models.map((m: any) => m.id)).toEqual(["gpt-5"]);
     } finally {
@@ -212,25 +211,23 @@ describe("flant-infra", () => {
     const dir = makeTempDir();
     const mod = await loadFlantInfraModule(dir);
     const config = mod.generateFlantConfig(
-      ["claude-fable-5", "claude-opus-4-9", "gpt-5.6-sol", "gpt-5.6-sol-pro", "gemini-3-1-pro"],
-      false,
+      ["sub/claude-fable-5", "sub/claude-opus-4-9", "gpt-5.6-sol", "gpt-5.6-sol-pro", "gemini-3-1-pro"],
+      true,
     ) as any;
-    expect(config.agents.main.model).toBe("pp-flant-anthropic/claude-opus-4-9");
-    expect(config.agents.subagents.simple.task.model).toBe("pp-flant-anthropic/claude-opus-4-9");
-    expect(config.agents.subagents.pools.advisors[0].model).toBe("pp-flant-anthropic/claude-fable-5");
+    expect(config.agents.main.model).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-9");
+    expect(config.agents.subagents.simple.task.model).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-9");
+    expect(config.agents.subagents.pools.advisors[0].model).toBe("pp-flant-anthropic-sub/sub/claude-fable-5");
     expect(config.agents.subagents.pools.advisors[1].model).toBe("pp-flant-openai/gpt-5.6-sol-pro");
     expect(config.agents.subagents.pools.reviewers[0].model).toBe("pp-flant-openai/gpt-5.6-sol");
     expect(config.agents.subagents.presetGroups).toBeUndefined();
     expect(config.agents.orchestrators).toBeUndefined();
   });
 
-  it("routes only subscription-confirmed Claude models through sub", async () => {
+  it("routes all catalog Claude models through sub when the subscription is active", async () => {
     const dir = makeTempDir();
     const mod = await loadFlantInfraModule(dir);
-    const company = mod.generateFlantConfig(["claude-opus-4-9", "sub/claude-opus-4-8", "gpt-5.6-sol"], true) as any;
-    expect(company.agents.main.model).toBe("pp-flant-anthropic/claude-opus-4-9");
-    const subscription = mod.generateFlantConfig(["claude-opus-4-9", "sub/claude-opus-4-9", "gpt-5.6-sol"], true) as any;
-    expect(subscription.agents.main.model).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-9");
+    const mixed = mod.generateFlantConfig(["claude-opus-4-9", "sub/claude-opus-4-8", "gpt-5.6-sol"], true) as any;
+    expect(mixed.agents.main.model).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-9");
   });
 
   it("skips the sub provider when subscription enabled but OAuth token missing", async () => {
@@ -414,9 +411,9 @@ describe("flant-infra", () => {
       "gemini-3-1-flash",
       "deepseek-v3",
       "grok-4",
-    ]) as any;
+    ], true) as any;
 
-    expect(config.agents.main.model).toBe("pp-flant-anthropic/claude-opus-4-6");
+    expect(config.agents.main.model).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-6");
     expect(config.agents.subagents.simple.explore.model).toBe("pp-flant-openai/gemini-3-1-flash");
     expect(config.agents.subagents.simple.librarian.model).toBe("pp-flant-openai/gemini-3-1-flash");
     expect(config.agents.subagents.pools.advisors[1].model).toBe("pp-flant-openai/gpt-5-4");
@@ -439,12 +436,12 @@ describe("flant-infra", () => {
     expect(config.agents.subagents.pools.reviewers[0].model).toBe("pp-flant-openai/gpt-5-4");
   });
 
-  it("generateFlantConfig keeps Claude roles on the company provider when subscription inactive", async () => {
+  it("generateFlantConfig excludes Claude entirely when the subscription is inactive", async () => {
     const dir = makeTempDir();
     const mod = await loadFlantInfraModule(dir);
 
     const config = mod.generateFlantConfig(["claude-opus-4-8", "gpt-5-4"], false) as any;
-    expect(config.agents.main.model).toBe("pp-flant-anthropic/claude-opus-4-8");
+    expect(config.agents.main.model).toBe("pp-flant-openai/gpt-5-4");
   });
 
   it("isSubscriptionActive requires flag + oauth token + gateway key", async () => {
@@ -530,15 +527,15 @@ describe("flant-infra", () => {
     expect(mod.generateFlantConfig([])).toEqual({});
   });
 
-  it("generateFlantConfig with anthropic-only models uses anthropic specs", async () => {
+  it("generateFlantConfig with anthropic-only models routes everything through sub", async () => {
     const dir = makeTempDir();
     const mod = await loadFlantInfraModule(dir);
 
-    const config = mod.generateFlantConfig(["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-3-5"]);
+    const config = mod.generateFlantConfig(["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-3-5"], true);
     const specs = collectModelSpecs(config);
 
     expect(specs.length).toBeGreaterThan(0);
-    expect(specs.every((spec) => spec.startsWith("pp-flant-anthropic/"))).toBe(true);
+    expect(specs.every((spec) => spec.startsWith("pp-flant-anthropic-sub/sub/"))).toBe(true);
     expect(specs.some((spec) => spec.startsWith("pp-flant-openai/"))).toBe(false);
   });
 
@@ -555,9 +552,9 @@ describe("flant-infra", () => {
       "gemini-3-1-pro",
       "gemini-3-1-flash",
       "gemini-3-1-flash-lite",
-    ]) as any;
+    ], true) as any;
 
-    expect(config.agents.main.model).toBe("pp-flant-anthropic/claude-opus-4-7");
+    expect(config.agents.main.model).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-7");
     expect(config.agents.subagents.pools.advisors[2].model).toBe("pp-flant-openai/gemini-3-1-pro");
     expect(config.agents.subagents.simple.explore.model).toBe("pp-flant-openai/gemini-3-1-flash-lite");
   });

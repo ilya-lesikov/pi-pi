@@ -41,40 +41,28 @@ describe("/pp session control panel", () => {
     rmSync(cwd, { recursive: true, force: true });
   });
 
-  it("offers status, workers, usage, and settings but no task or phase launcher", async () => {
+  it("offers the flat control panel with no task or phase launcher", async () => {
     select("Close");
     const orchestrator = makeOrchestrator(cwd);
     const { showPpMenu } = await import("./pp-menu.js");
     await showPpMenu(orchestrator, { model: null, sessionManager: {}, ui: {} });
     const options = askUser.mock.calls[0][1].options.map((option: any) => option.title);
-    expect(options).toEqual(["Status", "Workers", "Usage", "Settings", "Close"]);
+    expect(options).toEqual([
+      "Status", "Workers", "Usage", "Agents", "Flant", "Copilot", "Skills", "Context", "Compaction", "Commands", "General", "Performance", "LSP", "Report", "Doctor", "Close",
+    ]);
     expect(options).not.toContain("Task");
+    expect(options).not.toContain("Settings");
     expect(options).not.toContain("Next");
   });
 
-  it("exposes the full settings surface for the no-phase architecture", async () => {
-    select("Settings");
+  it("lists main, simple roles, pools, and concurrency under Agents", async () => {
+    select("Agents");
     select("Back");
     select("Close");
     const orchestrator = makeOrchestrator(cwd);
     const { showPpMenu } = await import("./pp-menu.js");
     await showPpMenu(orchestrator, { model: null, sessionManager: {}, ui: {} });
     const options = askUser.mock.calls[1][1].options.map((option: any) => option.title);
-    expect(options).toEqual([
-      "General", "Agents", "Context", "Skills", "Compaction", "Commands", "Flant", "Copilot", "Performance", "LSP", "Report", "Doctor", "Back",
-    ]);
-  });
-
-  it("lists main, simple roles, pools, and concurrency under Agents", async () => {
-    select("Settings");
-    select("Agents");
-    select("Back");
-    select("Back");
-    select("Close");
-    const orchestrator = makeOrchestrator(cwd);
-    const { showPpMenu } = await import("./pp-menu.js");
-    await showPpMenu(orchestrator, { model: null, sessionManager: {}, ui: {} });
-    const options = askUser.mock.calls[2][1].options.map((option: any) => option.title);
     expect(options).toContain("Main");
     expect(options).toContain("Explore");
     expect(options).toContain("Librarian");
@@ -86,12 +74,10 @@ describe("/pp session control panel", () => {
   });
 
   it("persists a project-scoped skills toggle through the settings flow", async () => {
-    select("Settings");
     select("Skills");
     select("Load bundled skills: ON");
     select("No");
     select("Set for project");
-    select("Back");
     select("Back");
     select("Back");
     select("Close");
@@ -107,12 +93,10 @@ describe("/pp session control panel", () => {
     const { writeFileSync, mkdirSync } = await import("node:fs");
     mkdirSync(join(cwd, ".pp"), { recursive: true });
     writeFileSync(join(cwd, ".pp", "config.json"), JSON.stringify({ skills: { loadBundled: false } }), "utf-8");
-    select("Settings");
     select("Skills");
     select("Load bundled skills: OFF");
     select("Yes (default)");
     select("Set for project");
-    select("Back");
     select("Back");
     select("Back");
     select("Close");
@@ -130,13 +114,11 @@ describe("/pp session control panel", () => {
     const pool = getDefaultConfig().agents.subagents.pools.advisors;
     mkdirSync(join(cwd, ".pp"), { recursive: true });
     writeFileSync(join(cwd, ".pp", "config.json"), JSON.stringify({ agents: { subagents: { pools: { advisors: pool } } } }), "utf-8");
-    select("Settings");
     select("Agents");
     select("Advisors");
     select(pool[0]!.model);
     select("Enabled: Yes");
     select("Set globally");
-    select("Back");
     select("Back");
     select("Back");
     select("Back");
@@ -149,14 +131,12 @@ describe("/pp session control panel", () => {
   });
 
   it("re-registers agent definitions after a pool edit", async () => {
-    select("Settings");
     select("Agents");
     select("Advisors");
     const advisorTitle = getDefaultConfig().agents.subagents.pools.advisors[0]!.model;
     select(advisorTitle);
     select("Enabled: Yes");
     select("Set for project");
-    select("Back");
     select("Back");
     select("Back");
     select("Back");

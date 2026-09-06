@@ -1,6 +1,6 @@
 import type { Orchestrator } from "./orchestrator.js";
 import { loadFlantSettings, probeSubscriptionCleared } from "./flant-infra.js";
-import { getModelInfo, resolveModel, setSubscriptionFallbackActive, toNonSubSpec } from "./model-registry.js";
+import { getModelInfo, resolveModel, setSubscriptionFallbackActive } from "./model-registry.js";
 import { isSubscriptionRouted } from "./usage-tracker.js";
 
 export function isRateLimitError(message?: string): boolean {
@@ -11,33 +11,55 @@ function thinking(orchestrator: Orchestrator): string {
   return orchestrator.config.agents.main.thinking;
 }
 
+// The paid gateway no longer serves Claude, so a sub rate limit cannot fall
+// back to flant-api. The only fallback tier for Claude is Copilot (when the
+// user enabled it). Without one, wait for the switch-back probe to detect the
+// cleared limit rather than routing onto a dead provider.
 async function activate(orchestrator: Orchestrator, ctx: any, modelId: string, origin: "main" | "subagent"): Promise<void> {
   if (orchestrator.subFallbackActive) return;
   const settings = loadFlantSettings(orchestrator.cwd);
   if (!settings.autoRateLimitFallback) {
-    ctx.ui?.notify?.("The personal subscription is rate-limited. Automatic paid-provider fallback is disabled in .pp/config.json.", "warning");
+    ctx.ui?.notify?.("The personal subscription is rate-limited. Automatic fallback is disabled in .pp/config.json.", "warning");
     return;
   }
   const mainSpec = ctx.model?.provider && ctx.model?.id ? `${ctx.model.provider}/${ctx.model.id}` : "";
   const sameFamily = getModelInfo(modelId).family === getModelInfo(mainSpec).family;
   const switchMain = origin === "main" || (isSubscriptionRouted(mainSpec, ctx.model?.provider) && sameFamily);
-  if (switchMain) {
-    const next = toNonSubSpec(origin === "main" ? modelId : mainSpec);
-    try {
-      if (!await orchestrator.switchModel(ctx, next, thinking(orchestrator))) {
-        ctx.ui?.notify?.("Subscription rate limit detected, but regular Flant routing is unavailable. Automatic continuation is paused.", "error");
-        return;
-      }
-    } catch {
-      ctx.ui?.notify?.("Subscription rate limit detected, but switching to regular Flant routing failed. Automatic continuation is paused.", "error");
-      return;
-    }
-  }
+
   orchestrator.subFallbackActive = true;
   orchestrator.subFallbackModelId = modelId;
-  orchestrator.subFallbackMainPriorSpec = switchMain ? mainSpec || modelId : null;
   setSubscriptionFallbackActive(true);
-  ctx.ui?.notify?.("Subscription rate limit detected; switched to regular paid Flant routing and will switch back after the limit clears.", "warning");
+
+  const originSpec = origin === "main" ? modelId : mainSpec;
+  const next = resolveModel(originSpec);
+  const hasFallbackTier = next !== originSpec && !isSubscriptionRouted(next);
+
+  if (!switchMain || !hasFallbackTier) {
+    orchestrator.subFallbackMainPriorSpec = null;
+    armSwitchBackProbe(orchestrator);
+    if (switchMain) {
+      ctx.ui?.notify?.("Subscription rate limit detected. Claude has no paid-gateway fallback anymore; waiting for the limit to clear (periodic probe armed). Enable the Copilot tier for an automatic fallback, or /model to a non-Claude model to keep working.", "warning");
+    } else {
+      ctx.ui?.notify?.("A subscription-routed worker hit a rate limit; subscription routing is paused until the limit clears.", "warning");
+    }
+    return;
+  }
+
+  try {
+    if (!await orchestrator.switchModel(ctx, next, thinking(orchestrator))) {
+      orchestrator.subFallbackMainPriorSpec = null;
+      armSwitchBackProbe(orchestrator);
+      ctx.ui?.notify?.("Subscription rate limit detected, but the fallback model is unavailable. Waiting for the limit to clear.", "error");
+      return;
+    }
+  } catch {
+    orchestrator.subFallbackMainPriorSpec = null;
+    armSwitchBackProbe(orchestrator);
+    ctx.ui?.notify?.("Subscription rate limit detected, but switching to the fallback model failed. Waiting for the limit to clear.", "error");
+    return;
+  }
+  orchestrator.subFallbackMainPriorSpec = mainSpec || modelId;
+  ctx.ui?.notify?.(`Subscription rate limit detected; switched to ${next} and will switch back after the limit clears.`, "warning");
   armSwitchBackProbe(orchestrator);
   orchestrator.queueContinuation("[PI-PI] Provider routing changed after a subscription rate limit. Continue the current request.");
 }

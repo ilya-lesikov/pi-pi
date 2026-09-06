@@ -217,7 +217,7 @@ function normalizeAvailableModelIds(modelId: string): string[] {
   const value = modelId.trim();
   if (!value) return [];
   if (value.includes("/")) return [value];
-  if (value.startsWith("claude-")) return [`pp-flant-anthropic/${value}`];
+  if (value.startsWith("claude-")) return [`${SUB_PROVIDER}/${SUB_MODEL_PREFIX}${value}`];
   if (
     value.startsWith("gpt-") ||
     value.startsWith("gemini-") ||
@@ -351,6 +351,9 @@ function isTierUsable(tier: ProviderTierName, family: Family): boolean {
   if (demotedTierFamily.has(`${tier}:${family}`)) return false;
   // flant-sub is Claude-only: it never serves gpt/gemini/etc families.
   if (tier === "flant-sub" && !isClaudeFamily(family)) return false;
+  // The paid gateway no longer serves Claude at all — Claude routes ONLY via
+  // the subscription (or Copilot). Never resolve a Claude family onto flant-api.
+  if (tier === "flant-api" && isClaudeFamily(family)) return false;
   return true;
 }
 
@@ -438,6 +441,16 @@ function applyTierResolution(spec: string): string {
     if (copilotSpec) return copilotSpec;
   }
 
+  // Legacy escape hatch: the paid gateway no longer serves Claude, so a stale
+  // flant-api Claude spec (from an old config) re-routes onto the subscription
+  // when usable — the ONE exception to "never promote api→sub", because the api
+  // tier is not merely rate-limited but permanently gone for this family.
+  if (currentTier === "flant-api" && isClaudeFamily(family) && isTierUsable("flant-sub", family)) {
+    const exact = specForTier("flant-sub", family, bareId);
+    if (registeredSpecs.size === 0 || registeredSpecs.has(exact)) return exact;
+    return registeredSpecForTier("flant-sub", family) ?? exact;
+  }
+
   // If the current tier is still usable, keep the spec (catalog-safe): for
   // copilot resolve to the real registered id; for flant keep as-is.
   if (isTierUsable(currentTier, family)) {
@@ -499,21 +512,7 @@ export function isSubscriptionFallbackActive(): boolean {
   return subscriptionFallbackActive;
 }
 
-// Rewrite a subscription-routed spec to its regular per-token equivalent.
-// Handles both `pp-flant-anthropic-sub/sub/<m>` and a bare `sub/<m>` id.
-// Non-subscription specs pass through unchanged.
-export function toNonSubSpec(spec: string): string {
-  if (spec.startsWith(`${SUB_PROVIDER}/${SUB_MODEL_PREFIX}`)) {
-    return `pp-flant-anthropic/${spec.slice(`${SUB_PROVIDER}/${SUB_MODEL_PREFIX}`.length)}`;
-  }
-  if (spec.startsWith(`${SUB_PROVIDER}/`)) {
-    return `pp-flant-anthropic/${spec.slice(`${SUB_PROVIDER}/`.length)}`;
-  }
-  if (spec.startsWith(SUB_MODEL_PREFIX)) {
-    return `pp-flant-anthropic/${spec.slice(SUB_MODEL_PREFIX.length)}`;
-  }
-  return spec;
-}
+
 
 export function resolveModel(aliasOrId: string): string {
   let resolved = aliasMap[aliasOrId] ?? aliasOrId;

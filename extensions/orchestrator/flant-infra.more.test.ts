@@ -254,7 +254,7 @@ describe("updateFlantInfra", () => {
     const res = await mod.updateFlantInfra(pi);
     expect(res.ok).toBe(true);
     expect(res.models).toContain("claude-opus-4-8");
-    expect([...pi.registered.keys()].sort()).toEqual(["pp-flant-anthropic", "pp-flant-openai"]);
+    expect([...pi.registered.keys()]).toEqual(["pp-flant-openai"]);
   });
 
   it("serves a fresh cache without re-fetching by default", async () => {
@@ -357,7 +357,7 @@ describe("initFlantSync / initFlantOnStartup", () => {
     mkdirSync(cacheDir, { recursive: true });
     writeFileSync(
       join(cacheDir, "flant-models.json"),
-      JSON.stringify({ cachedFlantModels: ["claude-opus-4-8"], cachedOpenRouterData: {} }),
+      JSON.stringify({ cachedFlantModels: ["sub/claude-opus-4-8", "gpt-5"], cachedOpenRouterData: {} }),
       "utf-8",
     );
     const mod = await loadModule(dir);
@@ -396,7 +396,7 @@ describe("initFlantSync / initFlantOnStartup", () => {
     mkdirSync(cacheDir, { recursive: true });
     writeFileSync(
       join(cacheDir, "flant-models.json"),
-      JSON.stringify({ cachedFlantModels: ["claude-opus-4-8"], cachedOpenRouterData: {} }),
+      JSON.stringify({ cachedFlantModels: ["sub/claude-opus-4-8", "gpt-5"], cachedOpenRouterData: {} }),
       "utf-8",
     );
     const projCwd = makeTempDir();
@@ -420,7 +420,7 @@ describe("initFlantSync / initFlantOnStartup", () => {
     mkdirSync(cacheDir, { recursive: true });
     writeFileSync(
       join(cacheDir, "flant-models.json"),
-      JSON.stringify({ cachedFlantModels: ["claude-opus-4-8"], cachedOpenRouterData: {} }),
+      JSON.stringify({ cachedFlantModels: ["sub/claude-opus-4-8", "gpt-5"], cachedOpenRouterData: {} }),
       "utf-8",
     );
     const projCwd = makeTempDir();
@@ -431,7 +431,7 @@ describe("initFlantSync / initFlantOnStartup", () => {
     const pi = makePi();
     // Global-only read would register nothing; the shared root cwd must bind.
     mod.initFlantSync(pi, projCwd);
-    expect(pi.registerProvider).toHaveBeenCalledWith("pp-flant-anthropic", expect.anything());
+    expect(pi.registerProvider).toHaveBeenCalledWith("pp-flant-openai", expect.anything());
   });
 
   it("a project override disabling flant unregisters providers at session_start", async () => {
