@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import { tmpdir } from "os";
-import { deepMerge, getDefaultConfig, loadConfig, readRawConfig, readScopedFlantSettings, removeConfigValue, validateConfig, writeConfigValue } from "./config.js";
+import { deepMerge, getDefaultConfig, loadConfig, mergeConfigLayers, readRawConfig, readScopedFlantSettings, removeConfigValue, validateConfig, writeConfigValue } from "./config.js";
 
 const tempDirs: string[] = [];
 
@@ -156,6 +156,11 @@ describe("validateConfig", () => {
     expect(() => validateConfig({ commands: { afterEdit: { fmt: { run: "prettier -w ${file}", globs: ["*.ts"], enabled: true } } } })).not.toThrow();
     expect(() => validateConfig({ commands: { afterEdit: { fmt: { run: "" } } } })).toThrow();
     expect(() => validateConfig({ commands: { afterEdit: { fmt: { run: "x", globs: [""] } } } })).toThrow();
+    // A single layer may carry only the leaf it overrides; `run` is required on
+    // the merged result, so the /pp menu can scope globs/enabled per project.
+    expect(() => validateConfig({ commands: { afterEdit: { fmt: { globs: ["*.ts"] } } } })).not.toThrow();
+    expect(() => mergeConfigLayers({ commands: { afterEdit: { fmt: { run: "prettier -w ${file}" } } } }, { commands: { afterEdit: { fmt: { globs: ["*.ts"] } } } })).not.toThrow();
+    expect(() => mergeConfigLayers(null, { commands: { afterEdit: { fmt: { globs: ["*.ts"] } } } })).toThrow(/afterEdit.fmt.run/);
     expect(() => validateConfig({ performance: { commands: { afterEdit: "30s" } } })).not.toThrow();
     expect(() => validateConfig({ performance: { commands: { afterEdit: "bogus" } } })).toThrow();
   });

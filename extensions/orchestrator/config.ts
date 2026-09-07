@@ -371,7 +371,10 @@ export function validateConfig(config: Record<string, any>): void {
       const afterEdit = requireObject(commands.afterEdit, "config.commands.afterEdit");
       for (const [id, entry] of Object.entries(afterEdit)) {
         const cmd = requireObject(entry, `config.commands.afterEdit.${id}`);
-        if (typeof cmd.run !== "string" || cmd.run.length === 0) {
+        // Partial, like every other layered section: a project layer may
+        // override only `globs` or `enabled` for a command the global layer
+        // defines. `run` is required on the MERGED result instead.
+        if (cmd.run !== undefined && (typeof cmd.run !== "string" || cmd.run.length === 0)) {
           throw new Error(`config.commands.afterEdit.${id}.run must be a non-empty string`);
         }
         ensureBool(cmd.enabled, `config.commands.afterEdit.${id}.enabled`);
@@ -489,6 +492,11 @@ export function validateMergedConfig(config: Record<string, any>): void {
 
   if (parseDuration(typed.performance.commands.afterEdit) === null) {
     throw new Error("config.performance.commands.afterEdit must be a valid duration");
+  }
+  for (const [id, cmd] of Object.entries(typed.commands?.afterEdit ?? {})) {
+    if (typeof cmd?.run !== "string" || cmd.run.length === 0) {
+      throw new Error(`config.commands.afterEdit.${id}.run must be a non-empty string`);
+    }
   }
   if (parseDuration(typed.performance.internals.subagentStale) === null) {
     throw new Error("config.performance.internals.subagentStale must be a valid duration");
