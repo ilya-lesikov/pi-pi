@@ -83,17 +83,32 @@ export function armSwitchBackProbe(orchestrator: Orchestrator): void {
     orchestrator.subSwitchBackTimer = null;
     if (!orchestrator.subFallbackActive || !orchestrator.subFallbackModelId) return;
     const outcome = await probeSubscriptionCleared(orchestrator.subFallbackModelId);
+    // Shutdown may have cleared the fallback while the probe was in flight.
+    if (!orchestrator.subFallbackActive) return;
     if (outcome !== "ok") {
       armSwitchBackProbe(orchestrator);
       return;
     }
     const ctx = orchestrator.lastCtx;
+    const prior = orchestrator.subFallbackMainPriorSpec;
+    if (prior) {
+      // Restore BEFORE tearing down fallback state so a failed switch keeps the
+      // prior spec and the probe re-arms instead of stranding the session on
+      // the fallback tier while reporting success.
+      let restored = false;
+      try {
+        restored = await orchestrator.switchModel(ctx, resolveModel(prior), thinking(orchestrator));
+      } catch {}
+      if (!restored) {
+        armSwitchBackProbe(orchestrator);
+        ctx?.ui?.notify?.(`Subscription limit cleared, but switching back to ${prior} failed; will retry.`, "warning");
+        return;
+      }
+    }
     setSubscriptionFallbackActive(false);
     orchestrator.subFallbackActive = false;
-    const prior = orchestrator.subFallbackMainPriorSpec;
     orchestrator.subFallbackMainPriorSpec = null;
     orchestrator.subFallbackModelId = null;
-    if (prior) await orchestrator.switchModel(ctx, resolveModel(prior), thinking(orchestrator));
     ctx?.ui?.notify?.("Subscription limit cleared; switched back to personal subscription routing.", "info");
   }, delay);
   orchestrator.subSwitchBackTimer.unref?.();

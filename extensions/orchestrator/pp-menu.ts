@@ -1171,7 +1171,7 @@ async function showFlantMenu(orchestrator: Orchestrator, ctx: any): Promise<void
       if (!scope) continue;
       const eff = loadFlantSettings(orchestrator.cwd);
       if (warnIfFlantEditMasked(ctx, "Automatic fallback on rate limit", scope, intended, eff.autoRateLimitFallback)) continue;
-      ctx.ui?.notify?.(eff.autoRateLimitFallback ? "Automatic fallback ON — rate limits switch provider tier without asking." : "Automatic fallback OFF — you'll be asked before each rate-limit switch.", "info");
+      ctx.ui?.notify?.(eff.autoRateLimitFallback ? "Automatic fallback ON — rate limits switch provider tier without asking." : "Automatic fallback OFF — rate limits only warn; switch models manually with /model.", "info");
       continue;
     }
 

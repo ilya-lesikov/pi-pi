@@ -369,6 +369,10 @@ export function unregisterFlantProviders(pi?: ExtensionAPI): void {
   api.unregisterProvider("pp-flant-anthropic");
   api.unregisterProvider("pp-flant-openai");
   api.unregisterProvider(SUB_PROVIDER);
+  // Otherwise the per-turn refreshSubProvider would re-register the sub
+  // provider the next time the OAuth token rotates.
+  subProviderContext = null;
+  lastSubToken = null;
 }
 
 function ensureSettingsDir(): void {
@@ -1125,13 +1129,13 @@ export async function updateFlantInfra(
   let refreshed = false;
 
   if (!models || !metadata) {
-    const apiKey = process.env.FLANT_API_KEY;
+    const apiKey = readGatewayApiKey();
     if (!apiKey) {
       if (settings.cachedFlantModels && settings.cachedOpenRouterData) {
         models = settings.cachedFlantModels;
         metadata = settings.cachedOpenRouterData;
       } else {
-        return { ok: false, error: "FLANT_API_KEY is not set" };
+        return { ok: false, error: "LLM_API_KEY (or FLANT_API_KEY) is not set" };
       }
     } else {
       try {
