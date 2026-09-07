@@ -130,6 +130,25 @@ describe("/pp session control panel", () => {
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("project override"), "warning");
   });
 
+  it("can reset a project pool override that masks global edits", async () => {
+    const { writeFileSync, mkdirSync } = await import("node:fs");
+    const pool = getDefaultConfig().agents.subagents.pools.advisors;
+    mkdirSync(join(cwd, ".pp"), { recursive: true });
+    writeFileSync(join(cwd, ".pp", "config.json"), JSON.stringify({ agents: { subagents: { pools: { advisors: pool } } } }), "utf-8");
+    select("Agents");
+    select("Advisors");
+    select("Reset project setting");
+    select("Yes, reset");
+    select("Back");
+    select("Back");
+    select("Close");
+    const orchestrator = makeOrchestrator(cwd);
+    const { showPpMenu } = await import("./pp-menu.js");
+    await showPpMenu(orchestrator, { model: null, sessionManager: {}, ui: {} });
+    const written = JSON.parse(readFileSync(join(cwd, ".pp", "config.json"), "utf-8"));
+    expect(written.agents?.subagents?.pools?.advisors).toBeUndefined();
+  });
+
   it("re-registers agent definitions after a pool edit", async () => {
     select("Agents");
     select("Advisors");

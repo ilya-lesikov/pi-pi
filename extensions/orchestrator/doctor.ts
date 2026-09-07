@@ -83,28 +83,38 @@ export async function runDoctor(orchestrator: Orchestrator, ctx: any): Promise<v
   }
 
   category("Flant");
-  const flant = loadFlantSettings(orchestrator.cwd);
-  if (!flant.enabled) {
-    add("pass", "Flant disabled");
-  } else {
-    if (readGatewayApiKey()) add("pass", "Gateway API key present");
-    else add("failure", "Flant enabled but no gateway key (set LLM_API_KEY or FLANT_API_KEY)");
-    if (flant.subscription) {
-      if (readClaudeOAuthToken()) add("pass", "Claude OAuth token present for the personal subscription");
-      else add("failure", "Subscription enabled but no Claude OAuth token (run /login → Anthropic)");
+  // Guarded: this rereads the scoped config, and a malformed one throws — which
+  // would abort the run before the summary, exactly when the doctor is needed.
+  try {
+    const flant = loadFlantSettings(orchestrator.cwd);
+    if (!flant.enabled) {
+      add("pass", "Flant disabled");
+    } else {
+      if (readGatewayApiKey()) add("pass", "Gateway API key present");
+      else add("failure", "Flant enabled but no gateway key (set LLM_API_KEY or FLANT_API_KEY)");
+      if (flant.subscription) {
+        if (readClaudeOAuthToken()) add("pass", "Claude OAuth token present for the personal subscription");
+        else add("failure", "Subscription enabled but no Claude OAuth token (run /login → Anthropic)");
+      }
+      if (flant.copilotEnabled) {
+        if (isCopilotTierActive(flant)) add("pass", "Copilot credentials present");
+        else add("warning", "Copilot tier enabled but credentials are missing (run /login → GitHub Copilot or set COPILOT_GITHUB_TOKEN)");
+      }
+      add(flant.lastUpdated ? "pass" : "warning", `Model list last updated: ${flant.lastUpdated ?? "never"}`);
     }
-    if (flant.copilotEnabled) {
-      if (isCopilotTierActive(flant)) add("pass", "Copilot credentials present");
-      else add("warning", "Copilot tier enabled but credentials are missing (run /login → GitHub Copilot or set COPILOT_GITHUB_TOKEN)");
-    }
-    add(flant.lastUpdated ? "pass" : "warning", `Model list last updated: ${flant.lastUpdated ?? "never"}`);
+  } catch (error: any) {
+    add("failure", `Flant settings unreadable: ${error?.message ?? String(error)}`);
   }
 
   category("Environment");
   add(which("git") ? "pass" : "failure", "git binary on PATH");
   add(existsSync(join(orchestrator.cwd, ".git")) ? "pass" : "warning", `Working directory is a git repository (${orchestrator.cwd})`);
-  const skills = listLayeredSkills(orchestrator.cwd);
-  add(skills.length > 0 ? "pass" : "warning", `${skills.length} skills discovered`);
+  try {
+    const skills = listLayeredSkills(orchestrator.cwd);
+    add(skills.length > 0 ? "pass" : "warning", `${skills.length} skills discovered`);
+  } catch (error: any) {
+    add("failure", `Skill discovery failed: ${error?.message ?? String(error)}`);
+  }
   const subagentsReady = !!(globalThis as any)[Symbol.for("pi-subagents:manager")];
   add(subagentsReady ? "pass" : "warning", "pi-subagents worker manager registered");
   const lspReady = !!(globalThis as any)[Symbol.for("pi-lsp:api")];

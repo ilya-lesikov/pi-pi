@@ -293,7 +293,9 @@ function reconcileAfterFlantChange(orchestrator: Orchestrator, ctx: any): void {
   }
   unregisterAgentDefinitions(orchestrator.pi);
   orchestrator.registerAgents();
-  void orchestrator.applyMainAgent(ctx);
+  void orchestrator.applyMainAgent(ctx).then((ok) => {
+    if (!ok) ctx?.ui?.notify?.(`Main agent model "${orchestrator.config.agents.main.model}" is not available; keeping the current model.`, "warning");
+  });
 }
 
 function applyConfigChange(orchestrator: Orchestrator, scope: Scope, keyPath: string[], value: any): void {
@@ -743,6 +745,7 @@ async function showPoolEntryEditor(orchestrator: Orchestrator, ctx: any, pool: P
 }
 
 async function showPoolSettings(orchestrator: Orchestrator, ctx: any, pool: PoolKey, label: string): Promise<void> {
+  const keyPath = ["agents", "subagents", "pools", pool];
   for (;;) {
     const entries = orchestrator.config.agents.subagents.pools[pool] ?? [];
     const options: OptionInput[] = [];
@@ -755,6 +758,10 @@ async function showPoolSettings(orchestrator: Orchestrator, ctx: any, pool: Pool
       byTitle.set(title, i);
     });
     options.push(opt("New entry", `Add a model to the ${label.toLowerCase()} pool`));
+    // Entry edits rewrite the whole array into one scope, so without these a
+    // project override can never be lifted and writePool's "reset it first"
+    // advice would have nowhere to go.
+    options.push(...buildResetOptions(orchestrator, keyPath));
     options.push(opt(BACK, "Return to the previous menu"));
     const choice = await selectOption(ctx, label, options);
     if (!choice || choice === BACK) return;
@@ -769,7 +776,11 @@ async function showPoolSettings(orchestrator: Orchestrator, ctx: any, pool: Pool
       continue;
     }
     const idx = byTitle.get(choice);
-    if (idx !== undefined) await showPoolEntryEditor(orchestrator, ctx, pool, idx);
+    if (idx !== undefined) {
+      await showPoolEntryEditor(orchestrator, ctx, pool, idx);
+      continue;
+    }
+    await maybeHandleResetChoice(orchestrator, ctx, choice, keyPath);
   }
 }
 
