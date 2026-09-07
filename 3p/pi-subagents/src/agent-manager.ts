@@ -24,6 +24,9 @@ export type CompactionInfo = { reason: "manual" | "threshold" | "overflow"; toke
 /** Default max concurrent background agents. */
 const DEFAULT_MAX_CONCURRENT = 4;
 
+/** LOCAL PATCH (pi-pi): ceiling on retained finished records, oldest evicted first. */
+const MAX_RETAINED_FINISHED = 20;
+
 /**
  * Validate a caller-supplied SpawnOptions.cwd. `undefined`/`null` mean "unset"
  * (parent cwd). Anything else must be an absolute path to an existing
@@ -126,7 +129,7 @@ export class AgentManager {
     this.onStart = onStart;
     this.onCompact = onCompact;
     this.maxConcurrent = maxConcurrent;
-    // Cleanup completed agents after 10 minutes (but keep sessions for resume)
+    // Sweep finished agents once a minute (but keep sessions for resume)
     this.cleanupInterval = setInterval(() => this.cleanup(), 60_000);
     this.cleanupInterval.unref();
   }
@@ -575,11 +578,22 @@ export class AgentManager {
   private cleanup() {
     // LOCAL PATCH (pi-pi): retain finished records for an hour so the widget's
     // linger window and the conversation viewer both still have them; the
-    // upstream 10-minute cutoff evicted them long before they aged out.
+    // upstream 10-minute cutoff evicted them long before they aged out. Each
+    // retained record pins its whole AgentSession, so the window is also capped
+    // by count — a busy session would otherwise hold hundreds of transcripts.
     const cutoff = Date.now() - 60 * 60_000;
+    const finished: Array<[string, AgentRecord]> = [];
     for (const [id, record] of this.agents) {
       if (record.status === "running" || record.status === "queued") continue;
-      if ((record.completedAt ?? 0) >= cutoff) continue;
+      if ((record.completedAt ?? 0) < cutoff) {
+        this.removeRecord(id, record);
+        continue;
+      }
+      finished.push([id, record]);
+    }
+    if (finished.length <= MAX_RETAINED_FINISHED) return;
+    finished.sort((a, b) => (a[1].completedAt ?? 0) - (b[1].completedAt ?? 0));
+    for (const [id, record] of finished.slice(0, finished.length - MAX_RETAINED_FINISHED)) {
       this.removeRecord(id, record);
     }
   }

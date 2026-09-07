@@ -214,6 +214,29 @@ describe("AgentManager — cleanup timer", () => {
 
     expect((manager as any).cleanupInterval.hasRef()).toBe(false);
   });
+
+  // LOCAL PATCH (pi-pi): finished records are kept for an hour so the widget and
+  // the transcript viewer still have them, so the window needs a count ceiling —
+  // every retained record pins a whole AgentSession.
+  it("evicts the oldest finished records beyond the retention ceiling", () => {
+    manager = new AgentManager();
+    const agents: Map<string, any> = (manager as any).agents;
+    const dispose = vi.fn();
+    const now = Date.now();
+    for (let i = 0; i < 25; i++) {
+      agents.set(`a${i}`, { id: `a${i}`, status: "completed", completedAt: now - (25 - i) * 1_000, session: { dispose } });
+    }
+    agents.set("live", { id: "live", status: "running", startedAt: Date.now() });
+
+    (manager as any).cleanup();
+
+    expect(agents.has("live")).toBe(true);
+    expect(agents.has("a0")).toBe(false);
+    expect(agents.has("a4")).toBe(false);
+    expect(agents.has("a5")).toBe(true);
+    expect(agents.has("a24")).toBe(true);
+    expect(dispose).toHaveBeenCalledTimes(5);
+  });
 });
 
 describe("AgentManager — Bug 3 clearCompleted", () => {
