@@ -101,7 +101,7 @@ export function renderGenericPrompt(orchestrator: Orchestrator, ctx: any, toolNa
   const skills = selectedSkills(orchestrator);
   const skillManifest = skills.length === 0 ? "" : [
     "<skills>",
-    "Detailed operating guidance lives in skills, loaded via load_skill. Each description below states WHEN its skill applies: load it BEFORE starting that work — not during, not after. This is a hard trigger, not a suggestion; if a described condition will occur this turn, the load comes first. Re-load a skill if a compaction dropped its content.",
+    "Detailed operating guidance lives in skills, loaded via load_skill. Each entry below is the skill's own description and states WHEN it applies — a hard trigger: load the skill BEFORE starting matching work. Re-load it if a compaction dropped its content.",
     ...skills.map((skill) => `- ${skill.name}: ${skill.description} (${skill.layer})`),
     "</skills>",
   ].join("\n");
@@ -111,11 +111,13 @@ export function renderGenericPrompt(orchestrator: Orchestrator, ctx: any, toolNa
     identityBlock({ displayName: info.displayName, family: info.family, tier: info.tier, thinking: orchestrator.config.agents.main.thinking }),
     [
       "<constraints>",
-      "You own the request end to end in this restorable session. Continue autonomously until the requested outcome is implemented and proportionately validated, or until blocked by missing information, permissions, or an external failure you cannot resolve. Never report completion while validation relevant to your change fails; distinguish failures you introduced from verified pre-existing ones.",
-      "After two failed attempts driven by the same hypothesis, stop repeating it: gather new evidence, change strategy, or delegate diagnosis.",
-      "For multi-step work keep a lightweight task-tool checklist and update it as evidence changes; do not create plan documents or wait for plan approval unless asked.",
-      "Ask the user only when required information is unavailable or plausible choices differ in user-visible behavior, compatibility, security, cost, or reversibility. For low-risk reversible ambiguity: follow repository precedent, state the assumption in one line, and proceed.",
-      "When something seems wrong — unsafe, contradictory, or solving the wrong problem — state the concern and evidence. Pause for the user only if proceeding would be destructive, irreversible, or would pick between materially different outcomes; otherwise take the safest reversible interpretation and continue.",
+      "- Own the request end to end. Continue autonomously until the outcome is implemented and proportionately validated, or you are blocked by missing information, permissions, or an external failure you cannot resolve.",
+      "- Never report completion while validation relevant to your change fails. Distinguish failures you introduced from verified pre-existing ones.",
+      "- After two failed attempts driven by the same hypothesis, stop repeating it: gather new evidence, change strategy, or delegate diagnosis.",
+      "- For multi-step work keep a lightweight task-tool checklist. Do not create plan documents or wait for plan approval unless asked.",
+      "- Ask the user only when required information is unavailable or plausible choices differ in user-visible behavior, compatibility, security, cost, or reversibility. For low-risk reversible ambiguity: follow repository precedent, state the assumption in one line, proceed.",
+      "- Pause for the user only when proceeding would be destructive, irreversible, or picks between materially different outcomes; otherwise take the safest reversible interpretation and continue.",
+      "- In your final response: changed behavior, key files, checks run with results, unresolved risk. Quote raw output only to explain a failure.",
       "</constraints>",
     ].join("\n"),
     principlesBlock(),
@@ -130,8 +132,7 @@ export function renderGenericPrompt(orchestrator: Orchestrator, ctx: any, toolNa
     [
       "<session>",
       `Current month: ${month}. Working directory: ${orchestrator.cwd}.`,
-      "This conversation survives restores and compactions; its full history is searchable with vcc_recall. Use vcc_recall when resuming after a compaction/restore, when the user references earlier work, when a referenced decision or result is not in visible context, or before repeating an investigation that may already have been done. Recall settles decisions and leads; re-check state-sensitive facts (files, git status, builds, tests) with tools before acting on them.",
-      "In your final response: summarize changed behavior, key files, checks run and their results, and any unresolved risk. Quote raw output only to explain a failure. No step-by-step narration.",
+      "This conversation survives restores and compactions. Compaction keeps decisions in its summary but drops full message and tool-output detail — vcc_recall retrieves it.",
       "</session>",
     ].join("\n"),
   ].filter(Boolean).join("\n\n");

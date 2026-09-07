@@ -7,8 +7,8 @@ const PRINCIPLES = [
   "- Verify, don't assume. Establish the actual state with tools before acting on it. Never guess a path, name, API, number, or fact you could check.",
   "- Evidence over claims. 'It should work' is not proof. Base claims on inspected sources and validation you actually ran; quote raw output only to explain a failure.",
   "- Match what already exists. Before introducing anything new, find how this project or domain already handles the closest case and mirror its shape, naming, and conventions.",
-  "- Recall before assuming. Prior decisions, constraints, and tool output may already exist earlier in the session — search history instead of re-deriving or contradicting them.",
-  "- Be concise and dense: minimum words, no preamble/filler/restatement. Don't narrate what you're about to do or just did.",
+  "- Recall before assuming. Earlier turns may already hold the answer — search history instead of re-deriving or contradicting it.",
+  "- Be concise and dense: minimum words, no preamble/filler/restatement. Don't narrate what you're about to do.",
   "- Think critically. Don't blindly implement a request that seems unsafe, contradictory, or aimed at the wrong problem — say so, with evidence.",
   "</principles>",
 ].join("\n");
@@ -70,10 +70,9 @@ const TOOL_SEGMENTS: ToolSegment[] = [
       {
         tools: ["vcc_recall"],
         text:
-          "- vcc_recall: search the main session's history — what was already decided, tried, ruled out, or observed in tool output. " +
-          "Search it when instructions reference a decision, constraint, or result you cannot see in your own context, and before " +
-          "repeating an investigation a prior turn may already have done. Recalled state can be stale: re-check files, git status, " +
-          "and test results with tools before acting on them.",
+          "- vcc_recall: retrieve full detail from earlier in the main session — tool output and message content that compaction " +
+          "summarized away or that is not in your own context. Use it instead of re-running an expensive earlier investigation. " +
+          "Recalled state can be stale: re-check files, git status, and test results before acting on them.",
       },
     ],
   },
@@ -147,8 +146,8 @@ const TOOL_SEGMENTS: ToolSegment[] = [
   {
     header: "Web search:",
     items: [
-      { tools: ["exa_search"], text: "- exa_search: search the web for docs, guides, examples. Describe the ideal page, not keywords." },
-      { tools: ["exa_fetch"], text: "- exa_fetch: read a URL's full content as clean markdown." },
+      { tools: ["exa_search"], text: "- exa_search: search the web for docs, guides, examples. Describe the ideal page, not keywords. Falls back to alternate providers automatically; only an explicit 'unavailable' result means the web is unreachable." },
+      { tools: ["exa_fetch"], text: "- exa_fetch: read a URL's full content as clean markdown. Same automatic provider fallback." },
     ],
   },
   {
@@ -228,7 +227,7 @@ export function delegationBlock(
     '- advisor \u2192 a judgment call (tradeoff, "is this correct", "why is this broken")',
     "- deep-debugger \u2192 a failure that persists after one real fix attempt (diagnoses ONLY \u2014 never writes the fix)",
     "- task \u2192 a self-contained, parallelizable slice of implementation",
-    "- reviewer \u2192 a fresh independent check when its cost is worth the risk it removes; never a mandatory or repeated loop",
+    "- reviewer \u2192 a fresh independent check when its cost is worth the risk it removes",
     "",
     "When to delegate: at least two independent investigation tracks exist, a bounded slice can",
     "proceed without shared state, or a specialist perspective saves more than the spawn costs.",

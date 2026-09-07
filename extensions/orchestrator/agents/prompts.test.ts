@@ -41,7 +41,7 @@ describe("delegationBlock", () => {
 
   it("keeps specialists selective without imposing workflow gates", () => {
     const block = delegationBlock("opus", pools);
-    expect(block).toContain("never a mandatory or repeated loop");
+    expect(block).toContain("worth the risk it removes");
     expect(block).toContain("diagnoses ONLY");
     expect(block).toContain("ONE cheap localizing probe");
     expect(block).not.toContain("OPEN with");
@@ -86,7 +86,7 @@ describe("toolsBlock only advertises granted tools", () => {
   });
 
   it("describes vcc_recall only when granted", () => {
-    expect(toolsBlock(["read", "vcc_recall"])).toContain("vcc_recall: search the main session's history");
+    expect(toolsBlock(["read", "vcc_recall"])).toContain("vcc_recall: retrieve full detail");
     expect(toolsBlock(["read", "grep"])).not.toContain("vcc_recall");
   });
 

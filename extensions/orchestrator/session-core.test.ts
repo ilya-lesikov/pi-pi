@@ -42,9 +42,9 @@ describe("session-first core", () => {
       model: { provider: "test", id: "model" },
       ui: { notify: vi.fn() },
     }, ["read", "vcc_recall", "load_skill"]);
-    expect(prompt).toContain("You own the request end to end");
+    expect(prompt).toContain("Own the request end to end");
     expect(prompt).toContain("After two failed attempts driven by the same hypothesis");
-    expect(prompt).toContain("searchable with vcc_recall");
+    expect(prompt).toContain("vcc_recall retrieves it");
     expect(prompt).toContain("load_skill");
     expect(prompt).toContain("In your final response");
     expect(prompt).not.toContain("ACTIVE PHASE");
