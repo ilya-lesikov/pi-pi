@@ -1,11 +1,12 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Orchestrator } from "./orchestrator.js";
 import { registerCommandHandlers } from "./command-handlers.js";
-import { registerEventHandlers, registerLoadSkill } from "./event-handlers.js";
+import { registerEventHandlers, registerLoadSkill, registerSubagentCompaction } from "./event-handlers.js";
 import { registerCbmTools } from "./cbm.js";
 import { registerExaTools } from "./exa.js";
 import { registerAstSearchTool } from "./ast-search.js";
 import { initFlantSync, migrateLegacyFlantSettings } from "./flant-infra.js";
+import { getDefaultConfig, loadConfig, normalizeConfigDurations } from "./config.js";
 import { registerBillingHook } from "./billing-spoof.js";
 import { suppressPierreThemeSpam } from "./suppress-pierre-theme-spam.js";
 import { registerRecallTool } from "../../3p/pi-vcc/index.js";
@@ -50,9 +51,17 @@ export default function (pi: ExtensionAPI) {
 
 function registerSubagentTools(pi: ExtensionAPI): void {
   const cwd = (globalThis as any)[ORCHESTRATOR_CWD_KEY] ?? process.cwd();
+  const sessionSkills = new Map<string, string>();
+  let config;
+  try {
+    config = loadConfig(cwd);
+  } catch {
+    config = normalizeConfigDurations(getDefaultConfig());
+  }
   registerCbmTools(pi, cwd);
   registerExaTools(pi);
   registerAstSearchTool(pi, cwd);
   registerRecallTool(pi, (globalThis as any)[Symbol.for("pi-pi:root-session-source")]);
-  registerLoadSkill(pi, cwd);
+  registerLoadSkill(pi, cwd, () => config.skills, sessionSkills);
+  registerSubagentCompaction(pi, config, sessionSkills);
 }

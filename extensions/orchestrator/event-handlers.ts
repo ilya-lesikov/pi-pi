@@ -133,7 +133,12 @@ export function renderGenericPrompt(orchestrator: Orchestrator, ctx: any, toolNa
   ].filter(Boolean).join("\n\n");
 }
 
-export function registerLoadSkill(pi: ExtensionAPI, cwd: string, getEnabled?: () => Orchestrator["config"]["skills"] | undefined): void {
+export function registerLoadSkill(
+  pi: ExtensionAPI,
+  cwd: string,
+  getEnabled?: () => Orchestrator["config"]["skills"] | undefined,
+  sessionSkills: Map<string, string> = loadedSkills,
+): void {
   const available = () => {
     const enabled = getEnabled?.();
     return listLayeredSkills(cwd).filter((skill) => !enabled
@@ -150,8 +155,8 @@ export function registerLoadSkill(pi: ExtensionAPI, cwd: string, getEnabled?: ()
       try {
         const skill = loadLayeredSkill(params.name, cwd);
         if (!available().some((candidate) => candidate.name === skill.name)) throw new Error(`Skill "${params.name}" is disabled by its source-layer setting.`);
-        loadedSkills.delete(skill.name);
-        loadedSkills.set(skill.name, skill.document);
+        sessionSkills.delete(skill.name);
+        sessionSkills.set(skill.name, skill.document);
         return { content: [{ type: "text" as const, text: skill.document }], details: { name: skill.name, source: skill.layer, path: skill.filePath } };
       } catch (error: any) {
         return { content: [{ type: "text" as const, text: error?.message ?? String(error) }], details: undefined, isError: true };
@@ -309,7 +314,11 @@ export function renderSkillReattachment(skills: Map<string, string>): string {
   ].join("\n");
 }
 
-function registerCompaction(orchestrator: Orchestrator): void {
+type CompactionState = Pick<Orchestrator,
+  "pi" | "config" | "lastCtx" | "lastEstimatedTokens" | "compactionArm" | "adaptiveCompaction" | "manualCompactionUseBuiltin" | "resetAdaptiveCompaction"
+>;
+
+function registerCompaction(orchestrator: CompactionState, sessionSkills: Map<string, string> = loadedSkills): void {
   const pi = orchestrator.pi;
   pi.on("context", (event: any) => {
     const messages = event?.messages;
@@ -328,7 +337,7 @@ function registerCompaction(orchestrator: Orchestrator): void {
       fileOps: prep.fileOps ? { readFiles: [...(prep.fileOps.read ?? [])], modifiedFiles: [...(prep.fileOps.written ?? []), ...(prep.fileOps.edited ?? [])] } : undefined,
     });
     const range = computeVccMessageRange(event.branchEntries ?? [], prep.firstKeptEntryId);
-    const fullSummary = summary + renderSkillReattachment(loadedSkills);
+    const fullSummary = summary + renderSkillReattachment(sessionSkills);
     return { compaction: { summary: fullSummary, details: buildVccDetails(fullSummary, prep.messagesToSummarize.length, !!prep.previousSummary, prep.tokensBefore ?? 0, range), firstKeptEntryId: prep.firstKeptEntryId, tokensBefore: prep.tokensBefore ?? 0 } };
   });
   pi.on("session_compact", (_event, ctx) => {
@@ -340,7 +349,7 @@ function registerCompaction(orchestrator: Orchestrator): void {
   });
 }
 
-async function maybeCompact(orchestrator: Orchestrator, ctx: any): Promise<void> {
+async function maybeCompact(orchestrator: CompactionState, ctx: any): Promise<void> {
   const cfg = orchestrator.config?.compaction;
   if (!cfg?.enabled || typeof ctx?.getContextUsage !== "function" || typeof ctx?.compact !== "function") return;
   const usage = ctx.getContextUsage();
@@ -372,6 +381,49 @@ async function maybeCompact(orchestrator: Orchestrator, ctx: any): Promise<void>
   adaptive.firedThreshold = effectiveThreshold;
   adaptive.inFlight = true;
   ctx.compact({ onError: () => { orchestrator.adaptiveCompaction.inFlight = false; } });
+}
+
+export function registerSubagentCompaction(
+  pi: ExtensionAPI,
+  config: Orchestrator["config"],
+  sessionSkills: Map<string, string> = new Map(),
+): void {
+  const state: CompactionState = {
+    pi,
+    config,
+    lastCtx: null,
+    lastEstimatedTokens: null,
+    compactionArm: { armed: true },
+    adaptiveCompaction: {
+      nextThreshold: null,
+      inFlight: false,
+      pendingProactiveMeasure: false,
+      disabled: false,
+      modelKey: null,
+      window: null,
+      firedThreshold: null,
+      contaminatedMeasures: 0,
+    },
+    manualCompactionUseBuiltin: false,
+    resetAdaptiveCompaction() {
+      state.adaptiveCompaction = {
+        nextThreshold: null,
+        inFlight: false,
+        pendingProactiveMeasure: false,
+        disabled: false,
+        modelKey: null,
+        window: null,
+        firedThreshold: null,
+        contaminatedMeasures: 0,
+      };
+      state.compactionArm.armed = true;
+    },
+  };
+  registerCompaction(state, sessionSkills);
+  pi.on("turn_end", async (_event: any, ctx: any) => {
+    state.lastCtx = ctx;
+    await maybeCompact(state, ctx);
+  });
 }
 
 export function registerEventHandlers(orchestrator: Orchestrator): void {

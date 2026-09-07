@@ -3,7 +3,7 @@ import { getDefaultConfig, normalizeConfigDurations } from "./config.js";
 import { Orchestrator } from "./orchestrator.js";
 import { buildAcpState } from "./acp.js";
 import { isSubscriptionFallbackActive, setSubscriptionFallbackActive } from "./model-registry.js";
-import { classifyContinuation, isMainTurnStalled, registerEventHandlers, registerLoadSkill, renderGenericPrompt } from "./event-handlers.js";
+import { classifyContinuation, isMainTurnStalled, registerEventHandlers, registerLoadSkill, registerSubagentCompaction, renderGenericPrompt } from "./event-handlers.js";
 
 function makePi(): any {
   const handlers = new Map<string, Array<(...args: any[]) => any>>();
@@ -223,6 +223,36 @@ describe("session-first core", () => {
     await emit(pi, "turn_end", { message: { stopReason: "stop", content: [{ type: "text", text: "The answer is 42." }] } }, ctx);
     expect(pi.sendUserMessage).not.toHaveBeenCalled();
     await emit(pi, "session_shutdown", {}, ctx);
+  });
+
+  it("uses VCC and configured per-model thresholds in worker sessions", async () => {
+    const pi = makePi();
+    const config = normalizeConfigDurations(getDefaultConfig());
+    config.compaction.floorTokens = 90_000;
+    config.compaction.fraction = 0.9;
+    config.compaction.perModel["worker-model"] = { fraction: 0.1, floorTokens: 1_000 };
+    registerSubagentCompaction(pi, config);
+    const compact = vi.fn();
+    const ctx = {
+      model: { provider: "test", id: "worker-model" },
+      getContextUsage: () => ({ contextWindow: 100_000, tokens: 20_000 }),
+      compact,
+    };
+    await emit(pi, "turn_end", { message: { stopReason: "stop" } }, ctx);
+    expect(compact).toHaveBeenCalledTimes(1);
+
+    const beforeCompact = pi.handlers.get("session_before_compact")?.[0] as any;
+    const result = await beforeCompact({
+      preparation: {
+        messagesToSummarize: [{ role: "user", content: "worker detail" }],
+        previousSummary: undefined,
+        firstKeptEntryId: "kept",
+        tokensBefore: 20_000,
+      },
+      branchEntries: [{ id: "old" }, { id: "kept" }],
+    });
+    expect(result.compaction.summary).toContain("[Session Goal]");
+    expect(result.compaction.details.compactor).toBe("pi-vcc");
   });
 
   it("makes layered skills loadable in worker processes", async () => {
