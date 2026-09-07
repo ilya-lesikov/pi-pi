@@ -18,7 +18,11 @@ import { createViewerKeys, type ViewerKeybindings, type ViewerKeys } from "./vie
 const CHROME_LINES_BASE = 6;
 const MIN_VIEWPORT = 3;
 /** Height ceiling shared by the overlay's `maxHeight` and the viewer's internal viewport cap. */
-export const VIEWPORT_HEIGHT_PCT = 70;
+// LOCAL PATCH (pi-pi): the viewer takes the whole screen. pi-tui composites an
+// overlay into the same line buffer it diffs, so a partial-height overlay is
+// repainted — and visibly tears — every time the base content behind it changes
+// height, which the agents widget does several times a second.
+export const VIEWPORT_HEIGHT_PCT = 100;
 
 export class ConversationViewer implements Component {
   private scrollOffset = 0;

@@ -566,6 +566,29 @@ export class AgentWidget {
     }
   }
 
+  /**
+   * LOCAL PATCH (pi-pi): park the widget while a full-screen view owns the
+   * terminal. Repainting underneath it only churns the buffer the overlay is
+   * composited into, which is what makes the view tear.
+   */
+  suspend() {
+    if (this.widgetInterval) {
+      clearInterval(this.widgetInterval);
+      this.widgetInterval = undefined;
+      this.widgetIntervalMs = undefined;
+    }
+    if (this.widgetRegistered) {
+      this.uiCtx?.setWidget("agents", undefined);
+      this.widgetRegistered = false;
+      this.tui = undefined;
+    }
+  }
+
+  /** Restore the widget after a suspend(); safe to call when never suspended. */
+  resume() {
+    this.update();
+  }
+
   dispose() {
     if (this.widgetInterval) {
       clearInterval(this.widgetInterval);

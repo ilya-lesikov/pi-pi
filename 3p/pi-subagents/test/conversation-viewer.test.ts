@@ -76,6 +76,18 @@ beforeEach(() => {
 });
 
 describe("ConversationViewer", () => {
+  // LOCAL PATCH (pi-pi): the viewer is full-screen. Rendering fewer rows than
+  // the overlay reserves leaves base content showing through, which is what
+  // tore; rendering more clips the footer.
+  it("fills exactly the terminal height", () => {
+    for (const rows of [24, 40, 60]) {
+      const viewer = new ConversationViewer(
+        mockTui(rows, 80), mockSession([{ role: "user", content: "hi" }]), mockRecord(), undefined, ansiTheme(), vi.fn(),
+      );
+      expect(viewer.render(80).length).toBe(rows);
+    }
+  });
+
   describe("render width safety", () => {
     const widths = [40, 80, 120, 216];
 

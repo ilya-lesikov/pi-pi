@@ -1530,19 +1530,27 @@ Terse command-style prompts produce shallow, generic work.
     const session = record.session;
     const activity = agentActivity.get(record.id);
 
-    await ctx.ui.custom<undefined>(
-      (tui, theme, keybindings, done) => {
-        return new ConversationViewer(tui, session, record, activity, theme, done, () => {
-          if (manager.abort(record.id)) {
-            ctx.ui.notify(`Stopped "${record.description}".`, "info");
-          }
-        }, keybindings, (message: string) => manager.steer(record.id, message));
-      },
-      {
-        overlay: true,
-        overlayOptions: { anchor: "center", width: "90%", maxHeight: `${VIEWPORT_HEIGHT_PCT}%` },
-      },
-    );
+    // LOCAL PATCH (pi-pi): the viewer covers the screen, so the widget behind it
+    // would only churn the line buffer the overlay is composited into. Park it
+    // for the duration instead of repainting under a full-screen view.
+    widget.suspend();
+    try {
+      await ctx.ui.custom<undefined>(
+        (tui, theme, keybindings, done) => {
+          return new ConversationViewer(tui, session, record, activity, theme, done, () => {
+            if (manager.abort(record.id)) {
+              ctx.ui.notify(`Stopped "${record.description}".`, "info");
+            }
+          }, keybindings, (message: string) => manager.steer(record.id, message));
+        },
+        {
+          overlay: true,
+          overlayOptions: { anchor: "center", width: "100%", maxHeight: `${VIEWPORT_HEIGHT_PCT}%`, margin: 0 },
+        },
+      );
+    } finally {
+      widget.resume();
+    }
   }
 
 }
