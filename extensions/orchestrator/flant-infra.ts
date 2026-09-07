@@ -1159,10 +1159,11 @@ export async function updateFlantInfra(
         }
         settings.cachedFlantModels = models;
         settings.cachedOpenRouterData = metadata;
-        // Stamping the cache after a failed metadata fetch with nothing cached
-        // would pin every model to the fallback context window and zero cost
-        // for a full TTL. Leave it unstamped so the next run retries.
-        if (metadataFetched || Object.keys(metadata).length > 0) settings.lastUpdated = new Date().toISOString();
+        // Serving empty metadata pins every model to the fallback context window
+        // and zero cost, so it must never look cache-valid: clear the timestamp
+        // outright rather than merely declining to refresh it — a forced update
+        // inside the TTL would otherwise keep the previous one alive.
+        settings.lastUpdated = metadataFetched || Object.keys(metadata).length > 0 ? new Date().toISOString() : null;
         saveFlantSettings(settings);
         refreshed = true;
       } catch (err: any) {

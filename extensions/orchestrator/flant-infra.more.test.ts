@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -313,6 +313,39 @@ describe("updateFlantInfra", () => {
     const res = await mod.updateFlantInfra(makePi(), { force: true });
     expect(res.ok).toBe(true);
     expect(res.models).toContain("sub/claude-fable-5");
+  });
+
+  // A forced refresh inside the TTL keeps a fresh timestamp, so declining to
+  // re-stamp is not enough: empty metadata has to invalidate the cache outright
+  // or every model keeps the fallback context window and zero cost until it ages out.
+  it("invalidates the cache when metadata comes back empty", async () => {
+    const dir = makeTempDir();
+    const cacheDir = join(dir, "extensions", "pp", "cache");
+    mkdirSync(cacheDir, { recursive: true });
+    const cachePath = join(cacheDir, "flant-models.json");
+    writeFileSync(
+      cachePath,
+      JSON.stringify({
+        enabled: true,
+        cacheTTLDays: 7,
+        lastUpdated: new Date().toISOString(),
+        cachedFlantModels: ["claude-opus-4-8"],
+        cachedOpenRouterData: {},
+      }),
+      "utf-8",
+    );
+    process.env.FLANT_API_KEY = "flant-k";
+    const mod = await loadModule(dir);
+    stubFetch((url: string) => {
+      if (url.includes("llm-api.flant.ru/v1/models")) {
+        return { ok: true, status: 200, json: async () => ({ data: [{ id: "claude-opus-4-8" }] }) };
+      }
+      if (url.includes("openrouter.ai")) return { ok: false, status: 500, json: async () => ({}) };
+      throw new Error(`unexpected ${url}`);
+    });
+    const res = await mod.updateFlantInfra(makePi(), { force: true });
+    expect(res.ok).toBe(true);
+    expect(JSON.parse(readFileSync(cachePath, "utf-8")).lastUpdated).toBeNull();
   });
 
   it("falls back to cached models when discovery throws", async () => {
