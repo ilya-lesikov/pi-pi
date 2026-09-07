@@ -37,7 +37,10 @@ function foreignPiPiPackages(): string[] {
   const sources = packages.flatMap((entry: any) => {
     const source = typeof entry === "string" ? entry : typeof entry?.source === "string" ? entry.source : undefined;
     if (!source || /^(npm|git|github|https?|ssh):/.test(source.trim())) return [];
-    const expanded = source.trim().startsWith("~") ? join(homedir(), source.trim().slice(1)) : source.trim();
+    // pi expands exactly "~" and "~/…"; anything else starting with a tilde is
+    // an ordinary relative path (resolved against the agent dir, as pi does).
+    const trimmed = source.trim();
+    const expanded = trimmed === "~" ? homedir() : trimmed.startsWith("~/") ? join(homedir(), trimmed.slice(2)) : trimmed;
     return [resolve(agentDir, expanded)];
   });
   return [...new Set(sources)].filter((path) => path !== running && existsSync(join(path, "extensions", "orchestrator")));

@@ -271,7 +271,9 @@ describe("updateFlantInfra", () => {
         cacheTTLDays: 7,
         lastUpdated: new Date().toISOString(),
         cachedFlantModels: ["claude-opus-4-8"],
-        cachedOpenRouterData: {},
+        // Non-empty: a cache with no metadata carries no context window or
+        // pricing and is deliberately never served.
+        cachedOpenRouterData: { "claude-opus-4-8": { context_length: 200_000 } },
       }),
       "utf-8",
     );

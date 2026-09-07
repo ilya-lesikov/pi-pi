@@ -242,6 +242,31 @@ describe("session-first core", () => {
     }
   });
 
+  // A redelivery does not cancel the poll chain it overlaps, so the queue entry
+  // is the claim that keeps one continuation from being sent twice.
+  it("delivers a continuation once even when redelivery overlaps a live poll", async () => {
+    vi.useFakeTimers();
+    try {
+      const pi = makePi();
+      const orchestrator = new Orchestrator(pi);
+      orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+      registerEventHandlers(orchestrator);
+      const ctx = { isIdle: () => true } as any;
+      orchestrator.lastCtx = ctx;
+      orchestrator.adaptiveCompaction.inFlight = true;
+
+      orchestrator.queueContinuation("[PI-PI] continue");
+      vi.advanceTimersByTime(3000);
+      orchestrator.adaptiveCompaction.inFlight = false;
+      await emit(pi, "session_compact", {}, ctx);
+      vi.advanceTimersByTime(5000);
+
+      expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // A provider switch resends everything with a cold cache, so the pre-switch
   // context is billed again in full at the new provider.
   it("compacts a large context before a model switch, but not a small one", async () => {

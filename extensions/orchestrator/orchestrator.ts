@@ -83,8 +83,13 @@ export class Orchestrator {
     // A compaction rebuilds the context the message would land in, and the host
     // reports idle while one runs — so a continuation queued right after a
     // model switch would race the compaction that switch just started.
+    // Several polling chains can be alive for one text (a redelivery does not
+    // cancel the chain it overlaps), so the queue entry is the claim: whoever
+    // takes it sends, the rest find it gone and stop.
+    if (!this.pendingContinuations.has(text)) return;
     const compacting = this.adaptiveCompaction.inFlight || this.manualCompactionPending;
     if (!compacting && (typeof ctx.isIdle !== "function" || ctx.isIdle())) {
+      this.pendingContinuations.delete(text);
       this.safeSendUserMessage(text);
       return;
     }

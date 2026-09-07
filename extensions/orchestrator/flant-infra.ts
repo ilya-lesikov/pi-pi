@@ -1097,6 +1097,9 @@ export function generateFlantConfig(models: string[], subscriptionActive = false
 
 function isCacheValid(settings: FlantSettings): boolean {
   if (!settings.lastUpdated || !settings.cachedFlantModels || !settings.cachedOpenRouterData) return false;
+  // An empty metadata map carries no context window and no pricing, so it is
+  // never worth serving from cache — including caches an earlier build stamped.
+  if (Object.keys(settings.cachedOpenRouterData).length === 0) return false;
   const updatedAt = new Date(settings.lastUpdated).getTime();
   if (!Number.isFinite(updatedAt)) return false;
   const ttlMs = Math.max(1, settings.cacheTTLDays) * 24 * 60 * 60 * 1000;

@@ -1144,6 +1144,11 @@ Terse command-style prompts produce shallow, generic work.
         if (!record) {
           return textResult(`Failed to resume agent "${params.resume}".`);
         }
+        // LOCAL PATCH (pi-pi): a resumed agent finishes again, so re-stamp its
+        // linger window — otherwise it inherits the first completion's and can
+        // vanish from the widget immediately.
+        widget.markFinished(record.id);
+        widget.update();
         return textResult(
           record.result?.trim() || record.error?.trim() || "No output.",
           buildDetails(detailBase, record),
