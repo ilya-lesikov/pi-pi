@@ -192,6 +192,33 @@ describe("session-first core", () => {
     expect(isMainTurnStalled(orchestrator, 3000)).toBe(false);
   });
 
+  // A provider switch resends everything with a cold cache, so the pre-switch
+  // context is billed again in full at the new provider.
+  it("compacts a large context before a model switch, but not a small one", async () => {
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi);
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    registerEventHandlers(orchestrator);
+    const compact = vi.fn();
+    const ctx = (tokens: number) => ({ compact, getContextUsage: () => ({ tokens, contextWindow: 200_000 }) });
+    const select = (from: string, to: string) => ({
+      source: "set",
+      previousModel: { provider: "pp-flant-anthropic-sub", id: from },
+      model: { provider: "github-copilot", id: to },
+    });
+
+    await emit(pi, "model_select", select("a", "b"), ctx(5_000));
+    expect(compact).not.toHaveBeenCalled();
+
+    await emit(pi, "model_select", select("a", "b"), ctx(120_000));
+    expect(compact).toHaveBeenCalledTimes(1);
+
+    orchestrator.adaptiveCompaction.inFlight = false;
+    await emit(pi, "model_select", { source: "restore", previousModel: { provider: "p", id: "a" }, model: { provider: "q", id: "b" } }, ctx(120_000));
+    await emit(pi, "model_select", { source: "set", previousModel: { provider: "p", id: "a" }, model: { provider: "p", id: "a" } }, ctx(120_000));
+    expect(compact).toHaveBeenCalledTimes(1);
+  });
+
   // The tracing toggle and the report bundle both promise recorded traces, but
   // nothing called into the tracer, so enabled traces held only the finalizer.
   it("records main and worker events into the session trace", async () => {

@@ -329,6 +329,29 @@ type CompactionState = Pick<Orchestrator,
   "pi" | "config" | "lastCtx" | "lastEstimatedTokens" | "compactionArm" | "adaptiveCompaction" | "manualCompactionUseBuiltin" | "resetAdaptiveCompaction"
 >;
 
+// Switching providers resends the whole conversation with a cold prompt cache,
+// so every retained token is billed again at the new provider. The vcc
+// summarizer runs locally, so compacting first costs only the detail it folds
+// away. Below this size the resend is too cheap to be worth that trade.
+const MODEL_SWITCH_COMPACTION_MIN_TOKENS = 40_000;
+
+function compactForModelSwitch(orchestrator: CompactionState, ctx: any): void {
+  if (!orchestrator.config?.compaction?.enabled || typeof ctx?.compact !== "function") return;
+  if (orchestrator.adaptiveCompaction.inFlight) return;
+  const usage = typeof ctx.getContextUsage === "function" ? ctx.getContextUsage() : null;
+  const tokens = usage?.tokens ?? orchestrator.lastEstimatedTokens;
+  if (typeof tokens !== "number" || tokens < MODEL_SWITCH_COMPACTION_MIN_TOKENS) return;
+  orchestrator.adaptiveCompaction.inFlight = true;
+  getLogger().debug({ s: "compaction", tokens }, "compacting before a model switch");
+  ctx.compact({
+    onError: (err: any) => {
+      orchestrator.adaptiveCompaction.inFlight = false;
+      orchestrator.compactionArm.armed = true;
+      getLogger().error({ s: "compaction", err: err?.message }, "model-switch compaction failed");
+    },
+  });
+}
+
 function registerCompaction(orchestrator: CompactionState, sessionSkills: Map<string, string> = loadedSkills): void {
   const pi = orchestrator.pi;
   pi.on("context", (event: any) => {
@@ -364,6 +387,13 @@ function registerCompaction(orchestrator: CompactionState, sessionSkills: Map<st
       orchestrator.adaptiveCompaction.inFlight = false;
       orchestrator.adaptiveCompaction.pendingProactiveMeasure = true;
     }
+  });
+  pi.on("model_select", (event: any, ctx: any) => {
+    if (event?.source === "restore" || !event?.previousModel || !event?.model) return;
+    const before = `${event.previousModel.provider}/${event.previousModel.id}`;
+    const after = `${event.model.provider}/${event.model.id}`;
+    if (before === after) return;
+    compactForModelSwitch(orchestrator, ctx ?? orchestrator.lastCtx);
   });
 }
 
