@@ -2,7 +2,7 @@ import { execFileSync } from "child_process";
 import { existsSync } from "fs";
 import { join } from "path";
 import { GLOBAL_CONFIG_PATH, mergeConfigLayers, readRawConfig, type NormalizedPiPiConfig } from "./config.js";
-import { loadFlantSettings, readClaudeOAuthToken, readGatewayApiKey } from "./flant-infra.js";
+import { isCopilotTierActive, loadFlantSettings, readClaudeOAuthToken, readGatewayApiKey } from "./flant-infra.js";
 import { resolveModel } from "./model-registry.js";
 import { listLayeredSkills } from "./skills-manifest.js";
 import type { Orchestrator } from "./orchestrator.js";
@@ -93,7 +93,10 @@ export async function runDoctor(orchestrator: Orchestrator, ctx: any): Promise<v
       if (readClaudeOAuthToken()) add("pass", "Claude OAuth token present for the personal subscription");
       else add("failure", "Subscription enabled but no Claude OAuth token (run /login → Anthropic)");
     }
-    if (flant.copilotEnabled && !process.env.COPILOT_GITHUB_TOKEN) add("warning", "Copilot tier enabled but COPILOT_GITHUB_TOKEN is missing");
+    if (flant.copilotEnabled) {
+      if (isCopilotTierActive(flant)) add("pass", "Copilot credentials present");
+      else add("warning", "Copilot tier enabled but credentials are missing (run /login → GitHub Copilot or set COPILOT_GITHUB_TOKEN)");
+    }
     add(flant.lastUpdated ? "pass" : "warning", `Model list last updated: ${flant.lastUpdated ?? "never"}`);
   }
 

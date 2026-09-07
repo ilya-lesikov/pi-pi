@@ -22,7 +22,7 @@ import { publishAcpState, resetAcpStateCache } from "./acp.js";
 import { runAfterEdit } from "./commands.js";
 import { checkDuplicateExtensions } from "./duplicate-extension-guard.js";
 import { handleMainRateLimit, handleSubagentRateLimit, isRateLimitError } from "./rate-limit-fallback.js";
-import { refreshSubProvider } from "./flant-infra.js";
+import { loadFlantSettings, refreshCopilotOAuthToken, refreshSubProvider, syncProviderTiers } from "./flant-infra.js";
 import { SUBAGENT_SESSION_KEY } from "./index.js";
 import type { Orchestrator } from "./orchestrator.js";
 
@@ -219,6 +219,13 @@ function registerLifecycle(orchestrator: Orchestrator): void {
     // when the token is fresh (a file read + compare); a network refresh only
     // happens near expiry, exactly when waiting is required.
     try { await refreshSubProvider(pi); } catch {}
+    try {
+      const flant = loadFlantSettings(orchestrator.cwd);
+      if (flant.copilotEnabled && !process.env.COPILOT_GITHUB_TOKEN) {
+        await refreshCopilotOAuthToken();
+        syncProviderTiers(flant);
+      }
+    } catch {}
     publishAcpState(orchestrator);
   });
   pi.on("tool_execution_start", (event: any) => {

@@ -5,8 +5,10 @@ import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const refreshAnthropicTokenMock = vi.fn();
+const refreshGitHubCopilotTokenMock = vi.fn();
 vi.mock("@earendil-works/pi-ai/oauth", () => ({
   refreshAnthropicToken: (...args: unknown[]) => refreshAnthropicTokenMock(...args),
+  refreshGitHubCopilotToken: (...args: unknown[]) => refreshGitHubCopilotTokenMock(...args),
 }));
 
 const tempDirs: string[] = [];
@@ -46,7 +48,9 @@ function collectModelSpecs(value: unknown): string[] {
 
 afterEach(() => {
   refreshAnthropicTokenMock.mockReset();
+  refreshGitHubCopilotTokenMock.mockReset();
   delete process.env.PI_CODING_AGENT_DIR;
+  delete process.env.COPILOT_GITHUB_TOKEN;
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -481,6 +485,51 @@ describe("flant-infra", () => {
       if (prevKey === undefined) delete process.env.LLM_API_KEY;
       else process.env.LLM_API_KEY = prevKey;
     }
+  });
+
+  it("activates the Copilot tier from OAuth credentials created by /login", async () => {
+    const dir = makeTempDir();
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "auth.json"),
+      JSON.stringify({ "github-copilot": { type: "oauth", access: "tid=test;exp=1", refresh: "ghu_test", expires: Date.now() + 3_600_000 } }),
+      "utf-8",
+    );
+    const mod = await loadFlantInfraModule(dir);
+
+    expect(mod.readCopilotOAuthToken()).toBe("tid=test;exp=1");
+    expect(mod.isCopilotTierActive({ copilotEnabled: true } as any)).toBe(true);
+  });
+
+  it("refreshes expired Copilot OAuth credentials and persists them for pi", async () => {
+    const dir = makeTempDir();
+    mkdirSync(dir, { recursive: true });
+    const authPath = join(dir, "auth.json");
+    writeFileSync(
+      authPath,
+      JSON.stringify({ "github-copilot": { type: "oauth", access: "expired", refresh: "ghu_refresh", expires: Date.now() - 1, enterpriseUrl: "github.example.com" } }),
+      "utf-8",
+    );
+    refreshGitHubCopilotTokenMock.mockResolvedValue({
+      access: "tid=fresh;exp=2",
+      refresh: "ghu_refresh",
+      expires: Date.now() + 3_600_000,
+      enterpriseUrl: "github.example.com",
+    });
+    const mod = await loadFlantInfraModule(dir);
+
+    await expect(mod.refreshCopilotOAuthToken()).resolves.toBe("tid=fresh;exp=2");
+    expect(refreshGitHubCopilotTokenMock).toHaveBeenCalledWith("ghu_refresh", "github.example.com");
+    expect(JSON.parse(readFileSync(authPath, "utf-8"))["github-copilot"].access).toBe("tid=fresh;exp=2");
+    expect(mod.isCopilotTierActive({ copilotEnabled: true } as any)).toBe(true);
+  });
+
+  it("keeps supporting COPILOT_GITHUB_TOKEN for the Copilot tier", async () => {
+    const dir = makeTempDir();
+    process.env.COPILOT_GITHUB_TOKEN = "github_pat_test";
+    const mod = await loadFlantInfraModule(dir);
+
+    expect(mod.isCopilotTierActive({ copilotEnabled: true } as any)).toBe(true);
   });
 
   it("syncProviderTiers respects an active sub-fallback and does not re-enable flant-sub", async () => {

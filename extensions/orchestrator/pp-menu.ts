@@ -20,6 +20,7 @@ import {
   getFlantGeneratedConfig,
   loadFlantSettings,
   readClaudeOAuthToken,
+  readCopilotOAuthToken,
   readGatewayApiKey,
   syncProviderTiers,
   unregisterFlantProviders,
@@ -1190,12 +1191,12 @@ async function showFlantMenu(orchestrator: Orchestrator, ctx: any): Promise<void
 async function showCopilotMenu(orchestrator: Orchestrator, ctx: any): Promise<void> {
   for (;;) {
     const settings = loadFlantSettings(orchestrator.cwd);
-    const tokenPresent = !!process.env.COPILOT_GITHUB_TOKEN;
+    const tokenPresent = !!(process.env.COPILOT_GITHUB_TOKEN || readCopilotOAuthToken());
     const enableLabel = `Enable Copilot tier: ${settings.copilotEnabled ? "ON" : "OFF"}`;
     const statusLine = settings.copilotEnabled
       ? tokenPresent
         ? "Active — Claude falls here when the subscription is rate-limited (its only automatic fallback)."
-        : "Enabled but COPILOT_GITHUB_TOKEN is missing — tier is skipped until the token is set."
+        : "Enabled but Copilot credentials are missing — run /login → GitHub Copilot or set COPILOT_GITHUB_TOKEN."
       : "Disabled — a rate-limited Claude subscription has no automatic fallback and waits for the limit to clear.";
     const choice = await selectOption(ctx, "Copilot", [
       opt(enableLabel, "Use Copilot as the automatic fallback when the Claude subscription is rate-limited"),
@@ -1209,7 +1210,7 @@ async function showCopilotMenu(orchestrator: Orchestrator, ctx: any): Promise<vo
     }
     const turningOn = !settings.copilotEnabled;
     if (turningOn && !tokenPresent) {
-      ctx.ui?.notify?.("Set COPILOT_GITHUB_TOKEN first (the built-in github-copilot provider authenticates off it).", "warning");
+      ctx.ui?.notify?.("Run /login → GitHub Copilot or set COPILOT_GITHUB_TOKEN first.", "warning");
       continue;
     }
     const scope = await setFlantConfigValue(orchestrator, ctx, "copilotEnabled", turningOn);

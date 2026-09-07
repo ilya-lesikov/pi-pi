@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import lockfile from "proper-lockfile";
-import { refreshAnthropicToken } from "@earendil-works/pi-ai/oauth";
+import { refreshAnthropicToken, refreshGitHubCopilotToken } from "@earendil-works/pi-ai/oauth";
 import type { ExtensionAPI, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 import { getDefaultConfig, type PiPiConfig, readScopedFlantSettings, GLOBAL_CONFIG_PATH, writeConfigValue } from "./config.js";
 import { listRegisteredSpecs, updateRegistryFromAvailableModels, setTierEnabled, isSubscriptionFallbackActive } from "./model-registry.js";
@@ -124,6 +124,77 @@ interface AnthropicOAuthCreds {
   access?: unknown;
   refresh?: unknown;
   expires?: unknown;
+}
+
+interface CopilotOAuthCreds extends AnthropicOAuthCreds {
+  enterpriseUrl?: unknown;
+}
+
+export function readCopilotOAuthToken(): string | null {
+  const authPath = join(resolveAgentDir(), "auth.json");
+  if (!existsSync(authPath)) return null;
+  try {
+    const raw = JSON.parse(readFileSync(authPath, "utf-8")) as { "github-copilot"?: CopilotOAuthCreds };
+    const copilot = raw["github-copilot"];
+    if (!copilot || typeof copilot.access !== "string" || !copilot.access) return null;
+    if (typeof copilot.expires === "number" && copilot.expires <= Date.now()) return null;
+    return copilot.access;
+  } catch {
+    return null;
+  }
+}
+
+export async function refreshCopilotOAuthToken(): Promise<string | null> {
+  const log = getLogger();
+  const authPath = join(resolveAgentDir(), "auth.json");
+  if (!existsSync(authPath)) return null;
+
+  let copilot: CopilotOAuthCreds | undefined;
+  try {
+    const raw = JSON.parse(readFileSync(authPath, "utf-8")) as { "github-copilot"?: CopilotOAuthCreds };
+    copilot = raw["github-copilot"];
+  } catch {
+    return null;
+  }
+  if (!copilot || typeof copilot.access !== "string" || !copilot.access) return null;
+
+  const REFRESH_MARGIN_MS = 5 * 60_000;
+  const expires = typeof copilot.expires === "number" ? copilot.expires : 0;
+  if (expires > Date.now() + REFRESH_MARGIN_MS) return copilot.access;
+  if (typeof copilot.refresh !== "string" || !copilot.refresh) return null;
+
+  const enterpriseUrl = typeof copilot.enterpriseUrl === "string" ? copilot.enterpriseUrl : undefined;
+  let refreshed: { refresh: string; access: string; expires: number; enterpriseUrl?: string };
+  try {
+    refreshed = await refreshGitHubCopilotToken(copilot.refresh, enterpriseUrl);
+  } catch (err: any) {
+    log.debug({ s: "flant", err: err?.message }, "copilot oauth token refresh failed");
+    return null;
+  }
+
+  try {
+    const release = lockfile.lockSync(authPath, { stale: 10000 });
+    try {
+      let current: Record<string, unknown> = {};
+      try {
+        current = JSON.parse(readFileSync(authPath, "utf-8")) as Record<string, unknown>;
+      } catch {}
+      const existing = current["github-copilot"] && typeof current["github-copilot"] === "object"
+        ? current["github-copilot"] as Record<string, unknown>
+        : {};
+      const existingExpires = typeof existing.expires === "number" ? existing.expires : 0;
+      if (existingExpires > Date.now() + REFRESH_MARGIN_MS && typeof existing.access === "string" && existing.access) {
+        return existing.access;
+      }
+      current["github-copilot"] = { ...existing, type: "oauth", ...refreshed };
+      writeFileSync(authPath, JSON.stringify(current, null, 2) + "\n", "utf-8");
+    } finally {
+      release();
+    }
+  } catch (err: any) {
+    log.debug({ s: "flant", err: err?.message }, "failed to persist copilot oauth token");
+  }
+  return refreshed.access;
 }
 
 /**
@@ -1058,15 +1129,10 @@ export async function updateFlantInfra(
   }
 }
 
-/**
- * Whether the Copilot provider tier is usable: enabled in settings AND the
- * COPILOT_GITHUB_TOKEN env var is present (the built-in `github-copilot`
- * provider authenticates off it). When the token is absent the tier is treated
- * as disabled so resolution silently skips it.
- */
+/** Whether the Copilot provider tier is enabled and has environment or /login credentials. */
 export function isCopilotTierActive(settings?: FlantSettings): boolean {
   const s = settings ?? loadFlantSettings();
-  return s.copilotEnabled && !!process.env.COPILOT_GITHUB_TOKEN;
+  return s.copilotEnabled && !!(process.env.COPILOT_GITHUB_TOKEN || readCopilotOAuthToken());
 }
 
 /**
@@ -1115,6 +1181,7 @@ export function initFlantSync(pi: ExtensionAPI, cwd?: string): void {
 export async function initFlantOnStartup(pi: ExtensionAPI, cwd?: string): Promise<void> {
   setPI(pi);
   const settings = loadFlantSettings(cwd);
+  if (settings.copilotEnabled && !process.env.COPILOT_GITHUB_TOKEN) await refreshCopilotOAuthToken();
   // Sync tiers from the EFFECTIVE (cwd-scoped) settings so a project override
   // rebinds what initFlantSync (global-only, at extension init) computed.
   syncProviderTiers(settings);
