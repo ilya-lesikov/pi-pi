@@ -79,7 +79,11 @@ export class Orchestrator {
   sendUserMessageWhenIdle(text: string, generation: number, attempt = 0): void {
     const ctx = this.lastCtx;
     if (!ctx || generation !== this.continuationGeneration) return;
-    if (typeof ctx.isIdle !== "function" || ctx.isIdle()) {
+    // A compaction rebuilds the context the message would land in, and the host
+    // reports idle while one runs — so a continuation queued right after a
+    // model switch would race the compaction that switch just started.
+    const compacting = this.adaptiveCompaction.inFlight || this.manualCompactionPending;
+    if (!compacting && (typeof ctx.isIdle !== "function" || ctx.isIdle())) {
       this.safeSendUserMessage(text);
       return;
     }

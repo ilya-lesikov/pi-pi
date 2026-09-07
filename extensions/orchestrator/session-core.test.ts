@@ -192,6 +192,31 @@ describe("session-first core", () => {
     expect(isMainTurnStalled(orchestrator, 3000)).toBe(false);
   });
 
+  // The host reports idle while a compaction runs, so a continuation queued by
+  // the rate-limit fallback would otherwise land mid-rebuild.
+  it("holds a queued continuation until an in-flight compaction settles", () => {
+    vi.useFakeTimers();
+    try {
+      const pi = makePi();
+      const orchestrator = new Orchestrator(pi);
+      orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+      orchestrator.lastCtx = { isIdle: () => true } as any;
+      orchestrator.adaptiveCompaction.inFlight = true;
+
+      orchestrator.queueContinuation("[PI-PI] continue");
+      expect(pi.sendUserMessage).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(2000);
+      expect(pi.sendUserMessage).not.toHaveBeenCalled();
+
+      orchestrator.adaptiveCompaction.inFlight = false;
+      vi.advanceTimersByTime(1000);
+      expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // A provider switch resends everything with a cold cache, so the pre-switch
   // context is billed again in full at the new provider.
   it("compacts a large context before a model switch, but not a small one", async () => {

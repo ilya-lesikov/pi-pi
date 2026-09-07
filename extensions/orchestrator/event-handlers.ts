@@ -326,7 +326,7 @@ export function renderSkillReattachment(skills: Map<string, string>): string {
 }
 
 type CompactionState = Pick<Orchestrator,
-  "pi" | "config" | "lastCtx" | "lastEstimatedTokens" | "compactionArm" | "adaptiveCompaction" | "manualCompactionUseBuiltin" | "resetAdaptiveCompaction"
+  "pi" | "config" | "lastCtx" | "lastEstimatedTokens" | "compactionArm" | "adaptiveCompaction" | "manualCompactionUseBuiltin" | "manualCompactionPending" | "resetAdaptiveCompaction"
 >;
 
 // Switching providers resends the whole conversation with a cold prompt cache,
@@ -337,7 +337,9 @@ const MODEL_SWITCH_COMPACTION_MIN_TOKENS = 40_000;
 
 function compactForModelSwitch(orchestrator: CompactionState, ctx: any): void {
   if (!orchestrator.config?.compaction?.enabled || typeof ctx?.compact !== "function") return;
-  if (orchestrator.adaptiveCompaction.inFlight) return;
+  // The host runs one compaction at a time; starting a second one over a manual
+  // or adaptive pass would have both writing compaction entries for one cut.
+  if (orchestrator.adaptiveCompaction.inFlight || orchestrator.manualCompactionPending) return;
   const usage = typeof ctx.getContextUsage === "function" ? ctx.getContextUsage() : null;
   const tokens = usage?.tokens ?? orchestrator.lastEstimatedTokens;
   if (typeof tokens !== "number" || tokens < MODEL_SWITCH_COMPACTION_MIN_TOKENS) return;
@@ -461,6 +463,7 @@ export function registerSubagentCompaction(
       contaminatedMeasures: 0,
     },
     manualCompactionUseBuiltin: false,
+    manualCompactionPending: false,
     resetAdaptiveCompaction() {
       state.adaptiveCompaction = {
         nextThreshold: null,
