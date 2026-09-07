@@ -4,6 +4,7 @@ import { Orchestrator } from "./orchestrator.js";
 import { buildAcpState } from "./acp.js";
 import { isSubscriptionFallbackActive, setSubscriptionFallbackActive } from "./model-registry.js";
 import { classifyContinuation, isMainTurnStalled, registerEventHandlers, registerLoadSkill, registerSubagentCompaction, renderGenericPrompt } from "./event-handlers.js";
+import { createUsageTracker } from "./usage-tracker.js";
 import initExtension from "./index.js";
 
 const ORCHESTRATOR_KEY = Symbol.for("pi-pi:orchestrator-initialized");
@@ -11,9 +12,19 @@ const SUBAGENT_SESSION_SCOPE_KEY = Symbol.for("pi-pi:subagent-session-scope");
 
 function makePi(): any {
   const handlers = new Map<string, Array<(...args: any[]) => any>>();
+  const busHandlers = new Map<string, Array<(data: any) => any>>();
   return {
     handlers,
-    events: { emit: vi.fn(), on: vi.fn() },
+    busHandlers,
+    events: {
+      emit: vi.fn((channel: string, data: any) => {
+        for (const handler of busHandlers.get(channel) ?? []) void handler(data);
+      }),
+      on: vi.fn((channel: string, handler: (data: any) => any) => {
+        busHandlers.set(channel, [...(busHandlers.get(channel) ?? []), handler]);
+        return () => busHandlers.set(channel, (busHandlers.get(channel) ?? []).filter((h) => h !== handler));
+      }),
+    },
     on: vi.fn((name: string, handler: (...args: any[]) => any) => {
       handlers.set(name, [...(handlers.get(name) ?? []), handler]);
     }),
@@ -30,6 +41,10 @@ function makePi(): any {
 
 async function emit(pi: any, name: string, event: any, ctx: any): Promise<void> {
   for (const handler of pi.handlers.get(name) ?? []) await handler(event, ctx);
+}
+
+async function emitBus(pi: any, channel: string, data: any): Promise<void> {
+  for (const handler of pi.busHandlers.get(channel) ?? []) await handler(data);
 }
 
 describe("session-first core", () => {
@@ -172,10 +187,37 @@ describe("session-first core", () => {
     orchestrator.config = normalizeConfigDurations(getDefaultConfig());
     registerEventHandlers(orchestrator);
 
-    await emit(pi, "subagents:created", { id: "worker", description: "Worker" }, {});
+    await emitBus(pi, "subagents:created", { id: "worker", description: "Worker" });
 
     expect(orchestrator.staleAgentTimer).toBeNull();
     expect(orchestrator.spawnedAgentIds.has("worker")).toBe(true);
+  });
+
+  // pi-subagents publishes on the shared event bus; wiring these to pi.on()
+  // silently detached worker tracking and worker usage accounting.
+  it("records worker usage and clears worker tracking on the completed event", async () => {
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi);
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    registerEventHandlers(orchestrator);
+    const usage = createUsageTracker();
+    (globalThis as any)[Symbol.for("pi-pi:usage-tracker")] = usage;
+    try {
+      await emitBus(pi, "subagents:created", { id: "worker", description: "Worker" });
+      await emitBus(pi, "subagents:completed", {
+        id: "worker",
+        type: "explore",
+        description: "Worker",
+        modelId: "test/model",
+        tokens: { input: 10, output: 4 },
+      });
+    } finally {
+      delete (globalThis as any)[Symbol.for("pi-pi:usage-tracker")];
+    }
+
+    expect(orchestrator.spawnedAgentIds.has("worker")).toBe(false);
+    expect(usage.getSubagentTotals()).toMatchObject({ inputTokens: 10, outputTokens: 4 });
+    expect(usage.getSubagentList()[0]).toMatchObject({ agentType: "explore", modelId: "test/model" });
   });
 
   it("enforces a user-configured stale-agent time limit", async () => {
@@ -187,7 +229,7 @@ describe("session-first core", () => {
     orchestrator.config.performance.internals.subagentStale = 1000;
     registerEventHandlers(orchestrator);
 
-    await emit(pi, "subagents:created", { id: "worker", description: "Worker" }, {});
+    await emitBus(pi, "subagents:created", { id: "worker", description: "Worker" });
     vi.setSystemTime(1001);
     await vi.advanceTimersByTimeAsync(1000);
 

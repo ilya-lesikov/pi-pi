@@ -166,7 +166,9 @@ export function registerFeatureToolsAndAgents(orchestrator: Orchestrator): void 
 
 function registerLifecycle(orchestrator: Orchestrator): void {
   const pi = orchestrator.pi;
-  pi.on("subagents:created" as any, (data: any) => {
+  // pi-subagents publishes its lifecycle on the shared event bus, not as host
+  // lifecycle events, so these must go through pi.events rather than pi.on.
+  pi.events.on("subagents:created", (data: any) => {
     if (data?.id) {
       orchestrator.spawnedAgentIds.add(data.id);
       orchestrator.agentDescriptions.set(data.id, data.description ?? data.type ?? data.id);
@@ -184,8 +186,21 @@ function registerLifecycle(orchestrator: Orchestrator): void {
     if (orchestrator.agentSpawnTimes.size === 0) orchestrator.stopStaleAgentWatchdog();
     publishAcpState(orchestrator);
   };
-  pi.on("subagents:completed" as any, settle);
-  pi.on("subagents:failed" as any, (data: any) => {
+  pi.events.on("subagents:completed", (data: any) => {
+    const usage = tracker();
+    if (usage && data?.tokens) {
+      usage.recordSubagentCompletion(data.tokens, undefined, {
+        description: data.description || data.type || data.id || "unknown",
+        agentType: data.type || "unknown",
+        modelId: data.modelId || "unknown",
+        durationMs: data.durationMs,
+        toolUses: data.toolUses,
+      });
+      (orchestrator.lastCtx?.ui as any)?.requestRender?.();
+    }
+    settle(data);
+  });
+  pi.events.on("subagents:failed", (data: any) => {
     settle(data);
     if (isRateLimitError(data?.error)) void handleSubagentRateLimit(orchestrator, orchestrator.lastCtx, data?.modelId);
   });
