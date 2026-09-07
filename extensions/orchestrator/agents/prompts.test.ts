@@ -71,11 +71,11 @@ describe("delegationBlock", () => {
 
 describe("toolsBlock only advertises granted tools", () => {
   it("omits pp_register_repo and lsp/cbm guidance for a minimal agent", () => {
-    const block = toolsBlock(parseToolNames("read, bash, grep, find, exa_search, exa_fetch"));
+    const block = toolsBlock(parseToolNames("read, bash, grep, find, web_search, web_fetch"));
     expect(block).not.toContain("pp_register_repo");
     expect(block).not.toContain("lsp goToDefinition");
     expect(block).not.toContain("cbm_search");
-    expect(block).toContain("exa_search");
+    expect(block).toContain("web_search");
   });
 
   it("includes pp_register_repo and the lsp/grep guidance for the main tool set", () => {

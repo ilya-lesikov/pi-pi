@@ -1,11 +1,11 @@
 import type { PiPiConfig } from "../config.js";
 import { getModelInfo, resolveModel } from "../model-registry.js";
-import { toolsBlock, parseToolNames, identityBlock, ALL_CBM_TOOLS, EXA_TOOLS, principlesBlock, FAILURE_RECOVERY } from "./tool-routing.js";
+import { toolsBlock, parseToolNames, identityBlock, ALL_CBM_TOOLS, WEB_TOOLS, principlesBlock, FAILURE_RECOVERY } from "./tool-routing.js";
 
 export function createTaskAgent(config: PiPiConfig) {
   const model = resolveModel(config.agents.subagents.simple.task.model);
   const thinking = config.agents.subagents.simple.task.thinking;
-  const tools = `read, write, edit, bash, grep, find, ls, lsp, ast_search, vcc_recall, ${ALL_CBM_TOOLS}, ${EXA_TOOLS}`;
+  const tools = `read, write, edit, bash, grep, find, ls, lsp, ast_search, vcc_recall, ${ALL_CBM_TOOLS}, ${WEB_TOOLS}`;
   const info = getModelInfo(model);
   return {
     frontmatter: {

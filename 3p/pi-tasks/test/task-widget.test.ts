@@ -228,7 +228,7 @@ describe("TaskWidget", () => {
     // header + overflow line + 5 visible = 7 lines
     expect(lines).toHaveLength(7);
     // overflow at top (after header)
-    expect(lines[1]).toContain("3 more");
+    expect(lines[1]).toContain("3 earlier");
     // all in_progress and pending visible
     expect(lines.some(l => l.includes("Working 1"))).toBe(true);
     expect(lines.some(l => l.includes("Todo 2"))).toBe(true);
@@ -252,6 +252,35 @@ describe("TaskWidget", () => {
     expect(lines[3]).toContain("Task 3");
     expect(lines[4]).toContain("2 more");
     expect(lines.some(l => l.includes("Task 4"))).toBe(false);
+  });
+
+  it("scrolls past leading completed tasks so open work is visible", () => {
+    widget = new TaskWidget(store, { maxVisible: 3 });
+    widget.setUICtx(ui.ctx);
+    for (let i = 1; i <= 6; i++) store.create(`Task ${i}`, "Desc");
+    for (let i = 1; i <= 4; i++) store.update(String(i), { status: "completed" });
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    // header + "4 earlier" + Task 5..6 (window clamped to tail: 4,5,6)
+    expect(lines.some(l => l.includes("earlier"))).toBe(true);
+    expect(lines.some(l => l.includes("Task 5"))).toBe(true);
+    expect(lines.some(l => l.includes("Task 6"))).toBe(true);
+    expect(lines.some(l => l.includes("Task 1"))).toBe(false);
+  });
+
+  it("shows the tail when every task is completed", () => {
+    widget = new TaskWidget(store, { maxVisible: 3 });
+    widget.setUICtx(ui.ctx);
+    for (let i = 1; i <= 5; i++) store.create(`Task ${i}`, "Desc");
+    for (let i = 1; i <= 5; i++) store.update(String(i), { status: "completed" });
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    expect(lines.some(l => l.includes("Task 5"))).toBe(true);
+    expect(lines.some(l => l.includes("Task 3"))).toBe(true);
+    expect(lines.some(l => l.includes("Task 1"))).toBe(false);
+    expect(lines.some(l => l.includes("2 earlier"))).toBe(true);
   });
 
   it("sorts tasks by status when sortOrder is 'status'", () => {

@@ -1,10 +1,10 @@
 import type { PoolEntry } from "../config.js";
 import { getModelInfo, resolveModel } from "../model-registry.js";
-import { toolsBlock, parseToolNames, identityBlock, ALL_CBM_TOOLS, EXA_TOOLS, principlesBlock } from "./tool-routing.js";
+import { toolsBlock, parseToolNames, identityBlock, ALL_CBM_TOOLS, WEB_TOOLS, principlesBlock } from "./tool-routing.js";
 
 export function createReviewerAgent(entry: PoolEntry) {
   const model = resolveModel(entry.model);
-  const tools = `read, bash, grep, find, ls, lsp, ast_search, vcc_recall, ${ALL_CBM_TOOLS}, ${EXA_TOOLS}`;
+  const tools = `read, bash, grep, find, ls, lsp, ast_search, vcc_recall, ${ALL_CBM_TOOLS}, ${WEB_TOOLS}`;
   const info = getModelInfo(model);
   return {
     frontmatter: {

@@ -68,7 +68,7 @@ describe("detectDuplicateExtensions", () => {
     const tools = [
       tool("lsp", "/opt/pi-pi/3p/pi-lsp/extensions/lsp/index.ts"),
       tool("pp_phase_complete", "/opt/pi-pi/extensions/orchestrator/index.ts"),
-      tool("exa_search", "/opt/pi-pi/extensions/orchestrator/exa.ts"),
+      tool("web_search", "/opt/pi-pi/extensions/orchestrator/exa.ts"),
     ];
     expect(detectDuplicateExtensions(tools, [], ROOT)).toHaveLength(0);
   });

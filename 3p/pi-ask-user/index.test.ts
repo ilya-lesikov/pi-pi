@@ -2164,3 +2164,36 @@ describe("ask_user", () => {
       });
    });
 });
+describe("multi-question flow", () => {
+   test("asks questions sequentially and collects all answers", async () => {
+      const tool = await setupTool();
+      const seen: string[] = [];
+      const values = ["first answer", "second answer"];
+
+      const result = await tool.execute(
+         "tool-call-id",
+         {
+            questions: [
+               { question: "First question?" },
+               { question: "Second question?" },
+            ],
+         },
+         undefined,
+         undefined,
+         {
+            hasUI: true,
+            ui: {
+               input: async (question: string) => {
+                  seen.push(question);
+                  return values[seen.length - 1];
+               },
+            },
+         },
+      );
+
+      expect(seen).toEqual(["First question?", "Second question?"]);
+      expect(result.details.answers).toHaveLength(2);
+      expect(result.content[0].text).toContain("1. First question?: first answer");
+      expect(result.content[0].text).toContain("2. Second question?: second answer");
+   });
+});

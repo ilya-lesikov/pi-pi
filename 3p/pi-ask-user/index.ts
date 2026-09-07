@@ -94,7 +94,15 @@ export function clampInitialIndex(index: number, count: number): number {
 type AskDisplayMode = "overlay" | "inline";
 
 interface AskParams {
-   question: string;
+   question?: string;
+   questions?: Array<{
+      question: string;
+      context?: string;
+      options?: AskOptionInput[];
+      allowMultiple?: boolean;
+      allowFreeform?: boolean;
+      allowComment?: boolean;
+   }>;
    context?: string;
    options?: AskOptionInput[];
    allowMultiple?: boolean;
@@ -145,6 +153,9 @@ interface AskToolDetails {
    response: AskResponse | null;
    cancelled: boolean;
    cancelReason?: CancelReason;
+   // Present when the call carried a `questions` array: per-question outcomes,
+   // in ask order. The top-level fields then describe the LAST asked question.
+   answers?: AskToolDetails[];
 }
 
 type AskUIResult = AskResponse | AskCancel;
@@ -1566,14 +1577,14 @@ export default function(pi: ExtensionAPI) {
       name: "ask_user",
       label: "Ask User",
       description:
-         "Ask the user a question with optional multiple-choice answers. Use this to gather information interactively. Ask exactly one focused question per call — NEVER bundle multiple decisions into one prompt; spawn several asks in sequence instead. Keep the `question` SHORT — one scannable line; put the substantive context, reasoning, and findings in your message (or the `context` field) BEFORE the call, so the terse question and options are interpretable. Do NOT add an option like 'I'll answer in a comment' — the built-in freeform 'Type something' path already covers custom answers.",
+         "Ask the user one focused question with optional multiple-choice answers — or several related questions via `questions`, presented one by one. NEVER bundle multiple decisions into a single question's text or options; use `questions` for a sequence instead. Keep each `question` SHORT — one scannable line; put the substantive context, reasoning, and findings in your message (or the `context` field) BEFORE the call, so the terse question and options are interpretable. Do NOT add an option like 'I'll answer in a comment' — the built-in freeform 'Type something' path already covers custom answers.",
       promptSnippet:
          "Ask the user one short, focused question with optional multiple-choice answers to gather information interactively",
       promptGuidelines: [
          "Keep the `question` field SHORT — a single scannable line (ideally under ~100 chars). The dialogue de-emphasizes it; the user reads your detail from the message rendered above the dialogue.",
          "ALWAYS present substantive context BEFORE the ask (in your assistant message and/or the `context` field): the question and options are intentionally terse, so the surrounding context must make them interpretable.",
          "Use ask_user when the user's intent is ambiguous, when a decision requires explicit user input, or when multiple valid options exist.",
-         "Ask exactly one focused question per ask_user call. NEVER combine multiple numbered, multipart, or unrelated decisions into one prompt — spawn multiple focused asks in sequence instead.",
+         "Each question must carry exactly one decision. For several related decisions, pass them as the `questions` array (asked one by one) instead of merging them into one prompt or spawning separate calls.",
          "NEVER add an option that just says the user will answer in a comment / free text (e.g. 'I'll type my own answer') — the built-in 'Type something' freeform path already covers custom answers.",
       ],
       // Block other tool calls in the same assistant turn until the user answers,
@@ -1581,7 +1592,30 @@ export default function(pi: ExtensionAPI) {
       // (potentially with side effects) before the user sees the prompt.
       executionMode: "sequential",
       parameters: Type.Object({
-         question: Type.String({ description: "The question to ask the user. Keep it SHORT — one scannable line. Put detail/reasoning in your message above the dialogue, not here." }),
+         question: Type.Optional(Type.String({ description: "The question to ask the user. Keep it SHORT — one scannable line. Put detail/reasoning in your message above the dialogue, not here. Omit when using `questions`." })),
+         questions: Type.Optional(
+            Type.Array(
+               Type.Object({
+                  question: Type.String({ description: "One short, focused question — exactly one decision." }),
+                  context: Type.Optional(Type.String({ description: "Context shown before this question" })),
+                  options: Type.Optional(
+                     Type.Array(
+                        Type.Union([
+                           Type.String(),
+                           Type.Object({
+                              title: Type.String(),
+                              description: Type.Optional(Type.String()),
+                           }),
+                        ]),
+                     ),
+                  ),
+                  allowMultiple: Type.Optional(Type.Boolean()),
+                  allowFreeform: Type.Optional(Type.Boolean()),
+                  allowComment: Type.Optional(Type.Boolean()),
+               }),
+               { description: "Several related questions asked one by one, each with its own options. The user answers them in order; a cancel stops the remaining questions. Use INSTEAD of `question` for multi-decision asks." },
+            ),
+         ),
          context: Type.Optional(
             Type.String({
                description: "Relevant context to show before the question (summary of findings)",
@@ -1630,12 +1664,71 @@ export default function(pi: ExtensionAPI) {
          if (signal?.aborted) {
             return {
                content: [{ type: "text" as const, text: "Cancelled" }],
-               details: { question: params.question, options: [], response: null, cancelled: true } as AskToolDetails,
+               details: { question: params.question ?? "", options: [], response: null, cancelled: true } as AskToolDetails,
             };
          }
 
+         const multiQuestions = (params as AskParams).questions;
+         if (!params.question && !multiQuestions?.length) {
+            return { content: [{ type: "text" as const, text: "ask_user requires `question` or a non-empty `questions` array" }], isError: true, details: { error: "missing question" } };
+         }
+         if (params.question && multiQuestions?.length) {
+            return { content: [{ type: "text" as const, text: "Use either `question` or `questions`, not both" }], isError: true, details: { error: "ambiguous question input" } };
+         }
+         if (multiQuestions?.length) {
+            if (!ctx.hasUI || !ctx.ui) {
+               return {
+                  content: [{ type: "text" as const, text: `Ask requires interactive mode. ${multiQuestions.length} questions could not be presented.` }],
+                  isError: true,
+                  details: { question: multiQuestions[0]!.question, options: [], response: null, cancelled: true } as AskToolDetails,
+               };
+            }
+            const answers: AskToolDetails[] = [];
+            for (let i = 0; i < multiQuestions.length; i++) {
+               const item = multiQuestions[i]!;
+               const itemOptions = normalizeOptions(item.options ?? []);
+               const itemContext = item.context?.trim() || undefined;
+               onUpdate?.({
+                  content: [{ type: "text" as const, text: `Waiting for user input (${i + 1}/${multiQuestions.length})...` }],
+                  details: { question: item.question, context: itemContext, options: itemOptions, response: null, cancelled: false, answers },
+               });
+               pi.events.emit("ask:opened", { question: item.question, context: itemContext, options: itemOptions });
+               let result: AskResponse | AskCancel | null;
+               try {
+                  result = await askUser(ctx, {
+                     question: item.question,
+                     context: itemContext,
+                     options: itemOptions,
+                     allowMultiple: item.allowMultiple ?? false,
+                     allowFreeform: item.allowFreeform ?? true,
+                     allowComment: item.allowComment ?? true,
+                     displayMode: (params as AskParams).displayMode,
+                     overlayToggleKey: (params as AskParams).overlayToggleKey,
+                     timeout: (params as AskParams).timeout,
+                     signal,
+                  });
+               } catch (error) {
+                  const message = error instanceof Error ? error.message : String(error);
+                  return { content: [{ type: "text" as const, text: `Ask tool failed: ${message}` }], isError: true, details: { error: message, answers } };
+               }
+               if (result === null || isCancel(result)) {
+                  const cancelReason = isCancel(result) ? result.reason : undefined;
+                  const cancelled: AskToolDetails = { question: item.question, context: itemContext, options: itemOptions, response: null, cancelled: true, cancelReason };
+                  answers.push(cancelled);
+                  pi.events.emit("ask:cancelled", { question: item.question, context: itemContext, options: itemOptions, reason: cancelReason });
+                  return { content: [{ type: "text" as const, text: `User cancelled question ${i + 1}/${multiQuestions.length}` }], details: { ...cancelled, answers } };
+               }
+               const answered: AskToolDetails = { question: item.question, context: itemContext, options: itemOptions, response: result, cancelled: false };
+               answers.push(answered);
+               pi.events.emit("ask:answered", { question: item.question, context: itemContext, response: result });
+            }
+            const last = answers[answers.length - 1]!;
+            const summary = answers.map((answer, i) => `${i + 1}. ${answer.question}: ${formatResponseSummary(answer.response!)}`).join("\n");
+            return { content: [{ type: "text" as const, text: `User answered:\n${summary}` }], details: { ...last, answers } };
+         }
+
          const {
-            question,
+            question = "",
             context,
             options: rawOptions = [],
             allowMultiple = false,
@@ -1744,10 +1837,11 @@ export default function(pi: ExtensionAPI) {
       },
 
       renderCall(args, theme) {
-         const question = (args.question as string) || "";
+         const rawQuestions = Array.isArray(args.questions) ? args.questions as Array<{ question?: string }> : [];
+         const question = (args.question as string) || rawQuestions[0]?.question || "";
          const rawOptions = Array.isArray(args.options) ? args.options : [];
          let text = theme.fg("toolTitle", theme.bold("ask_user "));
-         text += theme.fg("muted", question);
+         text += theme.fg("muted", rawQuestions.length > 0 ? `${rawQuestions.length} questions · ${question}` : question);
          if (rawOptions.length > 0) {
             const labels = rawOptions.map((o: unknown) =>
                typeof o === "string" ? o : (o as QuestionOption)?.title ?? "",
@@ -1781,6 +1875,13 @@ export default function(pi: ExtensionAPI) {
 
          if (!details || details.cancelled || !details.response) {
             return new Text(theme.fg("warning", "Cancelled"), 0, 0);
+         }
+
+         if (details.answers && details.answers.length > 1) {
+            const lines = details.answers.map((answer, i) =>
+               `${i + 1}. ${answer.question}: ${answer.response ? formatResponseSummary(answer.response) : "cancelled"}`,
+            );
+            return new Text(theme.fg("success", `✓ ${details.answers.length} answers`) + (options.expanded ? `\n${lines.join("\n")}` : ""), 0, 0);
          }
 
          const response = details.response;

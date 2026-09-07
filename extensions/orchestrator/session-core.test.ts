@@ -44,9 +44,9 @@ describe("session-first core", () => {
     }, ["read", "vcc_recall", "load_skill"]);
     expect(prompt).toContain("Own the request end to end");
     expect(prompt).toContain("After two failed attempts driven by the same hypothesis");
-    expect(prompt).toContain("vcc_recall retrieves it");
+    expect(prompt).toContain("vcc_recall: retrieve full detail");
     expect(prompt).toContain("load_skill");
-    expect(prompt).toContain("In your final response");
+    expect(prompt).toContain("When reporting finished work");
     expect(prompt).not.toContain("ACTIVE PHASE");
     expect(prompt).not.toContain("There are no task modes");
     expect(prompt).not.toContain("USER_REQUEST.md");

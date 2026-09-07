@@ -5,7 +5,7 @@ import { toolsBlock, parseToolNames, identityBlock, principlesBlock } from "./to
 export function createLibrarianAgent(config: PiPiConfig) {
   const model = resolveModel(config.agents.subagents.simple.librarian.model);
   const thinking = config.agents.subagents.simple.librarian.thinking;
-  const tools = "read, bash, grep, find, vcc_recall, exa_search, exa_fetch";
+  const tools = "read, bash, grep, find, vcc_recall, web_search, web_fetch";
   const info = getModelInfo(model);
   return {
     frontmatter: {
@@ -36,8 +36,8 @@ export function createLibrarianAgent(config: PiPiConfig) {
       "If your instructions reference a prior decision, constraint, or result you cannot see, recall the main session's history for it first — the question may already be narrowed.",
       "",
       "Web sources:",
-      "- exa_search: search the web. Describe the ideal page, not keywords.",
-      "- exa_fetch: read a URL's full content as clean markdown. Use after exa_search for details.",
+      "- web_search: search the web. Describe the ideal page, not keywords.",
+      "- web_fetch: read a URL's full content as clean markdown. Use after web_search for details.",
       "- Prefer primary sources (official docs, specs, the vendor, the paper) over secondary commentary. When sources disagree, report the disagreement rather than picking silently.",
       "",
       "Local sources:",
@@ -45,7 +45,7 @@ export function createLibrarianAgent(config: PiPiConfig) {
       "- grep those local sources for real usage patterns",
       "- bash for anything only a command can answer about an installed dependency or environment",
       "",
-      "Priority: exa_search → exa_fetch (for the full page) → installed/local source → grep as fallback",
+      "Priority: web_search → web_fetch (for the full page) → installed/local source → grep as fallback",
       "",
       "# Output",
       "- Organize findings by topic",

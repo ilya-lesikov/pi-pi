@@ -77,40 +77,40 @@ describe("registerExaTools", () => {
     const pi = makePi();
     registerExaTools(pi as any);
     expect(pi.registerTool).toHaveBeenCalledTimes(2);
-    expect([...pi.tools.keys()].sort()).toEqual(["exa_fetch", "exa_search"]);
+    expect([...pi.tools.keys()].sort()).toEqual(["web_fetch", "web_search"]);
   });
 
-  it("exa_search returns ok content on success and applies the default numResults", async () => {
+  it("web_search returns ok content on success and applies the default numResults", async () => {
     const fn = mockFetchText(JSON.stringify({ result: { content: [{ text: "results!" }] } }));
     const pi = makePi();
     registerExaTools(pi as any);
-    const res = await pi.tools.get("exa_search").execute("id", { query: "cats" });
+    const res = await pi.tools.get("web_search").execute("id", { query: "cats" });
     expect(res.content[0].text).toBe("results!");
     expect(res.isError).toBeUndefined();
     const args = JSON.parse(fn.mock.calls[0][1].body).params.arguments;
     expect(args).toEqual({ query: "cats", numResults: 5 });
   });
 
-  it("exa_search falls through to Tavily when Exa throws", async () => {
+  it("web_search falls through to Tavily when Exa throws", async () => {
     mockFetchText(JSON.stringify({ error: { message: "boom" } }));
     const pi = makePi();
     registerExaTools(pi as any);
-    const res = await pi.tools.get("exa_search").execute("id", { query: "cats" });
+    const res = await pi.tools.get("web_search").execute("id", { query: "cats" });
     expect(res.isError).toBeUndefined();
     expect(res.content[0].text).toBe("No results found.");
   });
 
-  it("exa_fetch passes urls and default maxCharacters, returns ok content", async () => {
+  it("web_fetch passes urls and default maxCharacters, returns ok content", async () => {
     const fn = mockFetchText(JSON.stringify({ result: { content: [{ text: "page" }] } }));
     const pi = makePi();
     registerExaTools(pi as any);
-    const res = await pi.tools.get("exa_fetch").execute("id", { urls: ["http://x"] });
+    const res = await pi.tools.get("web_fetch").execute("id", { urls: ["http://x"] });
     expect(res.content[0].text).toBe("page");
     const args = JSON.parse(fn.mock.calls[0][1].body).params.arguments;
     expect(args).toEqual({ urls: ["http://x"], maxCharacters: 3000 });
   });
 
-  it("exa_fetch falls through a non-rate-limit Exa error to the rest of the chain (no sticky lockout)", async () => {
+  it("web_fetch falls through a non-rate-limit Exa error to the rest of the chain (no sticky lockout)", async () => {
     // A 500 on every hop: Exa 500 (not a rate limit) falls through WITHOUT
     // marking Exa limited; Tavily 500 throws a non-rate-limit error and falls
     // through; Jina 500 yields a per-url "Failed to fetch" result string. The
@@ -118,19 +118,19 @@ describe("registerExaTools", () => {
     mockFetchText("nope", { ok: false, status: 500 });
     const pi = makePi();
     registerExaTools(pi as any);
-    const res = await pi.tools.get("exa_fetch").execute("id", { urls: ["http://x"], maxCharacters: 10 });
+    const res = await pi.tools.get("web_fetch").execute("id", { urls: ["http://x"], maxCharacters: 10 });
     expect(res.isError).toBeUndefined();
     expect(res.content[0].text).toContain("Failed to fetch");
   });
 
-  it("exa_fetch keyed-Exa: sends Authorization when EXA_API_KEY is set", async () => {
+  it("web_fetch keyed-Exa: sends Authorization when EXA_API_KEY is set", async () => {
     const prev = process.env.EXA_API_KEY;
     process.env.EXA_API_KEY = "exa-key-xyz";
     try {
       const fn = mockFetchText(JSON.stringify({ result: { content: [{ text: "keyed ok" }] } }));
       const pi = makePi();
       registerExaTools(pi as any);
-      const res = await pi.tools.get("exa_fetch").execute("id", { urls: ["http://x"], maxCharacters: 10 });
+      const res = await pi.tools.get("web_fetch").execute("id", { urls: ["http://x"], maxCharacters: 10 });
       expect(res.content[0].text).toBe("keyed ok");
       // First fetch call is Exa; assert the Authorization header was attached.
       const firstCallInit = fn.mock.calls[0][1];

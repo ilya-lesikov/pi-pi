@@ -117,7 +117,7 @@ export function renderGenericPrompt(orchestrator: Orchestrator, ctx: any, toolNa
       "- For multi-step work keep a lightweight task-tool checklist. Do not create plan documents or wait for plan approval unless asked.",
       "- Ask the user only when required information is unavailable or plausible choices differ in user-visible behavior, compatibility, security, cost, or reversibility. For low-risk reversible ambiguity: follow repository precedent, state the assumption in one line, proceed.",
       "- Pause for the user only when proceeding would be destructive, irreversible, or picks between materially different outcomes; otherwise take the safest reversible interpretation and continue.",
-      "- In your final response: changed behavior, key files, checks run with results, unresolved risk. Quote raw output only to explain a failure.",
+      "- When reporting finished work: what was done (not why), assumptions you made that the user should know about, and anything unresolved. Quote raw output only to explain a failure.",
       "</constraints>",
     ].join("\n"),
     principlesBlock(),
@@ -129,12 +129,7 @@ export function renderGenericPrompt(orchestrator: Orchestrator, ctx: any, toolNa
       deepDebuggers: buildPoolRoster(orchestrator.config, "deepDebuggers"),
     }),
     projectContext ? `<project_context>\n${projectContext}\n</project_context>` : "",
-    [
-      "<session>",
-      `Current month: ${month}. Working directory: ${orchestrator.cwd}.`,
-      "This conversation survives restores and compactions. Compaction keeps decisions in its summary but drops full message and tool-output detail — vcc_recall retrieves it.",
-      "</session>",
-    ].join("\n"),
+    `<session>\nCurrent month: ${month}. Working directory: ${orchestrator.cwd}.\n</session>`,
   ].filter(Boolean).join("\n\n");
 }
 

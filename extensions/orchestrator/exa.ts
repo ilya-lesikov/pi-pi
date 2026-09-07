@@ -260,8 +260,8 @@ async function runFetch(urls: string[], maxCharacters: number): Promise<string> 
 
 export function registerExaTools(pi: ExtensionAPI): void {
   pi.registerTool({
-    name: "exa_search",
-    label: "Exa",
+    name: "web_search",
+    label: "Web",
     description:
       "Search the web for any topic. Returns clean text from top results. " +
       "Query tip: describe the ideal page, not keywords. " +
@@ -276,17 +276,17 @@ export function registerExaTools(pi: ExtensionAPI): void {
         return ok(await runSearch(params.query, params.numResults ?? 5));
       } catch (e: any) {
         if (e?.message === UNAVAILABLE) return fail(UNAVAILABLE);
-        return fail(`exa_search error: ${e.message}`);
+        return fail(`web_search error: ${e.message}`);
       }
     },
   });
 
   pi.registerTool({
-    name: "exa_fetch",
-    label: "Exa",
+    name: "web_fetch",
+    label: "Web",
     description:
       "Read a webpage's full content as clean markdown. " +
-      "Use after exa_search when highlights are insufficient, or to read any URL. " +
+      "Use after web_search when highlights are insufficient, or to read any URL. " +
       "Batch multiple URLs in one call.",
     parameters: Type.Object({
       urls: Type.Array(Type.String(), { description: "URLs to read" }),
@@ -297,7 +297,7 @@ export function registerExaTools(pi: ExtensionAPI): void {
         return ok(await runFetch(params.urls, params.maxCharacters ?? 3000));
       } catch (e: any) {
         if (e?.message === UNAVAILABLE) return fail(UNAVAILABLE);
-        return fail(`exa_fetch error: ${e.message}`);
+        return fail(`web_fetch error: ${e.message}`);
       }
     },
   });

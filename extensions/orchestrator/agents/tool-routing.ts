@@ -1,5 +1,5 @@
 export const ALL_CBM_TOOLS = "cbm_search, cbm_search_code, cbm_trace, cbm_changes, cbm_query, cbm_architecture";
-export const EXA_TOOLS = "exa_search, exa_fetch";
+export const WEB_TOOLS = "web_search, web_fetch";
 
 // Domain-neutral operating principles shared by every agent.
 const PRINCIPLES = [
@@ -146,8 +146,8 @@ const TOOL_SEGMENTS: ToolSegment[] = [
   {
     header: "Web search:",
     items: [
-      { tools: ["exa_search"], text: "- exa_search: search the web for docs, guides, examples. Describe the ideal page, not keywords. Falls back to alternate providers automatically; only an explicit 'unavailable' result means the web is unreachable." },
-      { tools: ["exa_fetch"], text: "- exa_fetch: read a URL's full content as clean markdown. Same automatic provider fallback." },
+      { tools: ["web_search"], text: "- web_search: search the web for docs, guides, examples. Describe the ideal page, not keywords. Falls back to alternate providers automatically; only an explicit 'unavailable' result means the web is unreachable." },
+      { tools: ["web_fetch"], text: "- web_fetch: read a URL's full content as clean markdown. Same automatic provider fallback." },
     ],
   },
   {

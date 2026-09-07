@@ -140,7 +140,7 @@ describe("normalizeTavilyExtract", () => {
   });
 });
 
-describe("exa_search fallback chain", () => {
+describe("web_search fallback chain", () => {
   it("falls to Tavily and returns normalized text when Exa returns the rate-limit string", async () => {
     const fn = routeFetch((url) => {
       if (url === EXA_URL) return { body: exaSseText(EXA_LIMIT_TEXT) };
@@ -150,7 +150,7 @@ describe("exa_search fallback chain", () => {
     });
     const pi = makePi();
     registerExaTools(pi as any);
-    const res = await pi.tools.get("exa_search").execute("id", { query: "q" });
+    const res = await pi.tools.get("web_search").execute("id", { query: "q" });
     expect(res.isError).toBeUndefined();
     expect(res.content[0].text).toContain("tav body");
     expect(fn.mock.calls.map((c: any[]) => c[0])).toEqual([EXA_URL, TAVILY_SEARCH]);
@@ -165,7 +165,7 @@ describe("exa_search fallback chain", () => {
     });
     const pi = makePi();
     registerExaTools(pi as any);
-    const res = await pi.tools.get("exa_search").execute("id", { query: "q" });
+    const res = await pi.tools.get("web_search").execute("id", { query: "q" });
     expect(res.content[0].text).toContain("recovered");
   });
 
@@ -177,7 +177,7 @@ describe("exa_search fallback chain", () => {
     });
     const pi = makePi();
     registerExaTools(pi as any);
-    const res = await pi.tools.get("exa_search").execute("id", { query: "q" });
+    const res = await pi.tools.get("web_search").execute("id", { query: "q" });
     expect(res.isError).toBe(true);
     expect(res.content[0].text).toBe("web tools temporarily unavailable");
     for (const c of fn.mock.calls) expect((c[0] as string).startsWith("https://r.jina.ai/")).toBe(false);
@@ -192,7 +192,7 @@ describe("Tavily auth headers", () => {
     });
     const pi = makePi();
     registerExaTools(pi as any);
-    await pi.tools.get("exa_search").execute("id", { query: "q" });
+    await pi.tools.get("web_search").execute("id", { query: "q" });
     const tavCall = fn.mock.calls.find((c: any[]) => c[0] === TAVILY_SEARCH);
     expect(tavCall[1].headers["X-Tavily-Access-Mode"]).toBe("keyless");
     expect(tavCall[1].headers.Authorization).toBeUndefined();
@@ -206,14 +206,14 @@ describe("Tavily auth headers", () => {
     });
     const pi = makePi();
     registerExaTools(pi as any);
-    await pi.tools.get("exa_search").execute("id", { query: "q" });
+    await pi.tools.get("web_search").execute("id", { query: "q" });
     const tavCall = fn.mock.calls.find((c: any[]) => c[0] === TAVILY_SEARCH);
     expect(tavCall[1].headers.Authorization).toBe("Bearer tvly-secret");
     expect(tavCall[1].headers["X-Tavily-Access-Mode"]).toBeUndefined();
   });
 });
 
-describe("exa_fetch fallback chain", () => {
+describe("web_fetch fallback chain", () => {
   it("falls Exa -> Tavily -> Jina and uses Jina only for fetch", async () => {
     const fn = routeFetch((url) => {
       if (url === EXA_URL) return { body: exaSseText(EXA_LIMIT_TEXT) };
@@ -223,7 +223,7 @@ describe("exa_fetch fallback chain", () => {
     });
     const pi = makePi();
     registerExaTools(pi as any);
-    const res = await pi.tools.get("exa_fetch").execute("id", { urls: ["http://x"] });
+    const res = await pi.tools.get("web_fetch").execute("id", { urls: ["http://x"] });
     expect(res.content[0].text).toContain("jina page content");
     const urls = fn.mock.calls.map((c: any[]) => c[0]);
     expect(urls[0]).toBe(EXA_URL);
@@ -241,7 +241,7 @@ describe("exa_fetch fallback chain", () => {
     });
     const pi = makePi();
     registerExaTools(pi as any);
-    const res = await pi.tools.get("exa_fetch").execute("id", { urls: ["http://a", "http://b"] });
+    const res = await pi.tools.get("web_fetch").execute("id", { urls: ["http://a", "http://b"] });
     expect(res.content[0].text).toContain("URL: http://a");
     expect(res.content[0].text).toContain("AAA");
     expect(res.content[0].text).toContain("URL: http://b");
@@ -260,7 +260,7 @@ describe("all tiers exhausted", () => {
     });
     const pi = makePi();
     registerExaTools(pi as any);
-    const res = await pi.tools.get("exa_fetch").execute("id", { urls: ["http://x"] });
+    const res = await pi.tools.get("web_fetch").execute("id", { urls: ["http://x"] });
     expect(res.isError).toBe(true);
     expect(res.content[0].text).toBe("web tools temporarily unavailable");
   });
@@ -280,18 +280,18 @@ describe("cooldown re-probe", () => {
     const pi = makePi();
     registerExaTools(pi as any);
 
-    let res = await pi.tools.get("exa_search").execute("id", { query: "q1" });
+    let res = await pi.tools.get("web_search").execute("id", { query: "q1" });
     expect(res.content[0].text).toContain("tavily result");
     expect(fn.mock.calls.filter((c: any[]) => c[0] === EXA_URL).length).toBe(1);
 
     exaHealthy = true;
     vi.setSystemTime(PROBE_COOLDOWN_MS - 1);
-    res = await pi.tools.get("exa_search").execute("id", { query: "q2" });
+    res = await pi.tools.get("web_search").execute("id", { query: "q2" });
     expect(res.content[0].text).toContain("tavily result");
     expect(fn.mock.calls.filter((c: any[]) => c[0] === EXA_URL).length).toBe(1);
 
     vi.setSystemTime(PROBE_COOLDOWN_MS);
-    res = await pi.tools.get("exa_search").execute("id", { query: "q3" });
+    res = await pi.tools.get("web_search").execute("id", { query: "q3" });
     expect(res.content[0].text).toContain("exa is back");
     expect(fn.mock.calls.filter((c: any[]) => c[0] === EXA_URL).length).toBe(2);
   });

@@ -16,15 +16,22 @@ import type { TasksConfig } from "../tasks-config.js";
 
 import type { Task } from "../types.js";
 
-function truncateFromTop(tasks: Task[], limit: number): Task[] {
-  return tasks.slice(-limit);
+function truncateFromTop(tasks: Task[], limit: number): { visible: Task[]; hiddenAbove: number; hiddenBelow: number } {
+  const visible = tasks.slice(-limit);
+  return { visible, hiddenAbove: tasks.length - visible.length, hiddenBelow: 0 };
 }
 
-function truncateFromBottom(tasks: Task[], limit: number): Task[] {
-  return tasks.slice(0, limit);
+// Scroll the window down past leading completed tasks so at least one
+// non-completed task is visible; when everything is completed, show the tail.
+function truncateScrolled(tasks: Task[], limit: number): { visible: Task[]; hiddenAbove: number; hiddenBelow: number } {
+  const firstOpen = tasks.findIndex((t) => t.status !== "completed");
+  const anchor = firstOpen === -1 ? tasks.length : firstOpen;
+  const start = Math.max(0, Math.min(anchor, tasks.length - limit));
+  const visible = tasks.slice(start, start + limit);
+  return { visible, hiddenAbove: start, hiddenBelow: tasks.length - start - visible.length };
 }
 
-const TRUNCATE_FNS = { top: truncateFromTop, bottom: truncateFromBottom };
+const TRUNCATE_FNS = { top: truncateFromTop, bottom: truncateScrolled };
 
 // ---- Types ----
 
@@ -159,15 +166,12 @@ export class TaskWidget {
     const showAll = this.config.showAll ?? false;
     const limit = this.config.maxVisible ?? DEFAULT_MAX_VISIBLE_TASKS;
     const hiddenAt = this.config.hiddenAt ?? "bottom";
-    const visible = showAll ? tasks : TRUNCATE_FNS[hiddenAt](tasks, limit);
+    const { visible, hiddenAbove, hiddenBelow } = showAll
+      ? { visible: tasks, hiddenAbove: 0, hiddenBelow: 0 }
+      : TRUNCATE_FNS[hiddenAt](tasks, limit);
 
-    const hiddenCount = tasks.length - visible.length;
-    const overflowLine = hiddenCount > 0
-      ? truncate(theme.fg("dim", `    … and ${hiddenCount} more`))
-      : undefined;
-
-    if (overflowLine && hiddenAt === "top") {
-      lines.push(overflowLine);
+    if (hiddenAbove > 0) {
+      lines.push(truncate(theme.fg("dim", `    … ${hiddenAbove} earlier`)));
     }
     for (let i = 0; i < visible.length; i++) {
       const task = visible[i];
@@ -224,8 +228,8 @@ export class TaskWidget {
       lines.push(truncate(text + suffix));
     }
 
-    if (overflowLine && hiddenAt !== "top") {
-      lines.push(overflowLine);
+    if (hiddenBelow > 0) {
+      lines.push(truncate(theme.fg("dim", `    … and ${hiddenBelow} more`)));
     }
 
     return lines;
