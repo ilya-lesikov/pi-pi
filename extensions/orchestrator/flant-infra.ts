@@ -130,6 +130,41 @@ interface CopilotOAuthCreds extends AnthropicOAuthCreds {
   enterpriseUrl?: unknown;
 }
 
+// pi's own ModelRegistry (ctx.modelRegistry), captured at session start. Used
+// as the refresh path when the direct `@earendil-works/pi-ai/oauth` import is
+// unavailable: the standalone pi binary (>= 0.84) bundles that subpath as an
+// empty module, so refreshAnthropicToken/refreshGitHubCopilotToken are
+// undefined at runtime there even though they type-check against node_modules.
+let modelRegistryRef: { getApiKeyForProvider?: (provider: string) => Promise<string | undefined> } | null = null;
+
+export function setModelRegistry(registry: unknown): void {
+  modelRegistryRef = registry && typeof (registry as any).getApiKeyForProvider === "function" ? registry as any : null;
+}
+
+function readOAuthEntry<T extends AnthropicOAuthCreds>(authPath: string, provider: string): T | undefined {
+  try {
+    return (JSON.parse(readFileSync(authPath, "utf-8")) as Record<string, T | undefined>)[provider];
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Refresh `provider`'s OAuth credential through pi's registry, which refreshes
+ * and persists to auth.json itself, then re-read the persisted entry. Returns
+ * null when no registry is available or pi could not produce a fresh token.
+ */
+async function refreshViaModelRegistry<T extends AnthropicOAuthCreds>(authPath: string, provider: string): Promise<T | null> {
+  const registry = modelRegistryRef;
+  if (!registry?.getApiKeyForProvider) return null;
+  const apiKey = await registry.getApiKeyForProvider(provider);
+  if (!apiKey) return null;
+  const entry = readOAuthEntry<T>(authPath, provider);
+  if (!entry || typeof entry.access !== "string" || !entry.access) return null;
+  if (typeof entry.expires === "number" && entry.expires <= Date.now()) return null;
+  return entry;
+}
+
 export function readCopilotOAuthToken(): string | null {
   const authPath = join(resolveAgentDir(), "auth.json");
   if (!existsSync(authPath)) return null;
@@ -149,19 +184,24 @@ export async function refreshCopilotOAuthToken(): Promise<string | null> {
   const authPath = join(resolveAgentDir(), "auth.json");
   if (!existsSync(authPath)) return null;
 
-  let copilot: CopilotOAuthCreds | undefined;
-  try {
-    const raw = JSON.parse(readFileSync(authPath, "utf-8")) as { "github-copilot"?: CopilotOAuthCreds };
-    copilot = raw["github-copilot"];
-  } catch {
-    return null;
-  }
+  const copilot = readOAuthEntry<CopilotOAuthCreds>(authPath, "github-copilot");
   if (!copilot || typeof copilot.access !== "string" || !copilot.access) return null;
 
   const REFRESH_MARGIN_MS = 5 * 60_000;
   const expires = typeof copilot.expires === "number" ? copilot.expires : 0;
   if (expires > Date.now() + REFRESH_MARGIN_MS) return copilot.access;
   if (typeof copilot.refresh !== "string" || !copilot.refresh) return null;
+
+  if (typeof refreshGitHubCopilotToken !== "function") {
+    try {
+      const entry = await refreshViaModelRegistry<CopilotOAuthCreds>(authPath, "github-copilot");
+      if (entry) return entry.access as string;
+      log.debug({ s: "flant" }, "copilot oauth token refresh unavailable");
+    } catch (err: any) {
+      log.debug({ s: "flant", err: err?.message }, "copilot oauth token refresh failed");
+    }
+    return null;
+  }
 
   const enterpriseUrl = typeof copilot.enterpriseUrl === "string" ? copilot.enterpriseUrl : undefined;
   let refreshed: { refresh: string; access: string; expires: number; enterpriseUrl?: string };
@@ -214,13 +254,7 @@ export async function refreshClaudeOAuthToken(): Promise<string | null> {
   const authPath = join(resolveAgentDir(), "auth.json");
   if (!existsSync(authPath)) return null;
 
-  let anthropic: AnthropicOAuthCreds | undefined;
-  try {
-    const raw = JSON.parse(readFileSync(authPath, "utf-8")) as { anthropic?: AnthropicOAuthCreds };
-    anthropic = raw.anthropic;
-  } catch {
-    return null;
-  }
+  const anthropic = readOAuthEntry<AnthropicOAuthCreds>(authPath, "anthropic");
   if (!anthropic || typeof anthropic.access !== "string" || !anthropic.access) return null;
 
   // Refresh ahead of expiry so in-flight requests never race a dying token.
@@ -231,6 +265,20 @@ export async function refreshClaudeOAuthToken(): Promise<string | null> {
   // Expired (or expiring soon, or no expiry recorded): try to refresh.
   if (typeof anthropic.refresh !== "string" || !anthropic.refresh) {
     log.debug({ s: "flant" }, "claude oauth token expired and no refresh token available");
+    return null;
+  }
+
+  if (typeof refreshAnthropicToken !== "function") {
+    try {
+      const entry = await refreshViaModelRegistry<AnthropicOAuthCreds>(authPath, "anthropic");
+      if (entry) {
+        log.debug({ s: "flant" }, "refreshed claude oauth token via pi registry");
+        return entry.access as string;
+      }
+      log.debug({ s: "flant" }, "claude oauth token refresh unavailable");
+    } catch (err: any) {
+      log.debug({ s: "flant", err: err?.message }, "claude oauth token refresh failed");
+    }
     return null;
   }
 

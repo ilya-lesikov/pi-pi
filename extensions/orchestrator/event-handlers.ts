@@ -22,7 +22,7 @@ import { publishAcpState, resetAcpStateCache } from "./acp.js";
 import { runAfterEdit } from "./commands.js";
 import { checkDuplicateExtensions } from "./duplicate-extension-guard.js";
 import { handleMainRateLimit, handleSubagentRateLimit, isRateLimitError } from "./rate-limit-fallback.js";
-import { loadFlantSettings, refreshCopilotOAuthToken, refreshSubProvider, syncProviderTiers } from "./flant-infra.js";
+import { loadFlantSettings, refreshCopilotOAuthToken, refreshSubProvider, setModelRegistry, syncProviderTiers } from "./flant-infra.js";
 import type { Orchestrator } from "./orchestrator.js";
 
 const USAGE_TRACKER_KEY = Symbol.for("pi-pi:usage-tracker");
@@ -445,6 +445,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     };
     (globalThis as any)[Symbol.for("pi-pi:orchestrator-cwd")] = ctx.cwd;
     initSessionLogger(`${ctx.cwd}/.pp`, "info");
+    setModelRegistry((ctx as any).modelRegistry);
     const available = (ctx as any).modelRegistry?.getAvailable?.();
     if (Array.isArray(available)) updateRegistryFromAvailableModels(available.flatMap((model: any) => model?.provider && model?.id ? [`${model.provider}/${model.id}`] : []));
     try {
