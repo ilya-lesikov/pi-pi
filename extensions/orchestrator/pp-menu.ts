@@ -40,6 +40,7 @@ import { compareModelVersion } from "./model-version.js";
 import { enabledSkillLayers, listLayeredSkills } from "./skills-manifest.js";
 import { buildPoolRoster, unregisterAgentDefinitions } from "./agents/registry.js";
 import { setLogLevel } from "./log.js";
+import { finalizeTracer, getTracer, initTracer } from "./tracer.js";
 import type { Orchestrator } from "./orchestrator.js";
 
 type Scope = "global" | "project";
@@ -256,16 +257,43 @@ function tryClearConfigOverride(orchestrator: Orchestrator, scope: Scope, keyPat
 }
 
 function refreshRuntimeAfterConfigChange(orchestrator: Orchestrator, keyPath: string[]): void {
+  const key = keyPath.join(".");
   if (keyPath[0] === "agents") {
     unregisterAgentDefinitions(orchestrator.pi);
     orchestrator.registerAgents();
     if (keyPath[1] === "maxConcurrentSubagents") orchestrator.applySubagentConcurrency();
+    if (keyPath[1] === "main" && orchestrator.lastCtx) {
+      void orchestrator.applyMainAgent(orchestrator.lastCtx).then((ok) => {
+        if (!ok) orchestrator.lastCtx?.ui?.notify?.(`Main agent model "${orchestrator.config.agents.main.model}" is not available; keeping the current model.`, "warning");
+      });
+    }
     return;
   }
-  if (keyPath.join(".") === "performance.internals.subagentStale" && orchestrator.staleAgentTimer) {
-    clearInterval(orchestrator.staleAgentTimer);
-    orchestrator.staleAgentTimer = null;
+  if (key === "performance.internals.subagentStale") orchestrator.restartStaleAgentWatchdog();
+  if (key === "general.tracing") {
+    const sessionId = orchestrator.lastCtx?.sessionManager?.getSessionId?.();
+    if (orchestrator.config.general.tracing && sessionId && !getTracer()) initTracer(`${orchestrator.cwd}/.pp`, sessionId);
+    if (!orchestrator.config.general.tracing) finalizeTracer();
   }
+}
+
+// Flant provider (re)registration rewrites the generated config layer AFTER the
+// menu already reloaded orchestrator.config, so worker definitions and the main
+// model must be reconciled against the new merged config explicitly.
+function reconcileAfterFlantChange(orchestrator: Orchestrator, ctx: any): void {
+  try {
+    orchestrator.config = loadConfig(orchestrator.cwd);
+  } catch (err: any) {
+    ctx.ui?.notify?.(`Config reload failed: ${err?.message ?? String(err)}`, "error");
+    return;
+  }
+  const available = ctx?.modelRegistry?.getAvailable?.();
+  if (Array.isArray(available)) {
+    updateRegistryFromAvailableModels(available.flatMap((m: any) => (m?.provider && m?.id ? [`${m.provider}/${m.id}`] : [])));
+  }
+  unregisterAgentDefinitions(orchestrator.pi);
+  orchestrator.registerAgents();
+  void orchestrator.applyMainAgent(ctx);
 }
 
 function applyConfigChange(orchestrator: Orchestrator, scope: Scope, keyPath: string[], value: any): void {
@@ -1121,6 +1149,7 @@ async function showFlantMenu(orchestrator: Orchestrator, ctx: any): Promise<void
         clearFlantGeneratedConfig();
         ctx.ui?.notify?.("Flant disabled.", "info");
       }
+      reconcileAfterFlantChange(orchestrator, ctx);
       continue;
     }
 
@@ -1141,6 +1170,7 @@ async function showFlantMenu(orchestrator: Orchestrator, ctx: any): Promise<void
       const eff = loadFlantSettings(orchestrator.cwd);
       if (warnIfFlantEditMasked(ctx, "Personal Claude subscription", scope, turningOn, eff.subscription)) continue;
       const result = await updateFlantInfra(orchestrator.pi, { cwd: orchestrator.cwd });
+      reconcileAfterFlantChange(orchestrator, ctx);
       ctx.ui?.notify?.(
         result.ok
           ? eff.subscription
@@ -1214,6 +1244,7 @@ async function showFlantMenu(orchestrator: Orchestrator, ctx: any): Promise<void
 
     if (choice === "Update now") {
       const result = await updateFlantInfra(orchestrator.pi, { force: true, cwd: orchestrator.cwd });
+      reconcileAfterFlantChange(orchestrator, ctx);
       const message = describeUpdateResult(result);
       ctx.ui?.notify?.(message.text, message.kind);
       continue;
@@ -1253,6 +1284,7 @@ async function showCopilotMenu(orchestrator: Orchestrator, ctx: any): Promise<vo
     const eff = loadFlantSettings(orchestrator.cwd);
     syncProviderTiers(eff);
     if (warnIfFlantEditMasked(ctx, "Copilot", scope, turningOn, eff.copilotEnabled)) continue;
+    reconcileAfterFlantChange(orchestrator, ctx);
     ctx.ui?.notify?.(turningOn ? "Copilot tier ON — a rate-limited Claude subscription now falls back to Copilot." : "Copilot tier OFF — a rate-limited Claude subscription waits for the limit to clear.", "info");
   }
 }

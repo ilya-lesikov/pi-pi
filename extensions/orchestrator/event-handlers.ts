@@ -166,43 +166,12 @@ export function registerFeatureToolsAndAgents(orchestrator: Orchestrator): void 
 
 function registerLifecycle(orchestrator: Orchestrator): void {
   const pi = orchestrator.pi;
-  const stopStaleAgentWatchdog = () => {
-    if (orchestrator.staleAgentTimer) clearInterval(orchestrator.staleAgentTimer);
-    orchestrator.staleAgentTimer = null;
-  };
-  const startStaleAgentWatchdog = () => {
-    const staleMs = orchestrator.config.performance.internals.subagentStale;
-    if (staleMs <= 0 || orchestrator.staleAgentTimer) return;
-    orchestrator.staleAgentTimer = setInterval(() => {
-      const currentLimit = orchestrator.config.performance.internals.subagentStale;
-      if (currentLimit <= 0 || orchestrator.agentSpawnTimes.size === 0) {
-        stopStaleAgentWatchdog();
-        return;
-      }
-      const now = Date.now();
-      for (const [id, spawnTime] of orchestrator.agentSpawnTimes) {
-        if (now - spawnTime <= currentLimit) continue;
-        const description = orchestrator.agentDescriptions.get(id) ?? id;
-        pi.events.emit("subagents:rpc:stop", { requestId: crypto.randomUUID(), agentId: id });
-        orchestrator.spawnedAgentIds.delete(id);
-        orchestrator.agentSpawnTimes.delete(id);
-        orchestrator.agentDescriptions.delete(id);
-        pi.sendMessage({
-          customType: "pp-agent-stale",
-          content: `Aborted stale agent "${description}" after ${Math.round(currentLimit / 1000)}s.`,
-          display: true,
-        }, { deliverAs: "steer" });
-      }
-      if (orchestrator.agentSpawnTimes.size === 0) stopStaleAgentWatchdog();
-      publishAcpState(orchestrator);
-    }, Math.min(30_000, Math.max(1_000, staleMs)));
-  };
   pi.on("subagents:created" as any, (data: any) => {
     if (data?.id) {
       orchestrator.spawnedAgentIds.add(data.id);
       orchestrator.agentDescriptions.set(data.id, data.description ?? data.type ?? data.id);
       orchestrator.agentSpawnTimes.set(data.id, Date.now());
-      startStaleAgentWatchdog();
+      orchestrator.startStaleAgentWatchdog();
     }
     publishAcpState(orchestrator);
   });
@@ -212,7 +181,7 @@ function registerLifecycle(orchestrator: Orchestrator): void {
       orchestrator.agentSpawnTimes.delete(data.id);
       orchestrator.agentDescriptions.delete(data.id);
     }
-    if (orchestrator.agentSpawnTimes.size === 0) stopStaleAgentWatchdog();
+    if (orchestrator.agentSpawnTimes.size === 0) orchestrator.stopStaleAgentWatchdog();
     publishAcpState(orchestrator);
   };
   pi.on("subagents:completed" as any, settle);
@@ -486,6 +455,9 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     ctx.ui?.setFooter?.(createCustomFooter);
     orchestrator.applySubagentConcurrency();
     registerFeatureToolsAndAgents(orchestrator);
+    if (!await orchestrator.applyMainAgent(ctx)) {
+      ctx.ui?.notify?.(`Main agent model "${orchestrator.config.agents.main.model}" is not available; keeping the current model.`, "warning");
+    }
     // The Claude OAuth token expires within hours. Turn-start refreshes cover
     // active work; this timer keeps the sub provider fresh through long idle
     // stretches too, so the first request after a pause never rides a dead token.

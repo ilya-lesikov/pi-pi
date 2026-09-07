@@ -76,6 +76,24 @@ describe("session-first core", () => {
     }
   });
 
+  it("applies the configured main agent model and thinking to the root session", async () => {
+    const pi = makePi();
+    pi.setModel = vi.fn(async () => true);
+    pi.setThinkingLevel = vi.fn();
+    const orchestrator = new Orchestrator(pi);
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    orchestrator.config.agents.main = { model: "test/main-model", thinking: "low" };
+    const model = { provider: "test", id: "main-model" };
+    const ctx: any = { modelRegistry: { find: vi.fn((p: string, id: string) => (p === "test" && id === "main-model" ? model : undefined)) } };
+    expect(await orchestrator.applyMainAgent(ctx)).toBe(true);
+    expect(pi.setModel).toHaveBeenCalledWith(model);
+    expect(pi.setThinkingLevel).toHaveBeenCalledWith("low");
+
+    orchestrator.config.agents.main = { model: "test/missing", thinking: "high" };
+    expect(await orchestrator.applyMainAgent(ctx)).toBe(false);
+    expect(pi.setModel).toHaveBeenCalledTimes(1);
+  });
+
   it("publishes session activity rather than a phase plan", () => {
     const orchestrator = new Orchestrator(makePi());
     orchestrator.config = normalizeConfigDurations(getDefaultConfig());

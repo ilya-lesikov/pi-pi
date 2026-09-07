@@ -155,9 +155,47 @@ export class Orchestrator {
     manager?.abortAll?.();
     this.spawnedAgentIds.clear();
     this.agentSpawnTimes.clear();
+    this.stopStaleAgentWatchdog();
+    publishAcpState(this);
+  }
+
+  stopStaleAgentWatchdog(): void {
     if (this.staleAgentTimer) clearInterval(this.staleAgentTimer);
     this.staleAgentTimer = null;
-    publishAcpState(this);
+  }
+
+  startStaleAgentWatchdog(): void {
+    const staleMs = this.config.performance.internals.subagentStale;
+    if (staleMs <= 0 || this.staleAgentTimer) return;
+    this.staleAgentTimer = setInterval(() => {
+      const currentLimit = this.config.performance.internals.subagentStale;
+      if (currentLimit <= 0 || this.agentSpawnTimes.size === 0) {
+        this.stopStaleAgentWatchdog();
+        return;
+      }
+      const now = Date.now();
+      for (const [id, spawnTime] of this.agentSpawnTimes) {
+        if (now - spawnTime <= currentLimit) continue;
+        const description = this.agentDescriptions.get(id) ?? id;
+        this.pi.events.emit("subagents:rpc:stop", { requestId: crypto.randomUUID(), agentId: id });
+        this.spawnedAgentIds.delete(id);
+        this.agentSpawnTimes.delete(id);
+        this.agentDescriptions.delete(id);
+        this.pi.sendMessage({
+          customType: "pp-agent-stale",
+          content: `Aborted stale agent "${description}" after ${Math.round(currentLimit / 1000)}s.`,
+          display: true,
+        }, { deliverAs: "steer" });
+      }
+      if (this.agentSpawnTimes.size === 0) this.stopStaleAgentWatchdog();
+      publishAcpState(this);
+    }, Math.min(30_000, Math.max(1_000, staleMs)));
+  }
+
+  /** Re-evaluate the watchdog after the stale limit changed at runtime. */
+  restartStaleAgentWatchdog(): void {
+    this.stopStaleAgentWatchdog();
+    if (this.agentSpawnTimes.size > 0) this.startStaleAgentWatchdog();
   }
 
   applySubagentConcurrency(): void {
@@ -188,6 +226,21 @@ export class Orchestrator {
 
   mainAgentConfig(): { model: string; thinking: string } {
     return this.config.agents.main;
+  }
+
+  /**
+   * Route the root session onto the configured main agent model/thinking.
+   * Returns false (and leaves the current model alone) when the configured
+   * model is not available in the registry.
+   */
+  async applyMainAgent(ctx: ExtensionContext): Promise<boolean> {
+    const main = this.config?.agents?.main;
+    if (!main) return false;
+    try {
+      return await this.switchModel(ctx, main.model, main.thinking);
+    } catch {
+      return false;
+    }
   }
 
   mainModelInfo(): ReturnType<typeof getModelInfo> {
