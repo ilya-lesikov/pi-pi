@@ -2,7 +2,6 @@ node_modules/
 3p/*/package-lock.json
 3p/*/*/package-lock.json
 3p/*/*/*/package-lock.json
-3p/pi-plannotator/apps/pi-extension/generated/
 
 # stray patch/diff dumps
 *.patch
