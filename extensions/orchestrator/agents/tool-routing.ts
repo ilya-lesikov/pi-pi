@@ -18,14 +18,14 @@ export function principlesBlock(): string {
 }
 
 export const FAILURE_RECOVERY = [
-  "# Failure recovery",
-  "",
+  "<failure_recovery>",
   "If an attempt fails, analyze root cause before retrying — don't repeat the same approach.",
   "After 3 failed attempts at the same issue:",
   "1. STOP immediately",
   "2. Revert to the last known-good state if possible",
   "3. Document what you tried and why it failed",
   "4. Report the blocker — do not keep pushing",
+  "</failure_recovery>",
 ].join("\n");
 
 // A documentation segment for the <tools> block. `header` (if present) is emitted
