@@ -1,8 +1,9 @@
 import { execFileSync } from "child_process";
-import { existsSync } from "fs";
-import { join } from "path";
+import { existsSync, readFileSync } from "fs";
+import { dirname, join, resolve } from "path";
+import { fileURLToPath } from "url";
 import { GLOBAL_CONFIG_PATH, mergeConfigLayers, readRawConfig, type NormalizedPiPiConfig } from "./config.js";
-import { isCopilotTierActive, loadFlantSettings, readClaudeOAuthToken, readGatewayApiKey } from "./flant-infra.js";
+import { isCopilotTierActive, loadFlantSettings, readClaudeOAuthToken, readGatewayApiKey, resolveAgentDir } from "./flant-infra.js";
 import { resolveModel } from "./model-registry.js";
 import { listLayeredSkills } from "./skills-manifest.js";
 import type { Orchestrator } from "./orchestrator.js";
@@ -13,6 +14,26 @@ function statusSymbol(severity: Severity): string {
   if (severity === "pass") return "✓";
   if (severity === "warning") return "⚠";
   return "✗";
+}
+
+// pi-pi copies declared in pi's own settings that are NOT the running one. A
+// worker session builds its own resource loader, so it discovers these even when
+// the root session was launched with --no-extensions -e: the worker then runs
+// different pi-pi code than the session that spawned it, and the mismatch only
+// surfaces as unexplained worker-only failures.
+function foreignPiPiPackages(): string[] {
+  let packages: unknown;
+  try {
+    packages = JSON.parse(readFileSync(join(resolveAgentDir(), "settings.json"), "utf-8"))?.packages;
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(packages)) return [];
+  const running = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+  return packages
+    .filter((entry): entry is string => typeof entry === "string" && !entry.startsWith("npm:"))
+    .map((entry) => resolve(entry))
+    .filter((path) => path !== running && existsSync(join(path, "extensions", "orchestrator")));
 }
 
 function which(bin: string): string | null {
@@ -119,6 +140,9 @@ export async function runDoctor(orchestrator: Orchestrator, ctx: any): Promise<v
   add(subagentsReady ? "pass" : "warning", "pi-subagents worker manager registered");
   const lspReady = !!(globalThis as any)[Symbol.for("pi-lsp:api")];
   add(lspReady ? "pass" : "warning", "pi-lsp API registered");
+  for (const other of foreignPiPiPackages()) {
+    add("warning", `Settings declare another pi-pi copy at ${other} — workers load that one, not this checkout`);
+  }
 
   lines.push("", `Summary: ${pass} passed, ${warn} warnings, ${fail} failures`);
   ctx.ui?.notify?.(lines.join("\n"), fail > 0 ? "error" : warn > 0 ? "warning" : "info");

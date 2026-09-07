@@ -64,7 +64,7 @@ const GEMINI_MAP: Record<string, string> = {
   "gemini-3.1-pro": "google/gemini-3.1-pro-preview",
 };
 
-function resolveAgentDir(): string {
+export function resolveAgentDir(): string {
   const envKey = "PI_CODING_AGENT_DIR";
   const envDir = process.env[envKey];
   if (envDir) {
