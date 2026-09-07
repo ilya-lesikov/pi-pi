@@ -1,7 +1,7 @@
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "fs";
-import { loadAllMessages } from "../core/load-messages";
+import { loadAllMessages, loadMessagesFromEntries } from "../core/load-messages";
 import { searchEntries, type SearchHit } from "../core/search-entries";
 import { formatRecallOutput } from "../core/format-recall";
 import { getActiveLineageEntryIds } from "../core/lineage";
@@ -26,8 +26,8 @@ export const invalidExpandIndices = (requested: number[], available: Set<number>
  *
  * Returns [startIndex, endIndex] or undefined if not found.
  */
-const resolveCompactionMessageRange = (
-  sessionFile: string,
+const resolveCompactionMessageRangeFromEntries = (
+  entries: any[],
   scopeStr: string,
 ): [number, number] | undefined => {
   const isLatest = scopeStr === "compaction:latest";
@@ -35,17 +35,6 @@ const resolveCompactionMessageRange = (
     ? -1
     : parseInt(scopeStr.replace("compaction:", ""), 10);
   if (isNaN(targetIndex) && !isLatest) return undefined;
-
-  const content = readFileSync(sessionFile, "utf-8");
-  const entries: any[] = [];
-  for (const line of content.split("\n")) {
-    if (!line.trim()) continue;
-    try {
-      entries.push(JSON.parse(line));
-    } catch {
-      /* skip malformed lines */
-    }
-  }
 
   // Collect pi-vcc compaction entries in order
   const compactions = entries.filter(
@@ -78,6 +67,15 @@ const resolveCompactionMessageRange = (
   return [firstIdx, lastIdx];
 };
 
+const loadSessionEntries = (sessionFile: string): any[] => {
+  const entries: any[] = [];
+  for (const line of readFileSync(sessionFile, "utf-8").split("\n")) {
+    if (!line.trim()) continue;
+    try { entries.push(JSON.parse(line)); } catch {}
+  }
+  return entries;
+};
+
 export interface RecallSessionSource {
   getSessionFile(): string | undefined;
   getSessionManager?(): any;
@@ -88,12 +86,12 @@ export const registerRecallTool = (pi: ExtensionAPI, source?: RecallSessionSourc
     name: "vcc_recall",
     label: "VCC Recall",
     description:
-      "Search session history. Defaults to active lineage; use scope:'all' to include off-lineage branches." +
-      " Supports regex queries, paging, and expand indices. " +
+      "Search session history. source defaults to 'root'; use source:'current' for the executing session. " +
+      "Defaults to active lineage; use scope:'all' to include off-lineage branches. Supports regex queries, paging, and expand indices. " +
       "Use scope:'compaction:N' to search within a specific compaction's message range.",
     promptSnippet:
-      "vcc_recall: Search history; default scope is active lineage. " +
-      "Use scope:'all' for off-lineage branches. " +
+      "vcc_recall: Search history; source defaults to the owning root session. Use source:'current' for this session's history. " +
+      "Default scope is active lineage; use scope:'all' for off-lineage branches. " +
       "Use scope:'compaction:N' or scope:'compaction:latest' for targeted search within a compaction segment. " +
       "expand:[indices] returns full content for those entries, composable with query to expand matched results.",
     parameters: Type.Object({
@@ -109,16 +107,25 @@ export const registerRecallTool = (pi: ExtensionAPI, source?: RecallSessionSourc
       scope: Type.Optional(
         Type.String({ description: "Search scope. Options: 'lineage' (default), 'all' (entire session), 'compaction:N' (within compaction #N), 'compaction:latest' (most recent compaction segment)." }),
       ),
+      source: Type.Optional(
+        Type.Union([Type.Literal("root"), Type.Literal("current")], { description: "Session to search: 'root' (default; owning main session) or 'current' (the session executing this tool)." }),
+      ),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const sessionManager = source?.getSessionManager?.() ?? ctx.sessionManager;
-      const sessionFile = source?.getSessionFile() ?? sessionManager?.getSessionFile?.();
-      if (!sessionFile) {
+      const useCurrent = params.source === "current";
+      const sessionManager = useCurrent ? ctx.sessionManager : source?.getSessionManager?.() ?? ctx.sessionManager;
+      const sessionFile = useCurrent ? sessionManager?.getSessionFile?.() : source?.getSessionFile() ?? sessionManager?.getSessionFile?.();
+      const entries = sessionFile ? loadSessionEntries(sessionFile) : sessionManager?.getEntries?.();
+      if (!Array.isArray(entries)) {
         return {
-          content: [{ type: "text", text: "No session file available." }],
+          content: [{ type: "text", text: `No ${useCurrent ? "current" : "root"} session history available.` }],
           details: undefined,
         };
       }
+      const loadMessages = (full: boolean, allowedEntryIds?: Set<string>, entryFilter?: (globalIndex: number) => boolean) =>
+        sessionFile
+          ? loadAllMessages(sessionFile, full, allowedEntryIds, entryFilter)
+          : loadMessagesFromEntries(entries, full, allowedEntryIds, entryFilter);
 
       const rawScope = normalizeRecallScope(params.scope);
       const scopeStr = String(params.scope ?? "").toLowerCase();
@@ -129,7 +136,7 @@ export const registerRecallTool = (pi: ExtensionAPI, source?: RecallSessionSourc
       let scopeLabel = "";
 
       if (isCompactionScope) {
-        const range = resolveCompactionMessageRange(sessionFile, scopeStr);
+        const range = resolveCompactionMessageRangeFromEntries(entries, scopeStr);
         if (!range) {
           return {
             content: [{ type: "text", text: `No compaction found for scope: ${scopeStr}. Use scope:'lineage' (default) or scope:'all'.` }],
@@ -148,7 +155,7 @@ export const registerRecallTool = (pi: ExtensionAPI, source?: RecallSessionSourc
       const hasExpand = expandSet.size > 0;
 
       if (hasExpand && !params.query) {
-        const { rendered: fullMsgs } = loadAllMessages(sessionFile, true, lineageEntryIds, entryFilter);
+        const { rendered: fullMsgs } = loadMessages(true, lineageEntryIds, entryFilter);
         const requested = [...expandSet];
         const byIndex = new Map(fullMsgs.map((m) => [m.index, m]));
         const invalid = invalidExpandIndices(requested, new Set(byIndex.keys()));
@@ -167,7 +174,7 @@ export const registerRecallTool = (pi: ExtensionAPI, source?: RecallSessionSourc
         };
       }
 
-      const { rendered: msgs, rawMessages } = loadAllMessages(sessionFile, false, lineageEntryIds, entryFilter);
+      const { rendered: msgs, rawMessages } = loadMessages(false, lineageEntryIds, entryFilter);
       const allResults = params.query?.trim()
         ? searchEntries(msgs, rawMessages, params.query)
         : msgs.slice(-DEFAULT_RECENT);

@@ -7,19 +7,12 @@ interface LoadedMessages {
   rawMessages: Message[];
 }
 
-export const loadAllMessages = (
-  sessionFile: string,
+export const loadMessagesFromEntries = (
+  entries: any[],
   full: boolean,
   allowedEntryIds?: Set<string>,
-  /** Optional filter by global message index (for compaction-scoped searches) */
   entryFilter?: (globalIndex: number) => boolean,
 ): LoadedMessages => {
-  const content = readFileSync(sessionFile, "utf-8");
-  const entries: any[] = [];
-  for (const line of content.split("\n")) {
-    if (!line.trim()) continue;
-    try { entries.push(JSON.parse(line)); } catch {}
-  }
   const rendered: RenderedEntry[] = [];
   const rawMessages: Message[] = [];
   let messageIndex = 0;
@@ -37,4 +30,19 @@ export const loadAllMessages = (
   }
 
   return { rendered, rawMessages };
+};
+
+export const loadAllMessages = (
+  sessionFile: string,
+  full: boolean,
+  allowedEntryIds?: Set<string>,
+  entryFilter?: (globalIndex: number) => boolean,
+): LoadedMessages => {
+  const content = readFileSync(sessionFile, "utf-8");
+  const entries: any[] = [];
+  for (const line of content.split("\n")) {
+    if (!line.trim()) continue;
+    try { entries.push(JSON.parse(line)); } catch {}
+  }
+  return loadMessagesFromEntries(entries, full, allowedEntryIds, entryFilter);
 };

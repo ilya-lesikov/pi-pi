@@ -69,9 +69,9 @@ const TOOL_SEGMENTS: ToolSegment[] = [
       {
         tools: ["vcc_recall"],
         text:
-          "- vcc_recall: retrieve full detail from earlier in the main session — tool output and message content that compaction " +
-          "summarized away or that is not in your own context. Use it instead of re-running an expensive earlier investigation. " +
-          "Recalled state can be stale: re-check files, git status, and test results before acting on them.",
+          "- vcc_recall: retrieve full detail that compaction summarized away or that is not in your context. " +
+          "Use source:\"root\" (the default) for the owning main session and source:\"current\" for this agent's own session. " +
+          "Use it instead of re-running an expensive earlier investigation. Recalled state can be stale: re-check files, git status, and test results before acting on them.",
       },
     ],
   },

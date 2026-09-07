@@ -85,8 +85,11 @@ describe("toolsBlock only advertises granted tools", () => {
     expect(block).toContain("cbm_search");
   });
 
-  it("describes vcc_recall only when granted", () => {
-    expect(toolsBlock(["read", "vcc_recall"])).toContain("vcc_recall: retrieve full detail");
+  it("describes both root and current-session recall only when granted", () => {
+    const block = toolsBlock(["read", "vcc_recall"]);
+    expect(block).toContain("vcc_recall: retrieve full detail");
+    expect(block).toContain('source:"current"');
+    expect(block).toContain('source:"root"');
     expect(toolsBlock(["read", "grep"])).not.toContain("vcc_recall");
   });
 
@@ -135,16 +138,18 @@ describe("pre-1.0 principles", () => {
   });
 });
 
-describe("every worker can recall main-session history", () => {
+describe("every worker can recall root and current-session history", () => {
   it("grants vcc_recall", () => {
     for (const [, f] of workerFactories()) {
       expect(parseToolNames(f.frontmatter.tools)).toContain("vcc_recall");
     }
   });
 
-  it("instructs the worker to search that history when prior context may matter", () => {
+  it("instructs the worker how to select root and current history", () => {
     for (const [, f] of workerFactories()) {
       expect(f.prompt).toMatch(/recall the main session's history|recall the main-session|main session's history/i);
+      expect(f.prompt).toContain('source:"current"');
+      expect(f.prompt).toContain('source:"root"');
     }
   });
 });
