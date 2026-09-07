@@ -235,10 +235,10 @@ function registerLifecycle(orchestrator: Orchestrator): void {
     try { await refreshSubProvider(pi); } catch {}
     try {
       const flant = loadFlantSettings(orchestrator.cwd);
-      if (flant.copilotEnabled && !process.env.COPILOT_GITHUB_TOKEN) {
-        await refreshCopilotOAuthToken();
-        syncProviderTiers(flant);
-      }
+      if (flant.copilotEnabled && !process.env.COPILOT_GITHUB_TOKEN) await refreshCopilotOAuthToken();
+      // Unconditional: refreshSubProvider above may have revived a subscription
+      // token that was expired when the tiers were last computed.
+      syncProviderTiers(flant);
     } catch {}
     publishAcpState(orchestrator);
   });

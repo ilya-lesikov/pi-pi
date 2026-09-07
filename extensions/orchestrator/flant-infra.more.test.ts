@@ -40,6 +40,7 @@ function stubFetch(handler: (url: string, opts: any) => any) {
 afterEach(() => {
   refreshAnthropicTokenMock.mockReset();
   updateRegistryMock.mockReset();
+  setTierEnabledMock.mockReset();
   vi.unstubAllGlobals();
   delete process.env.PI_CODING_AGENT_DIR;
   delete process.env.FLANT_API_KEY;
@@ -374,6 +375,28 @@ describe("initFlantSync / initFlantOnStartup", () => {
     const pi = makePi();
     await mod.initFlantOnStartup(pi);
     expect(pi.registerProvider).not.toHaveBeenCalled();
+  });
+
+  it("initFlantOnStartup refreshes an expired subscription token before computing tiers", async () => {
+    const dir = makeTempDir();
+    const cfgDir = join(dir, "extensions", "pp");
+    mkdirSync(cfgDir, { recursive: true });
+    writeFileSync(join(cfgDir, "config.json"), JSON.stringify({ flant: { enabled: true, autoUpdate: false, subscription: true } }), "utf-8");
+    writeFileSync(
+      join(dir, "auth.json"),
+      JSON.stringify({ anthropic: { type: "oauth", access: "stale", refresh: "rt", expires: Date.now() - 1000 } }),
+      "utf-8",
+    );
+    process.env.LLM_API_KEY = "gw";
+    refreshAnthropicTokenMock.mockResolvedValue({ access: "fresh", refresh: "rt2", expires: Date.now() + 3_600_000 });
+
+    const mod = await loadModule(dir);
+    await mod.initFlantOnStartup(makePi());
+
+    // Reading the stored token before refreshing it would classify the tier as
+    // unavailable, and nothing re-syncs afterwards.
+    expect(refreshAnthropicTokenMock).toHaveBeenCalled();
+    expect(setTierEnabledMock).toHaveBeenCalledWith(expect.objectContaining({ "flant-sub": true }));
   });
 
   it("initFlantOnStartup skips update when autoUpdate is off", async () => {

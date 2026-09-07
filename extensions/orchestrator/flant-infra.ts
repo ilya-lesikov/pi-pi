@@ -1234,6 +1234,11 @@ export async function initFlantOnStartup(pi: ExtensionAPI, cwd?: string): Promis
   setPI(pi);
   const settings = loadFlantSettings(cwd);
   if (settings.copilotEnabled && !process.env.COPILOT_GITHUB_TOKEN) await refreshCopilotOAuthToken();
+  // Refresh before reading tiers: a stored subscription token that merely
+  // expired still refreshes, but the tier check reads it as absent, and nothing
+  // re-syncs afterwards — every Claude spec would resolve away from the
+  // subscription for the rest of the session.
+  if (settings.subscription) await refreshClaudeOAuthToken();
   // Sync tiers from the EFFECTIVE (cwd-scoped) settings so a project override
   // rebinds what initFlantSync (global-only, at extension init) computed.
   syncProviderTiers(settings);
@@ -1246,9 +1251,6 @@ export async function initFlantOnStartup(pi: ExtensionAPI, cwd?: string): Promis
     return;
   }
   if (!settings.autoUpdate) {
-    // updateFlantInfra (which refreshes the token) is skipped when auto-update
-    // is off, but any registered sub provider still needs a fresh token.
-    if (settings.subscription) await refreshClaudeOAuthToken();
     // autoUpdate=false means "do not REFRESH the cache", NOT "stay unregistered".
     // With effective (project-scoped) enabled=true, still register from the
     // cached models so a global-disabled + project-enabled + autoUpdate=false
