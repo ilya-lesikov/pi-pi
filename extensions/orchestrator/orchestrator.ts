@@ -90,7 +90,9 @@ export class Orchestrator {
     const compacting = this.adaptiveCompaction.inFlight || this.manualCompactionPending;
     if (!compacting && (typeof ctx.isIdle !== "function" || ctx.isIdle())) {
       this.pendingContinuations.delete(text);
-      this.safeSendUserMessage(text);
+      // Put the claim back if the host refused it, so a later redelivery can
+      // still get the message out instead of losing it silently.
+      if (!this.safeSendUserMessage(text)) this.pendingContinuations.add(text);
       return;
     }
     if (attempt >= 120) {
@@ -126,13 +128,18 @@ export class Orchestrator {
     this.sendUserMessageWhenIdle(tagged, this.continuationGeneration);
   }
 
-  safeSendUserMessage(text: string): void {
+  safeSendUserMessage(text: string): boolean {
     try {
       this.pi.sendUserMessage(text, { deliverAs: "followUp" });
+      return true;
     } catch {
       try {
         this.pi.sendUserMessage(text);
-      } catch {}
+        return true;
+      } catch {
+        getLogger().error({ s: "continuation" }, "the host refused an automatic continuation");
+        return false;
+      }
     }
   }
 

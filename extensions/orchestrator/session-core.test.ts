@@ -267,6 +267,26 @@ describe("session-first core", () => {
     }
   });
 
+  // Claiming the queue entry before sending must not lose the message when the
+  // host refuses it — a later redelivery is the only thing that can recover it.
+  it("re-queues a continuation the host refused", async () => {
+    const pi = makePi();
+    pi.sendUserMessage = vi.fn(() => { throw new Error("host busy"); });
+    const orchestrator = new Orchestrator(pi);
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    registerEventHandlers(orchestrator);
+    const ctx = { isIdle: () => true } as any;
+    orchestrator.lastCtx = ctx;
+
+    orchestrator.queueContinuation("[PI-PI] continue");
+    expect(orchestrator.pendingContinuations.size).toBe(1);
+
+    pi.sendUserMessage = vi.fn();
+    await emit(pi, "session_compact", {}, ctx);
+    expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(orchestrator.pendingContinuations.size).toBe(0);
+  });
+
   // A provider switch resends everything with a cold cache, so the pre-switch
   // context is billed again in full at the new provider.
   it("compacts a large context before a model switch, but not a small one", async () => {
