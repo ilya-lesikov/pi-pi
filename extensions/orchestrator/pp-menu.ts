@@ -256,10 +256,16 @@ function tryClearConfigOverride(orchestrator: Orchestrator, scope: Scope, keyPat
 }
 
 function refreshRuntimeAfterConfigChange(orchestrator: Orchestrator, keyPath: string[]): void {
-  if (keyPath[0] !== "agents") return;
-  unregisterAgentDefinitions(orchestrator.pi);
-  orchestrator.registerAgents();
-  if (keyPath[1] === "maxConcurrentSubagents") orchestrator.applySubagentConcurrency();
+  if (keyPath[0] === "agents") {
+    unregisterAgentDefinitions(orchestrator.pi);
+    orchestrator.registerAgents();
+    if (keyPath[1] === "maxConcurrentSubagents") orchestrator.applySubagentConcurrency();
+    return;
+  }
+  if (keyPath.join(".") === "performance.internals.subagentStale" && orchestrator.staleAgentTimer) {
+    clearInterval(orchestrator.staleAgentTimer);
+    orchestrator.staleAgentTimer = null;
+  }
 }
 
 function applyConfigChange(orchestrator: Orchestrator, scope: Scope, keyPath: string[], value: any): void {
@@ -592,12 +598,27 @@ async function showGeneralSettings(orchestrator: Orchestrator, ctx: any): Promis
   }
 }
 
-async function showAgentEditor(orchestrator: Orchestrator, ctx: any, basePath: string[], label: string, getCurrent: () => { model: string; thinking: string }): Promise<void> {
+function turnLimitLabel(maxTurns: number | undefined): string {
+  return maxTurns ? String(maxTurns) : "Unlimited";
+}
+
+async function promptTurnLimit(ctx: any, current: number | undefined): Promise<number | null> {
+  const input = await promptRequiredInput(ctx, `Turn limit [${turnLimitLabel(current)}] (0 = unlimited)`);
+  if (!input) return null;
+  if (!/^\d+$/.test(input)) {
+    ctx.ui?.notify?.("Enter a non-negative integer (0 means unlimited).", "warning");
+    return null;
+  }
+  return Number.parseInt(input, 10);
+}
+
+async function showAgentEditor(orchestrator: Orchestrator, ctx: any, basePath: string[], label: string, getCurrent: () => { model: string; thinking: string; maxTurns?: number }, allowTurnLimit = false): Promise<void> {
   for (;;) {
     const current = getCurrent();
     const choice = await selectOption(ctx, label, [
       opt(`Model: ${current.model}`, "Choose the model for this agent"),
       opt(`Thinking: ${thinkingLabel(current.thinking)}`, "Choose how much this agent thinks before acting"),
+      ...(allowTurnLimit ? [opt(`Turn limit: ${turnLimitLabel(current.maxTurns)}`, "Limit agentic turns; unlimited by default")] : []),
       ...buildResetOptions(orchestrator, basePath),
       opt(BACK, "Return to the previous menu"),
     ]);
@@ -612,6 +633,14 @@ async function showAgentEditor(orchestrator: Orchestrator, ctx: any, basePath: s
       const thinking = await pickThinking(ctx, orchestrator, [...basePath, "thinking"]);
       if (!thinking) continue;
       applyScopeChoice(orchestrator, [...basePath, "thinking"], thinking, await pickScope(ctx, orchestrator));
+      continue;
+    }
+    if (choice.startsWith("Turn limit:")) {
+      const maxTurns = await promptTurnLimit(ctx, current.maxTurns);
+      if (maxTurns === null) continue;
+      const scope = await pickScope(ctx, orchestrator);
+      if (!scope) continue;
+      applyScopeChoice(orchestrator, [...basePath, "maxTurns"], maxTurns, scope);
       continue;
     }
     await maybeHandleResetChoice(orchestrator, ctx, choice, basePath);
@@ -642,6 +671,7 @@ async function showPoolEntryEditor(orchestrator: Orchestrator, ctx: any, pool: P
       opt(`Enabled: ${entry.enabled === false ? "No" : "Yes"}`, "Toggle whether this model registers as a subagent"),
       opt(`Model: ${entry.model}`, "Choose the model for this pool entry"),
       opt(`Thinking: ${thinkingLabel(entry.thinking)}`, "Choose how much this agent thinks before acting"),
+      opt(`Turn limit: ${turnLimitLabel(entry.maxTurns)}`, "Limit agentic turns; unlimited by default"),
       opt("Delete", "Remove this entry from the pool"),
       opt(BACK, "Return to the previous menu"),
     ]);
@@ -665,6 +695,14 @@ async function showPoolEntryEditor(orchestrator: Orchestrator, ctx: any, pool: P
     if (choice.startsWith("Enabled:")) {
       const next = structuredClone(entries);
       next[index] = { ...next[index], enabled: entry.enabled === false };
+      await writePool(orchestrator, ctx, pool, next);
+      continue;
+    }
+    if (choice.startsWith("Turn limit:")) {
+      const maxTurns = await promptTurnLimit(ctx, entry.maxTurns);
+      if (maxTurns === null) continue;
+      const next = structuredClone(entries);
+      next[index] = { ...next[index], maxTurns };
       await writePool(orchestrator, ctx, pool, next);
       continue;
     }
@@ -761,7 +799,7 @@ async function showAgentsSettings(orchestrator: Orchestrator, ctx: any): Promise
     }
     const simple = SIMPLE_ROLES.find((item) => item.label === choice);
     if (simple) {
-      await showAgentEditor(orchestrator, ctx, ["agents", "subagents", "simple", simple.role], simple.label, () => orchestrator.config.agents.subagents.simple[simple.role]);
+      await showAgentEditor(orchestrator, ctx, ["agents", "subagents", "simple", simple.role], simple.label, () => orchestrator.config.agents.subagents.simple[simple.role], true);
       continue;
     }
     const pool = POOL_ITEMS.find((item) => item.label === choice);

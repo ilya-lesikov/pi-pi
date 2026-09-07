@@ -12,7 +12,7 @@ export function createAdvisorAgent(entry: PoolEntry) {
       tools,
       model,
       thinking: entry.thinking,
-      max_turns: 240,
+      max_turns: entry.maxTurns,
       prompt_mode: "replace",
     },
     prompt: [

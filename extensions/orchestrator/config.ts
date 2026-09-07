@@ -16,12 +16,16 @@ export const POOL_KEYS = ["advisors", "reviewers", "deepDebuggers"] as const;
 export interface AgentConfig {
   model: string;
   thinking: string;
+  /** Optional worker turn limit. Omitted or 0 = unlimited. */
+  maxTurns?: number;
 }
 
 export interface PoolEntry {
   model: string;
   thinking: string;
   enabled?: boolean;
+  /** Optional worker turn limit. Omitted or 0 = unlimited. */
+  maxTurns?: number;
 }
 
 export interface CompactionConfig {
@@ -102,6 +106,7 @@ export interface PiPiConfig {
       afterEdit: DurationValue;
     };
     internals: {
+      /** Subagent inactivity limit. 0 disables the limit. */
       subagentStale: DurationValue;
       mainTurnStale: DurationValue;
     };
@@ -195,7 +200,7 @@ const DEFAULT_CONFIG: PiPiConfig = {
       afterEdit: "30s",
     },
     internals: {
-      subagentStale: "5m",
+      subagentStale: 0,
       mainTurnStale: "10m",
     },
   },
@@ -312,10 +317,18 @@ export function deepMerge(target: Record<string, any>, source: Record<string, an
   return result;
 }
 
+function ensureOptionalMaxTurns(value: unknown, path: string): void {
+  if (value === undefined) return;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    throw new Error(`${path} must be a non-negative integer (0 means unlimited)`);
+  }
+}
+
 function validateAgentPartial(value: unknown, path: string): void {
   const agent = requireObject(value, path);
   ensureString(agent.model, `${path}.model`);
   ensureString(agent.thinking, `${path}.thinking`);
+  ensureOptionalMaxTurns(agent.maxTurns, `${path}.maxTurns`);
 }
 
 function validatePoolEntryPartial(value: unknown, path: string): void {
@@ -323,6 +336,7 @@ function validatePoolEntryPartial(value: unknown, path: string): void {
   ensureBool(entry.enabled, `${path}.enabled`);
   ensureString(entry.model, `${path}.model`);
   ensureString(entry.thinking, `${path}.thinking`);
+  ensureOptionalMaxTurns(entry.maxTurns, `${path}.maxTurns`);
 }
 
 export function validateConfig(config: Record<string, any>): void {
@@ -440,6 +454,7 @@ function ensureMergedAgent(agent: AgentConfig, path: string): void {
   if (typeof agent.thinking !== "string" || agent.thinking.length === 0) {
     throw new Error(`${path}.thinking must be a non-empty string`);
   }
+  ensureOptionalMaxTurns(agent.maxTurns, `${path}.maxTurns`);
 }
 
 export function validateMergedConfig(config: Record<string, any>): void {

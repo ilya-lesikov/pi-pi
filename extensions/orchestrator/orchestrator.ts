@@ -23,6 +23,7 @@ export class Orchestrator {
   spawnedAgentIds = new Set<string>();
   agentDescriptions = new Map<string, string>();
   agentSpawnTimes = new Map<string, number>();
+  staleAgentTimer: ReturnType<typeof setInterval> | null = null;
   mainTurnTimer: ReturnType<typeof setInterval> | null = null;
   mainTurnLastActivity = 0;
   mainTurnInFlight = false;
@@ -153,6 +154,9 @@ export class Orchestrator {
     const manager = (globalThis as any)[Symbol.for("pi-subagents:manager")];
     manager?.abortAll?.();
     this.spawnedAgentIds.clear();
+    this.agentSpawnTimes.clear();
+    if (this.staleAgentTimer) clearInterval(this.staleAgentTimer);
+    this.staleAgentTimer = null;
     publishAcpState(this);
   }
 

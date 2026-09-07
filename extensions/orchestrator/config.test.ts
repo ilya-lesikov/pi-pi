@@ -244,7 +244,7 @@ describe("loadConfig", () => {
     const cwd = makeTempDir();
     const defaults = loadConfig(cwd, "/nonexistent/global/config.json");
     expect(defaults.performance.internals.mainTurnStale).toBe(600000);
-    expect(defaults.performance.internals.subagentStale).toBe(300000);
+    expect(defaults.performance.internals.subagentStale).toBe(0);
 
     const cwd2 = makeTempDir();
     const ppDir = join(cwd2, ".pp");
@@ -262,6 +262,23 @@ describe("loadConfig", () => {
     expect(() => validateConfig({ performance: { internals: { subagentStale: -1 } } })).toThrow(
       "config.performance.internals.subagentStale",
     );
+  });
+
+  it("accepts optional per-worker turn limits and rejects invalid values", () => {
+    expect(() => validateConfig({
+      agents: {
+        subagents: {
+          simple: { explore: { maxTurns: 12 } },
+          pools: { reviewers: [{ maxTurns: 0 }] },
+        },
+      },
+    })).not.toThrow();
+    expect(() => validateConfig({
+      agents: { subagents: { simple: { task: { maxTurns: -1 } } } },
+    })).toThrow("config.agents.subagents.simple.task.maxTurns");
+    expect(() => validateConfig({
+      agents: { subagents: { pools: { advisors: [{ maxTurns: 1.5 }] } } },
+    })).toThrow("config.agents.subagents.pools.advisors[0].maxTurns");
   });
 
   it("creates no config file when config.json does not exist", () => {

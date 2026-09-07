@@ -13,7 +13,7 @@ const config = getDefaultConfig();
 const poolEntry = { model: "anthropic/claude-fable-latest", thinking: "high" };
 const gptEntry = { model: "openai/gpt-latest", thinking: "high" };
 
-const workerFactories = (): [string, { frontmatter: { tools: string; description: string }; prompt: string }][] => [
+const workerFactories = (): [string, { frontmatter: { tools: string; description: string; max_turns?: number }; prompt: string }][] => [
   ["explore", createExploreAgent(config)],
   ["librarian", createLibrarianAgent(config)],
   ["task", createTaskAgent(config)],
@@ -163,6 +163,28 @@ describe("workers are functional roles, not coding-only roles", () => {
     for (const [, f] of workerFactories()) {
       expect(f.frontmatter.description).not.toMatch(/\bcodebase\b/);
     }
+  });
+});
+
+describe("worker execution limits", () => {
+  it("defaults every pi-pi worker to unlimited turns", () => {
+    for (const [, worker] of workerFactories()) {
+      expect(worker.frontmatter.max_turns).toBeUndefined();
+    }
+  });
+
+  it("applies user-configured turn limits to simple workers and pool entries", () => {
+    const configured = getDefaultConfig();
+    configured.agents.subagents.simple.explore.maxTurns = 12;
+    configured.agents.subagents.simple.librarian.maxTurns = 13;
+    configured.agents.subagents.simple.task.maxTurns = 14;
+
+    expect(createExploreAgent(configured).frontmatter.max_turns).toBe(12);
+    expect(createLibrarianAgent(configured).frontmatter.max_turns).toBe(13);
+    expect(createTaskAgent(configured).frontmatter.max_turns).toBe(14);
+    expect(createAdvisorAgent({ ...poolEntry, maxTurns: 15 }).frontmatter.max_turns).toBe(15);
+    expect(createReviewerAgent({ ...gptEntry, maxTurns: 16 }).frontmatter.max_turns).toBe(16);
+    expect(createDeepDebuggerAgent({ ...gptEntry, maxTurns: 17 }).frontmatter.max_turns).toBe(17);
   });
 });
 

@@ -173,16 +173,53 @@ export function registerFeatureToolsAndAgents(orchestrator: Orchestrator): void 
 
 function registerLifecycle(orchestrator: Orchestrator): void {
   const pi = orchestrator.pi;
+  const stopStaleAgentWatchdog = () => {
+    if (orchestrator.staleAgentTimer) clearInterval(orchestrator.staleAgentTimer);
+    orchestrator.staleAgentTimer = null;
+  };
+  const startStaleAgentWatchdog = () => {
+    const staleMs = orchestrator.config.performance.internals.subagentStale;
+    if (staleMs <= 0 || orchestrator.staleAgentTimer) return;
+    orchestrator.staleAgentTimer = setInterval(() => {
+      const currentLimit = orchestrator.config.performance.internals.subagentStale;
+      if (currentLimit <= 0 || orchestrator.agentSpawnTimes.size === 0) {
+        stopStaleAgentWatchdog();
+        return;
+      }
+      const now = Date.now();
+      for (const [id, spawnTime] of orchestrator.agentSpawnTimes) {
+        if (now - spawnTime <= currentLimit) continue;
+        const description = orchestrator.agentDescriptions.get(id) ?? id;
+        pi.events.emit("subagents:rpc:stop", { requestId: crypto.randomUUID(), agentId: id });
+        orchestrator.spawnedAgentIds.delete(id);
+        orchestrator.agentSpawnTimes.delete(id);
+        orchestrator.agentDescriptions.delete(id);
+        pi.sendMessage({
+          customType: "pp-agent-stale",
+          content: `Aborted stale agent "${description}" after ${Math.round(currentLimit / 1000)}s.`,
+          display: true,
+        }, { deliverAs: "steer" });
+      }
+      if (orchestrator.agentSpawnTimes.size === 0) stopStaleAgentWatchdog();
+      publishAcpState(orchestrator);
+    }, Math.min(30_000, Math.max(1_000, staleMs)));
+  };
   pi.on("subagents:created" as any, (data: any) => {
     if (data?.id) {
       orchestrator.spawnedAgentIds.add(data.id);
       orchestrator.agentDescriptions.set(data.id, data.description ?? data.type ?? data.id);
       orchestrator.agentSpawnTimes.set(data.id, Date.now());
+      startStaleAgentWatchdog();
     }
     publishAcpState(orchestrator);
   });
   const settle = (data: any) => {
-    if (data?.id) orchestrator.spawnedAgentIds.delete(data.id);
+    if (data?.id) {
+      orchestrator.spawnedAgentIds.delete(data.id);
+      orchestrator.agentSpawnTimes.delete(data.id);
+      orchestrator.agentDescriptions.delete(data.id);
+    }
+    if (orchestrator.agentSpawnTimes.size === 0) stopStaleAgentWatchdog();
     publishAcpState(orchestrator);
   };
   pi.on("subagents:completed" as any, settle);
@@ -515,10 +552,12 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     finalizeTracer();
     delete (globalThis as any)[USAGE_TRACKER_KEY];
     if (orchestrator.mainTurnTimer) clearInterval(orchestrator.mainTurnTimer);
+    if (orchestrator.staleAgentTimer) clearInterval(orchestrator.staleAgentTimer);
     if (orchestrator.subSwitchBackTimer) clearTimeout(orchestrator.subSwitchBackTimer);
     if (orchestrator.idlePollTimer) clearTimeout(orchestrator.idlePollTimer);
     if (orchestrator.tokenRefreshTimer) clearInterval(orchestrator.tokenRefreshTimer);
     orchestrator.mainTurnTimer = null;
+    orchestrator.staleAgentTimer = null;
     orchestrator.subSwitchBackTimer = null;
     orchestrator.idlePollTimer = null;
     orchestrator.tokenRefreshTimer = null;

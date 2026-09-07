@@ -17,6 +17,7 @@ function makePi(): any {
     registerTool: vi.fn(),
     registerCommand: vi.fn(),
     sendUserMessage: vi.fn(),
+    sendMessage: vi.fn(),
     appendEntry: vi.fn(),
   };
 }
@@ -93,6 +94,37 @@ describe("session-first core", () => {
     orchestrator.spawnedAgentIds.clear();
     orchestrator.mainTurnToolInFlight = 1;
     expect(isMainTurnStalled(orchestrator, 3000)).toBe(false);
+  });
+
+  it("leaves the stale-agent watchdog disabled by default", async () => {
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi);
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    registerEventHandlers(orchestrator);
+
+    await emit(pi, "subagents:created", { id: "worker", description: "Worker" }, {});
+
+    expect(orchestrator.staleAgentTimer).toBeNull();
+    expect(orchestrator.spawnedAgentIds.has("worker")).toBe(true);
+  });
+
+  it("enforces a user-configured stale-agent time limit", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi);
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    orchestrator.config.performance.internals.subagentStale = 1000;
+    registerEventHandlers(orchestrator);
+
+    await emit(pi, "subagents:created", { id: "worker", description: "Worker" }, {});
+    vi.setSystemTime(1001);
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(pi.events.emit).toHaveBeenCalledWith("subagents:rpc:stop", expect.objectContaining({ agentId: "worker" }));
+    expect(pi.sendMessage).toHaveBeenCalledWith(expect.objectContaining({ customType: "pp-agent-stale" }), { deliverAs: "steer" });
+    expect(orchestrator.spawnedAgentIds.has("worker")).toBe(false);
+    vi.useRealTimers();
   });
 
   it("marks ask_user execution as waiting, suppresses recovery, and clears abnormal terminal state", async () => {

@@ -56,7 +56,7 @@ The main session owns long-running and interactive work. Functional workers are 
 - `reviewer_*` for fresh read-only review;
 - `task` for a self-contained parallel slice.
 
-Workers receive no duplicated task artifact bundle. They can search the owning session with `vcc_recall` when prior decisions or tool results matter.
+Workers receive no duplicated task artifact bundle. They can search the owning session with `vcc_recall` when prior decisions or tool results matter. Worker execution has no turn or stale-time limit by default. Users can set `maxTurns` per simple worker or pool entry and `performance.internals.subagentStale` in scoped `.pp/config.json`; `0` means unlimited.
 
 ## ACP clients
 

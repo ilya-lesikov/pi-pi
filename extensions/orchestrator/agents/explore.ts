@@ -13,7 +13,7 @@ export function createExploreAgent(config: PiPiConfig) {
       tools,
       model,
       thinking,
-      max_turns: 340,
+      max_turns: config.agents.subagents.simple.explore.maxTurns,
       prompt_mode: "replace",
     },
     prompt: [
