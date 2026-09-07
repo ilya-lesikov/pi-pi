@@ -870,11 +870,7 @@ function pickLatest(models: string[]): string | null {
     .sort((a, b) => compareModelVersion(b, a))[0] ?? null;
 }
 
-function pickCheapestFastModel(models: string[]): string | null {
-  const geminiFlashLite = pickLatest(models.filter((m) => /^gemini-.*flash-lite/.test(m)));
-  if (geminiFlashLite) return geminiFlashLite;
-  const geminiFlash = pickLatest(models.filter((m) => /^gemini-.*flash/.test(m) && !m.includes("flash-lite")));
-  if (geminiFlash) return geminiFlash;
+function pickFastFallbackModel(models: string[]): string | null {
   const gptMini = pickLatest(models.filter((m) => /^gpt-5.*-mini$/.test(m)));
   if (gptMini) return gptMini;
   return pickLatest(models.filter((m) => /^claude-haiku-/.test(m)));
@@ -894,12 +890,6 @@ function makeVariantWithThinking(
   return { enabled: true, model: modelSpec(modelId), thinking };
 }
 
-function disabledByDefault(
-  variant: { enabled: boolean; model: string; thinking: string },
-): { enabled: boolean; model: string; thinking: string } {
-  return { ...variant, enabled: false };
-}
-
 export function generateFlantConfig(models: string[], subscriptionActive = false): Partial<PiPiConfig> {
   const rawModels = [...new Set(models)];
   if (rawModels.length === 0) return {};
@@ -908,7 +898,7 @@ export function generateFlantConfig(models: string[], subscriptionActive = false
   // claude ids for the pickers, and drop Claude entirely when the subscription
   // is inactive so generated roles never point at an unroutable model.
   const uniqueModels = [...new Set(rawModels.map((m) => (m.startsWith(SUB_MODEL_PREFIX) ? m.slice(SUB_MODEL_PREFIX.length) : m)))]
-    .filter((m) => subscriptionActive || !m.startsWith("claude-"));
+    .filter((m) => (subscriptionActive || !m.startsWith("claude-")) && !m.startsWith("gemini-"));
   if (uniqueModels.length === 0) return {};
 
   const latestOpus = pickLatest(uniqueModels.filter((m) => /^claude-opus-/.test(m)));
@@ -923,8 +913,9 @@ export function generateFlantConfig(models: string[], subscriptionActive = false
   const gptLuna = pickLatest(uniqueModels.filter((m) => /^gpt-[0-9.]+-luna$/.test(m)));
   // Legacy fallback for pre-5.6 gateways that expose a single gpt SKU: keep the
   // old "latest gpt-5, else any gpt" behavior so tier pickers degrade to it.
-  const latestGpt5 = pickLatest(uniqueModels.filter((m) => /^gpt-5/.test(m) && !m.endsWith("-mini") && !m.endsWith("-codex")));
-  const latestGptLegacy = latestGpt5 ?? pickLatest(uniqueModels.filter((m) => /^gpt-/.test(m) && !m.endsWith("-mini") && !m.endsWith("-codex")));
+  const isLegacyGpt = (model: string) => !model.endsWith("-mini") && !model.endsWith("-codex") && !/-(?:sol|terra|luna)(?:-pro)?$/.test(model);
+  const latestGpt5 = pickLatest(uniqueModels.filter((m) => /^gpt-5/.test(m) && isLegacyGpt(m)));
+  const latestGptLegacy = latestGpt5 ?? pickLatest(uniqueModels.filter((m) => /^gpt-/.test(m) && isLegacyGpt(m)));
   // Per-role gpt selections with graceful degradation to the legacy single SKU
   // when the split tiers are absent (older catalogs / non-flant gateways).
   const gptSmartPro = gptSolPro ?? gptSol ?? latestGptLegacy;
@@ -932,18 +923,15 @@ export function generateFlantConfig(models: string[], subscriptionActive = false
   const gptBalanced = gptTerra ?? gptSmart;
   const gptFast = gptLuna ?? gptBalanced;
   const latestGpt = gptSmart;
-  const latestGeminiPro = pickLatest(uniqueModels.filter((m) => /^gemini-.*-pro$/.test(m)));
   const latestDeepseek = pickLatest(uniqueModels.filter((m) => /^deepseek-/.test(m)));
   const latestGrok = pickLatest(uniqueModels.filter((m) => /^grok-/.test(m)));
-  const fastest = pickCheapestFastModel(uniqueModels);
+  const fastFallback = pickFastFallbackModel(uniqueModels);
 
-  const fallback = latestOpus ?? latestClaude ?? latestGpt ?? latestGeminiPro ?? latestDeepseek ?? latestGrok ?? uniqueModels[0];
+  const fallback = latestOpus ?? latestClaude ?? latestGpt ?? latestDeepseek ?? latestGrok ?? uniqueModels[0];
   const mainModel = latestOpus ?? latestClaude ?? fallback;
-  const debugModel = gptSmart ?? latestGeminiPro ?? latestDeepseek ?? fallback;
+  const debugModel = gptSmart ?? latestDeepseek ?? fallback;
   const taskModel = latestOpus ?? latestClaude ?? fallback;
-  // Fast simple-subagents (explore/librarian) prefer a cheap gemini/haiku, then
-  // the fast gpt tier (gpt-luna), before the smart gpt fallback.
-  const fastModel = fastest ?? gptFast ?? debugModel;
+  const fastModel = gptLuna ?? fastFallback ?? gptFast ?? debugModel;
 
   return {
     agents: {
@@ -951,7 +939,7 @@ export function generateFlantConfig(models: string[], subscriptionActive = false
       maxConcurrentSubagents: getDefaultConfig().agents.maxConcurrentSubagents,
       subagents: {
         simple: {
-          explore: { model: modelSpec(fastModel), thinking: "low" },
+          explore: { model: modelSpec(fastModel), thinking: "medium" },
           librarian: { model: modelSpec(fastModel), thinking: "medium" },
           task: { model: modelSpec(taskModel), thinking: "medium" },
         },
@@ -959,17 +947,14 @@ export function generateFlantConfig(models: string[], subscriptionActive = false
           advisors: [
             makeVariant(latestFable, fallback),
             makeVariant(gptSmartPro, fallback),
-            disabledByDefault(makeVariant(latestGeminiPro, fallback)),
           ],
           reviewers: [
             makeVariant(gptSmart, fallback),
             makeVariantWithThinking(latestFable, fallback, "medium"),
-            disabledByDefault(makeVariant(latestGeminiPro, fallback)),
           ],
           deepDebuggers: [
             makeVariant(gptSmartPro, fallback),
             makeVariant(latestFable, fallback),
-            disabledByDefault(makeVariant(latestGeminiPro, fallback)),
           ],
         },
       },

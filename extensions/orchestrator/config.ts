@@ -170,25 +170,22 @@ const DEFAULT_CONFIG: PiPiConfig = {
     maxConcurrentSubagents: 7,
     subagents: {
       simple: {
-        explore: { model: "google/gemini-flash-latest", thinking: "low" },
-        librarian: { model: "google/gemini-flash-latest", thinking: "medium" },
+        explore: { model: "openai/gpt-luna-latest", thinking: "medium" },
+        librarian: { model: "openai/gpt-luna-latest", thinking: "medium" },
         task: { model: "anthropic/claude-opus-latest", thinking: "medium" },
       },
       pools: {
         advisors: [
           { enabled: true, model: "anthropic/claude-fable-latest", thinking: "high" },
           { enabled: true, model: "openai/gpt-latest", thinking: "high" },
-          { enabled: false, model: "google/gemini-pro-latest", thinking: "high" },
         ],
         reviewers: [
           { enabled: true, model: "openai/gpt-latest", thinking: "high" },
           { enabled: true, model: "anthropic/claude-fable-latest", thinking: "medium" },
-          { enabled: false, model: "google/gemini-pro-latest", thinking: "high" },
         ],
         deepDebuggers: [
           { enabled: true, model: "openai/gpt-latest", thinking: "high" },
           { enabled: true, model: "anthropic/claude-fable-latest", thinking: "high" },
-          { enabled: false, model: "google/gemini-pro-latest", thinking: "high" },
         ],
       },
     },

@@ -220,7 +220,7 @@ describe("loadConfig", () => {
     expect(config.agents.subagents.simple.explore).toEqual({ model: "custom/explore", thinking: "medium" });
     expect(config.agents.subagents.simple.task.model).toBe("anthropic/claude-opus-latest");
     expect(config.agents.subagents.pools.advisors).toEqual([{ enabled: true, model: "custom/advisor", thinking: "high" }]);
-    expect(config.agents.subagents.pools.reviewers.length).toBe(3);
+    expect(config.agents.subagents.pools.reviewers.length).toBe(2);
     expect(config.general.logLevel).toBe("debug");
     expect(config.general.tracing).toBe(false);
   });
@@ -425,7 +425,7 @@ describe("config write helpers", () => {
     first.agents.subagents.pools.advisors.push({ model: "extra/model", thinking: "low" });
 
     expect(second.agents.main.model).toBe("anthropic/claude-opus-latest");
-    expect(second.agents.subagents.pools.advisors.length).toBe(3);
+    expect(second.agents.subagents.pools.advisors.length).toBe(2);
   });
 
   it("readRawConfig returns empty object when file does not exist", () => {

@@ -430,8 +430,10 @@ describe("flant-infra", () => {
     ], true) as any;
 
     expect(config.agents.main.model).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-6");
-    expect(config.agents.subagents.simple.explore.model).toBe("pp-flant-openai/gemini-3-1-flash");
-    expect(config.agents.subagents.simple.librarian.model).toBe("pp-flant-openai/gemini-3-1-flash");
+    expect(config.agents.subagents.simple.explore.model).toBe("pp-flant-openai/gpt-5-4-mini");
+    expect(config.agents.subagents.simple.explore.thinking).toBe("medium");
+    expect(config.agents.subagents.simple.librarian.model).toBe("pp-flant-openai/gpt-5-4-mini");
+    expect(config.agents.subagents.simple.librarian.thinking).toBe("medium");
     expect(config.agents.subagents.pools.advisors[1].model).toBe("pp-flant-openai/gpt-5-4");
   });
 
@@ -440,15 +442,15 @@ describe("flant-infra", () => {
     const mod = await loadFlantInfraModule(dir);
 
     const config = mod.generateFlantConfig(
-      ["claude-opus-4-8", "claude-haiku-4-5", "gpt-5-4", "gemini-3-1-pro", "gemini-3-1-flash"],
+      ["claude-opus-4-8", "claude-haiku-4-5", "gpt-5-4", "gpt-5.6-luna", "gemini-3-1-pro", "gemini-3-1-flash"],
       true,
     ) as any;
 
     // Claude roles -> sub provider
     expect(config.agents.main.model).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
     expect(config.agents.subagents.simple.task.model).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
-    // Non-Claude roles stay on the openai (company-billed) provider
-    expect(config.agents.subagents.simple.explore.model).toBe("pp-flant-openai/gemini-3-1-flash");
+    expect(config.agents.subagents.simple.explore.model).toBe("pp-flant-openai/gpt-5.6-luna");
+    expect(config.agents.subagents.simple.explore.thinking).toBe("medium");
     expect(config.agents.subagents.pools.reviewers[0].model).toBe("pp-flant-openai/gpt-5-4");
   });
 
@@ -571,8 +573,9 @@ describe("flant-infra", () => {
     ], true) as any;
 
     expect(config.agents.main.model).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-7");
-    expect(config.agents.subagents.pools.advisors[2].model).toBe("pp-flant-openai/gemini-3-1-pro");
-    expect(config.agents.subagents.simple.explore.model).toBe("pp-flant-openai/gemini-3-1-flash-lite");
+    expect(config.agents.subagents.pools.advisors).toHaveLength(2);
+    expect(config.agents.subagents.simple.explore.model).toBe("pp-flant-openai/gpt-5-4");
+    expect(collectModelSpecs(config).some((spec) => spec.includes("gemini"))).toBe(false);
   });
 
   it("loadFlantSettings returns defaults when file is missing", async () => {
