@@ -41,10 +41,19 @@ describe("delegationBlock", () => {
 
   it("keeps specialists selective without imposing workflow gates", () => {
     const block = delegationBlock("opus", pools);
-    expect(block).toContain("worth the risk it removes");
     expect(block).toContain("diagnoses ONLY");
     expect(block).toContain("ONE cheap localizing probe");
     expect(block).not.toContain("OPEN with");
+  });
+
+  // The role lines alone stated no condition a caller could test, so reviewers
+  // and advisors only ever ran when a user asked for one by name.
+  it("gives reviewers and advisors observable triggers, with an escape hatch", () => {
+    const block = delegationBlock("opus", pools);
+    expect(block).toMatch(/tests cannot exercise \(UI, vendored/);
+    expect(block).toMatch(/before reporting a\s*\n?multi-commit batch as done/);
+    expect(block).toMatch(/Skip it when a test you wrote already proves the change/);
+    expect(block).toMatch(/advisors BEFORE committing to something you would have to unwind/);
   });
 
   it("renders the configured pool roster with model metadata", () => {
