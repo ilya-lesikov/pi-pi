@@ -129,7 +129,7 @@ describe("AgentWidget", () => {
 
     vi.useFakeTimers();
     try {
-      vi.setSystemTime(Date.now() + 6 * 60_000);
+      vi.setSystemTime(Date.now() + 61 * 60_000);
       widget.update();
       expect(factory).toBeUndefined();
     } finally {

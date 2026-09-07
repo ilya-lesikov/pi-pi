@@ -224,8 +224,8 @@ export class AgentWidget {
   // LOCAL PATCH (pi-pi): linger by wall time, not by turns. Turn-based aging
   // dropped a finished worker at the main session's very next tool call, so a
   // result that arrived mid-turn was often never visible at all.
-  private static readonly FINISHED_LINGER_MS = 5 * 60_000;
-  private static readonly ERROR_LINGER_MS = 10 * 60_000;
+  private static readonly FINISHED_LINGER_MS = 60 * 60_000;
+  private static readonly ERROR_LINGER_MS = 60 * 60_000;
   /** Widget repaint period: fast enough to animate spinners, idle when nothing runs. */
   private static readonly ANIMATED_INTERVAL_MS = 80;
   private static readonly IDLE_INTERVAL_MS = 1_000;
