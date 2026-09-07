@@ -99,6 +99,50 @@ export function compactionThresholdTokens(input: ThresholdInput): number {
   return Math.min(target, ceiling);
 }
 
+export interface AdaptiveMeasureState {
+  nextThreshold: number | null;
+  disabled: boolean;
+  firedThreshold: number | null;
+  contaminatedMeasures: number;
+}
+
+/**
+ * Fold the first post-compaction token reading into the adaptive state.
+ *
+ * A valid baseline must land BELOW the threshold that fired the compaction;
+ * a reading at/above it is contaminated — it includes a whole new turn's
+ * content that raced the measurement (observed in practice: fired at 791K,
+ * "baseline" read 810K) and is itself compactable, so ratcheting the next
+ * threshold from it would silence proactive compaction for the session.
+ * First contaminated reading: discard and request a re-arm so compaction can
+ * fire again promptly. Second consecutive one: the context genuinely cannot
+ * shrink below the threshold, so fall through to the normal path (ratchet or
+ * thrash-disable) to bound re-compaction to one extra attempt.
+ *
+ * A sane baseline REPLACES nextThreshold (via adaptiveNextThreshold, which
+ * already floors at base and caps at the ceiling) instead of max-ing with the
+ * previous value: a stale high threshold from a bad earlier measure must drop
+ * back once a good compaction shows the real floor.
+ */
+export function applyBaselineMeasure(
+  input: ThresholdInput,
+  state: AdaptiveMeasureState,
+  baseline: number,
+): { rearm: boolean } {
+  const contaminated = state.firedThreshold != null && baseline >= state.firedThreshold;
+  if (contaminated && state.contaminatedMeasures === 0) {
+    state.contaminatedMeasures = 1;
+    return { rearm: true };
+  }
+  if (wouldThrash(input, baseline)) {
+    state.disabled = true;
+    return { rearm: false };
+  }
+  state.contaminatedMeasures = 0;
+  state.nextThreshold = adaptiveNextThreshold(input, baseline);
+  return { rearm: false };
+}
+
 // Hysteresis state so a single crossing arms exactly one compaction and does not
 // re-fire until context has DROPPED below a lower band and then re-crossed the
 // threshold again. Kept per-session in memory.

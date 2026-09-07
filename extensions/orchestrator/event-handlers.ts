@@ -10,7 +10,7 @@ import { registerAstSearchTool } from "./ast-search.js";
 import { registerBillingHook } from "./billing-spoof.js";
 import { registerRecallTool, compile as vccCompile } from "../../3p/pi-vcc/index.js";
 import { computeVccMessageRange, buildVccDetails } from "./compaction-dispatch.js";
-import { compactionThresholdTokens, shouldFireCompaction, shouldForceCompaction, adaptiveNextThreshold, wouldThrash } from "./compaction-trigger.js";
+import { compactionThresholdTokens, shouldFireCompaction, shouldForceCompaction, applyBaselineMeasure } from "./compaction-trigger.js";
 import { collectContextFiles, renderContextInjection, summarizeContextInjectionSize } from "./context-injection.js";
 import { listLayeredSkills, loadLayeredSkill } from "./skills-manifest.js";
 import { identityBlock, principlesBlock, toolsBlock, delegationBlock } from "./agents/tool-routing.js";
@@ -272,13 +272,20 @@ async function maybeCompact(orchestrator: Orchestrator, ctx: any): Promise<void>
   const adaptive = orchestrator.adaptiveCompaction;
   if (adaptive.pendingProactiveMeasure && typeof usage.tokens === "number") {
     adaptive.pendingProactiveMeasure = false;
-    if (wouldThrash(input, usage.tokens)) adaptive.disabled = true;
-    else adaptive.nextThreshold = Math.max(base, adaptive.nextThreshold ?? 0, adaptiveNextThreshold(input, usage.tokens));
+    if (applyBaselineMeasure(input, adaptive, usage.tokens).rearm) orchestrator.compactionArm.armed = true;
   }
+  const effectiveThreshold = Math.max(base, adaptive.nextThreshold ?? 0);
+  // Post-compaction blind window: getContextUsage() reports tokens:null until
+  // a SUCCESSFUL assistant response lands after the compaction, so an error
+  // storm would otherwise let context coast far past the threshold. Fall back
+  // to our own chars/4 estimate against the normal threshold; the arm state
+  // still bounds this to one firing until the estimate materially drops.
+  const tokens = usage.tokens ?? orchestrator.lastEstimatedTokens;
   const forced = usage.tokens == null && orchestrator.lastEstimatedTokens != null && shouldForceCompaction(orchestrator.lastEstimatedTokens, usage.contextWindow);
-  const fire = forced || (!adaptive.disabled && shouldFireCompaction(usage.tokens, Math.max(base, adaptive.nextThreshold ?? 0), orchestrator.compactionArm));
+  const fire = forced || (!adaptive.disabled && shouldFireCompaction(tokens, effectiveThreshold, orchestrator.compactionArm));
   if (!fire) return;
   if (forced) orchestrator.compactionArm.armed = false;
+  adaptive.firedThreshold = effectiveThreshold;
   adaptive.inFlight = true;
   ctx.compact({ onError: () => { orchestrator.adaptiveCompaction.inFlight = false; } });
 }

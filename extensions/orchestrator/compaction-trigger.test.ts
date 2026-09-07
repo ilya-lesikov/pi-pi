@@ -8,6 +8,7 @@ import {
   adaptiveNextThreshold,
   wouldThrash,
   shouldForceCompaction,
+  applyBaselineMeasure,
   CONTEXT_RESERVE_TOKENS,
 } from "./compaction-trigger.js";
 import type { CompactionConfig } from "./config.js";
@@ -168,5 +169,58 @@ describe("shouldForceCompaction (blind-growth safety net)", () => {
     state.armed = false;
     expect(shouldFireCompaction(null, 300_000, state)).toBe(false);
     expect(state.armed).toBe(false);
+  });
+});
+
+describe("applyBaselineMeasure (poisoned-baseline guard)", () => {
+  const input = { contextWindow: 1_050_000, config: cfg() };
+  const state = () => ({ nextThreshold: null as number | null, disabled: false, firedThreshold: null as number | null, contaminatedMeasures: 0 });
+
+  it("ratchets from a sane baseline: nextThreshold = baseline + headroom", () => {
+    const s = state();
+    s.firedThreshold = 315_000;
+    const r = applyBaselineMeasure(input, s, 80_000);
+    expect(r.rearm).toBe(false);
+    expect(s.disabled).toBe(false);
+    expect(s.nextThreshold).toBe(315_000); // max(base 315K, 80K + 126K headroom)
+  });
+
+  it("discards the first contaminated reading (>= fired threshold) and requests a re-arm", () => {
+    // The observed session: fired at 791K, first "post-compaction" reading 810K.
+    const s = state();
+    s.firedThreshold = 791_490;
+    s.nextThreshold = 500_000;
+    const r = applyBaselineMeasure(input, s, 810_900);
+    expect(r.rearm).toBe(true);
+    expect(s.nextThreshold).toBe(500_000);
+    expect(s.disabled).toBe(false);
+    expect(s.contaminatedMeasures).toBe(1);
+  });
+
+  it("second consecutive contaminated reading falls through to the normal path", () => {
+    const s = state();
+    s.firedThreshold = 791_490;
+    s.contaminatedMeasures = 1;
+    const r = applyBaselineMeasure(input, s, 810_900);
+    expect(r.rearm).toBe(false);
+    // 810900 + 126000 headroom < 1050000 - 32000 ceiling: ratchets, no thrash.
+    expect(s.nextThreshold).toBe(936_900);
+    expect(s.contaminatedMeasures).toBe(0);
+  });
+
+  it("a good baseline after a bad ratchet LOWERS the threshold back down", () => {
+    const s = state();
+    s.firedThreshold = 936_900;
+    s.nextThreshold = 936_900;
+    applyBaselineMeasure(input, s, 80_000);
+    expect(s.nextThreshold).toBe(315_000);
+  });
+
+  it("disables on thrash (baseline + headroom over the ceiling)", () => {
+    const small = { contextWindow: 200_000, config: cfg() };
+    const s = state();
+    s.firedThreshold = 168_000;
+    applyBaselineMeasure(small, s, 150_000);
+    expect(s.disabled).toBe(true);
   });
 });

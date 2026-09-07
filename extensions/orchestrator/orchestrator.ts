@@ -45,7 +45,9 @@ export class Orchestrator {
     disabled: boolean;
     modelKey: string | null;
     window: number | null;
-  } = { nextThreshold: null, inFlight: false, pendingProactiveMeasure: false, disabled: false, modelKey: null, window: null };
+    firedThreshold: number | null;
+    contaminatedMeasures: number;
+  } = { nextThreshold: null, inFlight: false, pendingProactiveMeasure: false, disabled: false, modelKey: null, window: null, firedThreshold: null, contaminatedMeasures: 0 };
   manualCompactionUseBuiltin = false;
   manualCompactionPending = false;
   manualCompactionRequestId = 0;
@@ -141,6 +143,8 @@ export class Orchestrator {
       disabled: false,
       modelKey: null,
       window: null,
+      firedThreshold: null,
+      contaminatedMeasures: 0,
     };
     this.compactionArm.armed = true;
   }
