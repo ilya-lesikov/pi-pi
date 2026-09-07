@@ -138,6 +138,28 @@ describe("AgentWidget", () => {
     widget.dispose();
   });
 
+  // Completion paths call update() directly, so a non-sticky suspend would
+  // re-register the widget under the full-screen conversation viewer.
+  it("stays parked across update() calls until resumed", () => {
+    const manager = { listAgents: () => [makeRecord("worker")] };
+    const widget = new AgentWidget(manager as any, new Map([["worker", makeActivity()]]));
+    const setWidget = vi.fn();
+    widget.setUICtx({ setStatus: () => {}, setWidget });
+
+    widget.update();
+    expect(setWidget).toHaveBeenLastCalledWith("agents", expect.any(Function), expect.anything());
+
+    widget.suspend();
+    expect(setWidget).toHaveBeenLastCalledWith("agents", undefined);
+    widget.update();
+    widget.onTurnStart();
+    expect(setWidget).toHaveBeenLastCalledWith("agents", undefined);
+
+    widget.resume();
+    expect(setWidget).toHaveBeenLastCalledWith("agents", expect.any(Function), expect.anything());
+    widget.dispose();
+  });
+
   // "all" (and the no-policy constructor default) shows every agent.
   it("shows foreground agents in 'all' mode (and by default)", () => {
     const manager = { listAgents: () => [makeRecord("foreground", { isBackground: false })] };

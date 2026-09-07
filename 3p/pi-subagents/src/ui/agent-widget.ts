@@ -233,6 +233,8 @@ export class AgentWidget {
 
   /** Whether the widget callback is currently registered with the TUI. */
   private widgetRegistered = false;
+  /** Set while a full-screen view owns the terminal; update() is a no-op then. */
+  private suspended = false;
   /** Cached TUI reference from widget factory callback, used for requestRender(). */
   private tui: any | undefined;
   /** Last status bar text, used to avoid redundant setStatus calls. */
@@ -315,6 +317,11 @@ export class AgentWidget {
     if (!this.finishedAt.has(agentId)) {
       this.finishedAt.set(agentId, Date.now());
     }
+  }
+
+  /** Drop a finished timestamp so a resumed agent gets a fresh window on its next completion. */
+  private forgetIfActive(agentId: string, status: string) {
+    if (status === "running" || status === "queued") this.finishedAt.delete(agentId);
   }
 
   /** Render a finished agent line. */
@@ -492,7 +499,7 @@ export class AgentWidget {
 
   /** Force an immediate widget update. */
   update() {
-    if (!this.uiCtx) return;
+    if (!this.uiCtx || this.suspended) return;
     const allAgents = this.widgetAgents();
 
     // Lightweight existence checks — full categorization happens in renderWidget()
@@ -500,6 +507,7 @@ export class AgentWidget {
     let queuedCount = 0;
     let hasFinished = false;
     for (const a of allAgents) {
+      this.forgetIfActive(a.id, a.status);
       if (a.status === "running") { runningCount++; }
       else if (a.status === "queued") { queuedCount++; }
       else if (a.completedAt && this.shouldShowFinished(a.id, a.status)) { hasFinished = true; }
@@ -569,9 +577,11 @@ export class AgentWidget {
   /**
    * LOCAL PATCH (pi-pi): park the widget while a full-screen view owns the
    * terminal. Repainting underneath it only churns the buffer the overlay is
-   * composited into, which is what makes the view tear.
+   * composited into, which is what makes the view tear. Sticky: agent
+   * completions call update() directly and would otherwise re-register it.
    */
   suspend() {
+    this.suspended = true;
     if (this.widgetInterval) {
       clearInterval(this.widgetInterval);
       this.widgetInterval = undefined;
@@ -586,6 +596,7 @@ export class AgentWidget {
 
   /** Restore the widget after a suspend(); safe to call when never suspended. */
   resume() {
+    this.suspended = false;
     this.update();
   }
 
