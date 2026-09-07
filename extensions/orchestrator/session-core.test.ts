@@ -1,3 +1,6 @@
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { getDefaultConfig, normalizeConfigDurations } from "./config.js";
 import { Orchestrator } from "./orchestrator.js";
@@ -47,6 +50,15 @@ async function emitBus(pi: any, channel: string, data: any): Promise<void> {
   for (const handler of pi.busHandlers.get(channel) ?? []) await handler(data);
 }
 
+/** First handler result for an event; several handlers may listen, only one answers. */
+async function emitForResult(pi: any, name: string, event: any, ctx: any): Promise<any> {
+  for (const handler of pi.handlers.get(name) ?? []) {
+    const result = await handler(event, ctx);
+    if (result !== undefined) return result;
+  }
+  return undefined;
+}
+
 describe("session-first core", () => {
   it("renders one generic prompt without workflow state or coding-only policy", () => {
     const orchestrator = new Orchestrator(makePi());
@@ -83,9 +95,8 @@ describe("session-first core", () => {
     orchestrator.config = normalizeConfigDurations(getDefaultConfig());
     registerEventHandlers(orchestrator);
     const ctx = { cwd: orchestrator.cwd, model: { provider: "test", id: "model" }, ui: { notify: vi.fn() }, sessionManager: {} };
-    const start = pi.handlers.get("before_agent_start")?.[0] as any;
-    expect((await start({ prompt: "first" }, ctx))?.systemPrompt).toContain("<identity>");
-    expect((await start({ prompt: "after spawn" }, ctx))?.systemPrompt).toContain("<identity>");
+    expect((await emitForResult(pi, "before_agent_start", { prompt: "first" }, ctx))?.systemPrompt).toContain("<identity>");
+    expect((await emitForResult(pi, "before_agent_start", { prompt: "after spawn" }, ctx))?.systemPrompt).toContain("<identity>");
     orchestrator.mainTurnTimer = setInterval(() => {}, 60_000);
     await emit(pi, "session_shutdown", {}, ctx);
     expect(orchestrator.mainTurnTimer).toBeNull();
@@ -101,7 +112,7 @@ describe("session-first core", () => {
       const second = makePi();
       initExtension(second);
       expect(second.handlers.get("session_start")?.length).toBe(1);
-      expect(second.handlers.get("before_agent_start")?.length).toBe(1);
+      expect(second.handlers.get("before_agent_start")?.length).toBeGreaterThan(0);
       expect(second.registerCommand).toHaveBeenCalledWith("pp", expect.anything());
     } finally {
       delete (globalThis as any)[ORCHESTRATOR_KEY];
@@ -179,6 +190,34 @@ describe("session-first core", () => {
     orchestrator.spawnedAgentIds.clear();
     orchestrator.mainTurnToolInFlight = 1;
     expect(isMainTurnStalled(orchestrator, 3000)).toBe(false);
+  });
+
+  // The tracing toggle and the report bundle both promise recorded traces, but
+  // nothing called into the tracer, so enabled traces held only the finalizer.
+  it("records main and worker events into the session trace", async () => {
+    const { initTracer, finalizeTracer } = await import("./tracer.js");
+    const dir = mkdtempSync(join(tmpdir(), "pp-trace-"));
+    try {
+      const pi = makePi();
+      const orchestrator = new Orchestrator(pi);
+      orchestrator.cwd = dir;
+      orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+      registerEventHandlers(orchestrator);
+      initTracer(join(dir, ".pp"), "trace-session");
+
+      await emit(pi, "tool_execution_start", { toolCallId: "c1", toolName: "read", args: { path: "a.ts" } }, {});
+      await emitBus(pi, "subagents:created", { id: "worker", type: "explore", description: "Worker" });
+      await emitBus(pi, "subagents:completed", { id: "worker", status: "completed" });
+      finalizeTracer();
+
+      const main = readFileSync(join(dir, ".pp", "logs", "traces", "trace-session", "main.jsonl"), "utf-8");
+      expect(main).toContain('"kind":"tool_execution_start"');
+      expect(main).toContain('"kind":"subagent_spawned"');
+      const worker = readFileSync(join(dir, ".pp", "logs", "traces", "trace-session", "worker.jsonl"), "utf-8");
+      expect(worker).toContain('"kind":"subagent_settled"');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("leaves the stale-agent watchdog disabled by default", async () => {
@@ -287,7 +326,7 @@ describe("session-first core", () => {
     await emit(pi, "before_agent_start", { prompt: "New user request" }, ctx);
     expect(orchestrator.continuationCount).toBe(0);
     expect(orchestrator.continuationHalted).toBe(false);
-    const stale = await (pi.handlers.get("before_agent_start")?.[0] as any)({ prompt: nudge }, ctx);
+    const stale = await emitForResult(pi, "before_agent_start", { prompt: nudge }, ctx);
     expect(stale.systemPrompt).toContain("obsolete automatic continuation");
     await emit(pi, "session_shutdown", {}, ctx);
   });

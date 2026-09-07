@@ -3,7 +3,7 @@ import { Type } from "@sinclair/typebox";
 import { estimateTokens, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { loadConfig, getDefaultConfig, normalizeConfigDurations } from "./config.js";
 import { getLogger, initSessionLogger, setLogLevel, flushLogs } from "./log.js";
-import { initTracer, finalizeTracer } from "./tracer.js";
+import { initTracer, finalizeTracer, getTracer } from "./tracer.js";
 import { registerCbmTools } from "./cbm.js";
 import { registerExaTools } from "./exa.js";
 import { registerAstSearchTool } from "./ast-search.js";
@@ -164,6 +164,35 @@ export function registerFeatureToolsAndAgents(orchestrator: Orchestrator): void 
   orchestrator.registerAgents();
 }
 
+// Opt-in via config.general.tracing; getTracer() is undefined otherwise, so
+// these handlers cost one property read per event when it is off.
+function registerTracing(pi: ExtensionAPI): void {
+  pi.on("before_agent_start", async (event: any) => {
+    getTracer()?.traceMain("before_agent_start", { prompt: event.prompt, images: event.images, systemPrompt: event.systemPrompt });
+  });
+  pi.on("agent_end", async (event: any) => {
+    getTracer()?.traceMain("agent_end", { messages: event.messages });
+  });
+  pi.on("turn_start", async (event: any) => {
+    const tracer = getTracer();
+    if (!tracer) return;
+    tracer.turnIndex = event.turnIndex;
+    tracer.traceMain("turn_start", { turnIndex: event.turnIndex, timestamp: event.timestamp });
+  });
+  pi.on("turn_end", async (event: any) => {
+    getTracer()?.traceMain("turn_end", { turnIndex: event.turnIndex, message: event.message, toolResults: event.toolResults });
+  });
+  pi.on("message_end", async (event: any) => {
+    getTracer()?.traceMain("message_end", { message: event.message });
+  });
+  pi.on("tool_execution_start", async (event: any) => {
+    getTracer()?.traceMain("tool_execution_start", { toolCallId: event.toolCallId, toolName: event.toolName, args: event.args });
+  });
+  pi.on("tool_execution_end", async (event: any) => {
+    getTracer()?.traceMain("tool_execution_end", { toolCallId: event.toolCallId, toolName: event.toolName, result: event.result, isError: event.isError });
+  });
+}
+
 function registerLifecycle(orchestrator: Orchestrator): void {
   const pi = orchestrator.pi;
   // pi-subagents publishes its lifecycle on the shared event bus, not as host
@@ -174,6 +203,7 @@ function registerLifecycle(orchestrator: Orchestrator): void {
       orchestrator.agentDescriptions.set(data.id, data.description ?? data.type ?? data.id);
       orchestrator.agentSpawnTimes.set(data.id, Date.now());
       orchestrator.startStaleAgentWatchdog();
+      getTracer()?.openSubagent({ subagentId: data.id, type: data.type, description: data.description, parentToolCallId: data.toolCallId, depth: 1 });
     }
     publishAcpState(orchestrator);
   });
@@ -182,6 +212,15 @@ function registerLifecycle(orchestrator: Orchestrator): void {
       orchestrator.spawnedAgentIds.delete(data.id);
       orchestrator.agentSpawnTimes.delete(data.id);
       orchestrator.agentDescriptions.delete(data.id);
+      getTracer()?.traceSubagent(data.id, "subagent_settled", {
+        status: data.status,
+        error: data.error,
+        result: data.result,
+        tokens: data.tokens,
+        durationMs: data.durationMs,
+        toolUses: data.toolUses,
+        modelId: data.modelId,
+      });
     }
     if (orchestrator.agentSpawnTimes.size === 0) orchestrator.stopStaleAgentWatchdog();
     publishAcpState(orchestrator);
@@ -415,6 +454,7 @@ export function registerSubagentCompaction(
 
 export function registerEventHandlers(orchestrator: Orchestrator): void {
   const pi = orchestrator.pi;
+  registerTracing(pi);
   registerBillingHook(pi);
   registerLifecycle(orchestrator);
   registerCompaction(orchestrator);
