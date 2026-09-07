@@ -97,15 +97,18 @@ describe("toolsBlock only advertises granted tools", () => {
   });
 });
 
-describe("domain-neutral principles", () => {
-  it("the always-active block has no coding-only vocabulary", () => {
-    for (const phrase of ["codebase", "the code", "compil", "lsp", "refactor", "source code"]) {
-      expect(principlesBlock().toLowerCase()).not.toContain(phrase);
-    }
-  });
-
-  it("shared reasoning/evidence rules stay in the shared block", () => {
-    for (const phrase of ["Verify, don't assume", "Evidence over claims", "Match what already exists", "Think critically", "Recall before assuming"]) {
+describe("pre-1.0 principles", () => {
+  it("preserves the universal principles from the pre-1.0 prompt", () => {
+    for (const phrase of [
+      "Verify, don't assume",
+      "Never guess paths, types, or APIs",
+      "Evidence over claims",
+      "Show fresh tool output",
+      "Match existing patterns",
+      "Reading one neighboring file is not enough",
+      "Be concise and dense",
+      "Think critically",
+    ]) {
       expect(principlesBlock()).toContain(phrase);
     }
   });

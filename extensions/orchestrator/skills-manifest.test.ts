@@ -37,12 +37,11 @@ describe("layered skills", () => {
     expect(bundled.map((skill) => skill.name)).toEqual([
       "repository-work",
       "research-and-design",
-      "skill-authoring",
       "software-engineering",
     ]);
     expect(bundled.every((skill) => skill.filePath.startsWith(bundledSkillsDir()))).toBe(true);
-    expect(loadLayeredSkill("software-engineering", cwd).document).toContain("## Prove behavior");
-    expect(loadLayeredSkill("repository-work", cwd).document).toContain("## Establish repository state");
+    expect(loadLayeredSkill("software-engineering", cwd).document).toContain("## Verification gate");
+    expect(loadLayeredSkill("repository-work", cwd).document).toContain("conventional-commit type");
   });
 
   it("resolves project over global over bundled", () => {
