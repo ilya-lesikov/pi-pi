@@ -219,10 +219,17 @@ export class AgentWidget {
   private uiCtx: UICtx | undefined;
   private widgetFrame = 0;
   private widgetInterval: ReturnType<typeof setInterval> | undefined;
-  /** Tracks how many turns each finished agent has survived. Key: agent ID, Value: turns since finished. */
-  private finishedTurnAge = new Map<string, number>();
-  /** How many extra turns errors/aborted agents linger (completed agents clear after 1 turn). */
-  private static readonly ERROR_LINGER_TURNS = 2;
+  /** When each finished agent was first shown as finished. Key: agent ID, Value: epoch ms. */
+  private finishedAt = new Map<string, number>();
+  // LOCAL PATCH (pi-pi): linger by wall time, not by turns. Turn-based aging
+  // dropped a finished worker at the main session's very next tool call, so a
+  // result that arrived mid-turn was often never visible at all.
+  private static readonly FINISHED_LINGER_MS = 5 * 60_000;
+  private static readonly ERROR_LINGER_MS = 10 * 60_000;
+  /** Widget repaint period: fast enough to animate spinners, idle when nothing runs. */
+  private static readonly ANIMATED_INTERVAL_MS = 80;
+  private static readonly IDLE_INTERVAL_MS = 1_000;
+  private widgetIntervalMs: number | undefined;
 
   /** Whether the widget callback is currently registered with the TUI. */
   private widgetRegistered = false;
@@ -276,35 +283,37 @@ export class AgentWidget {
 
   /**
    * Called on each new turn (tool_execution_start).
-   * Ages finished agents and clears those that have lingered long enough.
+   * Refreshes the widget so agents whose linger window expired drop out.
    */
   onTurnStart() {
-    // Age all finished agents
-    for (const [id, age] of this.finishedTurnAge) {
-      this.finishedTurnAge.set(id, age + 1);
-    }
-    // Trigger a widget refresh (will filter out expired agents)
     this.update();
   }
 
-  /** Ensure the widget update timer is running. */
-  ensureTimer() {
-    if (!this.widgetInterval) {
-      this.widgetInterval = setInterval(() => this.update(), 80);
-    }
+  /** Ensure the widget update timer is running at the period the current state needs. */
+  ensureTimer(periodMs: number = AgentWidget.ANIMATED_INTERVAL_MS) {
+    if (this.widgetInterval && this.widgetIntervalMs === periodMs) return;
+    if (this.widgetInterval) clearInterval(this.widgetInterval);
+    this.widgetIntervalMs = periodMs;
+    this.widgetInterval = setInterval(() => this.update(), periodMs);
   }
 
   /** Check if a finished agent should still be shown in the widget. */
   private shouldShowFinished(agentId: string, status: string): boolean {
-    const age = this.finishedTurnAge.get(agentId) ?? 0;
-    const maxAge = ERROR_STATUSES.has(status) ? AgentWidget.ERROR_LINGER_TURNS : 1;
-    return age < maxAge;
+    // A record the completion hooks never marked (RPC/scheduler paths) starts
+    // its window here rather than being hidden outright.
+    let since = this.finishedAt.get(agentId);
+    if (since === undefined) {
+      since = Date.now();
+      this.finishedAt.set(agentId, since);
+    }
+    const linger = ERROR_STATUSES.has(status) ? AgentWidget.ERROR_LINGER_MS : AgentWidget.FINISHED_LINGER_MS;
+    return Date.now() - since < linger;
   }
 
   /** Record an agent as finished (call when agent completes). */
   markFinished(agentId: string) {
-    if (!this.finishedTurnAge.has(agentId)) {
-      this.finishedTurnAge.set(agentId, 0);
+    if (!this.finishedAt.has(agentId)) {
+      this.finishedAt.set(agentId, Date.now());
     }
   }
 
@@ -508,13 +517,17 @@ export class AgentWidget {
         this.uiCtx.setStatus("subagents", undefined);
         this.lastStatusText = undefined;
       }
-      if (this.widgetInterval) { clearInterval(this.widgetInterval); this.widgetInterval = undefined; }
+      if (this.widgetInterval) { clearInterval(this.widgetInterval); this.widgetInterval = undefined; this.widgetIntervalMs = undefined; }
       // Clean up stale entries
-      for (const [id] of this.finishedTurnAge) {
-        if (!allAgents.some(a => a.id === id)) this.finishedTurnAge.delete(id);
+      for (const [id] of this.finishedAt) {
+        if (!allAgents.some(a => a.id === id)) this.finishedAt.delete(id);
       }
       return;
     }
+
+    // Only running spinners need animation frames; a widget showing just
+    // finished agents repaints once a second, which is enough to expire them.
+    this.ensureTimer(hasActive ? AgentWidget.ANIMATED_INTERVAL_MS : AgentWidget.IDLE_INTERVAL_MS);
 
     // Status bar — only call setStatus when the text actually changes
     let newStatusText: string | undefined;
@@ -557,6 +570,7 @@ export class AgentWidget {
     if (this.widgetInterval) {
       clearInterval(this.widgetInterval);
       this.widgetInterval = undefined;
+      this.widgetIntervalMs = undefined;
     }
     if (this.uiCtx) {
       this.uiCtx.setWidget("agents", undefined);

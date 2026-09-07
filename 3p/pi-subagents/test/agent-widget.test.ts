@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { renderRunningAgentStatus } from "../src/index.js";
 import type { WidgetMode } from "../src/types.js";
 import { type AgentActivity, AgentWidget, fgPreservingNestedStyles, formatSessionTokens } from "../src/ui/agent-widget.js";
@@ -106,6 +106,37 @@ describe("AgentWidget", () => {
       .render()
       .join("\n");
   }
+
+  // LOCAL PATCH (pi-pi): finished agents linger by wall time. Turn-based aging
+  // dropped them at the main session's next tool call, often before the user
+  // ever saw the result.
+  it("keeps a finished agent visible across turns until its linger window ends", () => {
+    const finished = { ...makeRecord("done"), status: "completed", completedAt: Date.now() };
+    const manager = { listAgents: () => [finished] };
+    const widget = new AgentWidget(manager as any, new Map([["done", makeActivity()]]));
+    let factory: any;
+    widget.setUICtx({ setStatus: () => {}, setWidget: (_k, content) => { factory = content; } });
+    widget.markFinished("done");
+
+    const render = () => {
+      widget.update();
+      return factory ? factory({ terminal: { columns: 120 }, requestRender: () => {} }, theme).render().join("\n") : "";
+    };
+    expect(render()).toContain("done description");
+    widget.onTurnStart();
+    widget.onTurnStart();
+    expect(render()).toContain("done description");
+
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.now() + 6 * 60_000);
+      widget.update();
+      expect(factory).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+    widget.dispose();
+  });
 
   // "all" (and the no-policy constructor default) shows every agent.
   it("shows foreground agents in 'all' mode (and by default)", () => {
