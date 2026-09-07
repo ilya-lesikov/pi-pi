@@ -1091,4 +1091,28 @@ describe("AgentManager — first_tool/first_turn emission (all spawn paths)", ()
     await expect(manager.getRecord(id)!.promise).resolves.toBeDefined();
     expect(manager.getRecord(id)!.status).toBe("completed");
   });
+  it("keeps draining the background queue when onStart throws", async () => {
+    manager = new AgentManager(undefined, 1, () => {
+      throw new Error("widget is down");
+    });
+    resolvedRun();
+
+    const first = manager.spawn(mockPi, mockCtx, "explore", "one", { description: "one", isBackground: true });
+    const second = manager.spawn(mockPi, mockCtx, "explore", "two", { description: "two", isBackground: true });
+    expect(manager.getRecord(second)!.status).toBe("queued");
+
+    await manager.getRecord(first)!.promise;
+    await vi.waitFor(() => expect(manager.getRecord(second)!.status).toBe("completed"));
+  });
+
+  it("does not reject the run promise when onComplete throws on the error path", async () => {
+    manager = new AgentManager(() => {
+      throw new Error("bus is down");
+    });
+    vi.mocked(runAgent).mockRejectedValue(new Error("agent blew up"));
+
+    const id = manager.spawn(mockPi, mockCtx, "explore", "go", { description: "one", isBackground: true });
+    await expect(manager.getRecord(id)!.promise).resolves.toBe("");
+    expect(manager.getRecord(id)!.status).toBe("error");
+  });
 });

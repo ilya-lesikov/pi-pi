@@ -241,7 +241,11 @@ export class AgentManager {
     record.firstToolEmitted = false;
     record.firstTurnEmitted = false;
     if (options.isBackground) this.runningBackground++;
-    this.onStart?.(record);
+    // LOCAL PATCH (pi-pi): a throw here would propagate out of startAgent with
+    // the concurrency slot already taken and no promise to release it, and
+    // drainQueue would stop draining once every slot leaked that way. Mirrors
+    // how the completion callbacks below are guarded.
+    try { this.onStart?.(record); } catch { /* ignore start side-effect errors */ }
 
     // Wire parent abort signal to stop the subagent when the parent is interrupted
     let detachParentSignal: (() => void) | undefined;
@@ -387,10 +391,10 @@ export class AgentManager {
         // Mark resultConsumed so the callback skips notifications (result returned inline).
         if (!options.isBackground) {
           record.resultConsumed = true;
-          this.onComplete?.(record);
+          try { this.onComplete?.(record); } catch { /* ignore completion side-effect errors */ }
         } else {
           this.runningBackground--;
-          this.onComplete?.(record);
+          try { this.onComplete?.(record); } catch { /* ignore completion side-effect errors */ }
           this.drainQueue();
         }
         return "";
@@ -410,15 +414,19 @@ export class AgentManager {
       const next = this.queue.shift()!;
       const record = this.agents.get(next.id);
       if (!record || record.status !== "queued") continue;
+      const runningBefore = this.runningBackground;
       try {
         this.startAgent(next.id, record, next.args);
       } catch (err) {
         // Late failure (e.g. strict worktree-isolation) — surface on the record
-        // so the user/agent can see it via /agents, then keep draining.
+        // so the user/agent can see it via /agents, then keep draining. The
+        // throw happens before the run promise exists, so nothing else will
+        // release the concurrency slot startAgent may already have taken.
+        this.runningBackground = runningBefore;
         record.status = "error";
         record.error = err instanceof Error ? err.message : String(err);
         record.completedAt = Date.now();
-        this.onComplete?.(record);
+        try { this.onComplete?.(record); } catch { /* ignore completion side-effect errors */ }
       }
     }
   }
