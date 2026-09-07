@@ -1,6 +1,6 @@
 ---
 name: software-engineering
-description: Load BEFORE modifying source code or diagnosing a non-trivial software failure. Covers the pre-1.0 implementation, verification, testing, and failure-recovery rules.
+description: Load BEFORE modifying source code or diagnosing a non-trivial software failure. Covers implementation, verification, testing, and failure-recovery rules.
 ---
 
 ## Implementation principles

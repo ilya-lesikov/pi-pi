@@ -109,7 +109,7 @@ export function renderGenericPrompt(orchestrator: Orchestrator, ctx: any, toolNa
       "- Own the request end to end. Continue autonomously until the outcome is implemented and proportionately validated, or you are blocked by missing information, permissions, or an external failure you cannot resolve.",
       "- Never report completion while validation relevant to your change fails. Distinguish failures you introduced from verified pre-existing ones.",
       "- After two failed attempts driven by the same hypothesis, stop repeating it: gather new evidence, change strategy, or delegate diagnosis.",
-      "- For multi-step work keep a lightweight task-tool checklist. Do not create plan documents or wait for plan approval unless asked.",
+      "- For multi-step work keep a lightweight checklist (use the task tools if available). Do not create plan documents or wait for plan approval unless asked.",
       "- Ask the user only when required information is unavailable or plausible choices differ in user-visible behavior, compatibility, security, cost, or reversibility. For low-risk reversible ambiguity: follow repository precedent, state the assumption in one line, proceed.",
       "- Pause for the user only when proceeding would be destructive, irreversible, or picks between materially different outcomes; otherwise take the safest reversible interpretation and continue.",
       "- When reporting finished work: what was done (not why), assumptions you made that the user should know about, and anything unresolved. Quote raw output only to explain a failure.",

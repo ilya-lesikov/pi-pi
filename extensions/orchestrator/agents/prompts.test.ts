@@ -235,8 +235,8 @@ describe("task stays a bounded, self-contained worker", () => {
     const t = createTaskAgent(config);
     expect(t.prompt).not.toContain("=== USER REQUEST ===");
     expect(t.prompt).not.toContain("=== SYNTHESIZED PLAN ===");
-    expect(t.prompt).toContain("ONLY explore/librarian");
-    expect(t.prompt).toContain("Do NOT spawn task, advisor, deep-debugger, or reviewer");
+    expect(t.prompt).toContain("You have no subagents");
+    expect(t.prompt).not.toContain("Agent(subagent_type");
   });
 
   it("is explicitly never the whole-task owner", () => {
