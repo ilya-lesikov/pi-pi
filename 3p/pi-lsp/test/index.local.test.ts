@@ -129,6 +129,18 @@ describe('zero-config entrypoint (local fork)', () => {
     expect(ui.notifications).toHaveLength(0);
   });
 
+  test('a subagent load leaves the root session owning the shared api handle', async () => {
+    const rootPi = createFakePi();
+    lspExtension(rootPi as any);
+    const rootApi = (globalThis as any)[lspApiKey];
+    expect(rootApi).toBeTruthy();
+
+    const subagentPi = createFakePi();
+    inSubagentSessionScope(() => lspExtension(subagentPi as any));
+
+    expect((globalThis as any)[lspApiKey]).toBe(rootApi);
+  });
+
   test('lsp command reports auto-detected servers or a no-servers hint', async () => {
     const pi = createFakePi();
     lspExtension(pi as any);

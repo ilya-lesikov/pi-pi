@@ -110,7 +110,22 @@ export default function lspExtension(pi: ExtensionAPI) {
 
   // ── Register tool ─────────────────────────────────────────────────────
 
-  registerLspTool(pi, serverManager);
+  // LOCAL PATCH (pi-pi): an in-process subagent session skips session_start, so
+  // its own `config` stays null and every lsp call would answer "no capable
+  // server". Its clients would also never be shut down — nothing disposes a
+  // subagent session — so it borrows the root session's manager instead of
+  // starting language servers of its own.
+  const rootServerManager = (): ServerManagerService | undefined =>
+    (globalThis as any)[lspApiKey]?.serverManager;
+  registerLspTool(pi, isSubagentSession
+    ? {
+        clientsForFile: (filePath) => rootServerManager()?.clientsForFile(filePath) ?? [],
+        clientForFileWithCapability: (filePath, capability) =>
+          rootServerManager()?.clientForFileWithCapability(filePath, capability) ?? null,
+        anyClient: () => rootServerManager()?.anyClient() ?? null,
+        getRootPath: () => rootServerManager()?.getRootPath() ?? '',
+      }
+    : serverManager);
 
   // ── Session lifecycle ─────────────────────────────────────────────────
 
@@ -194,7 +209,13 @@ export default function lspExtension(pi: ExtensionAPI) {
     },
   });
 
-  (globalThis as any)[lspApiKey] = {
+  // LOCAL PATCH (pi-pi): only the root session may publish the shared handle.
+  // A subagent load would otherwise replace it with its own instance, whose
+  // config is null and whose client map is empty, so "restart LSP" and the
+  // doctor would report success against a dead object while the root session's
+  // language servers kept running.
+  if (!isSubagentSession) (globalThis as any)[lspApiKey] = {
+    serverManager,
     status: async (ctx: any) => {
       rootPath = ctx.cwd;
       const cfg = await loadConfig(ctx.cwd);

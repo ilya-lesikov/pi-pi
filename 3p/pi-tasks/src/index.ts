@@ -102,7 +102,10 @@ export default function (pi: ExtensionAPI) {
       widget.update();
     },
   };
-  (globalThis as any)[STORE_KEY] = storeApi;
+  // LOCAL PATCH (pi-pi): only the root session may publish the shared handle.
+  // A subagent load would otherwise replace it with its own empty in-memory
+  // store, detaching every cross-package reader from the real task list.
+  if (!isSubagentSession) (globalThis as any)[STORE_KEY] = storeApi;
 
   // ── Subagent integration state ──
   /** Latest ExtensionContext — refreshed on every tool execution so cascade always has a valid one. */

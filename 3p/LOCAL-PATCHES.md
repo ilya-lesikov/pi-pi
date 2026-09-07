@@ -68,8 +68,8 @@ that marker on anything you add, and list it here.
 | pi-subagents | `first_tool` / `first_turn` emitted at the manager choke point so all spawn paths report first progress | `src/agent-manager.ts` (`startAgent`), `src/types.ts` (`AgentRecord`) |
 | pi-subagents | `graceTurns` default raised 5 → 10 so a reviewer that trips the soft turn limit still has room to write its output file | `src/agent-runner.ts` (`graceTurns`) |
 | pi-subagents | Opens the `pi-pi:subagent-session-scope` async scope around a subagent's extension load, so pi-pi's extensions can tell an in-process subagent session apart from a root session the host re-instantiated on /new, /resume or fork | `src/agent-runner.ts` (`subagentSessionScope`, `runAgent`) |
-| pi-tasks | `clearAll` on the global store API; skip lifecycle hooks in in-process subagent sessions, snapshotting the `pi-pi:subagent-session-scope` scope at factory time | `src/index.ts` (`isSubagentSession`, store API) |
-| pi-lsp | Skip session/tool hooks in in-process subagent sessions, snapshotting the `pi-pi:subagent-session-scope` scope at factory time (reading it per event would also silence the root session, which never runs inside the scope) | `extensions/lsp/index.ts` (`isSubagentSession`) |
+| pi-tasks | `clearAll` on the global store API; skip lifecycle hooks and shared-handle publication in in-process subagent sessions, snapshotting the `pi-pi:subagent-session-scope` scope at factory time | `src/index.ts` (`isSubagentSession`, store API) |
+| pi-lsp | Skip session/tool hooks and shared-handle publication in in-process subagent sessions, snapshotting the `pi-pi:subagent-session-scope` scope at factory time (reading it per event would also silence the root session, which never runs inside the scope). A subagent's `lsp` tool borrows the root session's server manager, since nothing disposes a subagent session and its own language servers would leak | `extensions/lsp/index.ts` (`isSubagentSession`, `rootServerManager`) |
 
 Other files also diverge from upstream (`src/index.ts`, `src/agent-types.ts`,
 `src/cross-extension-rpc.ts`, `src/settings.ts`, `src/ui/*`) for widget/menu

@@ -150,18 +150,21 @@ describe("subagent-session hook skip (local fork)", () => {
   });
 
   it("session_switch does not clear parent tasks in a subagent session", async () => {
-    const mock = mockPi();
-    inSubagentSessionScope(() => initExtension(mock.pi as any));
+    const root = mockPi();
+    initExtension(root.pi as any);
     const api = storeApi();
+    const subagent = mockPi();
+    inSubagentSessionScope(() => initExtension(subagent.pi as any));
 
     api.create("parent task", "belongs to the parent session");
     expect(api.list().length).toBe(1);
 
-    await mock.fireLifecycle("session_switch", { reason: "new" }, mockCtx());
+    await subagent.fireLifecycle("session_switch", { reason: "new" }, mockCtx());
 
     // Without the guard, a /new session_switch in memory mode would clearAll(); the subagent
     // guard must short-circuit first and preserve the parent's tasks.
     expect(api.list().length).toBe(1);
+    expect(storeApi()).toBe(api);
   });
 
   it("outside the scope, before_agent_start still runs (guard is opt-in)", async () => {
