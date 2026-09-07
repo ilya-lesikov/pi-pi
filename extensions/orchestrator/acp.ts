@@ -24,8 +24,10 @@ export function isAcpMode(): boolean {
 
 function toSubagentStatus(status: unknown): AcpSubagentStatus {
   if (status === "queued") return "pending";
-  if (status === "running" || status === "steered") return "in_progress";
-  if (status === "completed") return "completed";
+  if (status === "running") return "in_progress";
+  // "steered" is the manager's terminal success state for a worker that hit its
+  // soft turn limit and was steered to wrap up; its output is complete.
+  if (status === "completed" || status === "steered") return "completed";
   return "failed";
 }
 
