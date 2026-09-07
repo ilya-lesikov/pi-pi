@@ -13,17 +13,17 @@ import { registerRecallTool } from "../../3p/pi-vcc/index.js";
 
 const ORCHESTRATOR_KEY = Symbol.for("pi-pi:orchestrator-initialized");
 const ORCHESTRATOR_CWD_KEY = Symbol.for("pi-pi:orchestrator-cwd");
-// Shared with 3p/pi-subagents/src/agent-runner.ts: the value is a { depth: number }
-// marking that this process runs as a subagent. The orchestrator only reads it for
-// truthiness ("am I a subagent?"); agent-runner uses depth for nesting.
-export const SUBAGENT_SESSION_KEY = Symbol.for("pi-pi:subagent-session");
+// Written by 3p/pi-subagents/src/agent-runner.ts for the duration of an
+// in-process subagent session's extension load; see the LOCAL PATCH there.
+// Shared with 3p/pi-tasks and 3p/pi-lsp, which make the same call.
+export function subagentSessionDepth(): number {
+  const scope = (globalThis as Record<symbol, any>)[Symbol.for("pi-pi:subagent-session-scope")];
+  return scope?.getStore?.()?.depth ?? 0;
+}
 
 export default function (pi: ExtensionAPI) {
   suppressPierreThemeSpam();
-  if ((globalThis as any)[ORCHESTRATOR_KEY]) {
-    if (!(globalThis as any)[SUBAGENT_SESSION_KEY]) {
-      (globalThis as any)[SUBAGENT_SESSION_KEY] = { depth: 1 };
-    }
+  if (subagentSessionDepth() > 0) {
     // Child sessions inherit the root project cwd (seeded/refreshed on the root
     // ORCHESTRATOR_CWD_KEY) so project-scoped flant overrides bind; fall back to
     // global-only when no root cwd is known.
@@ -36,12 +36,15 @@ export default function (pi: ExtensionAPI) {
     registerSubagentTools(pi);
     return;
   }
+  // The host re-runs this factory for every root session (startup and each
+  // /new, /resume or fork), so everything below must be safe to repeat.
+  const firstActivation = !(globalThis as any)[ORCHESTRATOR_KEY];
   (globalThis as any)[ORCHESTRATOR_KEY] = true;
   (globalThis as any)[ORCHESTRATOR_CWD_KEY] = process.cwd();
 
   // One-time (root-only) migration of durable flant policy out of the legacy
   // combined cache file into scoped config, before the first settings read.
-  migrateLegacyFlantSettings();
+  if (firstActivation) migrateLegacyFlantSettings();
   initFlantSync(pi);
 
   const orchestrator = new Orchestrator(pi);

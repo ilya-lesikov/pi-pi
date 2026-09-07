@@ -4,7 +4,10 @@ import { Orchestrator } from "./orchestrator.js";
 import { buildAcpState } from "./acp.js";
 import { isSubscriptionFallbackActive, setSubscriptionFallbackActive } from "./model-registry.js";
 import { classifyContinuation, isMainTurnStalled, registerEventHandlers, registerLoadSkill, registerSubagentCompaction, renderGenericPrompt } from "./event-handlers.js";
-import { SUBAGENT_SESSION_KEY } from "./index.js";
+import initExtension from "./index.js";
+
+const ORCHESTRATOR_KEY = Symbol.for("pi-pi:orchestrator-initialized");
+const SUBAGENT_SESSION_SCOPE_KEY = Symbol.for("pi-pi:subagent-session-scope");
 
 function makePi(): any {
   const handlers = new Map<string, Array<(...args: any[]) => any>>();
@@ -17,6 +20,8 @@ function makePi(): any {
     getAllTools: vi.fn(() => []),
     registerTool: vi.fn(),
     registerCommand: vi.fn(),
+    registerProvider: vi.fn(),
+    unregisterProvider: vi.fn(),
     sendUserMessage: vi.fn(),
     sendMessage: vi.fn(),
     appendEntry: vi.fn(),
@@ -65,14 +70,40 @@ describe("session-first core", () => {
     const ctx = { cwd: orchestrator.cwd, model: { provider: "test", id: "model" }, ui: { notify: vi.fn() }, sessionManager: {} };
     const start = pi.handlers.get("before_agent_start")?.[0] as any;
     expect((await start({ prompt: "first" }, ctx))?.systemPrompt).toContain("<identity>");
-    (globalThis as any)[SUBAGENT_SESSION_KEY] = { depth: 1 };
+    expect((await start({ prompt: "after spawn" }, ctx))?.systemPrompt).toContain("<identity>");
+    orchestrator.mainTurnTimer = setInterval(() => {}, 60_000);
+    await emit(pi, "session_shutdown", {}, ctx);
+    expect(orchestrator.mainTurnTimer).toBeNull();
+  });
+
+  // The host re-instantiates every extension on /new, /resume and fork. Before,
+  // a global "already initialized" flag made the second instantiation take the
+  // subagent branch, so the new root session silently lost its event handlers,
+  // its /pp command, its footer and its configured main model.
+  it("registers root handlers again each time the host re-instantiates the extension", () => {
+    (globalThis as any)[ORCHESTRATOR_KEY] = true;
     try {
-      expect((await start({ prompt: "after spawn" }, ctx))?.systemPrompt).toContain("<identity>");
-      orchestrator.mainTurnTimer = setInterval(() => {}, 60_000);
-      await emit(pi, "session_shutdown", {}, ctx);
-      expect(orchestrator.mainTurnTimer).toBeNull();
+      const second = makePi();
+      initExtension(second);
+      expect(second.handlers.get("session_start")?.length).toBe(1);
+      expect(second.handlers.get("before_agent_start")?.length).toBe(1);
+      expect(second.registerCommand).toHaveBeenCalledWith("pp", expect.anything());
     } finally {
-      delete (globalThis as any)[SUBAGENT_SESSION_KEY];
+      delete (globalThis as any)[ORCHESTRATOR_KEY];
+    }
+  });
+
+  it("takes the subagent branch only inside a subagent-session scope", () => {
+    (globalThis as any)[ORCHESTRATOR_KEY] = true;
+    (globalThis as any)[SUBAGENT_SESSION_SCOPE_KEY] = { getStore: () => ({ depth: 1 }) };
+    try {
+      const child = makePi();
+      initExtension(child);
+      expect(child.handlers.get("session_start")).toBeUndefined();
+      expect(child.registerCommand).not.toHaveBeenCalledWith("pp", expect.anything());
+    } finally {
+      delete (globalThis as any)[SUBAGENT_SESSION_SCOPE_KEY];
+      delete (globalThis as any)[ORCHESTRATOR_KEY];
     }
   });
 

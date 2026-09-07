@@ -64,16 +64,26 @@ function createUiRecorder() {
   };
 }
 
-const subagentSessionKey = Symbol.for('pi-pi:subagent-session');
+const subagentSessionScopeKey = Symbol.for('pi-pi:subagent-session-scope');
+
+/** Stands in for the async scope pi-subagents opens around a subagent's extension load. */
+function inSubagentSessionScope<T>(run: () => T): T {
+  (globalThis as any)[subagentSessionScopeKey] = { getStore: () => ({ depth: 1 }) };
+  try {
+    return run();
+  } finally {
+    delete (globalThis as any)[subagentSessionScopeKey];
+  }
+}
 const lspApiKey = Symbol.for('pi-lsp:api');
 
 beforeEach(() => {
-  delete (globalThis as any)[subagentSessionKey];
+  delete (globalThis as any)[subagentSessionScopeKey];
   delete (globalThis as any)[lspApiKey];
 });
 
 afterEach(() => {
-  delete (globalThis as any)[subagentSessionKey];
+  delete (globalThis as any)[subagentSessionScopeKey];
   delete (globalThis as any)[lspApiKey];
 });
 
@@ -105,9 +115,8 @@ describe('zero-config entrypoint (local fork)', () => {
   });
 
   test('subagent sessions short-circuit lifecycle handlers', async () => {
-    (globalThis as any)[subagentSessionKey] = true;
     const pi = createFakePi();
-    lspExtension(pi as any);
+    inSubagentSessionScope(() => lspExtension(pi as any));
     const ui = createUiRecorder();
 
     await pi.handlers.get('session_start')?.[0]?.({}, { cwd: process.cwd(), ui: ui.ui });

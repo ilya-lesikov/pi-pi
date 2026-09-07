@@ -17,11 +17,11 @@ import { registerLspTool, type ServerManagerService } from './tools';
 import type { ResolvedServerConfig } from './types';
 
 export default function lspExtension(pi: ExtensionAPI) {
-  // LOCAL PATCH (pi-pi): snapshot at factory time. pi-pi's orchestrator sets this
-  // marker when it is loaded a second time in-process (a subagent session) and
-  // never clears it, so reading it at event time would also silence the root
-  // session's hooks after the first subagent spawn.
-  const isSubagentSession = !!(globalThis as any)[Symbol.for('pi-pi:subagent-session')];
+  // LOCAL PATCH (pi-pi): pi-pi's subagent runner opens an async scope around the
+  // extension load of an in-process subagent session; snapshot it at factory time
+  // so only that instance skips its hooks.
+  const isSubagentSession =
+    ((globalThis as Record<symbol, any>)[Symbol.for('pi-pi:subagent-session-scope')]?.getStore?.()?.depth ?? 0) > 0;
   const lspApiKey = Symbol.for('pi-lsp:api');
   let rootPath = '';
   let config: LoadedConfig | null = null;

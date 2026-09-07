@@ -4,7 +4,8 @@
  * Tests ONLY what the fork adds on top of vendored upstream:
  *   - the `clearAll` method exposed on the global store API (Symbol.for("pi-tasks:store")),
  *     added so orchestrator's /pp:done can clear the widget (commit 4ba9183);
- *   - the subagent-session hook skip: when globalThis[Symbol.for("pi-pi:subagent-session")] is set,
+ *   - the subagent-session hook skip: when the extension is instantiated inside the
+ *     globalThis[Symbol.for("pi-pi:subagent-session-scope")] async scope,
  *     lifecycle hooks (turn_start, turn_end, tool_result, before_agent_start, session_switch,
  *     tool_execution_start) become no-ops so child subagent sessions don't mutate parent task
  *     state (commit 50530c0).
@@ -18,7 +19,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import initExtension from "../src/index.js";
 
 const STORE_KEY = Symbol.for("pi-tasks:store");
-const SUBAGENT_SESSION_KEY = Symbol.for("pi-pi:subagent-session");
+const SUBAGENT_SESSION_SCOPE_KEY = Symbol.for("pi-pi:subagent-session-scope");
+
+/** Stands in for the async scope pi-subagents opens around a subagent's extension load. */
+function inSubagentSessionScope<T>(run: () => T): T {
+  (globalThis as any)[SUBAGENT_SESSION_SCOPE_KEY] = { getStore: () => ({ depth: 1 }) };
+  try {
+    return run();
+  } finally {
+    delete (globalThis as any)[SUBAGENT_SESSION_SCOPE_KEY];
+  }
+}
 
 beforeEach(() => {
   process.env.PI_TASKS = "off";
@@ -26,7 +37,7 @@ beforeEach(() => {
 
 afterEach(() => {
   delete process.env.PI_TASKS;
-  delete (globalThis as any)[SUBAGENT_SESSION_KEY];
+  delete (globalThis as any)[SUBAGENT_SESSION_SCOPE_KEY];
   delete (globalThis as any)[STORE_KEY];
 });
 
@@ -115,10 +126,9 @@ describe("global store API (local fork)", () => {
 });
 
 describe("subagent-session hook skip (local fork)", () => {
-  it("before_agent_start is a no-op when the subagent-session flag is set", async () => {
+  it("before_agent_start is a no-op in a subagent session", async () => {
     const mock = mockPi();
-    (globalThis as any)[SUBAGENT_SESSION_KEY] = true;
-    initExtension(mock.pi as any);
+    inSubagentSessionScope(() => initExtension(mock.pi as any));
 
     const ctx = mockCtx();
     await mock.fireLifecycle("before_agent_start", {}, ctx);
@@ -129,10 +139,9 @@ describe("subagent-session hook skip (local fork)", () => {
     expect(ctx.ui.setStatus).not.toHaveBeenCalled();
   });
 
-  it("turn_start is a no-op when the subagent-session flag is set", async () => {
+  it("turn_start is a no-op in a subagent session", async () => {
     const mock = mockPi();
-    (globalThis as any)[SUBAGENT_SESSION_KEY] = true;
-    initExtension(mock.pi as any);
+    inSubagentSessionScope(() => initExtension(mock.pi as any));
 
     const ctx = mockCtx();
     await mock.fireLifecycle("turn_start", {}, ctx);
@@ -140,10 +149,9 @@ describe("subagent-session hook skip (local fork)", () => {
     expect(ctx.ui.setWidget).not.toHaveBeenCalled();
   });
 
-  it("session_switch does not clear parent tasks when the subagent-session flag is set", async () => {
+  it("session_switch does not clear parent tasks in a subagent session", async () => {
     const mock = mockPi();
-    (globalThis as any)[SUBAGENT_SESSION_KEY] = true;
-    initExtension(mock.pi as any);
+    inSubagentSessionScope(() => initExtension(mock.pi as any));
     const api = storeApi();
 
     api.create("parent task", "belongs to the parent session");
@@ -156,7 +164,7 @@ describe("subagent-session hook skip (local fork)", () => {
     expect(api.list().length).toBe(1);
   });
 
-  it("without the flag, before_agent_start still runs (guard is opt-in)", async () => {
+  it("outside the scope, before_agent_start still runs (guard is opt-in)", async () => {
     const mock = mockPi();
     initExtension(mock.pi as any);
     // Give the widget something to render so the non-subagent path produces an observable

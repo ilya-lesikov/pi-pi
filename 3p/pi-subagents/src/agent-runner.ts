@@ -2,6 +2,7 @@
  * agent-runner.ts — Core execution engine: creates sessions, runs agents, collects results.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, resolve } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
@@ -39,6 +40,21 @@ export const SUBAGENT_TOOL_NAMES = {
 
 /** Names of tools registered by this extension that subagents must NOT inherit. */
 const EXCLUDED_TOOL_NAMES: string[] = Object.values(SUBAGENT_TOOL_NAMES);
+
+/**
+ * LOCAL PATCH (pi-pi): subagent sessions load the same extensions in the same
+ * process as the root session, so pi-pi's extensions need to know which of the
+ * two they are being instantiated for. A plain global flag cannot express that —
+ * the host also re-instantiates every extension when the root session is
+ * switched (/new, /resume, fork), which is indistinguishable from a subagent
+ * load. An async scope is: extension factories only ever run inside the
+ * `loader.reload()` below for a subagent, and never inside it for the root.
+ */
+function subagentSessionScope(): AsyncLocalStorage<{ depth: number }> {
+  const registry = globalThis as Record<symbol, unknown>;
+  const key = Symbol.for("pi-pi:subagent-session-scope");
+  return (registry[key] ??= new AsyncLocalStorage<{ depth: number }>()) as AsyncLocalStorage<{ depth: number }>;
+}
 
 /**
  * Canonical name of an extension for `extensions: [...]` allowlist matching.
@@ -550,7 +566,8 @@ export async function runAgent(
     systemPromptOverride: () => systemPrompt,
     appendSystemPromptOverride: () => [],
   });
-  await loader.reload();
+  const scope = subagentSessionScope();
+  await scope.run({ depth: (scope.getStore()?.depth ?? 0) + 1 }, () => loader.reload());
 
   // Plain entries in `tools:` are expected to be built-in names (extension tools
   // go through `ext:`), so an unknown name there is unambiguously a typo. Previously
