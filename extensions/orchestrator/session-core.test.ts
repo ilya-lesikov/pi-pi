@@ -400,6 +400,19 @@ describe("session-first core", () => {
     });
     expect(result.compaction.summary).toContain("[Session Goal]");
     expect(result.compaction.details.compactor).toBe("pi-vcc");
+
+    // On a split turn the host discards the prefix of the cut turn too, so it
+    // must reach the summary rather than vanishing with the dropped history.
+    const split = await beforeCompact({
+      preparation: {
+        messagesToSummarize: [{ role: "user", content: "older history" }],
+        turnPrefixMessages: [{ role: "assistant", content: "split-turn prefix detail" }],
+        firstKeptEntryId: "kept",
+        tokensBefore: 20_000,
+      },
+      branchEntries: [{ id: "old" }, { id: "kept" }],
+    });
+    expect(split.compaction.details.sourceMessageCount).toBe(2);
   });
 
   it("makes layered skills loadable in worker processes", async () => {

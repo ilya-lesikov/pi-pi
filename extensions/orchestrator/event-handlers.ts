@@ -302,15 +302,22 @@ function registerCompaction(orchestrator: CompactionState, sessionSkills: Map<st
     orchestrator.manualCompactionUseBuiltin = false;
     if (useBuiltin) return;
     const prep = event.preparation;
-    if (!prep || !Array.isArray(prep.messagesToSummarize) || prep.messagesToSummarize.length === 0) return;
+    if (!prep) return;
+    const history = Array.isArray(prep.messagesToSummarize) ? prep.messagesToSummarize : [];
+    // On a split turn the host also discards the prefix of the turn it cut
+    // through, chronologically after the history it hands over separately.
+    // Summarizing only the history would drop those messages entirely.
+    const turnPrefix = Array.isArray(prep.turnPrefixMessages) ? prep.turnPrefixMessages : [];
+    const discarded = [...history, ...turnPrefix];
+    if (discarded.length === 0) return;
     const summary = vccCompile({
-      messages: prep.messagesToSummarize,
+      messages: discarded,
       previousSummary: prep.previousSummary,
       fileOps: prep.fileOps ? { readFiles: [...(prep.fileOps.read ?? [])], modifiedFiles: [...(prep.fileOps.written ?? []), ...(prep.fileOps.edited ?? [])] } : undefined,
     });
     const range = computeVccMessageRange(event.branchEntries ?? [], prep.firstKeptEntryId);
     const fullSummary = summary + renderSkillReattachment(sessionSkills);
-    return { compaction: { summary: fullSummary, details: buildVccDetails(fullSummary, prep.messagesToSummarize.length, !!prep.previousSummary, prep.tokensBefore ?? 0, range), firstKeptEntryId: prep.firstKeptEntryId, tokensBefore: prep.tokensBefore ?? 0 } };
+    return { compaction: { summary: fullSummary, details: buildVccDetails(fullSummary, discarded.length, !!prep.previousSummary, prep.tokensBefore ?? 0, range), firstKeptEntryId: prep.firstKeptEntryId, tokensBefore: prep.tokensBefore ?? 0 } };
   });
   pi.on("session_compact", (_event, ctx) => {
     orchestrator.lastCtx = ctx;
