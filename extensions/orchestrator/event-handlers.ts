@@ -368,7 +368,15 @@ async function maybeCompact(orchestrator: CompactionState, ctx: any): Promise<vo
   if (forced) orchestrator.compactionArm.armed = false;
   adaptive.firedThreshold = effectiveThreshold;
   adaptive.inFlight = true;
-  ctx.compact({ onError: () => { orchestrator.adaptiveCompaction.inFlight = false; } });
+  ctx.compact({
+    onError: (err: any) => {
+      // A failed compaction does not shrink the context, so the arm would
+      // never re-arm via the lower band; re-arm here so the next turn retries.
+      orchestrator.adaptiveCompaction.inFlight = false;
+      orchestrator.compactionArm.armed = true;
+      getLogger().error({ s: "compaction", err: err?.message }, "proactive compaction failed");
+    },
+  });
 }
 
 export function registerSubagentCompaction(
@@ -424,6 +432,9 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     orchestrator.lastCtx = ctx;
     orchestrator.cwd = ctx.cwd;
     orchestrator.interactivePromptOpen = false;
+    orchestrator.manualCompactionPending = false;
+    orchestrator.manualCompactionUseBuiltin = false;
+    orchestrator.manualCompactionRequestId++;
     loadedSkills.clear();
     orchestrator.resetContinuation();
     resetRequestActivity(orchestrator);
