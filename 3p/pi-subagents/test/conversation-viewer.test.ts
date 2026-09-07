@@ -101,6 +101,20 @@ describe("ConversationViewer", () => {
       }
     });
 
+    it("renders the retained summary after session compaction", () => {
+      const messages = [{
+        role: "compactionSummary",
+        summary: "Earlier investigation found the root cause.",
+        tokensBefore: 42_000,
+      }];
+      const viewer = new ConversationViewer(
+        mockTui(40, 100), mockSession(messages), mockRecord({ status: "completed", compactionCount: 1 }), undefined, ansiTheme(), vi.fn(),
+      );
+      const rendered = viewer.render(100).join("\n");
+      expect(rendered).toContain("[Compaction]");
+      expect(rendered).toContain("Earlier investigation found the root cause.");
+    });
+
     it("no line exceeds width when text is longer than viewport", () => {
       const longLine = "A".repeat(500);
       const messages = [

@@ -344,6 +344,14 @@ export class ConversationViewer implements Component {
             lines.push(th.fg("dim", line));
           }
         }
+      } else if ((msg as any).role === "compactionSummary") {
+        const summary = String((msg as any).summary ?? "").trim();
+        if (!summary) continue;
+        if (needsSeparator) lines.push(th.fg("dim", "───"));
+        lines.push(th.fg("accent", "[Compaction]"));
+        for (const line of wrapTextWithAnsi(summary, width)) {
+          lines.push(th.fg("dim", line));
+        }
       } else {
         continue;
       }
