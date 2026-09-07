@@ -52,6 +52,12 @@ describe("validateConfig", () => {
     );
   });
 
+  it("rejects a turn limit on the main agent", () => {
+    expect(() => validateConfig({ agents: { main: { model: "x/y", thinking: "high", maxTurns: 5 } } })).toThrow(
+      "config.agents.main.maxTurns is not supported",
+    );
+  });
+
   it("throws for an invalid logLevel and tracing value", () => {
     expect(() => validateConfig({ general: { logLevel: "loud" } })).toThrow("config.general.logLevel");
     expect(() => validateConfig({ general: { tracing: "yes" } as any })).toThrow("config.general.tracing");

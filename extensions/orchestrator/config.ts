@@ -387,7 +387,14 @@ export function validateConfig(config: Record<string, any>): void {
 
     ensureMaxConcurrentSubagents(agents.maxConcurrentSubagents);
 
-    if (agents.main !== undefined) validateAgentPartial(agents.main, "config.agents.main");
+    if (agents.main !== undefined) {
+      validateAgentPartial(agents.main, "config.agents.main");
+      // The root session has no turn limit; a stray maxTurns here would be
+      // silently ignored, so reject it instead.
+      if ((agents.main as Record<string, unknown>).maxTurns !== undefined) {
+        throw new Error("config.agents.main.maxTurns is not supported (the main session is unlimited)");
+      }
+    }
 
     if (agents.subagents !== undefined) {
       const subagents = requireObject(agents.subagents, "config.agents.subagents");
