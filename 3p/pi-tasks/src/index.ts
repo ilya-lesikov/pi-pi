@@ -60,7 +60,11 @@ The task tools haven't been used recently. If you're working on tasks that would
 </system-reminder>`;
 
 export default function (pi: ExtensionAPI) {
-  const subagentSessionKey = Symbol.for("pi-pi:subagent-session");
+  // LOCAL PATCH (pi-pi): snapshot at factory time. pi-pi's orchestrator sets this
+  // marker when it is loaded a second time in-process (a subagent session) and
+  // never clears it, so reading it at event time would also silence the root
+  // session's hooks after the first subagent spawn.
+  const isSubagentSession = !!(globalThis as any)[Symbol.for("pi-pi:subagent-session")];
   // Initialize store and config
   const cfg = loadTasksConfig();
   const piTasks = process.env.PI_TASKS;
@@ -328,7 +332,7 @@ export default function (pi: ExtensionAPI) {
   };
 
   pi.on("turn_start", async (_event, ctx) => {
-    if ((globalThis as any)[subagentSessionKey]) return;
+    if (isSubagentSession) return;
     onTurnStart(cadence);
     latestCtx = ctx;
     widget.setUICtx(ctx.ui as UICtx);
@@ -339,7 +343,7 @@ export default function (pi: ExtensionAPI) {
   // ── Token usage tracking ──
   // Feed per-turn token counts from assistant messages into the widget.
   pi.on("turn_end", async (event) => {
-    if ((globalThis as any)[subagentSessionKey]) return;
+    if (isSubagentSession) return;
     const msg = event.message as any;
     if (msg?.role === "assistant" && msg.usage) {
       widget.addTokenUsage(msg.usage.input ?? 0, msg.usage.output ?? 0);
@@ -357,7 +361,7 @@ export default function (pi: ExtensionAPI) {
   // before each LLM call and returns a modified copy of the messages
   // without persisting or polluting any tool output.
   pi.on("tool_result", async (event) => {
-    if ((globalThis as any)[subagentSessionKey]) return {};
+    if (isSubagentSession) return {};
     // Cheap-first: avoid store.list() disk I/O unless the cadence helper
     // says the call could matter (i.e. it's a task tool that resets state,
     // or it might queue the reminder).
@@ -381,7 +385,7 @@ export default function (pi: ExtensionAPI) {
   // receive it. It is not persisted in the session store — `context`
   // returns a transformed messages array used only for this one request.
   pi.on("context", async (event) => {
-    if ((globalThis as any)[subagentSessionKey]) return {};
+    if (isSubagentSession) return {};
     if (!drainReminderForContext(cadence)) return {};
 
     return {
@@ -399,7 +403,7 @@ export default function (pi: ExtensionAPI) {
   // Grab UI context early — before_agent_start fires before any tool calls,
   // so persisted tasks show up immediately on session start.
   pi.on("before_agent_start", async (_event, ctx) => {
-    if ((globalThis as any)[subagentSessionKey]) return;
+    if (isSubagentSession) return;
     latestCtx = ctx;
     widget.setUICtx(ctx.ui as UICtx);
     upgradeStoreIfNeeded(ctx);
@@ -414,7 +418,7 @@ export default function (pi: ExtensionAPI) {
   // On /new: reset all session-scoped state so the store switches to the new session file.
   // On resume: reload persisted tasks from the existing session file.
   pi.on("session_switch" as any, async (event: any, ctx: ExtensionContext) => {
-    if ((globalThis as any)[subagentSessionKey]) return;
+    if (isSubagentSession) return;
     latestCtx = ctx;
     widget.setUICtx(ctx.ui as UICtx);
 
@@ -437,7 +441,7 @@ export default function (pi: ExtensionAPI) {
 
   // Keep latestCtx fresh on every tool execution as well.
   pi.on("tool_execution_start", async (_event, ctx) => {
-    if ((globalThis as any)[subagentSessionKey]) return;
+    if (isSubagentSession) return;
     latestCtx = ctx;
     widget.setUICtx(ctx.ui as UICtx);
     upgradeStoreIfNeeded(ctx);

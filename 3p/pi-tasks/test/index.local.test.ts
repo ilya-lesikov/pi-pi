@@ -117,9 +117,9 @@ describe("global store API (local fork)", () => {
 describe("subagent-session hook skip (local fork)", () => {
   it("before_agent_start is a no-op when the subagent-session flag is set", async () => {
     const mock = mockPi();
+    (globalThis as any)[SUBAGENT_SESSION_KEY] = true;
     initExtension(mock.pi as any);
 
-    (globalThis as any)[SUBAGENT_SESSION_KEY] = true;
     const ctx = mockCtx();
     await mock.fireLifecycle("before_agent_start", {}, ctx);
 
@@ -131,9 +131,9 @@ describe("subagent-session hook skip (local fork)", () => {
 
   it("turn_start is a no-op when the subagent-session flag is set", async () => {
     const mock = mockPi();
+    (globalThis as any)[SUBAGENT_SESSION_KEY] = true;
     initExtension(mock.pi as any);
 
-    (globalThis as any)[SUBAGENT_SESSION_KEY] = true;
     const ctx = mockCtx();
     await mock.fireLifecycle("turn_start", {}, ctx);
 
@@ -142,13 +142,13 @@ describe("subagent-session hook skip (local fork)", () => {
 
   it("session_switch does not clear parent tasks when the subagent-session flag is set", async () => {
     const mock = mockPi();
+    (globalThis as any)[SUBAGENT_SESSION_KEY] = true;
     initExtension(mock.pi as any);
     const api = storeApi();
 
     api.create("parent task", "belongs to the parent session");
     expect(api.list().length).toBe(1);
 
-    (globalThis as any)[SUBAGENT_SESSION_KEY] = true;
     await mock.fireLifecycle("session_switch", { reason: "new" }, mockCtx());
 
     // Without the guard, a /new session_switch in memory mode would clearAll(); the subagent

@@ -21,6 +21,7 @@ import { getLogger } from "./log.js";
 export const PI_PI_OWNED_TOOL_NAMES: readonly string[] = [
   "lsp", // pi-lsp
   "Agent", // pi-subagents
+  "TaskCreate", // pi-tasks
   "ask_user", // pi-ask-user
   "vcc_recall", // vendored pi-vcc
 ];
@@ -33,6 +34,7 @@ export const PI_PI_OWNED_COMMAND_NAMES: readonly string[] = [];
 export const PI_PI_VENDORED_PACKAGE_IDS: readonly string[] = [
   "pi-lsp",
   "pi-subagents",
+  "pi-tasks",
   "pi-ask-user",
   "@monotykamary/pi-vcc",
   "pi-vcc",
