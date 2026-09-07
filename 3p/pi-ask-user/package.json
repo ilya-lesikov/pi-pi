@@ -27,15 +27,11 @@
   "pi": {
     "extensions": [
       "./index.ts"
-    ],
-    "skills": [
-      "./skills"
     ]
   },
   "files": [
     "index.ts",
     "single-select-layout.ts",
-    "skills",
     "README.md",
     "LICENSE"
   ],

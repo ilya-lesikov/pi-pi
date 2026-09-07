@@ -24,24 +24,6 @@ High-quality video: [ask-user-demo.mp4](./media/ask-user-demo.mp4)
 - Optional timeout for auto-dismiss in both overlay and fallback input modes
 - Structured `details` on all results for session state reconstruction
 - Graceful fallback when interactive UI is unavailable
-- Bundled `ask-user` skill for mandatory decision-gating in high-stakes or ambiguous tasks
-
-## Bundled skill: `ask-user`
-
-This package now ships a skill at `skills/ask-user/SKILL.md` that nudges/mandates the agent to use `ask_user` when:
-
-- architectural trade-offs are high impact
-- requirements are ambiguous or conflicting
-- assumptions would materially change implementation
-
-The skill follows a "decision handshake" flow:
-
-1. Gather evidence and summarize context
-2. Ask one focused question via `ask_user`
-3. Wait for explicit user choice
-4. Confirm the decision, then proceed
-
-See: `skills/ask-user/references/ask-user-skill-extension-spec.md`.
 
 ## Install
 
