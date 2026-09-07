@@ -1438,7 +1438,7 @@ export function showUsage(ctx: any): void {
         getMainInputTokens(): number; getMainOutputTokens(): number;
         getMainCacheReadTokens(): number; getMainCacheWriteTokens(): number;
         getMainCost(): number;
-        getPerModelUsage(): Record<string, { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; cacheSupported: boolean; turns: number; subscription: boolean }>;
+        getPerModelUsage(): Record<string, { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; cacheSupported: boolean; turns: number; cost: number; subscription: boolean }>;
         getSubagentList(): Array<{ description: string; agentType: string; modelId: string; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; cacheSupported: boolean; cost: number; durationMs: number; toolUses: number; subscription: boolean }>;
       }
     | undefined;
@@ -1465,15 +1465,19 @@ export function showUsage(ctx: any): void {
 
   const byModel = new Map<string, { input: number; output: number; cacheRead: number; cacheWrite: number; cacheSupported: boolean; cost: number; subscription: boolean }>();
   const mainModelEntries = Object.entries(models);
-  // Subscription (flat-rate) models contribute no dollars, so exclude their
-  // tokens from the proportional-share denominator.
+  // Exact per-model cost is recorded per turn. Summaries written before that
+  // field existed carry none, so fall back to a proportional share of the main
+  // total (subscription rows contribute no dollars either way).
+  const hasExactCost = mainModelEntries.some(([, u]) => u.cost > 0);
   const mainTotalTokens = mainModelEntries.reduce((s, [, u]) => s + (u.subscription ? 0 : u.inputTokens + u.outputTokens), 0);
   for (const [modelId, usage] of mainModelEntries) {
     const modelTokens = usage.inputTokens + usage.outputTokens;
-    const modelCostShare = usage.subscription || mainTotalTokens <= 0 ? 0 : mainCost * (modelTokens / mainTotalTokens);
+    const modelCost = usage.subscription ? 0
+      : hasExactCost ? usage.cost
+      : mainTotalTokens <= 0 ? 0 : mainCost * (modelTokens / mainTotalTokens);
     byModel.set(modelId, {
       input: usage.inputTokens, output: usage.outputTokens,
-      cacheRead: usage.cacheReadTokens, cacheWrite: usage.cacheWriteTokens, cacheSupported: usage.cacheSupported, cost: modelCostShare,
+      cacheRead: usage.cacheReadTokens, cacheWrite: usage.cacheWriteTokens, cacheSupported: usage.cacheSupported, cost: modelCost,
       subscription: usage.subscription,
     });
   }

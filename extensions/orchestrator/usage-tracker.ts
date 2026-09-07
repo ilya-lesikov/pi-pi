@@ -26,6 +26,7 @@ export interface ModelUsage {
   cacheWriteTokens: number;
   cacheSupported: boolean;
   turns: number;
+  cost: number;
   /** Flat-rate personal subscription: dollars are excluded from cost totals, tokens are not. */
   subscription: boolean;
 }
@@ -155,6 +156,7 @@ export function createUsageTracker(): UsageTracker {
         cacheWriteTokens: 0,
         cacheSupported: false,
         turns: 0,
+        cost: 0,
         subscription: false,
       };
 
@@ -162,6 +164,7 @@ export function createUsageTracker(): UsageTracker {
       usage.outputTokens += safeOutput;
       usage.cacheReadTokens += safeCacheRead;
       usage.cacheWriteTokens += safeCacheWrite;
+      usage.cost += safeCost;
       if (cacheSupported) usage.cacheSupported = true;
       if (subscription) usage.subscription = true;
       usage.turns += 1;
@@ -264,6 +267,7 @@ export function createUsageTracker(): UsageTracker {
             cacheWriteTokens: toFiniteNumber(usage.cacheWriteTokens),
             cacheSupported: (usage as any).cacheSupported === true,
             turns: toFiniteNumber(usage.turns),
+            cost: toFiniteNumber(usage.cost),
             subscription: (usage as any).subscription === true || isSubscriptionRouted(modelId),
           });
         }

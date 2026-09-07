@@ -96,6 +96,7 @@ describe("usage-tracker", () => {
         cacheWriteTokens: 0,
         cacheSupported: false,
         turns: 1,
+        cost: 0.2,
         subscription: false,
       },
       "anthropic/claude-opus-4-6": {
@@ -105,6 +106,7 @@ describe("usage-tracker", () => {
         cacheWriteTokens: 0,
         cacheSupported: false,
         turns: 1,
+        cost: 0.3,
         subscription: false,
       },
     });
