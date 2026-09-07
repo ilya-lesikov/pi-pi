@@ -34,17 +34,17 @@ describe("delegationBlock", () => {
     for (const name of ["explore", "librarian", "task", "advisor", "deep-debugger", "reviewer"]) {
       expect(block).toContain(name);
     }
-    expect(block).toContain("model-named");
-    expect(block).toContain("SAME PROVIDER");
-    expect(block).toContain("opus MAY call fable");
+    expect(block).toContain("NEVER spawn a same-provider model at your tier or weaker");
+    expect(block).toContain("DIFFERENT family");
+    expect(block).toContain("dissenting view");
   });
 
   it("keeps specialists selective without imposing workflow gates", () => {
     const block = delegationBlock("opus", pools);
-    expect(block).toContain("materially reduce consequential risk");
-    expect(block).toContain("never turn review into a mandatory or repeated loop");
-    expect(block).toMatch(/deep-debugger diagnoses/i);
-    expect(block).toContain("must NOT write the actual fix");
+    expect(block).toContain("never a mandatory or repeated loop");
+    expect(block).toContain("diagnoses ONLY");
+    expect(block).toContain("ONE cheap localizing probe");
+    expect(block).not.toContain("OPEN with");
   });
 
   it("renders the configured pool roster with model metadata", () => {
@@ -81,7 +81,7 @@ describe("toolsBlock only advertises granted tools", () => {
   it("includes pp_register_repo and the lsp/grep guidance for the main tool set", () => {
     const block = toolsBlock(["read", "bash", "edit", "write", "grep", "find", "ls", "lsp", "cbm_search", "pp_register_repo"]);
     expect(block).toContain("pp_register_repo");
-    expect(block).toContain("NEVER grep for definitions");
+    expect(block).toContain("Prefer lsp goToDefinition over grep");
     expect(block).toContain("cbm_search");
   });
 

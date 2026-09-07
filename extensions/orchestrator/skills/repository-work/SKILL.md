@@ -1,6 +1,6 @@
 ---
 name: repository-work
-description: Version-control safety, repository conventions, worktrees, diffs, commits, and change hygiene
+description: Load BEFORE your first commit, branch, worktree, or other history-affecting VCS operation. Covers version-control safety, repository conventions, diffs, and change hygiene.
 ---
 
 Use this guidance when work occurs in or modifies a version-controlled repository.

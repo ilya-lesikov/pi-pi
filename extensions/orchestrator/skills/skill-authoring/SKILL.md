@@ -1,6 +1,6 @@
 ---
 name: skill-authoring
-description: Write or edit a Pi skill (SKILL.md) so it is discovered by the layered skill loader with the right name, description, and precedence.
+description: Load BEFORE creating or editing any SKILL.md. Covers the layered skill loader's naming, description, and precedence rules.
 ---
 
 # Skill authoring

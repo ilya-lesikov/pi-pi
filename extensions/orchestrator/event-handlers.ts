@@ -101,7 +101,7 @@ export function renderGenericPrompt(orchestrator: Orchestrator, ctx: any, toolNa
   const skills = selectedSkills(orchestrator);
   const skillManifest = skills.length === 0 ? "" : [
     "<skills>",
-    "Specialized guidance is available through load_skill. Load a relevant skill before substantial unfamiliar or consequential work; reload it whenever its details are no longer salient.",
+    "Detailed operating guidance lives in skills, loaded via load_skill. Each description below states WHEN its skill applies: load it BEFORE starting that work — not during, not after. This is a hard trigger, not a suggestion; if a described condition will occur this turn, the load comes first. Re-load a skill if a compaction dropped its content.",
     ...skills.map((skill) => `- ${skill.name}: ${skill.description} (${skill.layer})`),
     "</skills>",
   ].join("\n");
@@ -109,8 +109,17 @@ export function renderGenericPrompt(orchestrator: Orchestrator, ctx: any, toolNa
   const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
   return [
     identityBlock({ displayName: info.displayName, family: info.family, tier: info.tier, thinking: orchestrator.config.agents.main.thinking }),
-    "<constraints>\nWork directly in this initial, restorable session. There are no task modes, phases, mandatory plans, artifacts, or automatic review loops. Own long-running work here and continue autonomously until the request is actually complete. Minimize user intervention: ask only when unavailable information or user preference controls a consequential decision, primarily during clarification, research, or design. Use specialists only for bounded parallel work, independent judgment, focused retrieval, or isolation. Do not invent domain-specific workflow; let the work determine which skills and capabilities to load.\n</constraints>",
+    [
+      "<constraints>",
+      "You own the request end to end in this restorable session. Continue autonomously until the requested outcome is implemented and proportionately validated, or until blocked by missing information, permissions, or an external failure you cannot resolve. Never report completion while validation relevant to your change fails; distinguish failures you introduced from verified pre-existing ones.",
+      "After two failed attempts driven by the same hypothesis, stop repeating it: gather new evidence, change strategy, or delegate diagnosis.",
+      "For multi-step work keep a lightweight task-tool checklist and update it as evidence changes; do not create plan documents or wait for plan approval unless asked.",
+      "Ask the user only when required information is unavailable or plausible choices differ in user-visible behavior, compatibility, security, cost, or reversibility. For low-risk reversible ambiguity: follow repository precedent, state the assumption in one line, and proceed.",
+      "When something seems wrong — unsafe, contradictory, or solving the wrong problem — state the concern and evidence. Pause for the user only if proceeding would be destructive, irreversible, or would pick between materially different outcomes; otherwise take the safest reversible interpretation and continue.",
+      "</constraints>",
+    ].join("\n"),
     principlesBlock(),
+    skillManifest,
     toolsBlock(toolNames),
     delegationBlock(info.family, {
       advisors: buildPoolRoster(orchestrator.config, "advisors"),
@@ -118,8 +127,13 @@ export function renderGenericPrompt(orchestrator: Orchestrator, ctx: any, toolNa
       deepDebuggers: buildPoolRoster(orchestrator.config, "deepDebuggers"),
     }),
     projectContext ? `<project_context>\n${projectContext}\n</project_context>` : "",
-    skillManifest,
-    `<session>\nCurrent month: ${month}. Working directory: ${orchestrator.cwd}. This conversation and its tool activity are durable through native session restore and searchable with vcc_recall. Prefer current observed state and newer explicit user decisions over older recalled material.\n</session>`,
+    [
+      "<session>",
+      `Current month: ${month}. Working directory: ${orchestrator.cwd}.`,
+      "This conversation survives restores and compactions; its full history is searchable with vcc_recall. Use vcc_recall when resuming after a compaction/restore, when the user references earlier work, when a referenced decision or result is not in visible context, or before repeating an investigation that may already have been done. Recall settles decisions and leads; re-check state-sensitive facts (files, git status, builds, tests) with tools before acting on them.",
+      "In your final response: summarize changed behavior, key files, checks run and their results, and any unresolved risk. Quote raw output only to explain a failure. No step-by-step narration.",
+      "</session>",
+    ].join("\n"),
   ].filter(Boolean).join("\n\n");
 }
 
@@ -140,6 +154,8 @@ export function registerLoadSkill(pi: ExtensionAPI, cwd: string, getEnabled?: ()
       try {
         const skill = loadLayeredSkill(params.name, cwd);
         if (!available().some((candidate) => candidate.name === skill.name)) throw new Error(`Skill "${params.name}" is disabled by its source-layer setting.`);
+        loadedSkills.delete(skill.name);
+        loadedSkills.set(skill.name, skill.document);
         return { content: [{ type: "text" as const, text: skill.document }], details: { name: skill.name, source: skill.layer, path: skill.filePath } };
       } catch (error: any) {
         return { content: [{ type: "text" as const, text: error?.message ?? String(error) }], details: undefined, isError: true };
@@ -226,6 +242,33 @@ function registerLifecycle(orchestrator: Orchestrator): void {
   pi.on("message_update", () => { orchestrator.mainTurnLastActivity = Date.now(); });
 }
 
+// Most recent load of each skill, in load order. After a compaction the
+// summary alone would silently drop skill guidance the agent believes is
+// active, so (like Claude Code) the freshest skills are re-attached to the
+// summary within a token budget.
+const loadedSkills = new Map<string, string>();
+const SKILL_REATTACH_TOKENS_EACH = 5_000;
+const SKILL_REATTACH_TOKENS_TOTAL = 25_000;
+
+export function renderSkillReattachment(skills: Map<string, string>): string {
+  if (skills.size === 0) return "";
+  const parts: string[] = [];
+  let budget = SKILL_REATTACH_TOKENS_TOTAL;
+  for (const [name, document] of [...skills].reverse()) {
+    if (budget <= 0) break;
+    const cap = Math.min(SKILL_REATTACH_TOKENS_EACH, budget) * 4;
+    const body = document.length > cap ? `${document.slice(0, cap)}\n[… truncated]` : document;
+    parts.push(`<skill name="${name}">\n${body}\n</skill>`);
+    budget -= Math.ceil(body.length / 4);
+  }
+  return [
+    "",
+    "[Loaded Skills]",
+    "These skills were loaded before compaction and remain in effect:",
+    ...parts.reverse(),
+  ].join("\n");
+}
+
 function registerCompaction(orchestrator: Orchestrator): void {
   const pi = orchestrator.pi;
   pi.on("context", (event: any) => {
@@ -245,7 +288,8 @@ function registerCompaction(orchestrator: Orchestrator): void {
       fileOps: prep.fileOps ? { readFiles: [...(prep.fileOps.read ?? [])], modifiedFiles: [...(prep.fileOps.written ?? []), ...(prep.fileOps.edited ?? [])] } : undefined,
     });
     const range = computeVccMessageRange(event.branchEntries ?? [], prep.firstKeptEntryId);
-    return { compaction: { summary, details: buildVccDetails(summary, prep.messagesToSummarize.length, !!prep.previousSummary, prep.tokensBefore ?? 0, range), firstKeptEntryId: prep.firstKeptEntryId, tokensBefore: prep.tokensBefore ?? 0 } };
+    const fullSummary = summary + renderSkillReattachment(loadedSkills);
+    return { compaction: { summary: fullSummary, details: buildVccDetails(fullSummary, prep.messagesToSummarize.length, !!prep.previousSummary, prep.tokensBefore ?? 0, range), firstKeptEntryId: prep.firstKeptEntryId, tokensBefore: prep.tokensBefore ?? 0 } };
   });
   pi.on("session_compact", (_event, ctx) => {
     orchestrator.lastCtx = ctx;
@@ -300,6 +344,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     orchestrator.lastCtx = ctx;
     orchestrator.cwd = ctx.cwd;
     orchestrator.interactivePromptOpen = false;
+    loadedSkills.clear();
     orchestrator.resetContinuation();
     resetRequestActivity(orchestrator);
     resetAcpStateCache(ctx.sessionManager?.getSessionId?.());

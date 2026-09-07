@@ -1,6 +1,6 @@
 ---
 name: software-engineering
-description: Safe implementation, debugging, testing, and code-quality practices for software changes
+description: Load BEFORE your first source-code edit of the session and BEFORE diagnosing any non-trivial failure. Covers implementation discipline, debugging, testing, and code quality.
 ---
 
 Use this guidance when the work changes or diagnoses software.

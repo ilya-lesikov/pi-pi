@@ -1,6 +1,6 @@
 ---
 name: research-and-design
-description: Evidence-led investigation, ambiguity reduction, and consequential design decisions
+description: Load BEFORE choosing between materially different designs, resolving ambiguous requirements, or acting on external technical claims. Covers evidence-led investigation and consequential decisions.
 ---
 
 Use this guidance for unfamiliar domains, open-ended investigation, architecture, or choices that are expensive to reverse.

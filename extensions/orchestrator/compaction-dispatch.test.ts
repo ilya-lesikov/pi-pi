@@ -47,3 +47,42 @@ describe("buildVccDetails", () => {
     expect(details.messageRange).toBeUndefined();
   });
 });
+
+describe("renderSkillReattachment", () => {
+  it("returns empty for no loaded skills", async () => {
+    const { renderSkillReattachment } = await import("./event-handlers.js");
+    expect(renderSkillReattachment(new Map())).toBe("");
+  });
+
+  it("re-attaches skills most-recent-first within the total budget", async () => {
+    const { renderSkillReattachment } = await import("./event-handlers.js");
+    const skills = new Map([
+      ["oldest", "O".repeat(4_000)],
+      ["middle", "M".repeat(4_000)],
+      ["newest", "N".repeat(4_000)],
+    ]);
+    const out = renderSkillReattachment(skills);
+    expect(out).toContain("[Loaded Skills]");
+    expect(out).toContain('<skill name="oldest">');
+    expect(out).toContain('<skill name="newest">');
+    expect(out.indexOf('name="oldest"')).toBeLessThan(out.indexOf('name="newest"'));
+  });
+
+  it("truncates each skill to its per-skill cap and drops the oldest past the total budget", async () => {
+    const { renderSkillReattachment } = await import("./event-handlers.js");
+    const big = "X".repeat(30_000 * 4);
+    const skills = new Map([
+      ["first", big],
+      ["second", big],
+      ["third", big],
+      ["fourth", big],
+      ["fifth", big],
+      ["sixth", big],
+    ]);
+    const out = renderSkillReattachment(skills);
+    expect(out).toContain('name="sixth"');
+    expect(out).toContain("[… truncated]");
+    expect(out).not.toContain('name="first"');
+    expect(out.length).toBeLessThanOrEqual(26_000 * 4 + 2_000);
+  });
+});
