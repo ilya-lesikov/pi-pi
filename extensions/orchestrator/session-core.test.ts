@@ -225,6 +225,41 @@ describe("session-first core", () => {
     await emit(pi, "session_shutdown", {}, ctx);
   });
 
+  it("does not compact a worker between a tool result and its next model step", async () => {
+    const pi = makePi();
+    const config = normalizeConfigDurations(getDefaultConfig());
+    config.compaction.floorTokens = 1_000;
+    config.compaction.fraction = 0.1;
+    registerSubagentCompaction(pi, config);
+    const compact = vi.fn();
+    const ctx = {
+      model: { provider: "test", id: "worker-model" },
+      getContextUsage: () => ({ contextWindow: 100_000, tokens: 20_000 }),
+      compact,
+    };
+    await emit(pi, "turn_end", { message: { stopReason: "toolUse" } }, ctx);
+    expect(compact).not.toHaveBeenCalled();
+  });
+
+  it("does not compact the main agent between a tool result and its next model step", async () => {
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi);
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    orchestrator.config.compaction.floorTokens = 1_000;
+    orchestrator.config.compaction.fraction = 0.1;
+    registerEventHandlers(orchestrator);
+    const compact = vi.fn();
+    const ctx = {
+      model: { provider: "test", id: "main-model" },
+      getContextUsage: () => ({ contextWindow: 100_000, tokens: 20_000 }),
+      compact,
+      ui: { notify: vi.fn() },
+    };
+    await emit(pi, "turn_end", { message: { stopReason: "toolUse", content: [{ type: "toolCall", name: "edit" }] } }, ctx);
+    expect(compact).not.toHaveBeenCalled();
+    await emit(pi, "session_shutdown", {}, ctx);
+  });
+
   it("uses VCC and configured per-model thresholds in worker sessions", async () => {
     const pi = makePi();
     const config = normalizeConfigDurations(getDefaultConfig());

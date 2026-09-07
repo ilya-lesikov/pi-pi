@@ -420,9 +420,9 @@ export function registerSubagentCompaction(
     },
   };
   registerCompaction(state, sessionSkills);
-  pi.on("turn_end", async (_event: any, ctx: any) => {
+  pi.on("turn_end", async (event: any, ctx: any) => {
     state.lastCtx = ctx;
-    await maybeCompact(state, ctx);
+    if (event?.message?.stopReason !== "toolUse") await maybeCompact(state, ctx);
   });
 }
 
@@ -566,7 +566,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       usage.recordTurn(message.model ?? ctx.model?.id ?? "unknown", message.provider ?? ctx.model?.provider ?? "unknown", message.usage.input ?? 0, message.usage.output ?? 0, message.usage.cacheRead ?? 0, message.usage.cacheWrite ?? 0, message.usage.cost?.total ?? 0, typeof message.usage.cacheRead === "number" || typeof message.usage.cacheWrite === "number");
     }
     publishAcpState(orchestrator);
-    await maybeCompact(orchestrator, ctx);
+    if (message?.stopReason !== "toolUse") await maybeCompact(orchestrator, ctx);
     if (message?.stopReason === "error" && isRateLimitError(message?.errorMessage)) {
       await handleMainRateLimit(orchestrator, ctx, message?.model ?? ctx.model?.id, message?.provider ?? ctx.model?.provider);
       return;
