@@ -42,6 +42,23 @@ describe("runDoctor", () => {
     expect(await report(agentDir)).toContain(`another pi-pi copy at ${other}`);
   });
 
+  // Entries may be objects, may be ~-relative, and remote sources are not checkouts.
+  it("understands every package entry form pi accepts", async () => {
+    const agentDir = makeAgentDir([]);
+    const other = mkdtempSync(join(tmpdir(), "pp-object-"));
+    dirs.push(other);
+    mkdirSync(join(other, "extensions", "orchestrator"), { recursive: true });
+    writeFileSync(
+      join(agentDir, "settings.json"),
+      JSON.stringify({ packages: ["npm:pi-tool-display", "github:someone/pi-pi", { source: other }] }),
+      "utf-8",
+    );
+
+    const text = await report(agentDir);
+    expect(text).toContain(`another pi-pi copy at ${other}`);
+    expect(text).not.toContain("github:");
+  });
+
   it("stays quiet when settings declare no other checkout", async () => {
     const agentDir = makeAgentDir(["npm:pi-tool-display"]);
 

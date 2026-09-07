@@ -348,6 +348,38 @@ describe("updateFlantInfra", () => {
     expect(JSON.parse(readFileSync(cachePath, "utf-8")).lastUpdated).toBeNull();
   });
 
+  // A metadata fetch that succeeds but matches no model is as empty as a failed
+  // one — stamping it would serve fallback windows and zero pricing for a week.
+  it("invalidates the cache when metadata fetches successfully but matches nothing", async () => {
+    const dir = makeTempDir();
+    const cacheDir = join(dir, "extensions", "pp", "cache");
+    mkdirSync(cacheDir, { recursive: true });
+    const cachePath = join(cacheDir, "flant-models.json");
+    writeFileSync(
+      cachePath,
+      JSON.stringify({
+        enabled: true,
+        cacheTTLDays: 7,
+        lastUpdated: new Date().toISOString(),
+        cachedFlantModels: ["claude-opus-4-8"],
+        cachedOpenRouterData: {},
+      }),
+      "utf-8",
+    );
+    process.env.FLANT_API_KEY = "flant-k";
+    const mod = await loadModule(dir);
+    stubFetch((url: string) => {
+      if (url.includes("llm-api.flant.ru/v1/models")) {
+        return { ok: true, status: 200, json: async () => ({ data: [{ id: "claude-opus-4-8" }] }) };
+      }
+      if (url.includes("openrouter.ai")) return { ok: true, status: 200, json: async () => ({ data: [] }) };
+      throw new Error(`unexpected ${url}`);
+    });
+    const res = await mod.updateFlantInfra(makePi(), { force: true });
+    expect(res.ok).toBe(true);
+    expect(JSON.parse(readFileSync(cachePath, "utf-8")).lastUpdated).toBeNull();
+  });
+
   it("falls back to cached models when discovery throws", async () => {
     const dir = makeTempDir();
     const cacheDir = join(dir, "extensions", "pp", "cache");

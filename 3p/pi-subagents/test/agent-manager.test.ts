@@ -224,7 +224,7 @@ describe("AgentManager — cleanup timer", () => {
     const dispose = vi.fn();
     const now = Date.now();
     for (let i = 0; i < 25; i++) {
-      agents.set(`a${i}`, { id: `a${i}`, status: "completed", completedAt: now - (25 - i) * 1_000, session: { dispose } });
+      agents.set(`a${i}`, { id: `a${i}`, status: "completed", completedAt: now - (25 - i) * 1_000, resultConsumed: true, session: { dispose } });
     }
     agents.set("live", { id: "live", status: "running", startedAt: Date.now() });
 
@@ -236,6 +236,29 @@ describe("AgentManager — cleanup timer", () => {
     expect(agents.has("a5")).toBe(true);
     expect(agents.has("a24")).toBe(true);
     expect(dispose).toHaveBeenCalledTimes(5);
+  });
+
+  // clearCompleted() spares results the LLM has not read; the count cap must
+  // spend consumed records first rather than dropping a pending answer.
+  it("spends consumed records before unconsumed ones at the ceiling", () => {
+    manager = new AgentManager();
+    const agents: Map<string, any> = (manager as any).agents;
+    const now = Date.now();
+    // The unconsumed pair is the OLDEST, so an age-only sort would evict them first.
+    agents.set("unread-1", { id: "unread-1", status: "completed", completedAt: now - 90_000, resultConsumed: false });
+    agents.set("unread-2", { id: "unread-2", status: "error", completedAt: now - 80_000, resultConsumed: false });
+    for (let i = 0; i < 22; i++) {
+      agents.set(`read${i}`, { id: `read${i}`, status: "completed", completedAt: now - (22 - i) * 1_000, resultConsumed: true });
+    }
+
+    (manager as any).cleanup();
+
+    expect(agents.size).toBe(20);
+    expect(agents.has("unread-1")).toBe(true);
+    expect(agents.has("unread-2")).toBe(true);
+    expect(agents.has("read0")).toBe(false);
+    expect(agents.has("read3")).toBe(false);
+    expect(agents.has("read4")).toBe(true);
   });
 });
 

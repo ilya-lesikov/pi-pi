@@ -592,7 +592,12 @@ export class AgentManager {
       finished.push([id, record]);
     }
     if (finished.length <= MAX_RETAINED_FINISHED) return;
-    finished.sort((a, b) => (a[1].completedAt ?? 0) - (b[1].completedAt ?? 0));
+    // Evict consumed results first: an unconsumed record is one the LLM has not
+    // read yet, and clearCompleted() deliberately spares those. They only go
+    // once nothing else is left to free, since the cap has to hold regardless.
+    finished.sort((a, b) =>
+      Number(!!b[1].resultConsumed) - Number(!!a[1].resultConsumed)
+      || (a[1].completedAt ?? 0) - (b[1].completedAt ?? 0));
     for (const [id, record] of finished.slice(0, finished.length - MAX_RETAINED_FINISHED)) {
       this.removeRecord(id, record);
     }

@@ -9,6 +9,7 @@ import { createReviewerAgent } from "./agents/reviewer.js";
 import { createDeepDebuggerAgent } from "./agents/deep-debugger.js";
 import { encodePoolVariant, registerAgentDefinitions } from "./agents/registry.js";
 import { publishAcpState } from "./acp.js";
+import { getLogger } from "./log.js";
 
 function isEnabled(value: { enabled?: boolean } | undefined): boolean {
   return value?.enabled !== false;
@@ -87,11 +88,23 @@ export class Orchestrator {
       this.safeSendUserMessage(text);
       return;
     }
-    if (attempt >= 120) return;
+    if (attempt >= 120) {
+      // Give up polling, but leave the text queued: a compaction that outlasted
+      // the window still fires session_compact, which redelivers it.
+      getLogger().warn({ s: "continuation", attempts: attempt }, "gave up waiting for an idle session");
+      return;
+    }
     this.idlePollTimer = setTimeout(() => {
       this.idlePollTimer = null;
       this.sendUserMessageWhenIdle(text, generation, attempt + 1);
     }, 1000);
+  }
+
+  /** Re-drive continuations still queued after whatever was blocking them cleared. */
+  redeliverPendingContinuations(): void {
+    for (const text of this.pendingContinuations) {
+      this.sendUserMessageWhenIdle(text, this.continuationGeneration);
+    }
   }
 
   resetContinuation(): void {

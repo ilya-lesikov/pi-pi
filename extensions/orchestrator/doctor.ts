@@ -1,5 +1,6 @@
 import { execFileSync } from "child_process";
 import { existsSync, readFileSync } from "fs";
+import { homedir } from "os";
 import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
 import { GLOBAL_CONFIG_PATH, mergeConfigLayers, readRawConfig, type NormalizedPiPiConfig } from "./config.js";
@@ -22,18 +23,24 @@ function statusSymbol(severity: Severity): string {
 // different pi-pi code than the session that spawned it, and the mismatch only
 // surfaces as unexplained worker-only failures.
 function foreignPiPiPackages(): string[] {
+  const agentDir = resolveAgentDir();
   let packages: unknown;
   try {
-    packages = JSON.parse(readFileSync(join(resolveAgentDir(), "settings.json"), "utf-8"))?.packages;
+    packages = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"))?.packages;
   } catch {
     return [];
   }
   if (!Array.isArray(packages)) return [];
   const running = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
-  return packages
-    .filter((entry): entry is string => typeof entry === "string" && !entry.startsWith("npm:"))
-    .map((entry) => resolve(entry))
-    .filter((path) => path !== running && existsSync(join(path, "extensions", "orchestrator")));
+  // A package entry is either a bare source string or { source, ... }; remote
+  // sources carry a scheme prefix, and a local one may be ~-relative.
+  const sources = packages.flatMap((entry: any) => {
+    const source = typeof entry === "string" ? entry : typeof entry?.source === "string" ? entry.source : undefined;
+    if (!source || /^(npm|git|github|https?|ssh):/.test(source.trim())) return [];
+    const expanded = source.trim().startsWith("~") ? join(homedir(), source.trim().slice(1)) : source.trim();
+    return [resolve(agentDir, expanded)];
+  });
+  return [...new Set(sources)].filter((path) => path !== running && existsSync(join(path, "extensions", "orchestrator")));
 }
 
 function which(bin: string): string | null {

@@ -1150,20 +1150,19 @@ export async function updateFlantInfra(
     } else {
       try {
         models = await discoverFlantModels(apiKey);
-        let metadataFetched = true;
         try {
           metadata = await fetchOpenRouterMetadata(models);
         } catch {
           metadata = settings.cachedOpenRouterData ?? {};
-          metadataFetched = false;
         }
         settings.cachedFlantModels = models;
         settings.cachedOpenRouterData = metadata;
         // Serving empty metadata pins every model to the fallback context window
         // and zero cost, so it must never look cache-valid: clear the timestamp
         // outright rather than merely declining to refresh it — a forced update
-        // inside the TTL would otherwise keep the previous one alive.
-        settings.lastUpdated = metadataFetched || Object.keys(metadata).length > 0 ? new Date().toISOString() : null;
+        // inside the TTL would otherwise keep the previous one alive. A fetch
+        // that succeeds but matches nothing is just as empty as a failed one.
+        settings.lastUpdated = Object.keys(metadata).length > 0 ? new Date().toISOString() : null;
         saveFlantSettings(settings);
         refreshed = true;
       } catch (err: any) {
@@ -1187,7 +1186,9 @@ export async function updateFlantInfra(
     // global-only read.
     registerFlantProviders(pi, models, metadata, { subscription: settings.subscription });
     generatedFlantConfig = generateFlantConfig(models, isSubscriptionActive(settings));
-    if (!refreshed && settings.cachedFlantModels && settings.cachedOpenRouterData && !settings.lastUpdated) {
+    // Backfill a timestamp for a cache that predates stamping — but never for an
+    // empty metadata map, which is exactly the state the stamp must not bless.
+    if (!refreshed && settings.cachedFlantModels && !settings.lastUpdated && Object.keys(settings.cachedOpenRouterData ?? {}).length > 0) {
       settings.lastUpdated = new Date().toISOString();
       saveFlantSettings(settings);
     }

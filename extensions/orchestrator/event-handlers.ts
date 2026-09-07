@@ -326,7 +326,7 @@ export function renderSkillReattachment(skills: Map<string, string>): string {
 }
 
 type CompactionState = Pick<Orchestrator,
-  "pi" | "config" | "lastCtx" | "lastEstimatedTokens" | "compactionArm" | "adaptiveCompaction" | "manualCompactionUseBuiltin" | "manualCompactionPending" | "resetAdaptiveCompaction"
+  "pi" | "config" | "lastCtx" | "lastEstimatedTokens" | "compactionArm" | "adaptiveCompaction" | "manualCompactionUseBuiltin" | "manualCompactionPending" | "resetAdaptiveCompaction" | "redeliverPendingContinuations"
 >;
 
 // Switching providers resends the whole conversation with a cold prompt cache,
@@ -389,6 +389,9 @@ function registerCompaction(orchestrator: CompactionState, sessionSkills: Map<st
       orchestrator.adaptiveCompaction.inFlight = false;
       orchestrator.adaptiveCompaction.pendingProactiveMeasure = true;
     }
+    // Continuations hold off while a compaction runs and stop polling after two
+    // minutes, so a long one has to hand them back rather than strand them.
+    orchestrator.redeliverPendingContinuations();
   });
   pi.on("model_select", (event: any, ctx: any) => {
     if (event?.source === "restore" || !event?.previousModel || !event?.model) return;
@@ -464,6 +467,8 @@ export function registerSubagentCompaction(
     },
     manualCompactionUseBuiltin: false,
     manualCompactionPending: false,
+    // A worker session has no continuation queue of its own.
+    redeliverPendingContinuations() {},
     resetAdaptiveCompaction() {
       state.adaptiveCompaction = {
         nextThreshold: null,

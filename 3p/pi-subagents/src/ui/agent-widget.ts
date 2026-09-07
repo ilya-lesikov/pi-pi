@@ -314,14 +314,10 @@ export class AgentWidget {
 
   /** Record an agent as finished (call when agent completes). */
   markFinished(agentId: string) {
-    if (!this.finishedAt.has(agentId)) {
-      this.finishedAt.set(agentId, Date.now());
-    }
-  }
-
-  /** Drop a finished timestamp so a resumed agent gets a fresh window on its next completion. */
-  private forgetIfActive(agentId: string, status: string) {
-    if (status === "running" || status === "queued") this.finishedAt.delete(agentId);
+    // Always re-stamp: a resumed agent finishing a second time earns a fresh
+    // window, and the widget cannot observe that transition on its own while a
+    // full-screen view has it suspended.
+    this.finishedAt.set(agentId, Date.now());
   }
 
   /** Render a finished agent line. */
@@ -507,7 +503,6 @@ export class AgentWidget {
     let queuedCount = 0;
     let hasFinished = false;
     for (const a of allAgents) {
-      this.forgetIfActive(a.id, a.status);
       if (a.status === "running") { runningCount++; }
       else if (a.status === "queued") { queuedCount++; }
       else if (a.completedAt && this.shouldShowFinished(a.id, a.status)) { hasFinished = true; }
@@ -591,6 +586,12 @@ export class AgentWidget {
       this.uiCtx?.setWidget("agents", undefined);
       this.widgetRegistered = false;
       this.tui = undefined;
+    }
+    // The counts freeze the moment we stop updating, so drop them rather than
+    // leave a stale "2 running" in the status bar for as long as the view is up.
+    if (this.lastStatusText !== undefined) {
+      this.uiCtx?.setStatus("subagents", undefined);
+      this.lastStatusText = undefined;
     }
   }
 

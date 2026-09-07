@@ -217,6 +217,31 @@ describe("session-first core", () => {
     }
   });
 
+  // Polling gives up after two minutes, so a compaction that outlasts it has to
+  // hand the continuation back instead of dropping it.
+  it("redelivers a continuation stranded by a long compaction", async () => {
+    vi.useFakeTimers();
+    try {
+      const pi = makePi();
+      const orchestrator = new Orchestrator(pi);
+      orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+      registerEventHandlers(orchestrator);
+      const ctx = { isIdle: () => true } as any;
+      orchestrator.lastCtx = ctx;
+      orchestrator.adaptiveCompaction.inFlight = true;
+
+      orchestrator.queueContinuation("[PI-PI] continue");
+      vi.advanceTimersByTime(200_000);
+      expect(pi.sendUserMessage).not.toHaveBeenCalled();
+
+      orchestrator.adaptiveCompaction.inFlight = false;
+      await emit(pi, "session_compact", {}, ctx);
+      expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // A provider switch resends everything with a cold cache, so the pre-switch
   // context is billed again in full at the new provider.
   it("compacts a large context before a model switch, but not a small one", async () => {
