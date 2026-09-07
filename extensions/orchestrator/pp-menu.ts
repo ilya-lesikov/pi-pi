@@ -37,7 +37,7 @@ import {
   updateRegistryFromAvailableModels,
 } from "./model-registry.js";
 import { compareModelVersion } from "./model-version.js";
-import { listLayeredSkills } from "./skills-manifest.js";
+import { enabledSkillLayers, listLayeredSkills } from "./skills-manifest.js";
 import { buildPoolRoster, unregisterAgentDefinitions } from "./agents/registry.js";
 import { setLogLevel } from "./log.js";
 import type { Orchestrator } from "./orchestrator.js";
@@ -839,10 +839,7 @@ async function showSkillsSettings(orchestrator: Orchestrator, ctx: any): Promise
   ];
   for (;;) {
     const enabled = orchestrator.config.skills;
-    const skills = listLayeredSkills(orchestrator.cwd).filter((skill) =>
-      (skill.layer === "bundled" && enabled.loadBundled)
-      || (skill.layer === "global" && enabled.loadGlobal)
-      || (skill.layer === "project" && enabled.loadProject));
+    const skills = listLayeredSkills(orchestrator.cwd, enabledSkillLayers(enabled));
     const options: OptionInput[] = [
       ...layers.map((layer) => opt(`${layer.label}: ${enabled[layer.key] ? "ON" : "OFF"}`, layer.desc)),
       opt("List skills", `${skills.length} skills available to the agent`),

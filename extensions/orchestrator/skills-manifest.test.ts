@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { bundledSkillsDir, listLayeredSkills, loadLayeredSkill, resolveLayeredSkill } from "./skills-manifest.js";
+import { bundledSkillsDir, enabledSkillLayers, listLayeredSkills, loadLayeredSkill, resolveLayeredSkill } from "./skills-manifest.js";
 
 function writeSkill(root: string, name: string, description: string, body = "body"): void {
   const dir = join(root, name);
@@ -50,6 +50,15 @@ describe("layered skills", () => {
     expect(resolveLayeredSkill(name, cwd)).toMatchObject({ layer: "global", shadows: ["bundled"] });
     writeSkill(join(cwd, ".pi", "skills"), name, "project");
     expect(resolveLayeredSkill(name, cwd)).toMatchObject({ layer: "project", description: "project", shadows: ["global", "bundled"] });
+  });
+
+  it("lets an enabled lower layer reappear when the shadowing layer is disabled", () => {
+    const name = listLayeredSkills(cwd).find((skill) => skill.layer === "bundled")!.name;
+    writeSkill(join(cwd, ".pi", "skills"), name, "project");
+    const layers = enabledSkillLayers({ loadBundled: true, loadGlobal: true, loadProject: false });
+    expect(listLayeredSkills(cwd, layers).find((skill) => skill.name === name)).toMatchObject({ layer: "bundled", shadows: [] });
+    expect(loadLayeredSkill(name, cwd, layers).layer).toBe("bundled");
+    expect(() => loadLayeredSkill(name, cwd, enabledSkillLayers({ loadBundled: false, loadGlobal: false, loadProject: false }))).toThrow(/Unknown skill/);
   });
 
   it("supports flat markdown files as well as skill directories", () => {

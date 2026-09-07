@@ -12,7 +12,7 @@ import { registerRecallTool, compile as vccCompile } from "../../3p/pi-vcc/index
 import { computeVccMessageRange, buildVccDetails } from "./compaction-dispatch.js";
 import { compactionThresholdTokens, shouldFireCompaction, shouldForceCompaction, applyBaselineMeasure } from "./compaction-trigger.js";
 import { collectContextFiles, renderContextInjection, summarizeContextInjectionSize } from "./context-injection.js";
-import { listLayeredSkills, loadLayeredSkill } from "./skills-manifest.js";
+import { enabledSkillLayers, listLayeredSkills, loadLayeredSkill } from "./skills-manifest.js";
 import { identityBlock, principlesBlock, toolsBlock, delegationBlock } from "./agents/tool-routing.js";
 import { buildPoolRoster, getAgentConfigSnapshot, registeredAgentNames, setExtensionOnlyMode } from "./agents/registry.js";
 import { getModelInfo, resolveModel, setSubscriptionFallbackActive, updateRegistryFromAvailableModels } from "./model-registry.js";
@@ -83,11 +83,7 @@ function resetRequestActivity(orchestrator: Orchestrator): void {
 }
 
 function selectedSkills(orchestrator: Orchestrator) {
-  const enabled = orchestrator.config.skills;
-  return listLayeredSkills(orchestrator.cwd).filter((skill) =>
-    (skill.layer === "bundled" && enabled.loadBundled)
-    || (skill.layer === "global" && enabled.loadGlobal)
-    || (skill.layer === "project" && enabled.loadProject));
+  return listLayeredSkills(orchestrator.cwd, enabledSkillLayers(orchestrator.config.skills));
 }
 
 export function renderGenericPrompt(orchestrator: Orchestrator, ctx: any, toolNames: string[]): string {
@@ -138,22 +134,15 @@ export function registerLoadSkill(
   getEnabled?: () => Orchestrator["config"]["skills"] | undefined,
   sessionSkills: Map<string, string> = loadedSkills,
 ): void {
-  const available = () => {
-    const enabled = getEnabled?.();
-    return listLayeredSkills(cwd).filter((skill) => !enabled
-      || (skill.layer === "bundled" && enabled.loadBundled)
-      || (skill.layer === "global" && enabled.loadGlobal)
-      || (skill.layer === "project" && enabled.loadProject));
-  };
+  const layers = () => enabledSkillLayers(getEnabled?.());
   pi.registerTool({
     name: "load_skill",
     label: "Load Skill",
-    description: `Load specialized guidance by name. Available: ${available().map((skill) => `${skill.name} — ${skill.description}`).join("; ") || "none"}. Skill documents are stateless, reloadable, and searchable in session history.`,
+    description: `Load specialized guidance by name. Available: ${listLayeredSkills(cwd, layers()).map((skill) => `${skill.name} — ${skill.description}`).join("; ") || "none"}. Skill documents are stateless, reloadable, and searchable in session history.`,
     parameters: Type.Object({ name: Type.String({ description: "Skill name from the available-skills catalog." }) }),
     async execute(_id, params) {
       try {
-        const skill = loadLayeredSkill(params.name, cwd);
-        if (!available().some((candidate) => candidate.name === skill.name)) throw new Error(`Skill "${params.name}" is disabled by its source-layer setting.`);
+        const skill = loadLayeredSkill(params.name, cwd, layers());
         sessionSkills.delete(skill.name);
         sessionSkills.set(skill.name, skill.document);
         return { content: [{ type: "text" as const, text: skill.document }], details: { name: skill.name, source: skill.layer, path: skill.filePath } };

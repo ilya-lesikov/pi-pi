@@ -21,6 +21,20 @@ export interface LoadedLayeredSkill extends LayeredSkill {
 const LAYERS: readonly SkillLayer[] = ["project", "global", "bundled"];
 const VALID_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
+export interface SkillLayerToggles {
+  loadBundled: boolean;
+  loadGlobal: boolean;
+  loadProject: boolean;
+}
+
+export function enabledSkillLayers(toggles?: SkillLayerToggles): readonly SkillLayer[] {
+  if (!toggles) return LAYERS;
+  return LAYERS.filter((layer) =>
+    (layer === "bundled" && toggles.loadBundled)
+    || (layer === "global" && toggles.loadGlobal)
+    || (layer === "project" && toggles.loadProject));
+}
+
 export function bundledSkillsDir(): string {
   return fileURLToPath(new URL("./skills/", import.meta.url));
 }
@@ -76,9 +90,12 @@ function readMetadata(filePath: string): { name: string; description: string } |
   }
 }
 
-export function listLayeredSkills(cwd: string): LayeredSkill[] {
+// Disabled layers are excluded BEFORE name collisions are resolved so a
+// disabled project skill cannot shadow (and thereby hide) an enabled bundled one.
+export function listLayeredSkills(cwd: string, layers: readonly SkillLayer[] = LAYERS): LayeredSkill[] {
   const resolved = new Map<string, LayeredSkill>();
   for (const layer of LAYERS) {
+    if (!layers.includes(layer)) continue;
     for (const filePath of skillFiles(layerDir(layer, cwd))) {
       const metadata = readMetadata(filePath);
       if (!metadata) continue;
@@ -101,8 +118,8 @@ function escapeAttribute(value: string): string {
   return value.replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
-export function loadLayeredSkill(name: string, cwd: string): LoadedLayeredSkill {
-  const skills = listLayeredSkills(cwd);
+export function loadLayeredSkill(name: string, cwd: string, layers: readonly SkillLayer[] = LAYERS): LoadedLayeredSkill {
+  const skills = listLayeredSkills(cwd, layers);
   const skill = skills.find((candidate) => candidate.name === name);
   if (!skill) throw new Error(`Unknown skill "${name}". Available skills: ${skills.map((candidate) => candidate.name).join(", ") || "<none>"}`);
   const body = parseFrontmatter(readFileSync(skill.filePath, "utf8")).body.trim();
