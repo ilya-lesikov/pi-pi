@@ -364,15 +364,15 @@ export function clearFlantGeneratedConfig(): void {
 }
 
 export function unregisterFlantProviders(pi?: ExtensionAPI): void {
+  // Cleared before the guard: otherwise the per-turn refreshSubProvider would
+  // re-register the sub provider the next time the OAuth token rotates.
+  subProviderContext = null;
+  lastSubToken = null;
   const api = pi ?? piRef;
   if (!api) return;
   api.unregisterProvider("pp-flant-anthropic");
   api.unregisterProvider("pp-flant-openai");
   api.unregisterProvider(SUB_PROVIDER);
-  // Otherwise the per-turn refreshSubProvider would re-register the sub
-  // provider the next time the OAuth token rotates.
-  subProviderContext = null;
-  lastSubToken = null;
 }
 
 function ensureSettingsDir(): void {
@@ -977,13 +977,23 @@ export async function refreshSubProvider(pi?: ExtensionAPI): Promise<void> {
 
   await refreshClaudeOAuthToken();
   const token = readClaudeOAuthToken();
+  const log = getLogger();
+  if (!token) {
+    // The registration still carries the previous token as a literal apiKey, so
+    // leaving it in place turns every Claude request into a 401 instead of
+    // letting resolution fall to another tier. The cached context stays, so a
+    // later refresh that succeeds re-registers the provider.
+    api.unregisterProvider(SUB_PROVIDER);
+    lastSubToken = null;
+    log.debug({ s: "flant" }, "subscription oauth token unavailable; unregistered the sub provider");
+    return;
+  }
   // Only re-register when the token actually changed; registerProvider takes
   // effect immediately, so re-registering every turn would be wasteful churn.
-  if (token && token === lastSubToken) return;
+  if (token === lastSubToken) return;
 
-  const log = getLogger();
   registerSubProvider(api, ctx.anthropicModels, ctx.metadata);
-  log.debug({ s: "flant", changed: token !== lastSubToken }, "refreshed sub provider oauth token");
+  log.debug({ s: "flant" }, "re-registered the sub provider with a refreshed oauth token");
 }
 
 function pickLatest(models: string[]): string | null {

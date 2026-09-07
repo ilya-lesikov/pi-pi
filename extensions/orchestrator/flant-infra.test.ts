@@ -317,6 +317,39 @@ describe("flant-infra", () => {
     }
   });
 
+  it("refreshSubProvider unregisters the sub provider when the token is gone", async () => {
+    const dir = makeTempDir();
+    mkdirSync(dir, { recursive: true });
+    const authPath = join(dir, "auth.json");
+    writeFileSync(
+      authPath,
+      JSON.stringify({ anthropic: { type: "oauth", access: "sk-ant-oat01-live", refresh: "rt", expires: Date.now() + 3_600_000 } }),
+      "utf-8",
+    );
+    const prevKey = process.env.LLM_API_KEY;
+    process.env.LLM_API_KEY = "sk-gateway-test";
+    try {
+      const mod = await loadFlantInfraModule(dir);
+      const registered = new Map<string, any>();
+      const pi = {
+        registerProvider: vi.fn((name: string, config: any) => registered.set(name, config)),
+        unregisterProvider: vi.fn((name: string) => registered.delete(name)),
+      } as any;
+      mod.registerFlantProviders(pi, ["claude-opus-4-8"], {}, { subscription: true });
+      expect(registered.has("pp-flant-anthropic-sub")).toBe(true);
+
+      // Credentials revoked: the refresh cannot mint a token any more.
+      writeFileSync(authPath, JSON.stringify({}), "utf-8");
+      await mod.refreshSubProvider(pi);
+
+      // Leaving it registered would keep the now-dead token as a literal apiKey.
+      expect(registered.has("pp-flant-anthropic-sub")).toBe(false);
+    } finally {
+      if (prevKey === undefined) delete process.env.LLM_API_KEY;
+      else process.env.LLM_API_KEY = prevKey;
+    }
+  });
+
   it("refreshSubProvider is a no-op when subscription routing is inactive", async () => {
     const dir = makeTempDir();
     const mod = await loadFlantInfraModule(dir);
