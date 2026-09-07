@@ -64,7 +64,14 @@ function registerSubagentTools(pi: ExtensionAPI): void {
   registerCbmTools(pi, cwd);
   registerExaTools(pi);
   registerAstSearchTool(pi, cwd);
-  registerRecallTool(pi, (globalThis as any)[Symbol.for("pi-pi:root-session-source")]);
+  // Resolved per call: the root session replaces this global on every
+  // session_start, so a value captured here would keep a subagent that outlives
+  // a /new or /resume searching the previous session's history.
+  const rootSession = () => (globalThis as any)[Symbol.for("pi-pi:root-session-source")];
+  registerRecallTool(pi, {
+    getSessionFile: () => rootSession()?.getSessionFile(),
+    getSessionManager: () => rootSession()?.getSessionManager?.(),
+  });
   registerLoadSkill(pi, cwd, () => config.skills, sessionSkills);
   registerSubagentCompaction(pi, config, sessionSkills);
 }
