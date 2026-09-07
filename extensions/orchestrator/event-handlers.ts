@@ -23,7 +23,6 @@ import { runAfterEdit } from "./commands.js";
 import { checkDuplicateExtensions } from "./duplicate-extension-guard.js";
 import { handleMainRateLimit, handleSubagentRateLimit, isRateLimitError } from "./rate-limit-fallback.js";
 import { loadFlantSettings, refreshCopilotOAuthToken, refreshSubProvider, syncProviderTiers } from "./flant-infra.js";
-import { SUBAGENT_SESSION_KEY } from "./index.js";
 import type { Orchestrator } from "./orchestrator.js";
 
 const USAGE_TRACKER_KEY = Symbol.for("pi-pi:usage-tracker");
@@ -448,7 +447,6 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     initSessionLogger(`${ctx.cwd}/.pp`, "info");
     const available = (ctx as any).modelRegistry?.getAvailable?.();
     if (Array.isArray(available)) updateRegistryFromAvailableModels(available.flatMap((model: any) => model?.provider && model?.id ? [`${model.provider}/${model.id}`] : []));
-    if ((globalThis as any)[SUBAGENT_SESSION_KEY]) return;
     try {
       orchestrator.config = loadConfig(ctx.cwd);
       orchestrator.configError = null;
@@ -498,7 +496,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   });
 
   pi.on("before_agent_start", async (event: any, ctx) => {
-    if ((globalThis as any)[SUBAGENT_SESSION_KEY] || !orchestrator.config) return;
+    if (!orchestrator.config) return;
     orchestrator.lastCtx = ctx;
     const prompt = typeof event?.prompt === "string" ? event.prompt : "";
     const continuation = prompt.match(/\n\[continuation:(\d+)]$/);
@@ -534,7 +532,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   });
 
   pi.on("tool_result", async (event: any) => {
-    if ((globalThis as any)[SUBAGENT_SESSION_KEY] || !orchestrator.config) return;
+    if (!orchestrator.config) return;
     if ((event.toolName !== "edit" && event.toolName !== "write") || event.isError) return;
     const commands = orchestrator.config.commands.afterEdit;
     if (Object.keys(commands).length === 0) return;
@@ -571,7 +569,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       await handleMainRateLimit(orchestrator, ctx, message?.model ?? ctx.model?.id, message?.provider ?? ctx.model?.provider);
       return;
     }
-    if ((globalThis as any)[SUBAGENT_SESSION_KEY] || orchestrator.interactivePromptOpen || orchestrator.spawnedAgentIds.size > 0) return;
+    if (orchestrator.spawnedAgentIds.size > 0) return;
     const decision = classifyContinuation(message, activity);
     if (decision === "none" || orchestrator.continuationHalted) return;
     if (decision === "objective") {
@@ -595,7 +593,6 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
-    if ((globalThis as any)[SUBAGENT_SESSION_KEY]) return;
     orchestrator.interactivePromptOpen = false;
     const usage = tracker();
     const sessionId = ctx.sessionManager?.getSessionId?.();

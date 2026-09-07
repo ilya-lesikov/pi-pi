@@ -4,6 +4,7 @@ import { Orchestrator } from "./orchestrator.js";
 import { buildAcpState } from "./acp.js";
 import { isSubscriptionFallbackActive, setSubscriptionFallbackActive } from "./model-registry.js";
 import { classifyContinuation, isMainTurnStalled, registerEventHandlers, registerLoadSkill, registerSubagentCompaction, renderGenericPrompt } from "./event-handlers.js";
+import { SUBAGENT_SESSION_KEY } from "./index.js";
 
 function makePi(): any {
   const handlers = new Map<string, Array<(...args: any[]) => any>>();
@@ -53,6 +54,26 @@ describe("session-first core", () => {
     expect(prompt).not.toContain("USER_REQUEST.md");
     expect(prompt).not.toContain("pp_phase_complete");
     expect(prompt).not.toContain("Implement only the approved plan");
+  });
+
+  it("keeps root hooks live after a subagent session has loaded the extension in-process", async () => {
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi);
+    orchestrator.cwd = "/tmp/project";
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    registerEventHandlers(orchestrator);
+    const ctx = { cwd: orchestrator.cwd, model: { provider: "test", id: "model" }, ui: { notify: vi.fn() }, sessionManager: {} };
+    const start = pi.handlers.get("before_agent_start")?.[0] as any;
+    expect((await start({ prompt: "first" }, ctx))?.systemPrompt).toContain("<identity>");
+    (globalThis as any)[SUBAGENT_SESSION_KEY] = { depth: 1 };
+    try {
+      expect((await start({ prompt: "after spawn" }, ctx))?.systemPrompt).toContain("<identity>");
+      orchestrator.mainTurnTimer = setInterval(() => {}, 60_000);
+      await emit(pi, "session_shutdown", {}, ctx);
+      expect(orchestrator.mainTurnTimer).toBeNull();
+    } finally {
+      delete (globalThis as any)[SUBAGENT_SESSION_KEY];
+    }
   });
 
   it("publishes session activity rather than a phase plan", () => {

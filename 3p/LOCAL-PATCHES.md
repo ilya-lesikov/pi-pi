@@ -67,6 +67,7 @@ that marker on anything you add, and list it here.
 | pi-subagents | `validateCompletion` / `maxValidationRetries` — re-prompt an agent that finished without a valid output file | `src/agent-runner.ts` (`RunOptions`, `runAgent`), `src/agent-manager.ts` (`SpawnOptions`, `startAgent`) |
 | pi-subagents | `first_tool` / `first_turn` emitted at the manager choke point so all spawn paths report first progress | `src/agent-manager.ts` (`startAgent`), `src/types.ts` (`AgentRecord`) |
 | pi-subagents | `graceTurns` default raised 5 → 10 so a reviewer that trips the soft turn limit still has room to write its output file | `src/agent-runner.ts` (`graceTurns`) |
+| pi-lsp | Skip session/tool hooks in in-process subagent sessions, snapshotting the `pi-pi:subagent-session` marker at factory time (reading it per event would also silence the root session once any subagent has loaded) | `extensions/lsp/index.ts` (`isSubagentSession`) |
 
 Other files also diverge from upstream (`src/index.ts`, `src/agent-types.ts`,
 `src/cross-extension-rpc.ts`, `src/settings.ts`, `src/ui/*`) for widget/menu
