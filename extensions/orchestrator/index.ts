@@ -7,6 +7,7 @@ import { registerExaTools } from "./exa.js";
 import { registerAstSearchTool } from "./ast-search.js";
 import { initFlantSync, migrateLegacyFlantSettings } from "./flant-infra.js";
 import { getDefaultConfig, loadConfig, normalizeConfigDurations } from "./config.js";
+import { getLogger } from "./log.js";
 import { registerBillingHook } from "./billing-spoof.js";
 import { suppressPierreThemeSpam } from "./suppress-pierre-theme-spam.js";
 import { registerRecallTool } from "../../3p/pi-vcc/index.js";
@@ -44,8 +45,14 @@ export default function (pi: ExtensionAPI) {
 
   // One-time (root-only) migration of durable flant policy out of the legacy
   // combined cache file into scoped config, before the first settings read.
-  if (firstActivation) migrateLegacyFlantSettings();
-  initFlantSync(pi);
+  // Both steps read config: an unreadable one must not abort the whole load,
+  // or pi-pi never registers its handlers and the session has no /pp to fix it.
+  try {
+    if (firstActivation) migrateLegacyFlantSettings();
+    initFlantSync(pi);
+  } catch (error: any) {
+    getLogger().error({ s: "flant", err: error?.message }, "flant initialization from config failed");
+  }
 
   const orchestrator = new Orchestrator(pi);
   registerEventHandlers(orchestrator);

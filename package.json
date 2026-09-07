@@ -29,11 +29,9 @@
     "3p/pi-vcc/index.ts",
     "3p/pi-vcc/src/",
     "3p/pi-vcc/package.json",
-    "scripts/",
-    "AGENTS.md"
+    "scripts/lib/"
   ],
   "scripts": {
-    "postinstall": "node scripts/postinstall.mjs",
     "test": "vitest run --exclude '3p/**'",
     "test:watch": "vitest --exclude '3p/**'",
     "test:3p": "bash scripts/test-3p.sh",

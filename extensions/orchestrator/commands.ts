@@ -36,7 +36,10 @@ export function runAfterEdit(
       const output = execSync(command, { cwd, encoding: "utf-8", timeout, stdio: "pipe" });
       results.push({ ok: true, command, output: output.trim() });
     } catch (err: any) {
-      results.push({ ok: false, command, output: err.stderr?.toString() || err.message || "unknown error" });
+      // Formatters and linters routinely report the actionable part of a failure
+      // on stdout, so reporting stderr alone leaves the agent nothing to act on.
+      const streams = [err.stdout?.toString().trim(), err.stderr?.toString().trim()].filter(Boolean);
+      results.push({ ok: false, command, output: streams.join("\n") || err.message || "unknown error" });
     }
   }
   return results;

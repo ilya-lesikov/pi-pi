@@ -78,7 +78,11 @@ export async function handleSubagentRateLimit(orchestrator: Orchestrator, ctx: a
 
 export function armSwitchBackProbe(orchestrator: Orchestrator): void {
   if (orchestrator.subSwitchBackTimer) clearTimeout(orchestrator.subSwitchBackTimer);
-  const delay = Math.max(1, loadFlantSettings(orchestrator.cwd).switchBackIntervalMinutes) * 60_000;
+  // The probe re-arms itself from inside its own callback, so an unreadable
+  // config here would strand the session on the fallback tier for good.
+  let minutes = 10;
+  try { minutes = loadFlantSettings(orchestrator.cwd).switchBackIntervalMinutes; } catch {}
+  const delay = Math.max(1, minutes) * 60_000;
   orchestrator.subSwitchBackTimer = setTimeout(async () => {
     orchestrator.subSwitchBackTimer = null;
     if (!orchestrator.subFallbackActive || !orchestrator.subFallbackModelId) return;

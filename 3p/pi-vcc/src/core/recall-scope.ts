@@ -1,3 +1,5 @@
+// LOCAL PATCH (pi-pi): not part of upstream pi-vcc. Parses the `scope:` argument
+// pi-pi's vcc_recall exposes so a compaction segment can be searched directly.
 type RecallScope = "lineage" | "all" | `compaction:${string}`;
 
 interface ParsedRecallScope {

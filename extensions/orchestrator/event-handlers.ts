@@ -629,27 +629,34 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
 
   pi.on("session_shutdown", (_event, ctx) => {
     orchestrator.interactivePromptOpen = false;
-    const usage = tracker();
-    const sessionId = ctx.sessionManager?.getSessionId?.();
-    if (usage && sessionId) dumpUsageSummary(usage, sessionId);
-    flushLogs();
-    finalizeTracer();
-    delete (globalThis as any)[USAGE_TRACKER_KEY];
-    if (orchestrator.mainTurnTimer) clearInterval(orchestrator.mainTurnTimer);
-    if (orchestrator.staleAgentTimer) clearInterval(orchestrator.staleAgentTimer);
-    if (orchestrator.subSwitchBackTimer) clearTimeout(orchestrator.subSwitchBackTimer);
-    if (orchestrator.idlePollTimer) clearTimeout(orchestrator.idlePollTimer);
-    if (orchestrator.tokenRefreshTimer) clearInterval(orchestrator.tokenRefreshTimer);
-    orchestrator.mainTurnTimer = null;
-    orchestrator.staleAgentTimer = null;
-    orchestrator.subSwitchBackTimer = null;
-    orchestrator.idlePollTimer = null;
-    orchestrator.tokenRefreshTimer = null;
-    setSubscriptionFallbackActive(false);
-    orchestrator.subFallbackActive = false;
-    orchestrator.subFallbackModelId = null;
-    orchestrator.subFallbackMainPriorSpec = null;
-    orchestrator.resetContinuation();
-    delete (globalThis as any)[Symbol.for("pi-pi:root-session-source")];
+    try {
+      const usage = tracker();
+      const sessionId = ctx.sessionManager?.getSessionId?.();
+      // Persisting the summary writes to disk and can fail; teardown below must
+      // still run or a session switch inherits this session's timers and globals.
+      if (usage && sessionId) dumpUsageSummary(usage, sessionId);
+    } catch (error: any) {
+      getLogger().error({ s: "usage", err: error?.message }, "failed to persist the usage summary");
+    } finally {
+      flushLogs();
+      finalizeTracer();
+      delete (globalThis as any)[USAGE_TRACKER_KEY];
+      if (orchestrator.mainTurnTimer) clearInterval(orchestrator.mainTurnTimer);
+      if (orchestrator.staleAgentTimer) clearInterval(orchestrator.staleAgentTimer);
+      if (orchestrator.subSwitchBackTimer) clearTimeout(orchestrator.subSwitchBackTimer);
+      if (orchestrator.idlePollTimer) clearTimeout(orchestrator.idlePollTimer);
+      if (orchestrator.tokenRefreshTimer) clearInterval(orchestrator.tokenRefreshTimer);
+      orchestrator.mainTurnTimer = null;
+      orchestrator.staleAgentTimer = null;
+      orchestrator.subSwitchBackTimer = null;
+      orchestrator.idlePollTimer = null;
+      orchestrator.tokenRefreshTimer = null;
+      setSubscriptionFallbackActive(false);
+      orchestrator.subFallbackActive = false;
+      orchestrator.subFallbackModelId = null;
+      orchestrator.subFallbackMainPriorSpec = null;
+      orchestrator.resetContinuation();
+      delete (globalThis as any)[Symbol.for("pi-pi:root-session-source")];
+    }
   });
 }

@@ -1150,14 +1150,19 @@ export async function updateFlantInfra(
     } else {
       try {
         models = await discoverFlantModels(apiKey);
+        let metadataFetched = true;
         try {
           metadata = await fetchOpenRouterMetadata(models);
         } catch {
           metadata = settings.cachedOpenRouterData ?? {};
+          metadataFetched = false;
         }
         settings.cachedFlantModels = models;
         settings.cachedOpenRouterData = metadata;
-        settings.lastUpdated = new Date().toISOString();
+        // Stamping the cache after a failed metadata fetch with nothing cached
+        // would pin every model to the fallback context window and zero cost
+        // for a full TTL. Leave it unstamped so the next run retries.
+        if (metadataFetched || Object.keys(metadata).length > 0) settings.lastUpdated = new Date().toISOString();
         saveFlantSettings(settings);
         refreshed = true;
       } catch (err: any) {

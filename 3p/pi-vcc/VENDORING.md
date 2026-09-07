@@ -47,14 +47,8 @@ Reachable from the two entry points `src/core/summarize.ts` (`compile`) and
   also asserts the excluded files are absent. This guards against a future
   upstream sync spreading that import into the engine.
 
-## Packaging (root TODO — reported, not applied)
+## Packaging
 
-The root `package.json` `files` array must add, alongside the other 3p entries:
-
-```
-"3p/pi-vcc/index.ts",
-"3p/pi-vcc/src/",
-"3p/pi-vcc/package.json",
-```
-
-(Do NOT add `test/`.) No change to root `dependencies` is needed.
+The root `package.json` `files` array ships `3p/pi-vcc/index.ts`,
+`3p/pi-vcc/src/` and `3p/pi-vcc/package.json` (never `test/`). No root
+`dependencies` entry is needed.

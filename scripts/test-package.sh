@@ -10,8 +10,8 @@
 # regression this guards against. Resolving bare specifiers from the installed package tree is
 # the only shape that reproduces that failure.
 #
-# Registry access is required (npm install of the tarball fetches deps, runs the root
-# postinstall, and npm v7+ auto-installs peerDependencies). Offline CI: warm the npm cache and
+# Registry access is required (npm install of the tarball fetches deps, and npm v7+
+# auto-installs peerDependencies). Offline CI: warm the npm cache and
 # export a --prefer-offline-friendly registry mirror.
 set -uo pipefail
 cd "$(dirname "$0")/.."

@@ -76,6 +76,8 @@ const loadSessionEntries = (sessionFile: string): any[] => {
   return entries;
 };
 
+// LOCAL PATCH (pi-pi): the owning root session, so a worker's vcc_recall can
+// search the session that spawned it rather than its own short history.
 export interface RecallSessionSource {
   getSessionFile(): string | undefined;
   getSessionManager?(): any;
