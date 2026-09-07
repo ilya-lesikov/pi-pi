@@ -501,6 +501,18 @@ describe("model-registry", () => {
       expect(resolveModel("pp-flant-anthropic-sub/sub/claude-opus-4-8")).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
     });
 
+    it("falls a gpt spec back to the base SKU, not the costlier -pro mode", () => {
+      updateRegistryFromAvailableModels([
+        "github-copilot/gpt-5.6-sol",
+        "pp-flant-openai/gpt-5.6-sol",
+        "pp-flant-openai/gpt-5.6-sol-pro",
+      ]);
+      setTierEnabled({ "copilot": false });
+      // Both flant ids carry the same version digits, so "latest within the
+      // family" must not silently upgrade the caller to the -pro effort mode.
+      expect(resolveModel("github-copilot/gpt-5.6-sol")).toBe("pp-flant-openai/gpt-5.6-sol");
+    });
+
     it("does NOT promote a gpt flant spec to copilot (copilot has no gpt) — stays on flant", () => {
       setTierEnabled({ "copilot": true });
       expect(resolveModel("pp-flant-openai/gpt-5.6-sol")).toBe("pp-flant-openai/gpt-5.6-sol");

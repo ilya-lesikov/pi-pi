@@ -206,7 +206,16 @@ function pickLatest(models: string[]): string | null {
   if (models.length === 0) return null;
   return models
     .slice()
-    .sort((a, b) => compareModelVersion(b, a))[0] ?? null;
+    // A `-pro` id carries the same version digits as its base SKU, so the
+    // version comparison ties and falls through to a lexical order that ranks
+    // `-pro` first. Prefer the base SKU: `-pro` is a costlier opt-in effort
+    // mode, and this picker only ever answers "what is the family's latest",
+    // never "which effort mode did the caller ask for".
+    .sort((a, b) => {
+      if (a === `${b}-pro`) return 1;
+      if (b === `${a}-pro`) return -1;
+      return compareModelVersion(b, a);
+    })[0] ?? null;
 }
 
 function toAlias(provider: ProviderPrefix, aliasTemplate: string): string {
