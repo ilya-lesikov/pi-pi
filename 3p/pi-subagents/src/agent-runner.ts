@@ -351,6 +351,12 @@ async function promptWithEmptyRetry(
       } finally {
         collector.unsubscribe();
       }
+      const terminalMessage = [...session.messages.slice(historyBefore)]
+        .reverse()
+        .find((message: any) => message?.role === "assistant") as any;
+      if (terminalMessage?.stopReason === "error") {
+        throw new Error(terminalMessage.errorMessage || "The model provider returned an unspecified error.");
+      }
       const text = collector.getText().trim() || terminalAssistantText(session, historyBefore);
       if (text) return text;
       if (isStopped()) return "";

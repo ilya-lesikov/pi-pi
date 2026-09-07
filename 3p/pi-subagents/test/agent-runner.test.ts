@@ -1397,6 +1397,22 @@ describe("agent-runner empty-turn retry", () => {
     expect(session.prompt).toHaveBeenCalledTimes(3);
   });
 
+  it("surfaces a terminal provider error immediately instead of retrying it as empty", async () => {
+    const session = createRetrySession([[]]);
+    session.prompt = vi.fn(async () => {
+      session.messages.push({
+        role: "assistant",
+        content: [],
+        stopReason: "error",
+        errorMessage: "400: Claude Code version too old",
+      });
+    });
+    createAgentSession.mockResolvedValue({ session });
+
+    await expect(runAgent(ctx, "Explore", "go", { pi })).rejects.toThrow("400: Claude Code version too old");
+    expect(session.prompt).toHaveBeenCalledTimes(1);
+  });
+
   it("treats a thinking-only turn as empty and never returns the thinking text", async () => {
     const session = createRetrySession([thinkingOnly]);
     createAgentSession.mockResolvedValue({ session });
