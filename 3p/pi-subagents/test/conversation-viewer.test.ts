@@ -88,6 +88,17 @@ describe("ConversationViewer", () => {
     }
   });
 
+  // Below chrome + MIN_VIEWPORT the old floor pushed the footer and bottom
+  // border past the overlay, and pi-tui clips from the bottom.
+  it("never renders more rows than the terminal has", () => {
+    for (const rows of [6, 7, 8, 9, 12]) {
+      const viewer = new ConversationViewer(
+        mockTui(rows, 80), mockSession([{ role: "user", content: "hi" }]), mockRecord(), undefined, ansiTheme(), vi.fn(),
+      );
+      expect(viewer.render(80).length).toBeLessThanOrEqual(rows);
+    }
+  });
+
   describe("render width safety", () => {
     const widths = [40, 80, 120, 216];
 

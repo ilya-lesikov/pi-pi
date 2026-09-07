@@ -267,9 +267,12 @@ export class ConversationViewer implements Component {
 
   private viewportHeight(): number {
     // Cap mirrors the overlay's maxHeight — otherwise the viewer would render
-    // more lines than the overlay shows and clip the footer.
+    // more lines than the overlay shows and clip the footer. On a terminal too
+    // short for the chrome plus a usable viewport, whatever rows remain win
+    // over a minimum that would push the footer and bottom border off-screen.
     const maxRows = Math.floor((this.tui.terminal.rows * VIEWPORT_HEIGHT_PCT) / 100);
-    return Math.max(MIN_VIEWPORT, maxRows - this.chromeLines());
+    const available = maxRows - this.chromeLines();
+    return available < MIN_VIEWPORT ? Math.max(0, available) : available;
   }
 
   private chromeLines(): number {

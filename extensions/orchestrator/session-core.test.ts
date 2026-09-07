@@ -258,13 +258,15 @@ describe("session-first core", () => {
       initTracer(join(dir, ".pp"), "trace-session");
 
       await emit(pi, "tool_execution_start", { toolCallId: "c1", toolName: "read", args: { path: "a.ts" } }, {});
-      await emitBus(pi, "subagents:created", { id: "worker", type: "explore", description: "Worker" });
+      await emitBus(pi, "subagents:created", { id: "worker", type: "explore", description: "Worker", toolCallId: "call-7" });
       await emitBus(pi, "subagents:completed", { id: "worker", status: "completed" });
       finalizeTracer();
 
       const main = readFileSync(join(dir, ".pp", "logs", "traces", "trace-session", "main.jsonl"), "utf-8");
       expect(main).toContain('"kind":"tool_execution_start"');
       expect(main).toContain('"kind":"subagent_spawned"');
+      // The spawning tool call is what ties a worker trace back to the turn that started it.
+      expect(main).toContain('"parentToolCallId":"call-7"');
       const worker = readFileSync(join(dir, ".pp", "logs", "traces", "trace-session", "worker.jsonl"), "utf-8");
       expect(worker).toContain('"kind":"subagent_settled"');
     } finally {

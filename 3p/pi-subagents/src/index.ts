@@ -1210,12 +1210,14 @@ Terse command-style prompts produce shallow, generic work.
         widget.ensureTimer();
         widget.update();
 
-        // Emit created event
+        // Emit created event. LOCAL PATCH (pi-pi): carries the spawning tool call
+        // so a subscriber can correlate the worker with the turn that spawned it.
         pi.events.emit("subagents:created", {
           id,
           type: subagentType,
           description: params.description,
           isBackground: true,
+          toolCallId,
         });
 
         const isQueued = record?.status === "queued";
