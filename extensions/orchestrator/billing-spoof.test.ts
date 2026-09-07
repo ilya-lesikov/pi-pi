@@ -12,6 +12,11 @@ function claudePayload(system: Array<{ type: string; text: string }>) {
 }
 
 describe("buildUserAgent", () => {
+  it("uses a Claude Code version supported by current subscription models", () => {
+    const [major, minor, patch] = CC_VERSION.split(".").map(Number);
+    expect(major * 1_000_000 + minor * 1_000 + patch).toBeGreaterThanOrEqual(2_001_251);
+  });
+
   it("produces the full-form claude-cli user agent matching cc_version", () => {
     expect(buildUserAgent()).toBe(`claude-cli/${CC_VERSION} (external, ${CC_ENTRYPOINT})`);
   });

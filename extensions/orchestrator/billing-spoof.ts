@@ -15,7 +15,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 // from the single CC_VERSION constant here.
 
 const BILLING_SALT = "59cf53e54c78";
-export const CC_VERSION = process.env.ANTHROPIC_CLI_VERSION ?? "2.1.160";
+export const CC_VERSION = process.env.ANTHROPIC_CLI_VERSION ?? "2.1.263";
 export const CC_ENTRYPOINT = process.env.CLAUDE_CODE_ENTRYPOINT ?? "sdk-cli";
 export const BILLING_PREFIX = "x-anthropic-billing-header";
 // pi-ai's Claude Code identity system block. injectBillingHeader is gated on
