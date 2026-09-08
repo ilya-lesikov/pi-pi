@@ -14,7 +14,7 @@ Recommended optional extension:
 pi install npm:pi-mcp-adapter
 ```
 
-Start Pi and talk to it normally. The initial Pi session owns all work; pi-pi does not create a second task context or impose research, planning, implementation, or review phases. It continues interrupted work autonomously, recovers stalled turns, and asks for user input only when unavailable information or preference controls a consequential decision.
+Start Pi and talk to it normally. The initial Pi session owns all work; pi-pi does not create a second task context or impose research, planning, implementation, or review phases. It continues interrupted work autonomously, recovers stalled turns, and asks for user input only when unavailable information or preference controls a consequential decision. A turn that ends in prose after real work is checked out of band — the turn is replayed to its own model with a yes/no question — and resumed through a hidden message only when that model says work is left, so nothing is added to the conversation on a false alarm.
 
 ## `/pp`
 
