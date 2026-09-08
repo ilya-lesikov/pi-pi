@@ -1104,6 +1104,14 @@ function isCacheValid(settings: FlantSettings): boolean {
   // An empty metadata map carries no context window and no pricing, so it is
   // never worth serving from cache — including caches an earlier build stamped.
   if (Object.keys(settings.cachedOpenRouterData).length === 0) return false;
+  // A cache an earlier build stamped can be missing a whole family whose ids it
+  // could not yet map, which leaves those models on the fallback window for the
+  // rest of the TTL. Any mappable model without an entry means refetch.
+  const metadata = settings.cachedOpenRouterData;
+  for (const modelId of settings.cachedFlantModels) {
+    const bare = modelId.startsWith(SUB_MODEL_PREFIX) ? modelId.slice(SUB_MODEL_PREFIX.length) : modelId;
+    if (mapFlantToOpenRouterId(bare) && !metadata[bare]) return false;
+  }
   const updatedAt = new Date(settings.lastUpdated).getTime();
   if (!Number.isFinite(updatedAt)) return false;
   const ttlMs = Math.max(1, settings.cacheTTLDays) * 24 * 60 * 60 * 1000;

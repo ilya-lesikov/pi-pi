@@ -409,6 +409,47 @@ describe("updateFlantInfra", () => {
     expect(JSON.parse(readFileSync(cachePath, "utf-8")).lastUpdated).toBeNull();
   });
 
+  // A cache written before sub/ ids were mapped holds metadata for every model
+  // EXCEPT Claude, so it looks valid while pinning that whole family to the
+  // fallback context window until the TTL expires.
+  it("refetches when a mappable cached model has no metadata entry", async () => {
+    const dir = makeTempDir();
+    const cacheDir = join(dir, "extensions", "pp", "cache");
+    mkdirSync(cacheDir, { recursive: true });
+    const cachePath = join(cacheDir, "flant-models.json");
+    writeFileSync(
+      cachePath,
+      JSON.stringify({
+        lastUpdated: new Date().toISOString(),
+        cachedFlantModels: ["gpt-5", "sub/claude-opus-4-8"],
+        cachedOpenRouterData: { "gpt-5": { name: "GPT 5", context_length: 400000, max_completion_tokens: 32000, pricing: { prompt: 0, completion: 0, cacheRead: 0, cacheWrite: 0 }, modality: "text" } },
+      }),
+      "utf-8",
+    );
+    process.env.FLANT_API_KEY = "flant-k";
+    const mod = await loadModule(dir);
+    const seen: string[] = [];
+    stubFetch((url: string) => {
+      seen.push(url);
+      if (url.includes("llm-api.flant.ru/v1/models")) {
+        return { ok: true, status: 200, json: async () => ({ data: [{ id: "gpt-5" }, { id: "sub/claude-opus-4-8" }] }) };
+      }
+      if (url.includes("openrouter.ai")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ data: [{ id: "anthropic/claude-opus-4.8", name: "Opus", context_length: 1000000 }, { id: "openai/gpt-5", name: "GPT 5" }] }),
+        };
+      }
+      throw new Error(`unexpected ${url}`);
+    });
+    const res = await mod.updateFlantInfra(makePi());
+    expect(res.ok).toBe(true);
+    expect(seen.some((u) => u.includes("openrouter.ai"))).toBe(true);
+    const written = JSON.parse(readFileSync(cachePath, "utf-8"));
+    expect(written.cachedOpenRouterData["claude-opus-4-8"].context_length).toBe(1_000_000);
+  });
+
   it("falls back to cached models when discovery throws", async () => {
     const dir = makeTempDir();
     const cacheDir = join(dir, "extensions", "pp", "cache");
