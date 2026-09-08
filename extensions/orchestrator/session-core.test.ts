@@ -248,7 +248,7 @@ describe("session-first core", () => {
     expect(classifyContinuation({ stopReason: "stop", content: [{ type: "text", text: "Did the work." }, { type: "text", text: "Proceed with the rename?" }] }, mutated)).toBe("none");
   });
 
-  it("does not nudge a turn that stopped to await the user past the approval gate", async () => {
+  it("leaves a finished-looking turn alone when its own model says nothing is left", async () => {
     const pi = makePi();
     const orchestrator = new Orchestrator(pi);
     orchestrator.config = normalizeConfigDurations(getDefaultConfig());
@@ -257,13 +257,12 @@ describe("session-first core", () => {
     orchestrator.queueContinuation = (text: string) => { queued.push(text); };
     orchestrator.requestHadTools = true;
     orchestrator.requestToolCallCount = 6;
-    // Prose that does not end in a question still gets nudged, and the nudge
-    // must point at ask_user rather than telling it to plough on.
+    const complete = vi.fn(async () => ({ content: [{ type: "text", text: "NO" }] }));
     await emit(pi, "turn_end", {
       message: { stopReason: "stop", content: [{ type: "text", text: "Here is the approach. Let me know." }] },
-    }, { model: { provider: "test", id: "m" }, ui: { notify: vi.fn() } });
-    expect(queued).toHaveLength(1);
-    expect(queued[0]).toContain("waiting on an answer");
+    }, { model: { provider: "test", id: "m" }, modelRegistry: { complete }, ui: { notify: vi.fn() } });
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(queued).toEqual([]);
   });
 
   it("recognizes a stalled main turn only when recovery is safe", () => {
@@ -517,17 +516,20 @@ describe("session-first core", () => {
     expect(orchestrator.interactivePromptOpen).toBe(false);
   });
 
-  it("self-adjudicates action-backed prose once and resets on genuine user input", async () => {
+  it("resumes an unfinished turn through a hidden message and resets on genuine user input", async () => {
     const pi = makePi();
     const orchestrator = new Orchestrator(pi);
     orchestrator.cwd = "/tmp/project";
     orchestrator.config = normalizeConfigDurations(getDefaultConfig());
     registerEventHandlers(orchestrator);
+    const complete = vi.fn(async () => ({ content: [{ type: "text", text: "YES" }] }));
     const ctx = {
       cwd: orchestrator.cwd,
       model: { provider: "test", id: "model" },
+      modelRegistry: { complete },
       isIdle: () => true,
       getContextUsage: () => null,
+      getSystemPrompt: () => "system",
       ui: { notify: vi.fn() },
     };
     await emit(pi, "before_agent_start", { prompt: "Implement the change" }, ctx);
@@ -535,19 +537,26 @@ describe("session-first core", () => {
     await emit(pi, "tool_execution_start", { toolName: "edit" }, ctx);
     await emit(pi, "tool_execution_end", { toolName: "edit" }, ctx);
     await emit(pi, "turn_end", { message: { stopReason: "toolUse", content: [{ type: "toolCall", name: "edit" }] } }, ctx);
-    expect(pi.sendUserMessage).not.toHaveBeenCalled();
+    expect(complete).not.toHaveBeenCalled();
     await emit(pi, "turn_start", {}, ctx);
     await emit(pi, "turn_end", { message: { stopReason: "stop", content: [{ type: "text", text: "I changed it." }] } }, ctx);
-    expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
-    const nudge = pi.sendUserMessage.mock.calls[0][0];
-    expect(nudge).toContain("If the user's request is fully complete");
+
+    // The nudge reaches the model but never the transcript.
+    expect(pi.sendUserMessage).not.toHaveBeenCalled();
+    expect(pi.sendMessage).toHaveBeenCalledTimes(1);
+    const [nudge, options] = pi.sendMessage.mock.calls[0];
+    expect(nudge).toMatchObject({ customType: "pp-continuation", display: false });
+    expect(options).toMatchObject({ deliverAs: "followUp", triggerTurn: true });
     expect(orchestrator.continuationCount).toBe(1);
-    await emit(pi, "before_agent_start", { prompt: nudge }, ctx);
-    expect(orchestrator.continuationCount).toBe(1);
+
     await emit(pi, "before_agent_start", { prompt: "New user request" }, ctx);
     expect(orchestrator.continuationCount).toBe(0);
     expect(orchestrator.continuationHalted).toBe(false);
-    const stale = await emitForResult(pi, "before_agent_start", { prompt: nudge }, ctx);
+
+    // A visible continuation still carries its generation, so a stale redelivery
+    // is recognized as superseded.
+    orchestrator.queueContinuation("[PI-PI] older");
+    const stale = await emitForResult(pi, "before_agent_start", { prompt: "[PI-PI] older\n[continuation:0]" }, ctx);
     expect(stale.systemPrompt).toContain("obsolete automatic continuation");
     await emit(pi, "session_shutdown", {}, ctx);
   });

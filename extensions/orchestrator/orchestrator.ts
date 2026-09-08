@@ -37,8 +37,10 @@ export class Orchestrator {
   continuationCount = 0;
   objectiveContinuationCount = 0;
   continuationHalted = false;
-  pendingContinuations = new Set<string>();
+  pendingContinuations = new Map<string, { invisible: boolean }>();
   lastEstimatedTokens: number | null = null;
+  /** Messages of the most recent LLM call, replayed by the continuation check. */
+  lastContextMessages: any[] = [];
   compactionArm = { armed: true };
   adaptiveCompaction: {
     nextThreshold: number | null;
@@ -87,13 +89,14 @@ export class Orchestrator {
     // Several polling chains can be alive for one text (a redelivery does not
     // cancel the chain it overlaps), so the queue entry is the claim: whoever
     // takes it sends, the rest find it gone and stop.
-    if (!this.pendingContinuations.has(text)) return;
+    const pending = this.pendingContinuations.get(text);
+    if (!pending) return;
     const compacting = this.adaptiveCompaction.inFlight || this.manualCompactionPending;
     if (!compacting && (typeof ctx.isIdle !== "function" || ctx.isIdle())) {
       this.pendingContinuations.delete(text);
       // Put the claim back if the host refused it, so a later redelivery can
       // still get the message out instead of losing it silently.
-      if (!this.safeSendUserMessage(text)) this.pendingContinuations.add(text);
+      if (!this.deliverContinuation(text, pending.invisible)) this.pendingContinuations.set(text, pending);
       return;
     }
     if (attempt >= 120) {
@@ -110,7 +113,7 @@ export class Orchestrator {
 
   /** Re-drive continuations still queued after whatever was blocking them cleared. */
   redeliverPendingContinuations(): void {
-    for (const text of this.pendingContinuations) {
+    for (const text of [...this.pendingContinuations.keys()]) {
       this.sendUserMessageWhenIdle(text, this.continuationGeneration);
     }
   }
@@ -123,10 +126,27 @@ export class Orchestrator {
     this.pendingContinuations.clear();
   }
 
-  queueContinuation(text: string): void {
-    const tagged = `${text}\n[continuation:${this.continuationGeneration}]`;
-    this.pendingContinuations.add(tagged);
+  /**
+   * Queue a continuation. An invisible one is delivered as a hidden message:
+   * it reaches the model but leaves no prompt in the transcript, so recovering
+   * from a premature stop does not read as the user asking for one.
+   */
+  queueContinuation(text: string, invisible = false): void {
+    const tagged = invisible ? text : `${text}\n[continuation:${this.continuationGeneration}]`;
+    this.pendingContinuations.set(tagged, { invisible });
     this.sendUserMessageWhenIdle(tagged, this.continuationGeneration);
+  }
+
+  private deliverContinuation(text: string, invisible: boolean): boolean {
+    if (!invisible) return this.safeSendUserMessage(text);
+    try {
+      this.pi.sendMessage({ customType: "pp-continuation", content: text, display: false }, { deliverAs: "followUp", triggerTurn: true });
+      getLogger().debug({ s: "continuation" }, "delivered a hidden continuation");
+      return true;
+    } catch (error: any) {
+      getLogger().debug({ s: "continuation", err: error?.message }, "hidden continuation refused; falling back to a visible one");
+      return this.safeSendUserMessage(text);
+    }
   }
 
   safeSendUserMessage(text: string): boolean {

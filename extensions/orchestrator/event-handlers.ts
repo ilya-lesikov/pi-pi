@@ -23,6 +23,7 @@ import { publishAcpState, resetAcpStateCache } from "./acp.js";
 import { runAfterEdit } from "./commands.js";
 import { checkDuplicateExtensions } from "./duplicate-extension-guard.js";
 import { handleMainRateLimit, handleSubagentRateLimit, isRateLimitError } from "./rate-limit-fallback.js";
+import { adjudicateContinuation } from "./continuation-adjudicator.js";
 import { loadFlantSettings, refreshCopilotOAuthToken, refreshSubProvider, setModelRegistry, syncProviderTiers } from "./flant-infra.js";
 import type { Orchestrator } from "./orchestrator.js";
 
@@ -32,7 +33,7 @@ const MAX_CONTINUATIONS = 3;
 const MAX_OBJECTIVE_CONTINUATIONS = 5;
 const CONTINUE_TRUNCATED = "[PI-PI] The previous response was truncated. Continue exactly where you stopped and complete the request.";
 const CONTINUE_EMPTY = "[PI-PI] The previous turn ended without a result. Continue with the next action and complete the request.";
-const CONTINUE_AMBIGUOUS = "[PI-PI] You stopped with a prose reply after taking actions. If the user's request is fully complete, state that concisely and stop. If you are waiting on an answer or an approval, ask it with ask_user instead of stopping in prose — prose cannot hold the turn open. Otherwise continue with the next action without re-explaining.";
+const CONTINUE_UNFINISHED = "[PI-PI] Continue where you left off and finish the request. Do not re-explain what you already did.";
 const CONTINUE_STALLED = "[PI-PI] The previous turn stalled without completing. Continue where you left off and complete the request.";
 
 export type ContinuationDecision = "none" | "objective" | "adjudicate";
@@ -44,9 +45,9 @@ export interface RequestActivity {
 }
 
 // Trivial informational exchanges (a couple of read-only tool calls followed by
-// a prose answer) must not be nudged: adjudication is only worth a model turn
-// when the request actually changed something or did enough work that an
-// unfinished objective is plausible.
+// a prose answer) must not reach the continuation check: replaying the turn to
+// its model is only worth it when the request actually changed something or did
+// enough work that an unfinished objective is plausible.
 const ADJUDICATE_TOOL_THRESHOLD = 4;
 
 // A turn whose last words are a question handed control back on purpose.
@@ -100,12 +101,11 @@ function selectedSkills(orchestrator: Orchestrator) {
 
 // Front-load everything that needs the user, so they are present for
 // clarification and design and absent for execution. The gate has to be an
-// ask_user call: once enough tool work has happened, a prose-only stop is
-// classified as an unfinished objective and nudged back into work (see
-// classifyContinuation), so prose cannot hold the turn open for approval.
+// ask_user call: prose only ends the turn, leaving the proposal to compete with
+// the report of a finished one, while the call visibly holds it open.
 function requestPhasesBlock(canAsk: boolean): string {
   const ask = canAsk
-    ? "Put both in ONE ask_user call and WAIT for the answer — never a prose message: after the investigation this phase requires, a prose stop is read as unfinished work and you are put straight back to it, so only that call reliably holds the turn open. Several decisions go in that call's questions array, which presents them one at a time, so asking sequentially costs no extra round trip. If an answer changes the shape of the solution, propose in a second call once you have it — that is a continuation of this phase, not a check-in."
+    ? "Put both in ONE ask_user call and WAIT for the answer — never a prose message: a proposal in prose just ends the turn and reads as a report, while the call holds it open until the user decides. Several decisions go in that call's questions array, which presents them one at a time, so asking sequentially costs no extra round trip. If an answer changes the shape of the solution, propose in a second call once you have it — that is a continuation of this phase, not a check-in."
     : "State both and stop; you have no ask_user tool, so you cannot hold the turn open — do not start implementing on an unanswered question.";
   return [
     "<request_phases>",
@@ -331,6 +331,11 @@ function registerLifecycle(orchestrator: Orchestrator): void {
     if (event?.toolName === "ask_user") orchestrator.interactivePromptOpen = false;
   });
   pi.on("message_update", () => { orchestrator.mainTurnLastActivity = Date.now(); });
+  // The exact messages the turn ran with, so a continuation check can replay it
+  // against the same prompt prefix instead of a reconstruction.
+  pi.on("context", (event: any) => {
+    if (Array.isArray(event?.messages)) orchestrator.lastContextMessages = event.messages.slice();
+  });
 }
 
 // Most recent load of each skill, in load order. After a compaction the
@@ -620,6 +625,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     orchestrator.manualCompactionRequestId++;
     loadedSkills.clear();
     orchestrator.resetContinuation();
+    orchestrator.lastContextMessages = [];
     resetRequestActivity(orchestrator);
     resetAcpStateCache(ctx.sessionManager?.getSessionId?.());
     (globalThis as any)[Symbol.for("pi-pi:root-session-source")] = {
@@ -779,9 +785,15 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       ctx.ui?.notify?.("Automatic continuation paused after repeated prose-only stops.", "warning");
       return;
     }
+    // The turn is replayed to its own model with a yes/no question rather than
+    // nudged on suspicion: a prose stop after real work is as often a finished
+    // report as an abandoned one, and only the model that ran the turn can tell.
+    const generation = orchestrator.continuationGeneration;
+    const unfinished = await adjudicateContinuation(pi, ctx, orchestrator.lastContextMessages, message);
+    if (!unfinished || generation !== orchestrator.continuationGeneration || orchestrator.continuationHalted) return;
     orchestrator.continuationCount++;
     resetRequestActivity(orchestrator);
-    orchestrator.queueContinuation(CONTINUE_AMBIGUOUS);
+    orchestrator.queueContinuation(CONTINUE_UNFINISHED, true);
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
