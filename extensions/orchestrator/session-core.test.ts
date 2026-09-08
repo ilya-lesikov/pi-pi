@@ -115,6 +115,13 @@ describe("session-first core", () => {
     expect(prompt).toContain("without further check-ins");
     // The old blanket instruction contradicted the gate and must be gone.
     expect(prompt).not.toContain("wait for plan approval unless asked");
+    // One turn, not one question: batching into a single turn must not be read
+    // as forbidding the sequential `questions` array, which is how the design
+    // skill's one-at-a-time rule is honored without extra round trips.
+    expect(prompt).toContain("questions array");
+    // An answer that reshapes the approach needs a second call, since the
+    // proposal cannot be written inside an already-issued question.
+    expect(prompt).toContain("changes the shape of the solution");
   });
 
   it("forbids interim prose so only the final message is written", () => {

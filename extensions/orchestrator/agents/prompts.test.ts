@@ -144,6 +144,9 @@ describe("pre-1.0 principles", () => {
     // Phases 1-2 (answers, proposal) and a blocking question must still be
     // able to produce text; the ban targets narration during execution.
     expect(principlesBlock()).toContain("asking a blocking question");
+    // A worker with no ask_user cannot both stay silent and "state concerns
+    // before implementing" — the concern has to route somewhere reachable.
+    expect(principlesBlock()).toContain("cannot ask");
   });
 
   it("read-only workers do NOT carry code-editing rules", () => {

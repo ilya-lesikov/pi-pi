@@ -86,20 +86,20 @@ function selectedSkills(orchestrator: Orchestrator) {
   return listLayeredSkills(orchestrator.cwd, enabledSkillLayers(orchestrator.config.skills));
 }
 
-// Front-load everything that needs the user (item: two-phase requests), so the
-// user is present for clarification and design and absent for execution. The
-// gate has to be an ask_user call: a prose-only stop is classified as an
-// unfinished objective and nudged straight back into work (see
-// classifyContinuation), so prose could never hold a turn open for approval.
+// Front-load everything that needs the user, so they are present for
+// clarification and design and absent for execution. The gate has to be an
+// ask_user call: once enough tool work has happened, a prose-only stop is
+// classified as an unfinished objective and nudged back into work (see
+// classifyContinuation), so prose cannot hold the turn open for approval.
 function requestPhasesBlock(canAsk: boolean): string {
   const ask = canAsk
-    ? "Put both in ONE ask_user call and WAIT for the answer — that call is the only thing that can hold the turn open for you; never a prose message."
+    ? "Put both in ONE ask_user call and WAIT for the answer — never a prose message: after the investigation this phase requires, a prose stop is read as unfinished work and you are put straight back to it, so only that call reliably holds the turn open. Several decisions go in that call's questions array, which presents them one at a time, so asking sequentially costs no extra round trip. If an answer changes the shape of the solution, propose in a second call once you have it — that is a continuation of this phase, not a check-in."
     : "State both and stop; you have no ask_user tool, so you cannot hold the turn open — do not start implementing on an unanswered question.";
   return [
     "<request_phases>",
     "Every request runs in three phases. The user is present for 1 and 2 and absent for 3, so everything that needs them belongs in the first two.",
     "",
-    "1. Clarify. Before touching anything, answer every question the request contains and resolve what would change the work: read the code, run the probes, delegate the lookups. Answer from evidence, never from assumption. If a genuine choice remains — required information you cannot obtain, or plausible options that differ in user-visible behavior, compatibility, security, cost, or reversibility — ask it here, together with the answers you already have. Do not spread questions across several turns.",
+    "1. Clarify. Before touching anything, answer every question the request contains and resolve what would change the work: read the code, run the probes, delegate the lookups. Answer from evidence, never from assumption. If a genuine choice remains — required information you cannot obtain, or plausible options that differ in user-visible behavior, compatibility, security, cost, or reversibility — ask it here, together with the answers you already have. Do not trickle questions out across separate turns as they occur to you.",
     `2. Propose. State how you will solve it: the approach, what you will change, and anything you deliberately are not doing. ${ask}`,
     "3. Implement. Once approved, carry the whole thing out autonomously without further check-ins, and report at the end.",
     "",

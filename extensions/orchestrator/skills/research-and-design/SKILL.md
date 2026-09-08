@@ -5,7 +5,7 @@ description: Load BEFORE open-ended research, design work, architecture decision
 
 ## Clarify and investigate
 
-- If the request is ambiguous, ask one focused question, then wait for the answer before asking the next. Do not batch a list.
+- If the request is ambiguous, ask one focused question at a time rather than presenting a batched list. Sequential questions belong in a single blocking call's `questions` array, which shows them one by one; do not spend a separate turn per question.
 - Skip questions the request already answers.
 - The first answer to a design question is often the polished or surface answer; push once more on it—what would that actually look like, or what breaks if it changes—before moving on.
 - Research, explore, and design without interrupting mid-flow. Collect uncertainties and clarify them after the investigation. Only a genuine blocker justifies interrupting the work.
