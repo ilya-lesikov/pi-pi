@@ -101,6 +101,13 @@ const DEFAULT_SETTINGS: FlantSettings = {
 /** Provider name for the personal-subscription Claude routing. */
 export const SUB_PROVIDER = "pp-flant-anthropic-sub";
 
+const CLAUDE_REFRESH_MARGIN_MS = 5 * 60_000;
+const FORCED_REFRESH_COOLDOWN_MS = 60_000;
+const ANTHROPIC_TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
+// Anthropic's public Claude Code OAuth client id, identical to the one pi-ai
+// uses; the refresh grant is unauthenticated beyond it.
+const ANTHROPIC_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+
 /** Prefix the gateway expects for personal-subscription Claude models. */
 export const SUB_MODEL_PREFIX = "sub/";
 
@@ -278,9 +285,8 @@ export async function refreshClaudeOAuthToken(): Promise<string | null> {
   if (!anthropic || typeof anthropic.access !== "string" || !anthropic.access) return null;
 
   // Refresh ahead of expiry so in-flight requests never race a dying token.
-  const REFRESH_MARGIN_MS = 5 * 60_000;
   const expires = typeof anthropic.expires === "number" ? anthropic.expires : 0;
-  if (expires > Date.now() + REFRESH_MARGIN_MS) return anthropic.access;
+  if (expires > Date.now() + CLAUDE_REFRESH_MARGIN_MS) return anthropic.access;
 
   // Expired (or expiring soon, or no expiry recorded): try to refresh.
   if (typeof anthropic.refresh !== "string" || !anthropic.refresh) {
@@ -310,13 +316,44 @@ export async function refreshClaudeOAuthToken(): Promise<string | null> {
     return null;
   }
 
-  // Persist refreshed credentials back under the `anthropic` provider id, using
-  // pi's { type: "oauth", ... } shape and the same file lock pi uses.
+  // A credential that could not be written is not usable: the grant consumed the
+  // stored refresh token, so disk now holds something that cannot be refreshed
+  // again, and every consumer reads the token from disk.
+  const persisted = await persistClaudeCredentials(refreshed, { keepFresherExisting: true, consumedRefresh: anthropic.refresh });
+  if (persisted !== refreshed.access) return persisted;
+
+  log.debug({ s: "flant" }, "refreshed claude oauth token");
+  return refreshed.access;
+}
+
+// Write refreshed credentials back under the `anthropic` provider id, using pi's
+// { type: "oauth", ... } shape and the same file lock pi uses, so pi's built-in
+// provider observes the rotation too. Returns the access token that ended up on
+// disk, or null when it could not be written.
+//
+// Two things can be on disk by the time the lock is taken, because the token was
+// minted before it: a credential another instance rotated to (keepFresherExisting
+// keeps it), or a credential minted from a DIFFERENT refresh token than the one
+// this rotation consumed (consumedRefresh) — meaning the other instance won the
+// race and ours is the loser of a superseded chain. Keeping theirs in both cases
+// is what stops two processes from revoking each other in a loop.
+async function persistClaudeCredentials(
+  refreshed: { refresh: string; access: string; expires: number },
+  options: { keepFresherExisting?: boolean; consumedRefresh?: string } = {},
+): Promise<string | null> {
+  const authDir = resolveAgentDir();
+  const authPath = join(authDir, "auth.json");
   try {
-    const authDir = resolveAgentDir();
     if (!existsSync(authDir)) mkdirSync(authDir, { recursive: true });
     if (!existsSync(authPath)) writeFileSync(authPath, "{}\n", "utf-8");
-    const release = lockfile.lockSync(authPath, { stale: 10000 });
+    // Retried rather than failed-fast, which is why this takes the async lock:
+    // the grant already consumed the previous refresh token, so losing the write
+    // loses the only usable credential and forces a re-login. Mirrors the retry
+    // policy of pi's own auth storage, whose lock this contends with.
+    const release = await lockfile.lock(authPath, {
+      stale: 10000,
+      retries: { retries: 10, factor: 2, minTimeout: 100, maxTimeout: 10000, randomize: true },
+    });
     try {
       let current: Record<string, unknown> = {};
       try {
@@ -327,10 +364,16 @@ export async function refreshClaudeOAuthToken(): Promise<string | null> {
       const existing = (current.anthropic && typeof current.anthropic === "object")
         ? current.anthropic as Record<string, unknown>
         : {};
-      // Another instance may have refreshed while we were waiting for the lock.
       const existingExpires = typeof existing.expires === "number" ? existing.expires : 0;
-      if (existingExpires > Date.now() + 5 * 60_000 && typeof existing.access === "string" && existing.access) {
-        return existing.access;
+      const existingAccess = typeof existing.access === "string" ? existing.access : "";
+      if (existingAccess) {
+        if (options.keepFresherExisting && existingExpires > Date.now() + CLAUDE_REFRESH_MARGIN_MS) {
+          return existingAccess;
+        }
+        if (options.consumedRefresh && existing.refresh !== options.consumedRefresh) {
+          getLogger().debug({ s: "flant" }, "another instance rotated the claude credential first; keeping its token");
+          return existingAccess;
+        }
       }
       current.anthropic = {
         ...existing,
@@ -341,16 +384,131 @@ export async function refreshClaudeOAuthToken(): Promise<string | null> {
       };
       writeFileSync(authPath, JSON.stringify(current, null, 2) + "\n", "utf-8");
     } finally {
-      release();
+      await release();
     }
   } catch (err: any) {
-    // If persistence fails we still return the freshly minted token so the
-    // current run can proceed; the next run will refresh again.
-    log.debug({ s: "flant", err: err?.message }, "failed to persist refreshed claude oauth token");
+    getLogger().warn({ s: "flant", err: err?.message }, "failed to persist refreshed claude oauth token");
+    return null;
   }
-
-  log.debug({ s: "flant" }, "refreshed claude oauth token");
   return refreshed.access;
+}
+
+let forcedRefreshAt = 0;
+let forcedRefreshInFlight: Promise<ForcedRefreshResult> | null = null;
+// The credential this process last minted through a forced rotation. A request
+// rejecting THAT token means rotating again is not the fix (the gateway key, the
+// account, or the whole refresh chain is the problem), so the second attempt is
+// refused instead of rotating on every turn or every probe interval — which
+// would revoke the shared credential out from under every other client.
+let lastForcedMint: string | null = null;
+
+export type ForcedRefreshResult =
+  /** A new credential was minted, or another instance's newer one adopted. */
+  | { status: "rotated"; token: string }
+  /** Another rotation happened moments ago; this one was suppressed. */
+  | { status: "throttled" }
+  /** No usable credential can be produced; the subscription is unusable. */
+  | { status: "failed" };
+
+/**
+ * Rotate the Claude OAuth credential even though the persisted one has not
+ * expired. This is the recovery path for a token the server REVOKED — another
+ * client rotating the same credential invalidates ours while it stays
+ * clock-valid, so every expiry-based check (including pi's own registry
+ * refresh) keeps handing out a dead token until it finally expires.
+ *
+ * `rejectedToken` must be the token the failing request actually carried, not
+ * whatever is on disk now: when the persisted one already differs, another
+ * instance rotated in the meantime and its token is adopted rather than rotated
+ * away — otherwise two processes revoke each other in a loop.
+ */
+export async function forceRefreshClaudeOAuthToken(rejectedToken?: string | null): Promise<ForcedRefreshResult> {
+  if (forcedRefreshInFlight) return forcedRefreshInFlight;
+  forcedRefreshInFlight = (async () => {
+    const log = getLogger();
+    const authPath = join(resolveAgentDir(), "auth.json");
+    if (!existsSync(authPath)) return { status: "failed" };
+    const anthropic = readOAuthEntry<AnthropicOAuthCreds>(authPath, "anthropic");
+    if (!anthropic) return { status: "failed" };
+    const persisted = typeof anthropic.access === "string" ? anthropic.access : "";
+    // Checked before the cooldown: parallel workers all fail on the same token,
+    // and every one after the first must adopt the fresh credential rather than
+    // be told to wait for a rotation that already happened.
+    if (rejectedToken && persisted && persisted !== rejectedToken) {
+      log.debug({ s: "flant" }, "claude oauth token already rotated elsewhere; reusing the persisted one");
+      return { status: "rotated", token: persisted };
+    }
+    if (rejectedToken && lastForcedMint && rejectedToken === lastForcedMint) {
+      log.warn({ s: "flant" }, "a freshly minted claude credential was rejected too; not rotating again");
+      return { status: "failed" };
+    }
+    if (Date.now() - forcedRefreshAt < FORCED_REFRESH_COOLDOWN_MS) return { status: "throttled" };
+    if (typeof anthropic.refresh !== "string" || !anthropic.refresh) {
+      log.debug({ s: "flant" }, "claude oauth credential rejected and no refresh token available");
+      return { status: "failed" };
+    }
+    forcedRefreshAt = Date.now();
+    let refreshed: { refresh: string; access: string; expires: number };
+    try {
+      refreshed = await requestClaudeTokenRefresh(anthropic.refresh);
+    } catch (err: any) {
+      log.warn({ s: "flant", err: err?.message }, "forced claude oauth token refresh failed");
+      // The usual reason a grant fails is that another instance consumed this
+      // single-use refresh token first — in which case its replacement is on
+      // disk by now and is exactly what this caller needs.
+      const adopted = readOAuthEntry<AnthropicOAuthCreds>(authPath, "anthropic")?.access;
+      if (typeof adopted === "string" && adopted && adopted !== persisted) {
+        log.debug({ s: "flant" }, "adopting the credential another instance minted after our grant failed");
+        return { status: "rotated", token: adopted };
+      }
+      return { status: "failed" };
+    }
+    // A credential that could not be written is not usable: the provider is
+    // rebound by re-reading auth.json, and pi's own provider reads the same
+    // file, so returning an unpersisted token would register the rejected one.
+    const stored = await persistClaudeCredentials(refreshed, { consumedRefresh: anthropic.refresh });
+    if (!stored) return { status: "failed" };
+    lastForcedMint = stored;
+    log.info({ s: "flant" }, "force-refreshed the claude oauth token after a rejected credential");
+    return { status: "rotated", token: stored };
+  })();
+  try {
+    return await forcedRefreshInFlight;
+  } finally {
+    forcedRefreshInFlight = null;
+  }
+}
+
+/**
+ * Record that a subscription request demonstrably succeeded. The credential in
+ * use works, so a later rejection is a NEW failure deserving its own rotation
+ * rather than the "already tried that" refusal above.
+ */
+export function noteSubscriptionCredentialAccepted(): void {
+  lastForcedMint = null;
+}
+
+// Mint a new Claude OAuth credential from a refresh token. Prefers pi-ai's own
+// implementation and falls back to the same public endpoint/client it uses,
+// because the standalone pi binary bundles `pi-ai/oauth` as an empty module —
+// and pi's registry cannot stand in here, since it refuses to refresh a
+// credential it still considers unexpired.
+async function requestClaudeTokenRefresh(refreshToken: string): Promise<{ refresh: string; access: string; expires: number }> {
+  if (typeof refreshAnthropicToken === "function") return refreshAnthropicToken(refreshToken);
+  const res = await fetch(ANTHROPIC_TOKEN_URL, {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify({ grant_type: "refresh_token", client_id: ANTHROPIC_CLIENT_ID, refresh_token: refreshToken }),
+    signal: AbortSignal.timeout(30000),
+  });
+  const body = await res.text();
+  if (!res.ok) throw new Error(`Anthropic token refresh returned ${res.status}: ${body.slice(0, 200)}`);
+  const data = JSON.parse(body) as { refresh_token: string; access_token: string; expires_in: number };
+  return {
+    refresh: data.refresh_token,
+    access: data.access_token,
+    expires: Date.now() + data.expires_in * 1000 - CLAUDE_REFRESH_MARGIN_MS,
+  };
 }
 
 /** Resolve the gateway API key (LLM_API_KEY preferred, FLANT_API_KEY fallback). */
@@ -714,14 +872,47 @@ export async function probeSubscriptionCleared(
 ): Promise<"ok" | "rate_limited" | "error"> {
   const log = getLogger();
   await refreshClaudeOAuthToken();
+  const probeModel = subProbeModelId(modelId);
+  let { outcome, token } = await sendSubscriptionProbe(probeModel);
+  // A 401 is a REVOKED credential, not a limit: without rotating it here the
+  // probe returns "error" forever and the switch-back never fires — the session
+  // stays on the fallback tier until the token happens to expire on its own.
+  // The rotation goes through the shared recovery path so the provider is
+  // rebound too, or a cleared probe would switch back onto a registration still
+  // carrying the rejected token as its literal apiKey.
+  if (outcome === "unauthenticated" && await recoverRejectedSubCredential(undefined, token) === "rotated") {
+    ({ outcome } = await sendSubscriptionProbe(probeModel));
+  }
+  switch (outcome) {
+    case "ok":
+      log.debug({ s: "flant", model: probeModel }, "probe: capacity back");
+      noteSubscriptionCredentialAccepted();
+      return "ok";
+    case "rate_limited":
+      log.debug({ s: "flant", model: probeModel }, "probe: still rate limited");
+      return "rate_limited";
+    case "unauthenticated":
+      log.warn({ s: "flant", model: probeModel }, "probe: credential rejected even after a forced refresh");
+      return "error";
+    default:
+      return "error";
+  }
+}
+
+type SubscriptionProbeOutcome = "ok" | "rate_limited" | "unauthenticated" | "error";
+
+// One minimal subscription request, shaped exactly like a live one, classified
+// by what came back. Callers decide what to do about each outcome. The token it
+// sent is reported alongside, so a rejection names the credential that actually
+// failed rather than whatever the file holds by the time the caller looks.
+async function sendSubscriptionProbe(probeModel: string): Promise<{ outcome: SubscriptionProbeOutcome; token: string | null }> {
+  const log = getLogger();
   const oauthToken = readClaudeOAuthToken();
   const gatewayKey = readGatewayApiKey();
   if (!oauthToken || !gatewayKey) {
     log.debug({ s: "flant", hasOAuth: !!oauthToken, hasGatewayKey: !!gatewayKey }, "probe skipped: missing credentials");
-    return "error";
+    return { outcome: "error", token: oauthToken };
   }
-  // The gateway expects the bare claude-* id under the `sub/` prefix.
-  const probeModel = subProbeModelId(modelId);
   // Build a payload that matches a LIVE subscription request's billing shape:
   // it must carry the Claude Code identity system block (so injectBillingHeader
   // passes its gate) and the billing system[0] entry the transform prepends.
@@ -757,31 +948,64 @@ export async function probeSubscriptionCleared(
       body: JSON.stringify(probePayload),
       signal: AbortSignal.timeout(30000),
     });
-    if (res.status === 429) {
-      log.debug({ s: "flant", model: probeModel }, "probe: still rate limited");
-      return "rate_limited";
-    }
-    if (res.ok) {
-      log.debug({ s: "flant", model: probeModel }, "probe: capacity back");
-      return "ok";
-    }
+    if (res.ok) return { outcome: "ok", token: oauthToken };
+    if (res.status === 429) return { outcome: "rate_limited", token: oauthToken };
+    if (res.status === 401 || res.status === 403) return { outcome: "unauthenticated", token: oauthToken };
     // A 400 "extra usage" means the subscription pool is still exhausted (the
     // same failure the fallback was triggered for) — treat it as still-limited so
     // the shared switch-back probe keeps waiting rather than declaring recovery.
     if (res.status === 400) {
       let bodyText = "";
       try { bodyText = await res.text(); } catch { /* ignore */ }
-      if (isExtraUsageMessage(bodyText)) {
-        log.debug({ s: "flant", model: probeModel }, "probe: still out of extra usage (400)");
-        return "rate_limited";
-      }
+      if (isExtraUsageMessage(bodyText)) return { outcome: "rate_limited", token: oauthToken };
     }
     log.debug({ s: "flant", model: probeModel, status: res.status }, "probe: unexpected status");
-    return "error";
+    return { outcome: "error", token: oauthToken };
   } catch (err: any) {
     log.debug({ s: "flant", err: err?.message }, "probe failed");
-    return "error";
+    return { outcome: "error", token: oauthToken };
   }
+}
+
+/**
+ * Establish whether the subscription credential currently works, rotating it
+ * when it does not:
+ *
+ *   "ok"           — accepted as-is, or refused over quota rather than identity
+ *   "rotated"      — was rejected, a fresh credential is now registered
+ *   "throttled"    — was rejected, but a rotation just happened; retry later
+ *   "failed"       — rejected and unrenewable; the subscription is unusable
+ *   "inconclusive" — nothing could be established (network, unexpected status)
+ *
+ * Every decision to rotate is made from THIS probe, whose token identity is
+ * exact. Callers that only learn "something returned 401" — a finished turn, a
+ * worker that failed minutes ago — cannot say which credential was rejected,
+ * and guessing is what makes two instances rotate each other's token away.
+ *
+ * A 401 the gateway raised over its OWN key, or over a disabled account, is
+ * indistinguishable here from a revoked token, so it does trigger one rotation.
+ * What bounds it is that the rotation refuses to run twice on a credential this
+ * process just minted, so the shared token cannot be spun once per turn.
+ */
+export async function reviveSubscriptionCredential(
+  modelId: string,
+  pi?: ExtensionAPI,
+): Promise<"ok" | "inconclusive" | ForcedRefreshResult["status"]> {
+  const { outcome, token } = await sendSubscriptionProbe(subProbeModelId(modelId));
+  if (outcome === "ok" || outcome === "rate_limited") {
+    // The probe reads the token from disk, but the provider holds it as a
+    // literal: when another instance rotated it, a probe that succeeds proves
+    // only that the DISK credential works, and resuming without rebinding sends
+    // the old one again — a 401 per turn, forever, each one "recovering" here.
+    if (token && token !== lastSubToken) await refreshSubProvider(pi);
+    // Quota, not identity: on a 429 the credential itself is fine, but it has
+    // not been shown to be ACCEPTED, so the one-rotation guard stays armed.
+    if (outcome === "ok") noteSubscriptionCredentialAccepted();
+    return "ok";
+  }
+  if (outcome === "error") return "inconclusive";
+  getLogger().warn({ s: "flant" }, "the subscription credential was rejected; rotating it");
+  return recoverRejectedSubCredential(pi, token);
 }
 
 export async function discoverFlantModels(apiKey: string): Promise<string[]> {
@@ -1043,6 +1267,33 @@ export async function refreshSubProvider(pi?: ExtensionAPI): Promise<void> {
 
   registerSubProvider(api, ctx.anthropicModels, ctx.metadata);
   log.debug({ s: "flant" }, "re-registered the sub provider with a refreshed oauth token");
+}
+
+/**
+ * Recover from a subscription request the gateway rejected as unauthenticated.
+ * Rotates the OAuth credential past its unexpired-looking state and rebinds the
+ * sub provider to the new token. Returns false when no usable credential could
+ * be minted — the caller must then route away from the subscription, because
+ * the registration keeps failing every request until the user re-logs in.
+ *
+ * `rejectedToken` is the credential the failed request carried; it defaults to
+ * the one the provider is registered with, NOT to whatever is on disk now,
+ * which may already be another instance's replacement.
+ */
+export async function recoverRejectedSubCredential(
+  pi?: ExtensionAPI,
+  rejectedToken?: string | null,
+): Promise<ForcedRefreshResult["status"]> {
+  const rejected = rejectedToken ?? lastSubToken ?? readClaudeOAuthToken();
+  const result = await forceRefreshClaudeOAuthToken(rejected);
+  if (result.status !== "rotated") return result.status;
+  const ctx = subProviderContext;
+  const api = pi ?? piRef;
+  if (ctx && api && result.token !== lastSubToken) {
+    registerSubProvider(api, ctx.anthropicModels, ctx.metadata);
+    getLogger().info({ s: "flant" }, "rebound the sub provider after a rejected credential");
+  }
+  return "rotated";
 }
 
 function pickLatest(models: string[]): string | null {

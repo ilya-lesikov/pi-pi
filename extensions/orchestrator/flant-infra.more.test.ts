@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import lockfile from "proper-lockfile";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const refreshAnthropicTokenMock = vi.fn();
@@ -247,6 +248,315 @@ describe("probeSubscriptionCleared", () => {
     await expect(mod.probeSubscriptionCleared("sub/claude-haiku-4-5")).resolves.toBe("error");
     stubFetch(() => { throw new Error("net"); });
     await expect(mod.probeSubscriptionCleared("sub/claude-haiku-4-5")).resolves.toBe("error");
+  });
+
+  // A REVOKED token stays clock-valid, so the expiry-gated refresh keeps handing
+  // it back and the probe 401s forever: "error" every interval, switch-back
+  // never fires, and the session is stuck on the fallback tier until the token
+  // happens to expire on its own.
+  it("rotates a rejected credential and retries instead of reporting a generic error", async () => {
+    const dir = makeTempDir();
+    writeAuth(dir);
+    process.env.LLM_API_KEY = "gw";
+    const mod = await loadModule(dir);
+    refreshAnthropicTokenMock.mockResolvedValue({ access: "sk-ant-oat01-fresh", refresh: "rt2", expires: Date.now() + 3_600_000 });
+    let call = 0;
+    const fn = stubFetch(() => (++call === 1 ? { ok: false, status: 401 } : { ok: true, status: 200 }));
+    await expect(mod.probeSubscriptionCleared("sub/claude-haiku-4-5")).resolves.toBe("ok");
+    expect(refreshAnthropicTokenMock).toHaveBeenCalledWith("rt");
+    expect(fn.mock.calls[1][1].headers.Authorization).toBe("Bearer sk-ant-oat01-fresh");
+    expect(JSON.parse(readFileSync(join(dir, "auth.json"), "utf-8")).anthropic.access).toBe("sk-ant-oat01-fresh");
+  });
+
+  it("reports an error when the credential is still rejected after a rotation", async () => {
+    const dir = makeTempDir();
+    writeAuth(dir);
+    process.env.LLM_API_KEY = "gw";
+    const mod = await loadModule(dir);
+    refreshAnthropicTokenMock.mockResolvedValue({ access: "sk-ant-oat01-fresh", refresh: "rt2", expires: Date.now() + 3_600_000 });
+    const fn = stubFetch(() => ({ ok: false, status: 401 }));
+    await expect(mod.probeSubscriptionCleared("sub/claude-haiku-4-5")).resolves.toBe("error");
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("forceRefreshClaudeOAuthToken", () => {
+  function writeAuth(dir: string, access = "sk-ant-oat01-live", refresh: string | null = "rt") {
+    mkdirSync(dir, { recursive: true });
+    const anthropic: Record<string, unknown> = { type: "oauth", access, expires: Date.now() + 3_600_000 };
+    if (refresh) anthropic.refresh = refresh;
+    writeFileSync(join(dir, "auth.json"), JSON.stringify({ anthropic }), "utf-8");
+  }
+
+  const stored = (dir: string) => JSON.parse(readFileSync(join(dir, "auth.json"), "utf-8")).anthropic;
+
+  it("rotates an unexpired credential and persists it", async () => {
+    const dir = makeTempDir();
+    writeAuth(dir);
+    const mod = await loadModule(dir);
+    refreshAnthropicTokenMock.mockResolvedValue({ access: "sk-ant-oat01-new", refresh: "rt2", expires: Date.now() + 3_600_000 });
+    await expect(mod.forceRefreshClaudeOAuthToken("sk-ant-oat01-live")).resolves.toEqual({ status: "rotated", token: "sk-ant-oat01-new" });
+    expect(stored(dir)).toMatchObject({ type: "oauth", access: "sk-ant-oat01-new", refresh: "rt2" });
+    // Unlike refreshClaudeOAuthToken, which returns early on an unexpired token.
+    await expect(mod.refreshClaudeOAuthToken()).resolves.toBe("sk-ant-oat01-new");
+  });
+
+  it("reuses a credential another party already rotated instead of rotating again", async () => {
+    const dir = makeTempDir();
+    writeAuth(dir, "sk-ant-oat01-rotated-elsewhere");
+    const mod = await loadModule(dir);
+    await expect(mod.forceRefreshClaudeOAuthToken("sk-ant-oat01-stale")).resolves.toEqual({ status: "rotated", token: "sk-ant-oat01-rotated-elsewhere" });
+    expect(refreshAnthropicTokenMock).not.toHaveBeenCalled();
+  });
+
+  // Parallel workers all hit the same 401. Without coalescing, each would mint a
+  // credential and invalidate the others' refresh token in turn.
+  it("coalesces concurrent rotations of the same rejected token", async () => {
+    const dir = makeTempDir();
+    writeAuth(dir);
+    const mod = await loadModule(dir);
+    refreshAnthropicTokenMock.mockResolvedValue({ access: "sk-ant-oat01-new", refresh: "rt2", expires: Date.now() + 3_600_000 });
+    const results = await Promise.all([
+      mod.forceRefreshClaudeOAuthToken("sk-ant-oat01-live"),
+      mod.forceRefreshClaudeOAuthToken("sk-ant-oat01-live"),
+    ]);
+    expect(results).toEqual([{ status: "rotated", token: "sk-ant-oat01-new" }, { status: "rotated", token: "sk-ant-oat01-new" }]);
+    expect(refreshAnthropicTokenMock).toHaveBeenCalledTimes(1);
+  });
+
+  // A worker that failed on the OLD token after the rotation already landed must
+  // adopt the new one, not be told to wait out a cooldown it cannot see.
+  it("hands a straggler the fresh credential rather than throttling it", async () => {
+    const dir = makeTempDir();
+    writeAuth(dir);
+    const mod = await loadModule(dir);
+    refreshAnthropicTokenMock.mockResolvedValue({ access: "sk-ant-oat01-new", refresh: "rt2", expires: Date.now() + 3_600_000 });
+    await mod.forceRefreshClaudeOAuthToken("sk-ant-oat01-live");
+    await expect(mod.forceRefreshClaudeOAuthToken("sk-ant-oat01-live")).resolves.toEqual({ status: "rotated", token: "sk-ant-oat01-new" });
+    expect(refreshAnthropicTokenMock).toHaveBeenCalledTimes(1);
+  });
+
+  // The 401 may come from the gateway key or a disabled account rather than a
+  // revoked token. Rotating on every such failure would revoke the shared
+  // credential out from under every other client, once per turn, forever.
+  it("refuses to rotate again when the credential it just minted is rejected", async () => {
+    const dir = makeTempDir();
+    writeAuth(dir);
+    const mod = await loadModule(dir);
+    refreshAnthropicTokenMock.mockResolvedValue({ access: "sk-ant-oat01-new", refresh: "rt2", expires: Date.now() + 3_600_000 });
+    await mod.forceRefreshClaudeOAuthToken("sk-ant-oat01-live");
+    await expect(mod.forceRefreshClaudeOAuthToken("sk-ant-oat01-new")).resolves.toEqual({ status: "failed" });
+    expect(refreshAnthropicTokenMock).toHaveBeenCalledTimes(1);
+    expect(stored(dir).refresh).toBe("rt2");
+  });
+
+  it("reports failure when no refresh token is stored", async () => {
+    const dir = makeTempDir();
+    writeAuth(dir, "sk-ant-oat01-live", null);
+    const mod = await loadModule(dir);
+    await expect(mod.forceRefreshClaudeOAuthToken("sk-ant-oat01-live")).resolves.toEqual({ status: "failed" });
+  });
+
+  // The token is minted BEFORE the file lock is taken, so another process can
+  // land its own rotation in between. Overwriting it would revoke a credential
+  // that is already in use and restart the mutual-revocation loop.
+  it("keeps a credential another process wrote from a different refresh chain", async () => {
+    const dir = makeTempDir();
+    writeAuth(dir);
+    const mod = await loadModule(dir);
+    refreshAnthropicTokenMock.mockImplementation(async () => {
+      writeFileSync(
+        join(dir, "auth.json"),
+        JSON.stringify({ anthropic: { type: "oauth", access: "sk-ant-oat01-other", refresh: "rt-other", expires: Date.now() + 3_600_000 } }),
+        "utf-8",
+      );
+      return { access: "sk-ant-oat01-ours", refresh: "rt-ours", expires: Date.now() + 3_600_000 };
+    });
+    await expect(mod.forceRefreshClaudeOAuthToken("sk-ant-oat01-live")).resolves.toEqual({ status: "rotated", token: "sk-ant-oat01-other" });
+    expect(stored(dir)).toMatchObject({ access: "sk-ant-oat01-other", refresh: "rt-other" });
+  });
+
+  // The refresh token is single-use, so a grant that fails usually means another
+  // instance consumed it first — and its replacement is already on disk. Failing
+  // here would demote the session over a credential that works.
+  it("adopts the persisted credential when the grant itself fails", async () => {
+    const dir = makeTempDir();
+    writeAuth(dir);
+    const mod = await loadModule(dir);
+    refreshAnthropicTokenMock.mockImplementation(async () => {
+      writeFileSync(
+        join(dir, "auth.json"),
+        JSON.stringify({ anthropic: { type: "oauth", access: "sk-ant-oat01-other", refresh: "rt-other", expires: Date.now() + 3_600_000 } }),
+        "utf-8",
+      );
+      throw new Error("invalid_grant: Refresh token not found or invalid");
+    });
+    await expect(mod.forceRefreshClaudeOAuthToken("sk-ant-oat01-live")).resolves.toEqual({ status: "rotated", token: "sk-ant-oat01-other" });
+  });
+
+  it("reports failure when the grant fails and nothing replaced the credential", async () => {
+    const dir = makeTempDir();
+    writeAuth(dir);
+    const mod = await loadModule(dir);
+    refreshAnthropicTokenMock.mockRejectedValue(new Error("invalid_grant"));
+    await expect(mod.forceRefreshClaudeOAuthToken("sk-ant-oat01-live")).resolves.toEqual({ status: "failed" });
+    expect(stored(dir)).toMatchObject({ access: "sk-ant-oat01-live", refresh: "rt" });
+  });
+
+  // The grant already consumed the previous refresh token, so a write that gives
+  // up on a contended lock destroys the only usable credential.
+  it("waits out a held lock rather than dropping the minted credential", async () => {
+    const dir = makeTempDir();
+    writeAuth(dir);
+    const mod = await loadModule(dir);
+    const release = await lockfile.lock(join(dir, "auth.json"), { stale: 10000 });
+    let released = false;
+    setTimeout(() => { released = true; void release(); }, 150);
+    refreshAnthropicTokenMock.mockResolvedValue({ access: "sk-ant-oat01-new", refresh: "rt2", expires: Date.now() + 3_600_000 });
+    await expect(mod.forceRefreshClaudeOAuthToken("sk-ant-oat01-live")).resolves.toEqual({ status: "rotated", token: "sk-ant-oat01-new" });
+    expect(released).toBe(true);
+    expect(stored(dir)).toMatchObject({ access: "sk-ant-oat01-new", refresh: "rt2" });
+  });
+
+  // The provider is rebound by re-reading auth.json, so an unpersisted token
+  // would leave the REJECTED one registered while reporting success.
+  it("reports failure when the rotated credential cannot be persisted", async () => {
+    const dir = makeTempDir();
+    writeAuth(dir);
+    const mod = await loadModule(dir);
+    refreshAnthropicTokenMock.mockImplementation(async () => {
+      rmSync(dir, { recursive: true, force: true });
+      writeFileSync(dir, "not a directory", "utf-8");
+      return { access: "sk-ant-oat01-new", refresh: "rt2", expires: Date.now() + 3_600_000 };
+    });
+    await expect(mod.forceRefreshClaudeOAuthToken("sk-ant-oat01-live")).resolves.toEqual({ status: "failed" });
+  });
+});
+
+describe("reviveSubscriptionCredential", () => {
+  function writeAuth(dir: string) {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "auth.json"),
+      JSON.stringify({ anthropic: { type: "oauth", access: "sk-ant-oat01-live", refresh: "rt", expires: Date.now() + 3_600_000 } }),
+      "utf-8",
+    );
+  }
+
+  it("passes without rotating when the credential is accepted", async () => {
+    const dir = makeTempDir();
+    writeAuth(dir);
+    process.env.LLM_API_KEY = "gw";
+    const mod = await loadModule(dir);
+    const fn = stubFetch(() => ({ ok: true, status: 200 }));
+    await expect(mod.reviveSubscriptionCredential("pp-flant-anthropic-sub/sub/claude-haiku-4-5")).resolves.toBe("ok");
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(refreshAnthropicTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("rotates a rejected credential", async () => {
+    const dir = makeTempDir();
+    writeAuth(dir);
+    process.env.LLM_API_KEY = "gw";
+    const mod = await loadModule(dir);
+    refreshAnthropicTokenMock.mockResolvedValue({ access: "sk-ant-oat01-new", refresh: "rt2", expires: Date.now() + 3_600_000 });
+    stubFetch(() => ({ ok: false, status: 401 }));
+    await expect(mod.reviveSubscriptionCredential("sub/claude-haiku-4-5")).resolves.toBe("rotated");
+    expect(refreshAnthropicTokenMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports failure when a rejected credential cannot be renewed", async () => {
+    const dir = makeTempDir();
+    writeAuth(dir);
+    process.env.LLM_API_KEY = "gw";
+    const mod = await loadModule(dir);
+    refreshAnthropicTokenMock.mockRejectedValue(new Error("refresh token revoked"));
+    stubFetch(() => ({ ok: false, status: 401 }));
+    await expect(mod.reviveSubscriptionCredential("sub/claude-haiku-4-5")).resolves.toBe("failed");
+  });
+
+  // A 401 the caller reports may be minutes old, and a rate limit does not
+  // reject a credential at all. Rotating on either would revoke a working
+  // token — the exact failure the whole change exists to stop.
+  it("rotates nothing when the credential is currently accepted or merely limited", async () => {
+    const dir = makeTempDir();
+    writeAuth(dir);
+    process.env.LLM_API_KEY = "gw";
+    const mod = await loadModule(dir);
+    stubFetch(() => ({ ok: false, status: 429 }));
+    await expect(mod.reviveSubscriptionCredential("sub/claude-haiku-4-5")).resolves.toBe("ok");
+    expect(refreshAnthropicTokenMock).not.toHaveBeenCalled();
+  });
+
+  // Reporting "ok" here would tell the caller to resume a turn that has just
+  // been shown to be unverifiable, and the retry would land right back here.
+  it("reports an unreachable gateway as inconclusive rather than working", async () => {
+    const dir = makeTempDir();
+    writeAuth(dir);
+    process.env.LLM_API_KEY = "gw";
+    const mod = await loadModule(dir);
+    stubFetch(() => { throw new Error("ECONNRESET"); });
+    await expect(mod.reviveSubscriptionCredential("sub/claude-haiku-4-5")).resolves.toBe("inconclusive");
+    stubFetch(() => ({ ok: false, status: 503 }));
+    await expect(mod.reviveSubscriptionCredential("sub/claude-haiku-4-5")).resolves.toBe("inconclusive");
+    expect(refreshAnthropicTokenMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("recoverRejectedSubCredential", () => {
+  function makePi() {
+    const registered = new Map<string, any>();
+    return {
+      registered,
+      registerProvider: vi.fn((n: string, c: any) => registered.set(n, c)),
+      unregisterProvider: vi.fn((n: string) => registered.delete(n)),
+    } as any;
+  }
+
+  async function registeredModule(dir: string) {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "auth.json"),
+      JSON.stringify({ anthropic: { type: "oauth", access: "sk-ant-oat01-live", refresh: "rt", expires: Date.now() + 3_600_000 } }),
+      "utf-8",
+    );
+    process.env.LLM_API_KEY = "gw";
+    const mod = await loadModule(dir);
+    const pi = makePi();
+    mod.registerFlantProviders(pi, ["claude-haiku-4-5"], {}, { subscription: true });
+    return { mod, pi };
+  }
+
+  // The provider carries the token as a LITERAL apiKey, so a rotation that does
+  // not re-register leaves every subsequent request on the rejected credential.
+  it("rebinds the provider to the rotated token", async () => {
+    const { mod, pi } = await registeredModule(makeTempDir());
+    expect(pi.registered.get("pp-flant-anthropic-sub").apiKey).toBe("sk-ant-oat01-live");
+    refreshAnthropicTokenMock.mockResolvedValue({ access: "sk-ant-oat01-new", refresh: "rt2", expires: Date.now() + 3_600_000 });
+    await expect(mod.recoverRejectedSubCredential(pi)).resolves.toBe("rotated");
+    expect(pi.registered.get("pp-flant-anthropic-sub").apiKey).toBe("sk-ant-oat01-new");
+  });
+
+  // The credential that failed is the one the PROVIDER holds, not whatever is on
+  // disk now — which may already be another instance's replacement. Rotating
+  // that one away is how two processes revoke each other in a loop.
+  it("adopts a credential another instance wrote instead of rotating it away", async () => {
+    const dir = makeTempDir();
+    const { mod, pi } = await registeredModule(dir);
+    writeFileSync(
+      join(dir, "auth.json"),
+      JSON.stringify({ anthropic: { type: "oauth", access: "sk-ant-oat01-other", refresh: "rt-other", expires: Date.now() + 3_600_000 } }),
+      "utf-8",
+    );
+    await expect(mod.recoverRejectedSubCredential(pi)).resolves.toBe("rotated");
+    expect(refreshAnthropicTokenMock).not.toHaveBeenCalled();
+    expect(pi.registered.get("pp-flant-anthropic-sub").apiKey).toBe("sk-ant-oat01-other");
+  });
+
+  it("reports failure when the credential cannot be renewed at all", async () => {
+    const { mod, pi } = await registeredModule(makeTempDir());
+    refreshAnthropicTokenMock.mockRejectedValue(new Error("revoked"));
+    await expect(mod.recoverRejectedSubCredential(pi)).resolves.toBe("failed");
   });
 });
 

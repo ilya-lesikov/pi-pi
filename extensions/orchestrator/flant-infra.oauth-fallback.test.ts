@@ -58,6 +58,31 @@ describe("oauth refresh without the pi-ai/oauth module", () => {
     await expect(mod.refreshClaudeOAuthToken()).resolves.toBeNull();
   });
 
+  // The forced rotation cannot go through pi's registry: it refuses to refresh a
+  // credential it still considers unexpired, which is exactly the revoked case.
+  it("force-refreshes the Claude token over the token endpoint", async () => {
+    const dir = makeAgentDir();
+    const authPath = join(dir, "auth.json");
+    writeFileSync(authPath, JSON.stringify({ anthropic: { type: "oauth", access: "sk-ant-oat01-live", refresh: "rt", expires: Date.now() + 3_600_000 } }), "utf-8");
+    const mod = await loadFlantInfraModule(dir);
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ access_token: "sk-ant-oat01-http", refresh_token: "rt-http", expires_in: 3600 }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      await expect(mod.forceRefreshClaudeOAuthToken("sk-ant-oat01-live")).resolves.toEqual({ status: "rotated", token: "sk-ant-oat01-http" });
+      const [url, req] = fetchMock.mock.calls[0] as unknown as [string, any];
+      expect(url).toContain("/v1/oauth/token");
+      expect(JSON.parse(req.body)).toMatchObject({ grant_type: "refresh_token", refresh_token: "rt" });
+      const stored = JSON.parse(readFileSync(authPath, "utf-8")).anthropic;
+      expect(stored).toMatchObject({ type: "oauth", access: "sk-ant-oat01-http", refresh: "rt-http" });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("refreshes the Copilot token through pi's model registry", async () => {
     const dir = makeAgentDir();
     const authPath = join(dir, "auth.json");
