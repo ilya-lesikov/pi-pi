@@ -934,6 +934,9 @@ describe("initFlantSync / initFlantOnStartup", () => {
     );
     process.env.LLM_API_KEY = "gw";
     refreshAnthropicTokenMock.mockResolvedValue({ access: "fresh", refresh: "rt2", expires: Date.now() + 3_600_000 });
+    // No cache is written, so this settings shape bootstraps one through a real
+    // discovery request; keep it off the network.
+    stubFetch(() => ({ ok: true, status: 200, json: async () => ({ data: [] }) }));
 
     const mod = await loadModule(dir);
     await mod.initFlantOnStartup(makePi());
