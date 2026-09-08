@@ -1,13 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Orchestrator } from "./orchestrator.js";
 import { getDefaultConfig, normalizeConfigDurations } from "./config.js";
-import { armSwitchBackProbe, handleMainRateLimit, isRateLimitError } from "./rate-limit-fallback.js";
+import { armSwitchBackProbe, handleMainAuthFailure, handleMainRateLimit, handleSubagentAuthFailure, isAuthError, isRateLimitError } from "./rate-limit-fallback.js";
 import { clearAllTierDemotions, isSubscriptionFallbackActive, setSubscriptionFallbackActive, setTierEnabled, updateRegistryFromAvailableModels } from "./model-registry.js";
 
 vi.mock("./flant-infra.js", async (original) => ({
   ...(await original<any>()),
   loadFlantSettings: () => ({ autoRateLimitFallback: true, switchBackIntervalMinutes: 10 }),
   probeSubscriptionCleared: vi.fn(async () => "rate_limited"),
+  reviveSubscriptionCredential: vi.fn(async () => "failed"),
 }));
 
 function makeOrchestrator(pi: any): Orchestrator {
@@ -125,6 +126,113 @@ describe("session-first rate-limit fallback", () => {
     expect(isSubscriptionFallbackActive()).toBe(false);
     vi.mocked(probeSubscriptionCleared).mockResolvedValue("rate_limited" as any);
     vi.useRealTimers();
+  });
+
+  // A revoked subscription token is not a quota problem: the fix is to rotate
+  // the credential in place, and only a rotation that cannot happen justifies
+  // demoting the session to a lower tier.
+  it("recognizes rejected credentials distinctly from rate limits", () => {
+    expect(isAuthError('{"type":"authentication_error","message":"OAuth access token has been revoked."}')).toBe(true);
+    expect(isAuthError("401 Unauthorized")).toBe(true);
+    expect(isAuthError("HTTP 429 too many requests")).toBe(false);
+    expect(isRateLimitError('{"type":"authentication_error"}')).toBe(false);
+  });
+
+  it("rotates a rejected credential and resumes without demoting the tier", async () => {
+    const { reviveSubscriptionCredential } = await import("./flant-infra.js");
+    vi.mocked(reviveSubscriptionCredential).mockResolvedValue("rotated");
+    const pi = { sendUserMessage: vi.fn() } as any;
+    const orchestrator = makeOrchestrator(pi);
+    orchestrator.switchModel = vi.fn(async () => true);
+    const ctx = subCtx();
+    await handleMainAuthFailure(orchestrator, ctx, "sub/claude-opus-4-8", "pp-flant-anthropic-sub");
+    expect(orchestrator.subFallbackActive).toBe(false);
+    expect(orchestrator.switchModel).not.toHaveBeenCalled();
+    expect(pi.sendUserMessage).toHaveBeenCalled();
+    expect(orchestrator.subSwitchBackTimer).toBeNull();
+    vi.mocked(reviveSubscriptionCredential).mockResolvedValue("failed");
+  });
+
+  // A worker that failed minutes ago cannot say which credential was rejected,
+  // and by now it may already have been replaced. Rotating on that report would
+  // revoke a working token; the recovery path re-checks instead and does
+  // nothing when the credential currently works.
+  it("resumes without rotating when the credential already works again", async () => {
+    const { reviveSubscriptionCredential } = await import("./flant-infra.js");
+    vi.mocked(reviveSubscriptionCredential).mockResolvedValue("ok");
+    const pi = { sendUserMessage: vi.fn() } as any;
+    const orchestrator = makeOrchestrator(pi);
+    orchestrator.switchModel = vi.fn(async () => true);
+    const ctx = subCtx();
+    await handleMainAuthFailure(orchestrator, ctx, "sub/claude-opus-4-8", "pp-flant-anthropic-sub");
+    expect(orchestrator.subFallbackActive).toBe(false);
+    expect(orchestrator.switchModel).not.toHaveBeenCalled();
+    expect(pi.sendUserMessage).toHaveBeenCalled();
+    expect(ctx.ui.notify).not.toHaveBeenCalled();
+    vi.mocked(reviveSubscriptionCredential).mockResolvedValue("failed");
+  });
+
+  it("falls to the lower tier when a rejected credential cannot be renewed", async () => {
+    setTierEnabled({ "copilot": true });
+    updateRegistryFromAvailableModels([
+      "pp-flant-anthropic-sub/sub/claude-opus-4-8",
+      "github-copilot/claude-opus-4.5",
+    ]);
+    const orchestrator = makeOrchestrator({ sendUserMessage: vi.fn() } as any);
+    orchestrator.switchModel = vi.fn(async () => true);
+    const ctx = subCtx();
+    await handleMainAuthFailure(orchestrator, ctx, "sub/claude-opus-4-8", "pp-flant-anthropic-sub");
+    expect(orchestrator.subFallbackActive).toBe(true);
+    expect(orchestrator.switchModel).toHaveBeenCalledWith(ctx, "github-copilot/claude-opus-4.5", expect.any(String));
+    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("/login"), expect.any(String));
+    if (orchestrator.subSwitchBackTimer) clearTimeout(orchestrator.subSwitchBackTimer);
+  });
+
+  // A suppressed rotation leaves the SAME rejected credential in place, so an
+  // automatic retry would fail identically and spin for as long as the
+  // suppression lasts. Demoting would be wrong too: the credential may well be
+  // fine, since another rotation just landed. Stop the turn and say so.
+  it.each(["throttled", "inconclusive"] as const)("neither retries nor demotes on a %s recovery check", async (outcome) => {
+    const { reviveSubscriptionCredential } = await import("./flant-infra.js");
+    vi.mocked(reviveSubscriptionCredential).mockResolvedValue(outcome);
+    setTierEnabled({ "copilot": true });
+    updateRegistryFromAvailableModels([
+      "pp-flant-anthropic-sub/sub/claude-opus-4-8",
+      "github-copilot/claude-opus-4.5",
+    ]);
+    const pi = { sendUserMessage: vi.fn() } as any;
+    const orchestrator = makeOrchestrator(pi);
+    orchestrator.switchModel = vi.fn(async () => true);
+    const ctx = subCtx();
+    await handleMainAuthFailure(orchestrator, ctx, "sub/claude-opus-4-8", "pp-flant-anthropic-sub");
+    expect(orchestrator.subFallbackActive).toBe(false);
+    expect(orchestrator.switchModel).not.toHaveBeenCalled();
+    expect(pi.sendUserMessage).not.toHaveBeenCalled();
+    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("not retrying"), "warning");
+    vi.mocked(reviveSubscriptionCredential).mockResolvedValue("failed");
+  });
+
+  it("recovers a worker's rejected credential without touching the main model", async () => {
+    const { reviveSubscriptionCredential } = await import("./flant-infra.js");
+    vi.mocked(reviveSubscriptionCredential).mockResolvedValue("rotated");
+    const pi = { sendUserMessage: vi.fn() } as any;
+    const orchestrator = makeOrchestrator(pi);
+    orchestrator.switchModel = vi.fn(async () => true);
+    await handleSubagentAuthFailure(orchestrator, subCtx(), "pp-flant-anthropic-sub/sub/claude-fable-5");
+    expect(orchestrator.subFallbackActive).toBe(false);
+    expect(orchestrator.switchModel).not.toHaveBeenCalled();
+    expect(pi.sendUserMessage).not.toHaveBeenCalled();
+    vi.mocked(reviveSubscriptionCredential).mockResolvedValue("failed");
+  });
+
+  it("ignores a rejected credential on a model the subscription does not route", async () => {
+    const { reviveSubscriptionCredential } = await import("./flant-infra.js");
+    vi.mocked(reviveSubscriptionCredential).mockClear();
+    const orchestrator = makeOrchestrator({ sendUserMessage: vi.fn() } as any);
+    orchestrator.switchModel = vi.fn(async () => true);
+    await handleMainAuthFailure(orchestrator, subCtx(), "gpt-5.6-sol", "github-copilot");
+    expect(reviveSubscriptionCredential).not.toHaveBeenCalled();
+    expect(orchestrator.subFallbackActive).toBe(false);
   });
 
   it("keeps the fallback in effect when switching back fails", async () => {

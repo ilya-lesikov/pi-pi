@@ -1,5 +1,5 @@
 import type { Orchestrator } from "./orchestrator.js";
-import { loadFlantSettings, probeSubscriptionCleared } from "./flant-infra.js";
+import { loadFlantSettings, probeSubscriptionCleared, reviveSubscriptionCredential } from "./flant-infra.js";
 import { getModelInfo, resolveModel, setSubscriptionFallbackActive } from "./model-registry.js";
 import { isSubscriptionRouted } from "./usage-tracker.js";
 
@@ -7,19 +7,42 @@ export function isRateLimitError(message?: string): boolean {
   return typeof message === "string" && /\b429\b|rate.?limit|too many requests|exceed your account|extra usage|draw from[\s\S]{0,40}plan limits/i.test(message);
 }
 
+/**
+ * A credential the provider refused, as opposed to a quota it exhausted. The
+ * subscription's OAuth token can be REVOKED server-side (another client
+ * rotating the same credential) long before the persisted expiry says so, and
+ * that arrives only as this error text.
+ */
+export function isAuthError(message?: string): boolean {
+  return typeof message === "string"
+    && /\b401\b|\b403\b|authentication_error|permission_error|has been revoked|invalid[ _-]?(api[ _-]?key|token)|unauthorized/i.test(message);
+}
+
 function thinking(orchestrator: Orchestrator): string {
   return orchestrator.config.agents.main.thinking;
 }
+
+type FallbackCause = "rate-limit" | "auth";
 
 // The paid gateway no longer serves Claude, so a sub rate limit cannot fall
 // back to flant-api. The only fallback tier for Claude is Copilot (when the
 // user enabled it). Without one, wait for the switch-back probe to detect the
 // cleared limit rather than routing onto a dead provider.
-async function activate(orchestrator: Orchestrator, ctx: any, modelId: string, origin: "main" | "subagent"): Promise<void> {
+async function activate(
+  orchestrator: Orchestrator,
+  ctx: any,
+  modelId: string,
+  origin: "main" | "subagent",
+  cause: FallbackCause = "rate-limit",
+  resumeRequest = true,
+): Promise<void> {
   if (orchestrator.subFallbackActive) return;
   const settings = loadFlantSettings(orchestrator.cwd);
+  const trigger = cause === "auth"
+    ? "The personal subscription credential was rejected and could not be renewed"
+    : "Subscription rate limit detected";
   if (!settings.autoRateLimitFallback) {
-    ctx.ui?.notify?.("The personal subscription is rate-limited. Automatic fallback is disabled in .pp/config.json.", "warning");
+    ctx.ui?.notify?.(`${trigger}. Automatic fallback is disabled in .pp/config.json.`, "warning");
     return;
   }
   const mainSpec = ctx.model?.provider && ctx.model?.id ? `${ctx.model.provider}/${ctx.model.id}` : "";
@@ -34,13 +57,17 @@ async function activate(orchestrator: Orchestrator, ctx: any, modelId: string, o
   const next = resolveModel(originSpec);
   const hasFallbackTier = next !== originSpec && !isSubscriptionRouted(next);
 
+  const recovery = cause === "auth"
+    ? " Run /login \u2192 Anthropic to restore subscription routing."
+    : "";
+
   if (!switchMain || !hasFallbackTier) {
     orchestrator.subFallbackMainPriorSpec = null;
     armSwitchBackProbe(orchestrator);
     if (switchMain) {
-      ctx.ui?.notify?.("Subscription rate limit detected. Claude has no paid-gateway fallback anymore; waiting for the limit to clear (periodic probe armed). Enable the Copilot tier for an automatic fallback, or /model to a non-Claude model to keep working.", "warning");
+      ctx.ui?.notify?.(`${trigger}. Claude has no paid-gateway fallback anymore; waiting for it to clear (periodic probe armed). Enable the Copilot tier for an automatic fallback, or /model to a non-Claude model to keep working.${recovery}`, "warning");
     } else {
-      ctx.ui?.notify?.("A subscription-routed worker hit a rate limit; subscription routing is paused until the limit clears.", "warning");
+      ctx.ui?.notify?.(`${trigger} on a worker; subscription routing is paused until it clears.${recovery}`, "warning");
     }
     return;
   }
@@ -49,19 +76,19 @@ async function activate(orchestrator: Orchestrator, ctx: any, modelId: string, o
     if (!await orchestrator.switchModel(ctx, next, thinking(orchestrator))) {
       orchestrator.subFallbackMainPriorSpec = null;
       armSwitchBackProbe(orchestrator);
-      ctx.ui?.notify?.("Subscription rate limit detected, but the fallback model is unavailable. Waiting for the limit to clear.", "error");
+      ctx.ui?.notify?.(`${trigger}, but the fallback model is unavailable. Waiting for it to clear.${recovery}`, "error");
       return;
     }
   } catch {
     orchestrator.subFallbackMainPriorSpec = null;
     armSwitchBackProbe(orchestrator);
-    ctx.ui?.notify?.("Subscription rate limit detected, but switching to the fallback model failed. Waiting for the limit to clear.", "error");
+    ctx.ui?.notify?.(`${trigger}, but switching to the fallback model failed. Waiting for it to clear.${recovery}`, "error");
     return;
   }
   orchestrator.subFallbackMainPriorSpec = mainSpec || modelId;
-  ctx.ui?.notify?.(`Subscription rate limit detected; switched to ${next} and will switch back after the limit clears.`, "warning");
+  ctx.ui?.notify?.(`${trigger}; switched to ${next} and will switch back once the subscription works again.${recovery}`, "warning");
   armSwitchBackProbe(orchestrator);
-  orchestrator.queueContinuation("[PI-PI] Provider routing changed after a subscription rate limit. Continue the current request.");
+  if (resumeRequest) orchestrator.queueContinuation("[PI-PI] Provider routing changed after a subscription failure. Continue the current request.");
 }
 
 export async function handleMainRateLimit(orchestrator: Orchestrator, ctx: any, modelId?: string, provider?: string): Promise<void> {
@@ -74,6 +101,65 @@ export async function handleMainRateLimit(orchestrator: Orchestrator, ctx: any, 
 export async function handleSubagentRateLimit(orchestrator: Orchestrator, ctx: any, modelId?: string): Promise<void> {
   if (!modelId || !isSubscriptionRouted(modelId)) return;
   await activate(orchestrator, ctx, modelId, "subagent");
+}
+
+// A rejected subscription credential is recoverable in place: rotate it, rebind
+// the provider, and resume. Only when no fresh credential can be minted does
+// this become a routing problem, handled exactly like a rate limit (fall to a
+// lower tier and let the probe decide when the subscription works again).
+//
+// The rotation decision is re-derived from a live probe rather than taken from
+// the reported error: by the time a turn ends or a worker settles, the rejected
+// credential may already have been replaced, and rotating on a stale report is
+// how two instances revoke each other's token.
+async function recoverOrDemote(orchestrator: Orchestrator, ctx: any, spec: string, origin: "main" | "subagent"): Promise<void> {
+  if (orchestrator.subFallbackActive) return;
+  const outcome = await reviveSubscriptionCredential(spec, orchestrator.pi);
+  if (outcome === "failed") {
+    await activate(orchestrator, ctx, spec, origin, "auth");
+    return;
+  }
+  // Only an outcome that establishes something justifies resuming, because a
+  // resumed turn that fails the same way comes straight back here. "Throttled"
+  // means the rejected credential is still the persisted one and a rotation is
+  // barred for now; "inconclusive" means the check itself could not reach the
+  // gateway. Either way an automatic retry would just spin. Stop the turn and
+  // let the next request try again.
+  if (outcome === "throttled" || outcome === "inconclusive") {
+    const why = outcome === "throttled"
+      ? "was rejected moments after a renewal"
+      : "was rejected, and the check that would renew it could not reach the gateway";
+    ctx?.ui?.notify?.(`The subscription credential ${why}; not retrying automatically. Send a message to try again.`, "warning");
+    return;
+  }
+  if (outcome === "rotated") {
+    ctx?.ui?.notify?.("The subscription credential was rejected and has been renewed; continuing.", "info");
+  }
+  if (origin === "main") {
+    orchestrator.queueContinuation("[PI-PI] The subscription credential was renewed after a rejected request. Continue the current request.");
+  }
+}
+
+export async function handleMainAuthFailure(orchestrator: Orchestrator, ctx: any, modelId?: string, provider?: string): Promise<void> {
+  const spec = modelId?.includes("/") ? modelId : provider && modelId ? `${provider}/${modelId}` : modelId ?? "";
+  if (!isSubscriptionRouted(spec, provider)) return;
+  try { ctx.abort?.(); } catch {}
+  await recoverOrDemote(orchestrator, ctx, spec, "main");
+}
+
+export async function handleSubagentAuthFailure(orchestrator: Orchestrator, ctx: any, modelId?: string): Promise<void> {
+  if (!modelId || !isSubscriptionRouted(modelId)) return;
+  await recoverOrDemote(orchestrator, ctx, modelId, "subagent");
+}
+
+/**
+ * Route off the subscription because its credential is unusable and could not
+ * be renewed. For the startup check, which has already attempted the rotation
+ * itself and must not send the turn-recovery continuation.
+ */
+export async function demoteUnusableSubscription(orchestrator: Orchestrator, ctx: any, modelId: string): Promise<void> {
+  if (!isSubscriptionRouted(modelId)) return;
+  await activate(orchestrator, ctx, modelId, "main", "auth", false);
 }
 
 export function armSwitchBackProbe(orchestrator: Orchestrator): void {
