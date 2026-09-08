@@ -578,6 +578,46 @@ describe("session-first core", () => {
     expect(split.compaction.details.sourceMessageCount).toBe(2);
   });
 
+  it("never hands a compaction back to the host LLM summarizer", async () => {
+    const pi = makePi();
+    registerSubagentCompaction(pi, normalizeConfigDurations(getDefaultConfig()));
+    const beforeCompact = pi.handlers.get("session_before_compact")?.[0] as any;
+
+    // Nothing to summarize: the host would otherwise LLM-summarize the split
+    // turn prefix, or write an LLM summary of an empty history.
+    const empty = await beforeCompact({
+      preparation: { messagesToSummarize: [], turnPrefixMessages: [], firstKeptEntryId: "kept", tokensBefore: 900_000 },
+      branchEntries: [{ id: "kept" }],
+    });
+    expect(empty.compaction.details.compactor).toBe("pi-vcc");
+    expect(typeof empty.compaction.summary).toBe("string");
+    expect(empty.compaction.firstKeptEntryId).toBe("kept");
+
+    // Messages that carry no extractable content compile to an empty summary,
+    // which is still ours rather than a fallback to the host.
+    const blank = await beforeCompact({
+      preparation: { messagesToSummarize: [{ role: "user", content: "" }], firstKeptEntryId: "kept", tokensBefore: 10 },
+      branchEntries: [{ id: "old" }, { id: "kept" }],
+    });
+    expect(blank.compaction.details.compactor).toBe("pi-vcc");
+    expect(blank.compaction.summary.length).toBeGreaterThan(0);
+
+    // A summarizer crash must not silently yield to the host either.
+    const crashed = await beforeCompact({
+      preparation: {
+        get messagesToSummarize(): never { throw new Error("boom"); },
+        firstKeptEntryId: "kept",
+        tokensBefore: 5,
+      },
+      branchEntries: [{ id: "old" }, { id: "kept" }],
+    });
+    expect(crashed.compaction.details.compactor).toBe("pi-vcc");
+    expect(crashed.compaction.firstKeptEntryId).toBe("kept");
+
+    // A preparation the host could not build is the only legitimate bail-out.
+    expect(await beforeCompact({ branchEntries: [] })).toBeUndefined();
+  });
+
   it("makes layered skills loadable in worker processes", async () => {
     const pi = makePi();
     registerLoadSkill(pi, "/tmp/project");

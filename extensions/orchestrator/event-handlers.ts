@@ -325,6 +325,10 @@ export function renderSkillReattachment(skills: Map<string, string>): string {
   ].join("\n");
 }
 
+// Stands in when a cut discards nothing that survives summarization, so the
+// dispatcher can still own the compaction instead of yielding to the host LLM.
+const EMPTY_COMPACTION_SUMMARY = "[Session Goal]\n- (nothing summarizable was discarded at this cut; use vcc_recall for earlier context)";
+
 type CompactionState = Pick<Orchestrator,
   "pi" | "config" | "lastCtx" | "lastEstimatedTokens" | "compactionArm" | "adaptiveCompaction" | "manualCompactionUseBuiltin" | "manualCompactionPending" | "resetAdaptiveCompaction" | "redeliverPendingContinuations"
 >;
@@ -367,21 +371,36 @@ function registerCompaction(orchestrator: CompactionState, sessionSkills: Map<st
     if (useBuiltin) return;
     const prep = event.preparation;
     if (!prep) return;
-    const history = Array.isArray(prep.messagesToSummarize) ? prep.messagesToSummarize : [];
-    // On a split turn the host also discards the prefix of the turn it cut
-    // through, chronologically after the history it hands over separately.
-    // Summarizing only the history would drop those messages entirely.
-    const turnPrefix = Array.isArray(prep.turnPrefixMessages) ? prep.turnPrefixMessages : [];
-    const discarded = [...history, ...turnPrefix];
-    if (discarded.length === 0) return;
-    const summary = vccCompile({
-      messages: discarded,
-      previousSummary: prep.previousSummary,
-      fileOps: prep.fileOps ? { readFiles: [...(prep.fileOps.read ?? [])], modifiedFiles: [...(prep.fileOps.written ?? []), ...(prep.fileOps.edited ?? [])] } : undefined,
-    });
-    const range = computeVccMessageRange(event.branchEntries ?? [], prep.firstKeptEntryId);
-    const fullSummary = summary + renderSkillReattachment(sessionSkills);
-    return { compaction: { summary: fullSummary, details: buildVccDetails(fullSummary, discarded.length, !!prep.previousSummary, prep.tokensBefore ?? 0, range), firstKeptEntryId: prep.firstKeptEntryId, tokensBefore: prep.tokensBefore ?? 0 } };
+    // Returning nothing (or throwing) hands the cut to the host's LLM
+    // summarizer, which is exactly what this dispatcher exists to replace, so
+    // every outcome below still produces a compaction. Nothing to summarize is
+    // not a reason to fall back either: the host needs a compaction entry to
+    // move the cut point, and would spend a model call producing one.
+    let discarded: any[] = [];
+    let summary = "";
+    let range: [string, string] | undefined;
+    let previousSummaryUsed = false;
+    let tokensBefore = 0;
+    try {
+      previousSummaryUsed = !!prep.previousSummary;
+      tokensBefore = prep.tokensBefore ?? 0;
+      const history = Array.isArray(prep.messagesToSummarize) ? prep.messagesToSummarize : [];
+      // On a split turn the host also discards the prefix of the turn it cut
+      // through, chronologically after the history it hands over separately.
+      // Summarizing only the history would drop those messages entirely.
+      const turnPrefix = Array.isArray(prep.turnPrefixMessages) ? prep.turnPrefixMessages : [];
+      discarded = [...history, ...turnPrefix];
+      summary = vccCompile({
+        messages: discarded,
+        previousSummary: prep.previousSummary,
+        fileOps: prep.fileOps ? { readFiles: [...(prep.fileOps.read ?? [])], modifiedFiles: [...(prep.fileOps.written ?? []), ...(prep.fileOps.edited ?? [])] } : undefined,
+      });
+      range = computeVccMessageRange(event.branchEntries ?? [], prep.firstKeptEntryId);
+    } catch (error: any) {
+      getLogger().error({ s: "compaction", err: error?.message }, "vcc summarization failed; emitting a placeholder summary");
+    }
+    const fullSummary = (summary || EMPTY_COMPACTION_SUMMARY) + renderSkillReattachment(sessionSkills);
+    return { compaction: { summary: fullSummary, details: buildVccDetails(fullSummary, discarded.length, previousSummaryUsed, tokensBefore, range), firstKeptEntryId: prep.firstKeptEntryId, tokensBefore } };
   });
   pi.on("session_compact", (_event, ctx) => {
     orchestrator.lastCtx = ctx;
