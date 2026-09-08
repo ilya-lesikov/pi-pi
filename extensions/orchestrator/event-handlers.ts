@@ -35,6 +35,7 @@ const CONTINUE_TRUNCATED = "[PI-PI] The previous response was truncated. Continu
 const CONTINUE_EMPTY = "[PI-PI] The previous turn ended without a result. Continue with the next action and complete the request.";
 const CONTINUE_UNFINISHED = "[PI-PI] Continue where you left off and finish the request. Do not re-explain what you already did.";
 const CONTINUE_STALLED = "[PI-PI] The previous turn stalled without completing. Continue where you left off and complete the request.";
+const CONTINUE_COMPACTED = "[PI-PI] Context was compacted mid-task, which cut the tool loop short. Continue exactly where you left off; do not restart the work or re-report what is already done.";
 
 export type ContinuationDecision = "none" | "objective" | "adjudicate";
 
@@ -414,7 +415,7 @@ function digestDiscarded(messages: any[]): string {
 }
 
 type CompactionState = Pick<Orchestrator,
-  "pi" | "config" | "lastCtx" | "lastEstimatedTokens" | "compactionArm" | "adaptiveCompaction" | "manualCompactionPending" | "startupModelCorrection" | "resetAdaptiveCompaction" | "redeliverPendingContinuations"
+  "pi" | "config" | "lastCtx" | "lastEstimatedTokens" | "compactionArm" | "adaptiveCompaction" | "manualCompactionPending" | "startupModelCorrection" | "resetAdaptiveCompaction" | "redeliverPendingContinuations" | "queueContinuation"
 >;
 
 // Switching providers resends the whole conversation with a cold prompt cache,
@@ -524,7 +525,7 @@ function registerCompaction(orchestrator: CompactionState, sessionSkills: Map<st
   });
 }
 
-async function maybeCompact(orchestrator: CompactionState, ctx: any): Promise<void> {
+async function maybeCompact(orchestrator: CompactionState, ctx: any, midRun = false): Promise<void> {
   const cfg = orchestrator.config?.compaction;
   if (!cfg?.enabled || typeof ctx?.getContextUsage !== "function" || typeof ctx?.compact !== "function") return;
   const usage = ctx.getContextUsage();
@@ -555,6 +556,11 @@ async function maybeCompact(orchestrator: CompactionState, ctx: any): Promise<vo
   if (forced) orchestrator.compactionArm.armed = false;
   adaptive.firedThreshold = effectiveThreshold;
   adaptive.inFlight = true;
+  // ctx.compact() aborts the run it is called from, so a compaction fired
+  // between two tool-calling turns leaves the request half-done. Queue the
+  // resume BEFORE starting it: the queue holds while a compaction is in
+  // flight, and session_compact redelivers it once the cut has landed.
+  if (midRun) orchestrator.queueContinuation(CONTINUE_COMPACTED, true);
   ctx.compact({
     onError: (err: any) => {
       // A failed compaction does not shrink the context, so the arm would
@@ -591,6 +597,7 @@ export function registerSubagentCompaction(
     startupModelCorrection: false,
     // A worker session has no continuation queue of its own.
     redeliverPendingContinuations() {},
+    queueContinuation() {},
     resetAdaptiveCompaction() {
       state.adaptiveCompaction = {
         nextThreshold: null,
@@ -794,12 +801,16 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       noteSubscriptionCredentialAccepted();
     }
     publishAcpState(orchestrator);
-    if (message?.stopReason !== "toolUse") {
-      await maybeCompact(orchestrator, ctx);
-      // Between requests only: switching providers mid-run would resend the
-      // whole conversation on a cold cache from inside a tool-call chain.
-      await orchestrator.restoreMainRouting(ctx);
+    // A mid-loop turn is never a continuation candidate, and the compaction
+    // fired here aborts the run — which the queued resume picks back up.
+    if (message?.stopReason === "toolUse") {
+      await maybeCompact(orchestrator, ctx, true);
+      return;
     }
+    await maybeCompact(orchestrator, ctx);
+    // Between requests only: switching providers mid-run would resend the
+    // whole conversation on a cold cache from inside a tool-call chain.
+    await orchestrator.restoreMainRouting(ctx);
     if (message?.stopReason === "error" && isRateLimitError(message?.errorMessage)) {
       await handleMainRateLimit(orchestrator, ctx, message?.model ?? ctx.model?.id, message?.provider ?? ctx.model?.provider);
       return;

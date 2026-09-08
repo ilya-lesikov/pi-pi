@@ -752,7 +752,7 @@ describe("session-first core", () => {
     expect(compact).not.toHaveBeenCalled();
   });
 
-  it("does not compact the main agent between a tool result and its next model step", async () => {
+  it("compacts the main agent mid tool loop and hands the aborted run back", async () => {
     const pi = makePi();
     const orchestrator = new Orchestrator(pi);
     orchestrator.config = normalizeConfigDurations(getDefaultConfig());
@@ -764,10 +764,21 @@ describe("session-first core", () => {
       model: { provider: "test", id: "main-model" },
       getContextUsage: () => ({ contextWindow: 100_000, tokens: 20_000 }),
       compact,
+      isIdle: () => true,
       ui: { notify: vi.fn() },
     };
     await emit(pi, "turn_end", { message: { stopReason: "toolUse", content: [{ type: "toolCall", name: "edit" }] } }, ctx);
-    expect(compact).not.toHaveBeenCalled();
+    expect(compact).toHaveBeenCalledTimes(1);
+    // The resume waits for the cut to land instead of racing the compaction.
+    expect(pi.sendMessage).not.toHaveBeenCalled();
+
+    await emit(pi, "session_compact", {}, ctx);
+    expect(pi.sendUserMessage).not.toHaveBeenCalled();
+    expect(pi.sendMessage).toHaveBeenCalledTimes(1);
+    const [message, options] = pi.sendMessage.mock.calls[0];
+    expect(message.display).toBe(false);
+    expect(message.content).toContain("Continue exactly where you left off");
+    expect(options).toEqual({ deliverAs: "followUp", triggerTurn: true });
     await emit(pi, "session_shutdown", {}, ctx);
   });
 
