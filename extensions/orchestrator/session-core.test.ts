@@ -730,6 +730,21 @@ describe("session-first core", () => {
     // Without a range, vcc_recall scope:'compaction:N' cannot resolve this cut.
     expect(crashedWithHistory.compaction.details.messageRange).toEqual(["old", "kept"]);
 
+    // A throw while ASSEMBLING the result (not while summarizing) must not
+    // yield either: the host treats an exception as no result and LLM-compacts.
+    const brokenTail = await beforeCompact({
+      preparation: {
+        // Throws for the summarizer AND for the verbatim-tail fallback that
+        // runs after the try block.
+        messagesToSummarize: [{ role: "user", get content(): never { throw new Error("boom"); } }],
+        firstKeptEntryId: "kept",
+        tokensBefore: 10,
+      },
+      branchEntries: [{ id: "old", type: "message", message: {} }, { id: "kept", type: "message", message: {} }],
+    });
+    expect(brokenTail?.compaction?.details?.compactor).toBe("pi-vcc");
+    expect(brokenTail?.compaction?.firstKeptEntryId).toBe("kept");
+
     // A preparation the host could not build is the only legitimate bail-out.
     expect(await beforeCompact({ branchEntries: [] })).toBeUndefined();
   });

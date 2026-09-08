@@ -8,6 +8,7 @@ import { registerCbmTools } from "./cbm.js";
 import { registerExaTools } from "./exa.js";
 import { registerAstSearchTool } from "./ast-search.js";
 import { registerBillingHook } from "./billing-spoof.js";
+import type { PiVccCompactionDetails } from "../../3p/pi-vcc/index.js";
 import { registerRecallTool, compile as vccCompile } from "../../3p/pi-vcc/index.js";
 import { BUILTIN_COMPACTION_MARKER, computeVccMessageRange, buildVccDetails } from "./compaction-dispatch.js";
 import { compactionThresholdTokens, shouldFireCompaction, shouldForceCompaction, applyBaselineMeasure } from "./compaction-trigger.js";
@@ -478,8 +479,19 @@ function registerCompaction(orchestrator: CompactionState, sessionSkills: Map<st
     } catch (error: any) {
       getLogger().error({ s: "compaction", err: error?.message }, "vcc summarization failed; quoting the discarded tail verbatim");
     }
-    const fullSummary = (summary || digestDiscarded(discarded) || EMPTY_COMPACTION_SUMMARY) + renderSkillReattachment(sessionSkills);
-    return { compaction: { summary: fullSummary, details: buildVccDetails(fullSummary, discarded.length, previousSummaryUsed, tokensBefore, range), firstKeptEntryId: prep.firstKeptEntryId, tokensBefore } };
+    // Assembling the result must not throw either: the host reads an exception
+    // as no result and falls back to its own LLM summarizer.
+    let fullSummary = EMPTY_COMPACTION_SUMMARY;
+    let details: PiVccCompactionDetails | undefined;
+    try {
+      fullSummary = (summary || digestDiscarded(discarded) || EMPTY_COMPACTION_SUMMARY) + renderSkillReattachment(sessionSkills);
+      details = buildVccDetails(fullSummary, discarded.length, previousSummaryUsed, tokensBefore, range);
+    } catch (error: any) {
+      getLogger().error({ s: "compaction", err: error?.message }, "vcc result assembly failed; emitting a placeholder summary");
+      fullSummary = EMPTY_COMPACTION_SUMMARY;
+      details = buildVccDetails(fullSummary, 0, previousSummaryUsed, tokensBefore, range);
+    }
+    return { compaction: { summary: fullSummary, details, firstKeptEntryId: prep.firstKeptEntryId, tokensBefore } };
   });
   pi.on("session_compact", (_event, ctx) => {
     orchestrator.lastCtx = ctx;
