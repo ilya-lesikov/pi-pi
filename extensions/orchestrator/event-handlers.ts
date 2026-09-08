@@ -426,7 +426,7 @@ function digestDiscarded(messages: any[]): string {
 }
 
 type CompactionState = Pick<Orchestrator,
-  "pi" | "config" | "lastCtx" | "lastEstimatedTokens" | "compactionArm" | "adaptiveCompaction" | "manualCompactionPending" | "startupModelCorrection" | "resetAdaptiveCompaction" | "redeliverPendingContinuations" | "queueContinuation"
+  "pi" | "config" | "lastCtx" | "lastEstimatedTokens" | "compactionArm" | "adaptiveCompaction" | "manualCompactionPending" | "modelSwitchInFlight" | "switchingBetweenRequests" | "startupModelCorrection" | "resetAdaptiveCompaction" | "redeliverPendingContinuations" | "queueContinuation"
 >;
 
 // Switching providers resends the whole conversation with a cold prompt cache,
@@ -439,23 +439,109 @@ const MODEL_SWITCH_COMPACTION_MIN_TOKENS = 40_000;
 // trying: the host's own overflow recovery is the remaining backstop.
 const MAX_COMPACTION_FAILURES = 2;
 
-function compactForModelSwitch(orchestrator: CompactionState, ctx: any): void {
-  if (!orchestrator.config?.compaction?.enabled || typeof ctx?.compact !== "function") return;
+/** Whether a compaction can be started right now, and is worth its cost. */
+function switchWorthCompacting(orchestrator: CompactionState, ctx: any): number | null {
+  if (!orchestrator.config?.compaction?.enabled || typeof ctx?.compact !== "function") return null;
   // The host runs one compaction at a time; starting a second one over a manual
   // or adaptive pass would have both writing compaction entries for one cut.
-  if (orchestrator.adaptiveCompaction.inFlight || orchestrator.manualCompactionPending) return;
+  if (orchestrator.adaptiveCompaction.inFlight || orchestrator.manualCompactionPending) return null;
   const usage = typeof ctx.getContextUsage === "function" ? ctx.getContextUsage() : null;
   const tokens = usage?.tokens ?? orchestrator.lastEstimatedTokens;
-  if (typeof tokens !== "number" || tokens < MODEL_SWITCH_COMPACTION_MIN_TOKENS) return;
+  if (typeof tokens !== "number" || tokens < MODEL_SWITCH_COMPACTION_MIN_TOKENS) return null;
+  return tokens;
+}
+
+function compactForModelSwitch(orchestrator: CompactionState, ctx: any): void {
+  // A parked switch compacts on its own terms, before it switches, and this
+  // hook fires from inside that switch.
+  if (orchestrator.modelSwitchInFlight) return;
+  const tokens = switchWorthCompacting(orchestrator, ctx);
+  if (tokens == null) return;
   orchestrator.adaptiveCompaction.inFlight = true;
   getLogger().debug({ s: "compaction", tokens }, "compacting before a model switch");
-  ctx.compact({
-    onError: (err: any) => {
-      orchestrator.adaptiveCompaction.inFlight = false;
-      orchestrator.compactionArm.armed = true;
-      getLogger().error({ s: "compaction", err: err?.message }, "model-switch compaction failed");
-    },
-  });
+  // A switch inside a live request aborts it, exactly as a mid-loop compaction
+  // does, so the resume has to be queued before the cut starts.
+  const live = !orchestrator.switchingBetweenRequests && typeof ctx.isIdle === "function" && !ctx.isIdle();
+  if (live) orchestrator.queueContinuation(CONTINUE_COMPACTED, true);
+  try {
+    ctx.compact({
+      onError: (err: any) => {
+        orchestrator.adaptiveCompaction.inFlight = false;
+        orchestrator.compactionArm.armed = true;
+        getLogger().error({ s: "compaction", err: err?.message }, "model-switch compaction failed");
+      },
+    });
+  } catch (error: any) {
+    // Neither callback will fire, so the in-flight flag would silence
+    // compaction for the rest of the session.
+    orchestrator.adaptiveCompaction.inFlight = false;
+    orchestrator.compactionArm.armed = true;
+    getLogger().error({ s: "compaction", err: error?.message }, "the host refused a model-switch compaction");
+    if (live) orchestrator.redeliverPendingContinuations();
+  }
+}
+
+/**
+ * Carry out a switch parked by an earlier mid-request decision, now that the
+ * turn has ended: compact first (the switch resends everything on a cold cache
+ * at the new provider), and only switch once the cut has landed. Returns true
+ * when a compaction took over, meaning the switch and the resume both happen
+ * from its callbacks and this turn has nothing left to do.
+ */
+async function drainPendingModelSwitch(orchestrator: Orchestrator, ctx: any, midRun: boolean): Promise<boolean> {
+  const action = orchestrator.pendingModelSwitch;
+  if (!action) return false;
+  // A compaction already in flight owns this cut; leave the switch parked for
+  // its own backstop rather than racing it.
+  if (orchestrator.modelSwitchInFlight || orchestrator.adaptiveCompaction.inFlight || orchestrator.manualCompactionPending) {
+    orchestrator.pollPendingModelSwitch();
+    return false;
+  }
+  orchestrator.pendingModelSwitch = null;
+  const tokens = switchWorthCompacting(orchestrator, ctx);
+  if (tokens == null) {
+    // Nothing worth folding away, so nothing compacts and nothing is aborted:
+    // the run keeps the model it started on for its remaining turns.
+    await action();
+    return false;
+  }
+  orchestrator.modelSwitchInFlight = true;
+  orchestrator.adaptiveCompaction.inFlight = true;
+  getLogger().debug({ s: "compaction", tokens, midRun }, "compacting before a parked model switch");
+  // The compaction cannot be awaited from here: the host aborts the live run
+  // and waits for it to settle, and this handler IS that run. So the switch and
+  // the resume both hang off its callbacks. The resume is queued only after the
+  // switch, and continuations hold while modelSwitchInFlight is set, so the
+  // request picks back up on the model this sequence landed on.
+  const finish = async () => {
+    orchestrator.adaptiveCompaction.inFlight = false;
+    try {
+      await action();
+    } catch (error: any) {
+      getLogger().error({ s: "model", err: error?.message }, "a parked model switch failed");
+    }
+    orchestrator.modelSwitchInFlight = false;
+    if (midRun) orchestrator.queueContinuation(CONTINUE_COMPACTED, true);
+    orchestrator.redeliverPendingContinuations();
+  };
+  try {
+    ctx.compact({
+      onComplete: () => { void finish(); },
+      onError: (err: any) => {
+        orchestrator.compactionArm.armed = true;
+        getLogger().error({ s: "compaction", err: err?.message }, "the compaction before a parked model switch failed");
+        void finish();
+      },
+    });
+  } catch (error: any) {
+    // Neither callback will fire, and both flags stay set without this: one
+    // silences compaction for the session, the other strands continuations.
+    getLogger().error({ s: "compaction", err: error?.message }, "the host refused a compaction before a parked model switch");
+    orchestrator.compactionArm.armed = true;
+    await finish();
+    return false;
+  }
+  return true;
 }
 
 function registerCompaction(orchestrator: CompactionState, sessionSkills: Map<string, string> = loadedSkills): void {
@@ -544,6 +630,9 @@ function registerCompaction(orchestrator: CompactionState, sessionSkills: Map<st
 async function maybeCompact(orchestrator: CompactionState, ctx: any, midRun = false): Promise<void> {
   const cfg = orchestrator.config?.compaction;
   if (!cfg?.enabled || typeof ctx?.getContextUsage !== "function" || typeof ctx?.compact !== "function") return;
+  // The host runs one compaction at a time, so a second one started over a
+  // pass already in flight would have both writing entries for the same cut.
+  if (orchestrator.adaptiveCompaction.inFlight || orchestrator.manualCompactionPending) return;
   const usage = ctx.getContextUsage();
   if (!usage || typeof usage.contextWindow !== "number" || usage.contextWindow <= 0) return;
   const modelKey = ctx.model?.provider && ctx.model?.id ? `${ctx.model.provider}/${ctx.model.id}` : ctx.model?.id ?? null;
@@ -615,6 +704,8 @@ export function registerSubagentCompaction(
       failures: 0,
     },
     manualCompactionPending: false,
+    modelSwitchInFlight: false,
+    switchingBetweenRequests: false,
     startupModelCorrection: false,
     // A worker session has no continuation queue of its own: the pi-subagents
     // runner owns the resume, waiting the cut out and re-prompting the run the
@@ -679,6 +770,10 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     orchestrator.interactivePromptOpen = false;
     orchestrator.manualCompactionPending = false;
     orchestrator.manualCompactionRequestId++;
+    orchestrator.pendingModelSwitch = null;
+    orchestrator.modelSwitchInFlight = false;
+    if (orchestrator.modelSwitchPollTimer) clearTimeout(orchestrator.modelSwitchPollTimer);
+    orchestrator.modelSwitchPollTimer = null;
     loadedSkills.clear();
     orchestrator.resetContinuation();
     orchestrator.lastContextMessages = [];
@@ -826,6 +921,14 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       noteSubscriptionCredentialAccepted();
     }
     publishAcpState(orchestrator);
+    // A switch parked mid-request is carried out here, between two LLM calls:
+    // compact, wait for the cut, switch, then resume. Only a turn that ran to
+    // completion is drained: a truncated, empty or failed one has recovery of
+    // its own below, which the drain's resume would not stand in for, and an
+    // error may route the session itself — switching first would undo that.
+    const drainable = message?.stopReason === "toolUse" || message?.stopReason === "stop";
+    // The threshold compaction below would otherwise compact the same cut.
+    if (drainable && await drainPendingModelSwitch(orchestrator, ctx, message?.stopReason === "toolUse")) return;
     // A mid-loop turn is never a continuation candidate, and the compaction
     // fired here aborts the run — which the queued resume picks back up.
     if (message?.stopReason === "toolUse") {
@@ -895,16 +998,20 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       if (orchestrator.subSwitchBackTimer) clearTimeout(orchestrator.subSwitchBackTimer);
       if (orchestrator.idlePollTimer) clearTimeout(orchestrator.idlePollTimer);
       if (orchestrator.tokenRefreshTimer) clearInterval(orchestrator.tokenRefreshTimer);
+      if (orchestrator.modelSwitchPollTimer) clearTimeout(orchestrator.modelSwitchPollTimer);
       orchestrator.mainTurnTimer = null;
       orchestrator.staleAgentTimer = null;
       orchestrator.subSwitchBackTimer = null;
       orchestrator.idlePollTimer = null;
       orchestrator.tokenRefreshTimer = null;
+      orchestrator.modelSwitchPollTimer = null;
       setSubscriptionFallbackActive(false);
       orchestrator.subFallbackActive = false;
       orchestrator.subFallbackModelId = null;
       orchestrator.subFallbackMainPriorSpec = null;
       orchestrator.routedMainSpec = null;
+      orchestrator.pendingModelSwitch = null;
+      orchestrator.modelSwitchInFlight = false;
       orchestrator.resetContinuation();
       delete (globalThis as any)[Symbol.for("pi-pi:root-session-source")];
     }

@@ -828,6 +828,203 @@ describe("session-first core", () => {
     await emit(pi, "session_shutdown", {}, ctx);
   });
 
+  // The observed failure: the switch-back probe fired mid-request, its switch
+  // compacted, the host aborted the run with "The operation was aborted", and
+  // nothing resumed. The order has to be stop → compact → wait → switch → continue.
+  it("compacts, switches, then resumes a request a parked model switch cut short", async () => {
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi);
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    registerEventHandlers(orchestrator);
+    let compactOptions: any;
+    const compact = vi.fn((options: any) => { compactOptions = options; });
+    const ctx = {
+      model: { provider: "test", id: "main-model" },
+      getContextUsage: () => ({ contextWindow: 200_000, tokens: 120_000 }),
+      compact,
+      isIdle: () => true,
+      ui: { notify: vi.fn() },
+    };
+    orchestrator.lastCtx = ctx as any;
+    const switched = vi.fn(async () => {});
+    orchestrator.pendingModelSwitch = switched;
+
+    await emit(pi, "turn_end", { message: { stopReason: "toolUse", content: [{ type: "toolCall", name: "edit" }] } }, ctx);
+    // Compaction first, and nothing switches or resumes until the cut lands.
+    expect(compact).toHaveBeenCalledTimes(1);
+    expect(switched).not.toHaveBeenCalled();
+    expect(pi.sendMessage).not.toHaveBeenCalled();
+
+    // The resume must not go out before the switch: it would run the resumed
+    // request on the model the switch was meant to leave behind.
+    let switchedBeforeResume = false;
+    pi.sendMessage = vi.fn(() => { switchedBeforeResume = switched.mock.calls.length > 0; });
+
+    compactOptions.onComplete({});
+    await vi.waitFor(() => expect(switched).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(pi.sendMessage).toHaveBeenCalledTimes(1));
+    expect(switchedBeforeResume).toBe(true);
+    expect(orchestrator.modelSwitchInFlight).toBe(false);
+    expect(orchestrator.adaptiveCompaction.inFlight).toBe(false);
+    expect(pi.sendMessage.mock.calls[0][0].content).toContain("Continue exactly where you left off");
+    await emit(pi, "session_shutdown", {}, ctx);
+  });
+
+  // Below the resend-cost threshold nothing compacts, so nothing is aborted and
+  // the request needs no resume.
+  it("switches a small context in place without compacting or resuming", async () => {
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi);
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    registerEventHandlers(orchestrator);
+    const compact = vi.fn();
+    const ctx = {
+      model: { provider: "test", id: "main-model" },
+      getContextUsage: () => ({ contextWindow: 200_000, tokens: 5_000 }),
+      compact,
+      isIdle: () => true,
+      ui: { notify: vi.fn() },
+    };
+    const switched = vi.fn(async () => {});
+    orchestrator.pendingModelSwitch = switched;
+
+    await emit(pi, "turn_end", { message: { stopReason: "toolUse", content: [{ type: "toolCall", name: "edit" }] } }, ctx);
+    expect(switched).toHaveBeenCalledTimes(1);
+    expect(compact).not.toHaveBeenCalled();
+    expect(pi.sendMessage).not.toHaveBeenCalled();
+    await emit(pi, "session_shutdown", {}, ctx);
+  });
+
+  // A compaction the switch does not own is already writing this cut; racing it
+  // would have two passes on one cut and could change the model under it.
+  it("leaves a switch parked while another compaction owns the cut", async () => {
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi);
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    registerEventHandlers(orchestrator);
+    const compact = vi.fn();
+    const ctx = {
+      model: { provider: "test", id: "main-model" },
+      getContextUsage: () => ({ contextWindow: 200_000, tokens: 120_000 }),
+      compact,
+      isIdle: () => true,
+      ui: { notify: vi.fn() },
+    };
+    orchestrator.lastCtx = ctx as any;
+    const switched = vi.fn(async () => {});
+    orchestrator.pendingModelSwitch = switched;
+    orchestrator.manualCompactionPending = true;
+
+    await emit(pi, "turn_end", { message: { stopReason: "toolUse", content: [{ type: "toolCall", name: "edit" }] } }, ctx);
+    expect(switched).not.toHaveBeenCalled();
+    expect(compact).not.toHaveBeenCalled();
+    expect(orchestrator.pendingModelSwitch).toBe(switched);
+
+    await emit(pi, "session_shutdown", {}, ctx);
+  });
+
+  // Neither compaction callback fires when the host refuses the call outright,
+  // so the flags have to be released here or compaction and continuations both
+  // stay blocked for the rest of the session.
+  it("still switches and resumes when the host refuses the compaction", async () => {
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi);
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    registerEventHandlers(orchestrator);
+    const ctx = {
+      model: { provider: "test", id: "main-model" },
+      getContextUsage: () => ({ contextWindow: 200_000, tokens: 120_000 }),
+      compact: vi.fn(() => { throw new Error("stale ctx"); }),
+      isIdle: () => true,
+      ui: { notify: vi.fn() },
+    };
+    orchestrator.lastCtx = ctx as any;
+    const switched = vi.fn(async () => {});
+    orchestrator.pendingModelSwitch = switched;
+
+    await emit(pi, "turn_end", { message: { stopReason: "toolUse", content: [{ type: "toolCall", name: "edit" }] } }, ctx);
+    expect(switched).toHaveBeenCalledTimes(1);
+    expect(orchestrator.modelSwitchInFlight).toBe(false);
+    expect(orchestrator.adaptiveCompaction.inFlight).toBe(false);
+    expect(pi.sendMessage).toHaveBeenCalledTimes(1);
+    await emit(pi, "session_shutdown", {}, ctx);
+  });
+
+  // A truncated or empty turn has recovery of its own, which the drain's resume
+  // does not stand in for; an error turn may reroute the session entirely.
+  it("keeps a switch parked on a turn that did not run to completion", async () => {
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi);
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    registerEventHandlers(orchestrator);
+    const compact = vi.fn();
+    const ctx = {
+      model: { provider: "test", id: "main-model" },
+      getContextUsage: () => ({ contextWindow: 200_000, tokens: 120_000 }),
+      compact,
+      isIdle: () => true,
+      ui: { notify: vi.fn() },
+    };
+    orchestrator.lastCtx = ctx as any;
+    const switched = vi.fn(async () => {});
+
+    for (const stopReason of ["length", "error", "aborted"]) {
+      orchestrator.pendingModelSwitch = switched;
+      await emit(pi, "turn_end", { message: { stopReason, content: [], errorMessage: "boom" } }, ctx);
+      expect(switched).not.toHaveBeenCalled();
+      expect(orchestrator.pendingModelSwitch).toBe(switched);
+    }
+
+    await emit(pi, "session_shutdown", {}, ctx);
+  });
+
+  // A user's own /model pick mid-request compacts too, which aborts the run the
+  // same way, so it owes the request the same resume.
+  it("resumes a live request a model-switch compaction cut short", async () => {
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi);
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    registerEventHandlers(orchestrator);
+    const ctx = (idle: boolean) => ({
+      compact: vi.fn(),
+      getContextUsage: () => ({ tokens: 120_000, contextWindow: 200_000 }),
+      isIdle: () => idle,
+    });
+    const select = {
+      source: "set",
+      previousModel: { provider: "pp-flant-anthropic-sub", id: "a" },
+      model: { provider: "github-copilot", id: "b" },
+    };
+
+    const live = ctx(false);
+    orchestrator.lastCtx = live as any;
+    await emit(pi, "model_select", select, live);
+    // Queued, not sent: the resume waits for the cut to land.
+    expect(orchestrator.pendingContinuations.size).toBe(1);
+    expect(pi.sendMessage).not.toHaveBeenCalled();
+
+    orchestrator.adaptiveCompaction.inFlight = false;
+    await emit(pi, "session_compact", {}, { ...live, isIdle: () => true });
+    expect(pi.sendMessage).toHaveBeenCalledTimes(1);
+    expect(pi.sendMessage.mock.calls[0][0].content).toContain("Continue exactly where you left off");
+
+    // Between requests there is no run to cut short and nothing to resume.
+    pi.sendMessage.mockClear();
+    await emit(pi, "model_select", select, ctx(true));
+    expect(orchestrator.pendingContinuations.size).toBe(0);
+    expect(pi.sendMessage).not.toHaveBeenCalled();
+
+    // The host settles a run only after its turn_end handlers return, so a
+    // switch made from there still reads as live and would be owed a resume it
+    // does not need.
+    orchestrator.adaptiveCompaction.inFlight = false;
+    orchestrator.switchingBetweenRequests = true;
+    await emit(pi, "model_select", select, ctx(false));
+    orchestrator.switchingBetweenRequests = false;
+    expect(orchestrator.pendingContinuations.size).toBe(0);
+    expect(pi.sendMessage).not.toHaveBeenCalled();
+  });
+
   it("stops compacting proactively after consecutive failures", async () => {
     const pi = makePi();
     const orchestrator = new Orchestrator(pi);
