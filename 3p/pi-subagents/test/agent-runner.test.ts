@@ -1580,7 +1580,7 @@ describe("agent-runner validateCompletion", () => {
 // Without the resume the runner takes the narration streamed before the cut as
 // the worker's answer, which reads as a successful but truncated run.
 describe("agent-runner compaction resume", () => {
-  function createCutSession(finalText: string) {
+  function createCutSession(finalText: string, options: { endCut?: boolean; onCut?: () => void } = {}) {
     const listeners: Array<(event: any) => void> = [];
     const emit = (event: any) => { for (const listener of [...listeners]) listener(event); };
     const session: any = {
@@ -1598,6 +1598,8 @@ describe("agent-runner compaction resume", () => {
         // aborted, so its end lands after prompt() has already resolved.
         session.messages.push({ role: "assistant", content: [{ type: "toolCall", name: "read" }], stopReason: "toolUse" });
         emit({ type: "compaction_start", reason: "manual" });
+        options.onCut?.();
+        if (options.endCut === false) return;
         setTimeout(() => {
           session.messages = [{ role: "custom", content: "[summary]" }];
           emit({ type: "compaction_end", reason: "manual", aborted: false, result: { tokensBefore: 200_000 } });
@@ -1632,6 +1634,20 @@ describe("agent-runner compaction resume", () => {
 
     await runAgent(ctx, "Explore", "go", { pi, signal: controller.signal });
 
+    expect(session.prompt).toHaveBeenCalledTimes(1);
+  });
+
+  // A stop asked for mid-compaction must land now. Waiting the cut out first
+  // would hold the worker for the whole compaction deadline.
+  it("gives up on a compaction that outlives the stop that interrupted it", async () => {
+    const controller = new AbortController();
+    const session = createCutSession("FINAL ANSWER", { endCut: false, onCut: () => controller.abort() });
+    createAgentSession.mockResolvedValue({ session });
+
+    const started = Date.now();
+    await runAgent(ctx, "Explore", "go", { pi, signal: controller.signal });
+
+    expect(Date.now() - started).toBeLessThan(2_000);
     expect(session.prompt).toHaveBeenCalledTimes(1);
   });
 });

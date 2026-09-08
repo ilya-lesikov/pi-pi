@@ -323,41 +323,37 @@ const EMPTY_TURN_NUDGE = "Your last turn produced no output. Provide your final 
 const COMPACTION_RESUME_NUDGE = "Your context was compacted mid-task, which cut your tool loop short. Continue exactly where you left off; do not restart the work or re-report what is already done.";
 const MAX_COMPACTION_RESUMES = 10;
 const COMPACTION_WAIT_MS = 120_000;
+const COMPACTION_POLL_MS = 100;
 
 /**
  * LOCAL PATCH (pi-pi): track extension-triggered compactions across one
  * `session.prompt()`. `prompt()` resolves as soon as the aborted loop settles,
  * which is before the compaction it raced has finished, so the caller has to be
  * able to wait for the cut. A compaction that FAILS still aborted the run, so
- * the resume hangs on the compaction having started, not on its result.
+ * the resume hangs on the compaction having started, not on its result — but a
+ * compaction still RUNNING would replace the message array out from under
+ * anything prompted now, so it is not a cut to resume from either. Polled, not
+ * awaited outright: a stop the user asked for has to land now, not after the
+ * compaction it interrupted.
  */
-function watchCompactionCuts(session: AgentSession): { cutRun: () => Promise<boolean>; unsubscribe: () => void } {
+function watchCompactionCuts(session: AgentSession): { cutRun: (isStopped: () => boolean) => Promise<boolean>; unsubscribe: () => void } {
   let started = false;
   let running = false;
-  let waiters: Array<() => void> = [];
   const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
     if (event.type === "compaction_start" && event.reason === "manual") {
       started = true;
       running = true;
       return;
     }
-    if (event.type !== "compaction_end" || event.reason !== "manual") return;
-    running = false;
-    const pending = waiters;
-    waiters = [];
-    for (const resolve of pending) resolve();
+    if (event.type === "compaction_end" && event.reason === "manual") running = false;
   });
   return {
-    cutRun: async () => {
-      if (running) {
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        await Promise.race([
-          new Promise<void>((resolve) => waiters.push(resolve)),
-          new Promise<void>((resolve) => { timer = setTimeout(resolve, COMPACTION_WAIT_MS); }),
-        ]);
-        if (timer) clearTimeout(timer);
+    cutRun: async (isStopped: () => boolean) => {
+      const deadline = Date.now() + COMPACTION_WAIT_MS;
+      while (running && !isStopped() && Date.now() < deadline) {
+        await new Promise<void>((resolve) => setTimeout(resolve, COMPACTION_POLL_MS));
       }
-      const cut = started;
+      const cut = started && !running;
       started = false;
       return cut;
     },
@@ -424,7 +420,7 @@ async function promptWithEmptyRetry(
         // streamed text and the index captured before it describe a run that no
         // longer exists.
         for (let resume = 0; resume < MAX_COMPACTION_RESUMES; resume++) {
-          if (!await compactions.cutRun() || isStopped()) break;
+          if (isStopped() || !await compactions.cutRun(isStopped)) break;
           collector.unsubscribe();
           collector = collectResponseText(session);
           historyBefore = session.messages.length;
