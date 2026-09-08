@@ -61,7 +61,7 @@ describe("continuation adjudication", () => {
     expect(parseCheckInAdjudication("")).toBe(false);
 
     const pi = makePi();
-    const complete = vi.fn(async () => ({ content: [{ type: "text", text: "OPTIONAL" }] }));
+    const complete = vi.fn(async (_model: any, _context: any) => ({ content: [{ type: "text", text: "OPTIONAL" }] }));
     const ctx = { model: { provider: "p", id: "m" }, modelRegistry: { complete }, getSystemPrompt: () => "SYSTEM" };
     await expect(adjudicateCheckIn(pi, ctx, [], { role: "assistant", content: [{ type: "text", text: "Reorder it?" }] })).resolves.toBe(true);
     expect(complete.mock.calls[0][1].messages.at(-1).content[0].text).toContain("BLOCKING or OPTIONAL");

@@ -670,7 +670,7 @@ describe("session-first core", () => {
     const orchestrator = new Orchestrator(pi);
     orchestrator.config = normalizeConfigDurations(getDefaultConfig());
     registerEventHandlers(orchestrator);
-    const complete = vi.fn(async () => ({ content: [{ type: "text", text: "OPTIONAL" }] }));
+    const complete = vi.fn(async (_model: any, _context: any) => ({ content: [{ type: "text", text: "OPTIONAL" }] }));
     const ctx = {
       model: { provider: "test", id: "model" },
       modelRegistry: { complete },
