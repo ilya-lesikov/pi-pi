@@ -512,6 +512,44 @@ describe("updateFlantInfra", () => {
     expect(seen.some((u) => u.includes("openrouter.ai"))).toBe(true);
   });
 
+  // A metadata fetch that never reached OpenRouter proves nothing about which
+  // models it publishes, so it must not silence the retry for the whole TTL.
+  it("refetches after a metadata fetch failed over an older cache", async () => {
+    const dir = makeTempDir();
+    const cacheDir = join(dir, "extensions", "pp", "cache");
+    mkdirSync(cacheDir, { recursive: true });
+    const cachePath = join(cacheDir, "flant-models.json");
+    writeFileSync(
+      cachePath,
+      JSON.stringify({
+        lastUpdated: null,
+        cachedFlantModels: ["gpt-5"],
+        cachedOpenRouterData: { "gpt-5": { name: "GPT 5", context_length: 400000, max_completion_tokens: 32000, pricing: { prompt: 0, completion: 0, cacheRead: 0, cacheWrite: 0 }, modality: "text" } },
+      }),
+      "utf-8",
+    );
+    process.env.FLANT_API_KEY = "flant-k";
+    const mod = await loadModule(dir);
+    let openRouterCalls = 0;
+    stubFetch((url: string) => {
+      if (url.includes("llm-api.flant.ru/v1/models")) {
+        return { ok: true, status: 200, json: async () => ({ data: [{ id: "gpt-5" }, { id: "gpt-6" }] }) };
+      }
+      if (url.includes("openrouter.ai")) {
+        openRouterCalls += 1;
+        throw new Error("openrouter down");
+      }
+      throw new Error(`unexpected ${url}`);
+    });
+
+    expect((await mod.updateFlantInfra(makePi())).ok).toBe(true);
+    const written = JSON.parse(readFileSync(cachePath, "utf-8"));
+    expect(written.unmappedModels ?? null).toBeNull();
+
+    expect((await mod.updateFlantInfra(makePi())).ok).toBe(true);
+    expect(openRouterCalls).toBe(2);
+  });
+
   it("falls back to cached models when discovery throws", async () => {
     const dir = makeTempDir();
     const cacheDir = join(dir, "extensions", "pp", "cache");

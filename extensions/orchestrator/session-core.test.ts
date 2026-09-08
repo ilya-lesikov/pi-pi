@@ -561,6 +561,41 @@ describe("session-first core", () => {
     await emit(pi, "session_shutdown", {}, ctx);
   });
 
+  // A resumed turn that stops in prose again is checked again, so the cap is the
+  // only thing standing between a wrong verdict and an endless loop.
+  it("stops resuming after repeated unfinished verdicts", async () => {
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi);
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    registerEventHandlers(orchestrator);
+    const notify = vi.fn();
+    const ctx = {
+      model: { provider: "test", id: "model" },
+      modelRegistry: { complete: vi.fn(async () => ({ content: [{ type: "text", text: "YES" }] })) },
+      isIdle: () => true,
+      getContextUsage: () => null,
+      getSystemPrompt: () => "system",
+      ui: { notify },
+    };
+    const proseStop = async () => {
+      await emit(pi, "turn_start", {}, ctx);
+      orchestrator.requestHadTools = true;
+      orchestrator.requestToolCallCount = 6;
+      await emit(pi, "turn_end", { message: { stopReason: "stop", content: [{ type: "text", text: "Made progress." }] } }, ctx);
+    };
+
+    for (let i = 0; i < 4; i += 1) await proseStop();
+
+    expect(pi.sendMessage).toHaveBeenCalledTimes(3);
+    expect(orchestrator.continuationHalted).toBe(true);
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("Automatic continuation paused"), "warning");
+
+    // A genuine user message lifts the pause.
+    await emit(pi, "before_agent_start", { prompt: "do something else" }, { ...ctx, cwd: "/tmp/project" });
+    expect(orchestrator.continuationHalted).toBe(false);
+    await emit(pi, "session_shutdown", {}, ctx);
+  });
+
   it("recovers a stalled turn once and suppresses repeated watchdog ticks", async () => {
     vi.useFakeTimers();
     const pi = makePi();

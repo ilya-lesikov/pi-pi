@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { convertToLlm } from "@earendil-works/pi-coding-agent";
+import { completeSimple } from "@earendil-works/pi-ai";
 import { getLogger } from "./log.js";
 
 // Asked out of band, so the answer never enters the session. Kept to one word
@@ -53,16 +54,26 @@ export async function adjudicateContinuation(pi: ExtensionAPI, ctx: any, context
   const log = getLogger();
   const registry = ctx?.modelRegistry;
   const model = ctx?.model;
-  if (!model || typeof registry?.complete !== "function") {
+  if (!model || !registry) {
     log.debug({ s: "continuation" }, "no completion surface for the continuation check");
     return false;
   }
   try {
     const context = buildAdjudicationContext(pi, ctx, contextMessages, finalMessage);
-    const result = await registry.complete(model, context, {
-      maxTokens: 16,
-      signal: AbortSignal.timeout(ADJUDICATION_TIMEOUT_MS),
-    });
+    const options = { maxTokens: 16, signal: AbortSignal.timeout(ADJUDICATION_TIMEOUT_MS) };
+    // The host's own one-shot completion resolves auth and headers itself; the
+    // provider call below is the path for hosts whose registry predates it.
+    let result: any;
+    if (typeof registry.complete === "function") {
+      result = await registry.complete(model, context, options);
+    } else if (typeof registry.getApiKeyAndHeaders === "function" && typeof completeSimple === "function") {
+      const auth = await registry.getApiKeyAndHeaders(model);
+      if (!auth?.ok) return false;
+      result = await completeSimple(model, context, { ...options, apiKey: auth.apiKey, headers: auth.headers });
+    } else {
+      log.debug({ s: "continuation" }, "no completion surface for the continuation check");
+      return false;
+    }
     const answer = responseText(result);
     log.debug({ s: "continuation", answer }, "continuation check answered");
     return parseAdjudication(answer);

@@ -1226,14 +1226,19 @@ export async function updateFlantInfra(
     } else {
       try {
         models = await discoverFlantModels(apiKey);
+        let metadataFetched = true;
         try {
           metadata = await fetchOpenRouterMetadata(models);
         } catch {
+          metadataFetched = false;
           metadata = settings.cachedOpenRouterData ?? {};
         }
         settings.cachedFlantModels = models;
         settings.cachedOpenRouterData = metadata;
-        settings.unmappedModels = collectUnmappedModels(models, metadata);
+        // Only a fetch that actually reached OpenRouter can establish that a
+        // model has no entry there; recording it after a failed one would
+        // suppress the retry that fills in the models still missing metadata.
+        if (metadataFetched) settings.unmappedModels = collectUnmappedModels(models, metadata);
         // Serving empty metadata pins every model to the fallback context window
         // and zero cost, so it must never look cache-valid: clear the timestamp
         // outright rather than merely declining to refresh it — a forced update

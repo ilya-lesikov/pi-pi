@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { adjudicateContinuation, buildAdjudicationContext, parseAdjudication } from "./continuation-adjudicator.js";
 
+const completeSimpleMock = vi.fn();
+vi.mock("@earendil-works/pi-ai", () => ({
+  completeSimple: (...args: unknown[]) => completeSimpleMock(...args),
+}));
+
 function makePi(tools: Array<{ name: string; description: string; parameters: unknown }> = []): any {
   return {
     getAllTools: () => tools,
@@ -66,5 +71,24 @@ describe("continuation adjudication", () => {
       modelRegistry: { complete: vi.fn(async () => ({ content: [{ type: "toolCall", name: "read", arguments: {} }] })) },
     };
     await expect(adjudicateContinuation(pi, toolCall, [], null)).resolves.toBe(false);
+  });
+
+  // Older hosts expose no one-shot completion on the registry, and silently
+  // never continuing would be indistinguishable from a model that always says no.
+  it("calls the provider directly when the host has no completion helper", async () => {
+    const pi = makePi();
+    completeSimpleMock.mockResolvedValueOnce({ content: [{ type: "text", text: "YES" }] });
+    const ctx = {
+      model: { provider: "p", id: "m" },
+      getSystemPrompt: () => "SYSTEM",
+      modelRegistry: { getApiKeyAndHeaders: vi.fn(async () => ({ ok: true, apiKey: "k", headers: { h: "v" } })) },
+    };
+    await expect(adjudicateContinuation(pi, ctx, [], null)).resolves.toBe(true);
+    expect(completeSimpleMock).toHaveBeenCalledWith(ctx.model, expect.objectContaining({ systemPrompt: "SYSTEM" }), expect.objectContaining({ apiKey: "k", headers: { h: "v" } }));
+
+    // Unresolvable auth answers no rather than sending an unauthenticated call.
+    const unauthorized = { model: { provider: "p", id: "m" }, modelRegistry: { getApiKeyAndHeaders: vi.fn(async () => ({ ok: false, error: "no key" })) } };
+    await expect(adjudicateContinuation(pi, unauthorized, [], null)).resolves.toBe(false);
+    expect(completeSimpleMock).toHaveBeenCalledTimes(1);
   });
 });
