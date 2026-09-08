@@ -358,6 +358,39 @@ export function renderSkillReattachment(skills: Map<string, string>): string {
 // Stands in when a cut discards nothing that survives summarization, so the
 // dispatcher can still own the compaction instead of yielding to the host LLM.
 const EMPTY_COMPACTION_SUMMARY = "[Session Goal]\n- (nothing summarizable was discarded at this cut; use vcc_recall for earlier context)";
+const FALLBACK_SUMMARY_CHARS = 12_000;
+
+/**
+ * Last-resort summary for a cut whose summarizer threw. The host drops every
+ * message before `firstKeptEntryId` no matter what the summary says, so a
+ * placeholder here would erase that history from context; quoting the tail
+ * verbatim keeps the most recent content without another model call.
+ */
+function digestDiscarded(messages: any[]): string {
+  const rendered: string[] = [];
+  let total = 0;
+  for (const message of [...messages].reverse()) {
+    const content = message?.content;
+    const text = typeof content === "string"
+      ? content
+      : Array.isArray(content)
+        ? content.map((part: any) => (typeof part?.text === "string" ? part.text : "")).filter(Boolean).join("\n")
+        : "";
+    if (!text.trim()) continue;
+    const line = `[${message?.role ?? "unknown"}] ${text.trim()}`;
+    if (total + line.length > FALLBACK_SUMMARY_CHARS) break;
+    rendered.unshift(line);
+    total += line.length;
+  }
+  if (rendered.length === 0) return "";
+  return [
+    "[Session Goal]",
+    "- Summarization failed at this cut; the most recent discarded messages are quoted verbatim below. Use vcc_recall for anything older.",
+    "",
+    "[Verbatim Tail]",
+    ...rendered,
+  ].join("\n");
+}
 
 type CompactionState = Pick<Orchestrator,
   "pi" | "config" | "lastCtx" | "lastEstimatedTokens" | "compactionArm" | "adaptiveCompaction" | "manualCompactionUseBuiltin" | "manualCompactionPending" | "resetAdaptiveCompaction" | "redeliverPendingContinuations"
@@ -420,16 +453,18 @@ function registerCompaction(orchestrator: CompactionState, sessionSkills: Map<st
       // Summarizing only the history would drop those messages entirely.
       const turnPrefix = Array.isArray(prep.turnPrefixMessages) ? prep.turnPrefixMessages : [];
       discarded = [...history, ...turnPrefix];
+      // The range only locates the cut in the entry list, so it must survive a
+      // summarizer crash — without it vcc_recall cannot scope to this cut.
+      range = computeVccMessageRange(event.branchEntries ?? [], prep.firstKeptEntryId);
       summary = vccCompile({
         messages: discarded,
         previousSummary: prep.previousSummary,
         fileOps: prep.fileOps ? { readFiles: [...(prep.fileOps.read ?? [])], modifiedFiles: [...(prep.fileOps.written ?? []), ...(prep.fileOps.edited ?? [])] } : undefined,
       });
-      range = computeVccMessageRange(event.branchEntries ?? [], prep.firstKeptEntryId);
     } catch (error: any) {
-      getLogger().error({ s: "compaction", err: error?.message }, "vcc summarization failed; emitting a placeholder summary");
+      getLogger().error({ s: "compaction", err: error?.message }, "vcc summarization failed; quoting the discarded tail verbatim");
     }
-    const fullSummary = (summary || EMPTY_COMPACTION_SUMMARY) + renderSkillReattachment(sessionSkills);
+    const fullSummary = (summary || digestDiscarded(discarded) || EMPTY_COMPACTION_SUMMARY) + renderSkillReattachment(sessionSkills);
     return { compaction: { summary: fullSummary, details: buildVccDetails(fullSummary, discarded.length, previousSummaryUsed, tokensBefore, range), firstKeptEntryId: prep.firstKeptEntryId, tokensBefore } };
   });
   pi.on("session_compact", (_event, ctx) => {

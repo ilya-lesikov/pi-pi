@@ -679,6 +679,31 @@ describe("session-first core", () => {
     expect(crashed.compaction.details.compactor).toBe("pi-vcc");
     expect(crashed.compaction.firstKeptEntryId).toBe("kept");
 
+    // The host discards everything before firstKeptEntryId whatever the summary
+    // says, so a crash that yielded only a placeholder would erase this content
+    // from context outright. The fallback must carry the messages themselves.
+    const crashedWithHistory = await beforeCompact({
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "deploy the frobnicator to staging" },
+          { role: "assistant", content: [{ type: "text", text: "picked the blue-green path" }] },
+        ],
+        get fileOps(): never { throw new Error("boom"); },
+        firstKeptEntryId: "kept",
+        tokensBefore: 5,
+      },
+      branchEntries: [
+        { id: "old", type: "message", message: { role: "user" } },
+        { id: "kept", type: "message", message: { role: "user" } },
+      ],
+    });
+    expect(crashedWithHistory.compaction.details.compactor).toBe("pi-vcc");
+    expect(crashedWithHistory.compaction.summary).toContain("frobnicator");
+    expect(crashedWithHistory.compaction.summary).toContain("blue-green");
+    expect(crashedWithHistory.compaction.details.sourceMessageCount).toBe(2);
+    // Without a range, vcc_recall scope:'compaction:N' cannot resolve this cut.
+    expect(crashedWithHistory.compaction.details.messageRange).toEqual(["old", "kept"]);
+
     // A preparation the host could not build is the only legitimate bail-out.
     expect(await beforeCompact({ branchEntries: [] })).toBeUndefined();
   });
