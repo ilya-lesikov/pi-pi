@@ -10,6 +10,7 @@ const ADJUDICATION_QUESTION = [
   "Answer with exactly one word, YES or NO, and call no tools.",
   "YES if you stopped before the user's request was carried out and can continue on your own.",
   "NO if the request is done, if what remains needs the user's answer, approval or a decision, or if you are reporting a blocker.",
+  "NO if the user's last message asked you something and this turn answered it: they have to react to your answer before you carry on, however much of their request is still undone.",
 ].join("\n");
 
 const ADJUDICATION_TIMEOUT_MS = 60_000;

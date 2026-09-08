@@ -46,6 +46,9 @@ describe("continuation adjudication", () => {
     const question = context.messages[context.messages.length - 1];
     expect(question.role).toBe("user");
     expect(question.content[0].text).toContain("YES or NO");
+    // An answer the user asked for is a stop even with work left over: they
+    // have to react to it before the agent carries on.
+    expect(question.content[0].text).toContain("asked you something and this turn answered it");
   });
 
   it("answers no when the check cannot run or fails", async () => {
