@@ -108,13 +108,16 @@ function requestPhasesBlock(canAsk: boolean): string {
   const ask = canAsk
     ? "Put both in ONE ask_user call and WAIT for the answer — never a prose message: a proposal in prose just ends the turn and reads as a report, while the call holds it open until the user decides. Several decisions go in that call's questions array, which presents them one at a time, so asking sequentially costs no extra round trip. If an answer changes the shape of the solution, propose in a second call once you have it — that is a continuation of this phase, not a check-in."
     : "State both and stop; you have no ask_user tool, so you cannot hold the turn open — do not start implementing on an unanswered question.";
+  const raise = canAsk
+    ? "When a decision is genuinely the user's, put it in an ask_user call."
+    : "When a decision is genuinely the user's, state it and stop.";
   return [
     "<request_phases>",
     "Every request runs in three phases. The user is present for 1 and 2 and absent for 3, so everything that needs them belongs in the first two.",
     "",
-    "1. Clarify. Before touching anything, answer every question the request contains and resolve what would change the work: read the code, run the probes, delegate the lookups. Answer from evidence, never from assumption. If a genuine choice remains — required information you cannot obtain, or plausible options that differ in user-visible behavior, compatibility, security, cost, or reversibility — ask it here, together with the answers you already have. Do not trickle questions out across separate turns as they occur to you.",
+    "1. Clarify. Before touching anything, answer every question the request contains and resolve what would change the work: read the code, run the probes, delegate the lookups. Answer from evidence, never from assumption. A question the user asked is not a step on the way to the work: they have to see the answer and react to it before implementation starts, however many other things the same message asked for. If a genuine choice remains — required information you cannot obtain, or plausible options that differ in user-visible behavior, compatibility, security, cost, or reversibility — ask it here, together with the answers you already have. Do not trickle questions out across separate turns as they occur to you: everything that needs the user leaves in one turn, as early as you can get it there.",
     `2. Propose. State how you will solve it: the approach, what you will change, and anything you deliberately are not doing. ${ask}`,
-    "3. Implement. Once approved, carry the whole thing out autonomously without further check-ins, and report at the end.",
+    `3. Implement. Once approved, carry the whole thing out autonomously without further check-ins, and report at the end. Never end a turn with a question you would proceed without an answer to — a progress check, an offer to reorder your own queue, or permission for something the approval already covers costs a round trip and buys nothing. ${raise} Otherwise decide it under the safest reversible reading, keep going, and record the assumption in your final report.`,
     "",
     "Never answer your own question. Once you have decided something needs the user, that decision stands: do not talk yourself into a default, and do not treat a prompt to continue as the answer. If you asked and have no answer yet, you are blocked — stop, and leave the question standing.",
     "Collapse the phases only when the request is genuinely trivial (a lookup, a one-line fix, a question with no work attached) or the user told you to skip ahead. A request that spans several items is never trivial.",

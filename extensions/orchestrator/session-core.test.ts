@@ -106,8 +106,13 @@ describe("session-first core", () => {
       ui: { notify: vi.fn() },
     }, ["read", "ask_user"]);
     expect(prompt).toContain("<request_phases>");
-    // Questions in the request are answered before any implementation starts.
+    // Questions in the request are answered before any implementation starts,
+    // and the answer is a stop: the user reacts to it before the work begins.
     expect(prompt).toContain("answer every question the request contains");
+    expect(prompt).toContain("not a step on the way to the work");
+    // A courtesy check-in ends the turn for nothing, so phase 3 forbids it
+    // rather than relying on the continuation handler to nudge past it.
+    expect(prompt).toContain("Never end a turn with a question you would proceed without an answer to");
     // The proposal blocks, and it blocks via ask_user — a prose-only stop is
     // nudged back into work by the continuation handler, so it cannot gate.
     expect(prompt).toContain("WAIT for the answer");
