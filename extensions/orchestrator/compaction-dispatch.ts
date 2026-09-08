@@ -3,9 +3,10 @@ import type { PiVccCompactionDetails } from "../../3p/pi-vcc/index.js";
 /**
  * Marks the one manual compaction request that asked for the host summarizer.
  * The host appends this verbatim to its summarization prompt as "Additional
- * focus: ...", so it has to read as a real instruction rather than a sentinel.
+ * focus: ...", so it reads as a real instruction; the bracketed tag keeps it
+ * from colliding with prose a user could type into `/compact <instructions>`.
  */
-export const BUILTIN_COMPACTION_MARKER = "Summarize the whole discarded history faithfully, preserving decisions, file paths, and unresolved work.";
+export const BUILTIN_COMPACTION_MARKER = "[pp:builtin] Summarize the discarded history faithfully, preserving decisions, file paths, and unresolved work.";
 
 // Helpers for the in-phase (natural) compaction path that runs the vendored
 // pi-vcc engine from pi-pi's single session_before_compact dispatcher (item 1).

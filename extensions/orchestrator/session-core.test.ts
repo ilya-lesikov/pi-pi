@@ -752,6 +752,13 @@ describe("session-first core", () => {
 
     // ...and the manual request that set it still gets the host summarizer.
     expect(await beforeCompact({ ...prep, customInstructions: BUILTIN_COMPACTION_MARKER })).toBeUndefined();
+
+    // `/compact <text>` feeds user prose into the same field, so the marker
+    // must not be something a user could plausibly type and thereby opt in
+    // without going through the menu.
+    const typed = await beforeCompact({ ...prep, customInstructions: "Summarize the whole discarded history faithfully, preserving decisions, file paths, and unresolved work." });
+    expect(typed?.compaction?.details?.compactor).toBe("pi-vcc");
+    expect(BUILTIN_COMPACTION_MARKER).toContain("pp:builtin");
   });
 
   it("makes layered skills loadable in worker processes", async () => {
