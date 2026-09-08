@@ -450,6 +450,68 @@ describe("updateFlantInfra", () => {
     expect(written.cachedOpenRouterData["claude-opus-4-8"].context_length).toBe(1_000_000);
   });
 
+  // OpenRouter simply does not publish some gateway models. Re-invalidating on
+  // their permanently missing entries refetched the whole catalog on every
+  // startup, so the TTL never held.
+  it("serves the cache again after a fetch that could not resolve a model", async () => {
+    const dir = makeTempDir();
+    const cacheDir = join(dir, "extensions", "pp", "cache");
+    mkdirSync(cacheDir, { recursive: true });
+    const cachePath = join(cacheDir, "flant-models.json");
+    process.env.FLANT_API_KEY = "flant-k";
+    const mod = await loadModule(dir);
+    const fetchFn = stubFetch((url: string) => {
+      if (url.includes("llm-api.flant.ru/v1/models")) {
+        return { ok: true, status: 200, json: async () => ({ data: [{ id: "gpt-5" }, { id: "qwen3.8-27b" }] }) };
+      }
+      if (url.includes("openrouter.ai")) {
+        return { ok: true, status: 200, json: async () => ({ data: [{ id: "openai/gpt-5", name: "GPT 5", context_length: 400000 }] }) };
+      }
+      throw new Error(`unexpected ${url}`);
+    });
+
+    expect((await mod.updateFlantInfra(makePi())).ok).toBe(true);
+    expect(JSON.parse(readFileSync(cachePath, "utf-8")).unmappedModels).toEqual({ "qwen3.8-27b": "qwen/qwen-3.8-27b" });
+
+    const callsAfterFirst = fetchFn.mock.calls.length;
+    expect((await mod.updateFlantInfra(makePi())).ok).toBe(true);
+    expect(fetchFn.mock.calls.length).toBe(callsAfterFirst);
+  });
+
+  // A mapping change makes the recorded id stale, so the model deserves
+  // another lookup rather than being skipped forever.
+  it("refetches when a model recorded as unresolvable now maps elsewhere", async () => {
+    const dir = makeTempDir();
+    const cacheDir = join(dir, "extensions", "pp", "cache");
+    mkdirSync(cacheDir, { recursive: true });
+    writeFileSync(
+      join(cacheDir, "flant-models.json"),
+      JSON.stringify({
+        lastUpdated: new Date().toISOString(),
+        cachedFlantModels: ["gpt-5", "qwen3.8-27b"],
+        cachedOpenRouterData: { "gpt-5": { name: "GPT 5", context_length: 400000, max_completion_tokens: 32000, pricing: { prompt: 0, completion: 0, cacheRead: 0, cacheWrite: 0 }, modality: "text" } },
+        unmappedModels: { "qwen3.8-27b": "qwen/some-older-guess" },
+      }),
+      "utf-8",
+    );
+    process.env.FLANT_API_KEY = "flant-k";
+    const mod = await loadModule(dir);
+    const seen: string[] = [];
+    stubFetch((url: string) => {
+      seen.push(url);
+      if (url.includes("llm-api.flant.ru/v1/models")) {
+        return { ok: true, status: 200, json: async () => ({ data: [{ id: "gpt-5" }, { id: "qwen3.8-27b" }] }) };
+      }
+      if (url.includes("openrouter.ai")) {
+        return { ok: true, status: 200, json: async () => ({ data: [{ id: "openai/gpt-5", name: "GPT 5", context_length: 400000 }] }) };
+      }
+      throw new Error(`unexpected ${url}`);
+    });
+
+    expect((await mod.updateFlantInfra(makePi())).ok).toBe(true);
+    expect(seen.some((u) => u.includes("openrouter.ai"))).toBe(true);
+  });
+
   it("falls back to cached models when discovery throws", async () => {
     const dir = makeTempDir();
     const cacheDir = join(dir, "extensions", "pp", "cache");

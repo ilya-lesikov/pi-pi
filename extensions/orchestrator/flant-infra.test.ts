@@ -311,6 +311,44 @@ describe("flant-infra", () => {
     }
   });
 
+  // pi restores the session's model from what extensions registered at load
+  // time, before anything can refresh the token. Skipping registration there
+  // drops every sub/ model from the catalog and the session lands on an
+  // unrelated model with a "could not restore" warning.
+  it("registers the sub provider with an expired token so the catalog is complete", async () => {
+    const dir = makeTempDir();
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "auth.json"),
+      JSON.stringify({ anthropic: { type: "oauth", access: "sk-ant-oat01-expired", refresh: "rt", expires: Date.now() - 1000 } }),
+      "utf-8",
+    );
+    const prevKey = process.env.LLM_API_KEY;
+    process.env.LLM_API_KEY = "sk-gateway-test";
+    try {
+      const mod = await loadFlantInfraModule(dir);
+      const registered = new Map<string, any>();
+      const pi = {
+        registerProvider: vi.fn((name: string, config: any) => registered.set(name, config)),
+        unregisterProvider: vi.fn((name: string) => registered.delete(name)),
+      } as any;
+
+      mod.registerFlantProviders(pi, ["claude-opus-4-8"], {}, { subscription: true });
+
+      const sub = registered.get("pp-flant-anthropic-sub");
+      expect(sub.apiKey).toBe("sk-ant-oat01-expired");
+      expect(sub.models.map((m: any) => m.id)).toEqual(["sub/claude-opus-4-8"]);
+
+      // The stale registration is replaced as soon as a refresh succeeds.
+      refreshAnthropicTokenMock.mockResolvedValueOnce({ access: "sk-ant-oat01-rotated", refresh: "rt2", expires: Date.now() + 3_600_000 });
+      await mod.refreshSubProvider(pi);
+      expect(registered.get("pp-flant-anthropic-sub").apiKey).toBe("sk-ant-oat01-rotated");
+    } finally {
+      if (prevKey === undefined) delete process.env.LLM_API_KEY;
+      else process.env.LLM_API_KEY = prevKey;
+    }
+  });
+
   it("refreshSubProvider re-registers the sub provider when the token changes", async () => {
     const dir = makeTempDir();
     mkdirSync(dir, { recursive: true });
@@ -716,6 +754,7 @@ describe("flant-infra", () => {
       lastUpdated: null,
       cachedFlantModels: null,
       cachedOpenRouterData: null,
+      unmappedModels: null,
     });
   });
 
@@ -757,6 +796,7 @@ describe("flant-infra", () => {
       subscription: false,
       lastUpdated: "2026-01-02T03:04:05.000Z",
       cachedFlantModels: ["gpt-5-4", "claude-opus-4-6"],
+      unmappedModels: null,
       cachedOpenRouterData: {
         "gpt-5-4": {
           name: "GPT 5.4",
@@ -787,6 +827,7 @@ describe("flant-infra", () => {
       subscription: true,
       lastUpdated: "2026-02-01T00:00:00.000Z",
       cachedFlantModels: ["claude-opus-4-6", "gpt-5-4"],
+      unmappedModels: null,
       cachedOpenRouterData: {
         "claude-opus-4-6": {
           name: "Claude Opus 4.6",
@@ -802,7 +843,7 @@ describe("flant-infra", () => {
     const cachePath = join(cfgDir, "cache", "flant-models.json");
     expect(existsSync(cachePath)).toBe(true);
     const cacheRaw = JSON.parse(readFileSync(cachePath, "utf-8"));
-    expect(Object.keys(cacheRaw).sort()).toEqual(["cachedFlantModels", "cachedOpenRouterData", "lastUpdated"]);
+    expect(Object.keys(cacheRaw).sort()).toEqual(["cachedFlantModels", "cachedOpenRouterData", "lastUpdated", "unmappedModels"]);
 
     // Durable fields are read back from config, cache fields from the cache file.
     const loaded = mod.loadFlantSettings();

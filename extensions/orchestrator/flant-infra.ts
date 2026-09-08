@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import lockfile from "proper-lockfile";
@@ -30,6 +30,13 @@ export interface FlantSettings {
   lastUpdated: string | null;
   cachedFlantModels: string[] | null;
   cachedOpenRouterData: Record<string, OpenRouterModelData> | null;
+  /**
+   * Models the last metadata fetch could map but OpenRouter does not publish,
+   * keyed by bare gateway id with the OpenRouter id that was tried. Without
+   * this record their permanently missing entries would re-invalidate the cache
+   * on every startup, so the TTL would never hold.
+   */
+  unmappedModels: Record<string, string> | null;
   /**
    * When true, additionally register the `pp-flant-anthropic-sub` provider,
    * which routes Claude requests through the gateway using the user's personal
@@ -84,6 +91,7 @@ const DEFAULT_SETTINGS: FlantSettings = {
   lastUpdated: null,
   cachedFlantModels: null,
   cachedOpenRouterData: null,
+  unmappedModels: null,
   subscription: false,
   switchBackIntervalMinutes: 10,
   autoRateLimitFallback: true,
@@ -104,6 +112,16 @@ export const SUB_MODEL_PREFIX = "sub/";
  * headers because the token has the `sk-ant-oat` prefix.
  */
 export function readClaudeOAuthToken(): string | null {
+  const token = readStoredClaudeOAuthToken();
+  if (!token || token.expired) return null;
+  return token.access;
+}
+
+// The persisted access token WITH its expiry state, so provider registration can
+// fall back to an expired token. The registration must exist before pi restores
+// the session's model (which happens at extension load, ahead of any refresh);
+// without it the restore fails and the session lands on an unrelated model.
+function readStoredClaudeOAuthToken(): { access: string; expired: boolean } | null {
   const authPath = join(resolveAgentDir(), "auth.json");
   if (!existsSync(authPath)) return null;
   try {
@@ -112,8 +130,10 @@ export function readClaudeOAuthToken(): string | null {
     };
     const anthropic = raw.anthropic;
     if (!anthropic || typeof anthropic.access !== "string" || !anthropic.access) return null;
-    if (typeof anthropic.expires === "number" && anthropic.expires <= Date.now()) return null;
-    return anthropic.access;
+    return {
+      access: anthropic.access,
+      expired: typeof anthropic.expires === "number" && anthropic.expires <= Date.now(),
+    };
   } catch {
     return null;
   }
@@ -413,6 +433,9 @@ function normalizeSettings(raw: unknown): FlantSettings {
     cachedOpenRouterData: value.cachedOpenRouterData && typeof value.cachedOpenRouterData === "object"
       ? value.cachedOpenRouterData as Record<string, OpenRouterModelData>
       : null,
+    unmappedModels: value.unmappedModels && typeof value.unmappedModels === "object"
+      ? value.unmappedModels as Record<string, string>
+      : null,
   };
 }
 
@@ -422,6 +445,7 @@ export interface FlantCache {
   lastUpdated: string | null;
   cachedFlantModels: string[] | null;
   cachedOpenRouterData: Record<string, OpenRouterModelData> | null;
+  unmappedModels: Record<string, string> | null;
 }
 
 const DURABLE_FLANT_KEYS = [
@@ -455,7 +479,7 @@ const HISTORICAL_DEFAULTS: Record<string, unknown[]> = {
 };
 
 function loadFlantCache(): FlantCache {
-  const empty: FlantCache = { lastUpdated: null, cachedFlantModels: null, cachedOpenRouterData: null };
+  const empty: FlantCache = { lastUpdated: null, cachedFlantModels: null, cachedOpenRouterData: null, unmappedModels: null };
   if (!existsSync(SETTINGS_PATH)) return empty;
   try {
     const value = JSON.parse(readFileSync(SETTINGS_PATH, "utf-8")) as Record<string, unknown>;
@@ -466,6 +490,9 @@ function loadFlantCache(): FlantCache {
         : null,
       cachedOpenRouterData: value.cachedOpenRouterData && typeof value.cachedOpenRouterData === "object"
         ? (value.cachedOpenRouterData as Record<string, OpenRouterModelData>)
+        : null,
+      unmappedModels: value.unmappedModels && typeof value.unmappedModels === "object"
+        ? (value.unmappedModels as Record<string, string>)
         : null,
     };
   } catch {
@@ -482,8 +509,20 @@ function saveFlantCache(cache: FlantCache): void {
       lastUpdated: cache.lastUpdated,
       cachedFlantModels: cache.cachedFlantModels,
       cachedOpenRouterData: cache.cachedOpenRouterData,
+      unmappedModels: cache.unmappedModels,
     };
-    writeFileSync(SETTINGS_PATH, JSON.stringify(out, null, 2) + "\n", "utf-8");
+    // Written through a temp file and renamed: a process killed mid-write would
+    // otherwise leave truncated JSON, and an unreadable cache registers NO flant
+    // providers at extension load — early enough that the host cannot restore
+    // the session's model and falls back to an unrelated one.
+    const temp = `${SETTINGS_PATH}.${process.pid}.tmp`;
+    try {
+      writeFileSync(temp, JSON.stringify(out, null, 2) + "\n", "utf-8");
+      renameSync(temp, SETTINGS_PATH);
+    } catch (err) {
+      try { unlinkSync(temp); } catch { /* the temp file may never have been created */ }
+      throw err;
+    }
   } finally {
     release();
   }
@@ -559,6 +598,7 @@ export function loadFlantSettings(cwd?: string): FlantSettings {
     lastUpdated: cache.lastUpdated,
     cachedFlantModels: cache.cachedFlantModels,
     cachedOpenRouterData: cache.cachedOpenRouterData,
+    unmappedModels: cache.unmappedModels,
   };
 }
 
@@ -569,6 +609,7 @@ export function saveFlantSettings(settings: FlantSettings): void {
     lastUpdated: settings.lastUpdated,
     cachedFlantModels: settings.cachedFlantModels,
     cachedOpenRouterData: settings.cachedOpenRouterData,
+    unmappedModels: settings.unmappedModels,
   });
 }
 
@@ -932,12 +973,16 @@ function registerSubProvider(
   metadata: Record<string, OpenRouterModelData>,
 ): string[] {
   const log = getLogger();
-  const oauthToken = readClaudeOAuthToken();
+  const stored = readStoredClaudeOAuthToken();
   const gatewayKey = readGatewayApiKey();
-  if (!oauthToken || !gatewayKey) {
-    log.debug({ s: "flant", hasOAuth: !!oauthToken, hasGatewayKey: !!gatewayKey }, "subscription enabled but credentials missing; skipping sub provider");
+  if (!stored || !gatewayKey) {
+    log.debug({ s: "flant", hasOAuth: !!stored, hasGatewayKey: !!gatewayKey }, "subscription enabled but credentials missing; skipping sub provider");
     lastSubToken = null;
     return [];
+  }
+  const oauthToken = stored.access;
+  if (stored.expired) {
+    log.debug({ s: "flant" }, "registering the sub provider with an expired token; a refresh re-registers it before the first request");
   }
   pi.registerProvider(SUB_PROVIDER, {
     name: "Flant (personal Claude subscription)",
@@ -1099,6 +1144,19 @@ export function generateFlantConfig(models: string[], subscriptionActive = false
   };
 }
 
+// Bare gateway id → the OpenRouter id a metadata fetch would look up. Only ids
+// a fetch already tried and failed to resolve belong here; pairing each with the
+// id that was tried lets a later mapping change retry it.
+function collectUnmappedModels(models: string[], metadata: Record<string, OpenRouterModelData>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const modelId of models) {
+    const bare = modelId.startsWith(SUB_MODEL_PREFIX) ? modelId.slice(SUB_MODEL_PREFIX.length) : modelId;
+    const mapped = mapFlantToOpenRouterId(bare);
+    if (mapped && !metadata[bare]) out[bare] = mapped;
+  }
+  return out;
+}
+
 function isCacheValid(settings: FlantSettings): boolean {
   if (!settings.lastUpdated || !settings.cachedFlantModels || !settings.cachedOpenRouterData) return false;
   // An empty metadata map carries no context window and no pricing, so it is
@@ -1106,11 +1164,14 @@ function isCacheValid(settings: FlantSettings): boolean {
   if (Object.keys(settings.cachedOpenRouterData).length === 0) return false;
   // A cache an earlier build stamped can be missing a whole family whose ids it
   // could not yet map, which leaves those models on the fallback window for the
-  // rest of the TTL. Any mappable model without an entry means refetch.
+  // rest of the TTL. Any mappable model without an entry means refetch, unless
+  // the last fetch already established that OpenRouter has nothing under that id.
   const metadata = settings.cachedOpenRouterData;
+  const unmapped = settings.unmappedModels ?? {};
   for (const modelId of settings.cachedFlantModels) {
     const bare = modelId.startsWith(SUB_MODEL_PREFIX) ? modelId.slice(SUB_MODEL_PREFIX.length) : modelId;
-    if (mapFlantToOpenRouterId(bare) && !metadata[bare]) return false;
+    const mapped = mapFlantToOpenRouterId(bare);
+    if (mapped && !metadata[bare] && unmapped[bare] !== mapped) return false;
   }
   const updatedAt = new Date(settings.lastUpdated).getTime();
   if (!Number.isFinite(updatedAt)) return false;
@@ -1172,6 +1233,7 @@ export async function updateFlantInfra(
         }
         settings.cachedFlantModels = models;
         settings.cachedOpenRouterData = metadata;
+        settings.unmappedModels = collectUnmappedModels(models, metadata);
         // Serving empty metadata pins every model to the fallback context window
         // and zero cost, so it must never look cache-valid: clear the timestamp
         // outright rather than merely declining to refresh it — a forced update
