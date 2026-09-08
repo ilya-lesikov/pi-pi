@@ -761,8 +761,12 @@ export async function discoverFlantModels(apiKey: string): Promise<string[]> {
 export async function fetchOpenRouterMetadata(modelIds: string[]): Promise<Record<string, OpenRouterModelData>> {
   const mapping = new Map<string, string>();
   for (const modelId of modelIds) {
-    const mapped = mapFlantToOpenRouterId(modelId);
-    if (mapped) mapping.set(modelId, mapped);
+    // The gateway lists Claude only under `sub/<bare-id>`, while every consumer
+    // (registerSubProvider, buildProviderModelConfig) looks metadata up by the
+    // BARE id — so key the result bare, not as listed.
+    const key = modelId.startsWith(SUB_MODEL_PREFIX) ? modelId.slice(SUB_MODEL_PREFIX.length) : modelId;
+    const mapped = mapFlantToOpenRouterId(key);
+    if (mapped) mapping.set(key, mapped);
   }
   if (mapping.size === 0) return {};
 

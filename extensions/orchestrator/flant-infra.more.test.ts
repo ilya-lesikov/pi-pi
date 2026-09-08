@@ -126,6 +126,33 @@ describe("fetchOpenRouterMetadata", () => {
     expect(out["gemini-3.1-pro"]).toBeTruthy();
   });
 
+  it("maps subscription-prefixed claude ids to their openrouter metadata", async () => {
+    const mod = await loadModule(makeTempDir());
+    stubFetch(() => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        data: [
+          {
+            id: "anthropic/claude-fable-5.1",
+            name: "Claude Fable 5.1",
+            context_length: 1000000,
+            top_provider: { max_completion_tokens: 128000 },
+            pricing: { prompt: 1, completion: 2 },
+            architecture: { modality: "text+image" },
+          },
+        ],
+      }),
+    }));
+    // Keyed by the BARE id, which is what registerSubProvider looks up.
+    const out = await mod.fetchOpenRouterMetadata(["sub/claude-fable-5-1"]);
+    expect(out["claude-fable-5-1"]).toMatchObject({
+      name: "Claude Fable 5.1",
+      context_length: 1000000,
+      max_completion_tokens: 128000,
+    });
+  });
+
   it("throws when OpenRouter returns a non-ok status", async () => {
     const mod = await loadModule(makeTempDir());
     stubFetch(() => ({ ok: false, status: 500, json: async () => ({}) }));

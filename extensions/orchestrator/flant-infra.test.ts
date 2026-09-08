@@ -199,6 +199,47 @@ describe("flant-infra", () => {
     }
   });
 
+  it("registers sub models with their real context window instead of the fallback", async () => {
+    const dir = makeTempDir();
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "auth.json"),
+      JSON.stringify({ anthropic: { type: "oauth", access: "sk-ant-oat01-test-token", expires: Date.now() + 3_600_000 } }),
+      "utf-8",
+    );
+    const prevKey = process.env.LLM_API_KEY;
+    process.env.LLM_API_KEY = "sk-gateway-test";
+    try {
+      const mod = await loadFlantInfraModule(dir);
+      const registered = new Map<string, any>();
+      const pi = {
+        registerProvider: vi.fn((name: string, config: any) => registered.set(name, config)),
+        unregisterProvider: vi.fn((name: string) => registered.delete(name)),
+      } as any;
+
+      mod.registerFlantProviders(
+        pi,
+        ["sub/claude-fable-5-1"],
+        {
+          "claude-fable-5-1": {
+            name: "Claude Fable 5.1",
+            context_length: 1_000_000,
+            max_completion_tokens: 128_000,
+            pricing: { prompt: 0, completion: 0, cacheRead: 0, cacheWrite: 0 },
+            modality: "text",
+          },
+        },
+        { subscription: true },
+      );
+
+      const sub = registered.get("pp-flant-anthropic-sub");
+      expect(sub.models[0]).toMatchObject({ id: "sub/claude-fable-5-1", contextWindow: 1_000_000, maxTokens: 128_000 });
+    } finally {
+      if (prevKey === undefined) delete process.env.LLM_API_KEY;
+      else process.env.LLM_API_KEY = prevKey;
+    }
+  });
+
   it("falls back to all claude models for the sub provider when the model list has no sub/ ids", async () => {
     const dir = makeTempDir();
     mkdirSync(dir, { recursive: true });
