@@ -9,7 +9,7 @@ import { registerExaTools } from "./exa.js";
 import { registerAstSearchTool } from "./ast-search.js";
 import { registerBillingHook } from "./billing-spoof.js";
 import { registerRecallTool, compile as vccCompile } from "../../3p/pi-vcc/index.js";
-import { computeVccMessageRange, buildVccDetails } from "./compaction-dispatch.js";
+import { BUILTIN_COMPACTION_MARKER, computeVccMessageRange, buildVccDetails } from "./compaction-dispatch.js";
 import { compactionThresholdTokens, shouldFireCompaction, shouldForceCompaction, applyBaselineMeasure } from "./compaction-trigger.js";
 import { collectContextFiles, renderContextInjection, summarizeContextInjectionSize } from "./context-injection.js";
 import { enabledSkillLayers, listLayeredSkills, loadLayeredSkill } from "./skills-manifest.js";
@@ -370,6 +370,7 @@ export function renderSkillReattachment(skills: Map<string, string>): string {
 // Stands in when a cut discards nothing that survives summarization, so the
 // dispatcher can still own the compaction instead of yielding to the host LLM.
 const EMPTY_COMPACTION_SUMMARY = "[Session Goal]\n- (nothing summarizable was discarded at this cut; use vcc_recall for earlier context)";
+
 const FALLBACK_SUMMARY_CHARS = 12_000;
 
 /**
@@ -405,7 +406,7 @@ function digestDiscarded(messages: any[]): string {
 }
 
 type CompactionState = Pick<Orchestrator,
-  "pi" | "config" | "lastCtx" | "lastEstimatedTokens" | "compactionArm" | "adaptiveCompaction" | "manualCompactionUseBuiltin" | "manualCompactionPending" | "resetAdaptiveCompaction" | "redeliverPendingContinuations"
+  "pi" | "config" | "lastCtx" | "lastEstimatedTokens" | "compactionArm" | "adaptiveCompaction" | "manualCompactionPending" | "resetAdaptiveCompaction" | "redeliverPendingContinuations"
 >;
 
 // Switching providers resends the whole conversation with a cold prompt cache,
@@ -441,9 +442,10 @@ function registerCompaction(orchestrator: CompactionState, sessionSkills: Map<st
     orchestrator.lastEstimatedTokens = messages.reduce((sum: number, message: any) => sum + estimateTokens(message), 0);
   });
   pi.on("session_before_compact", async (event: any) => {
-    const useBuiltin = orchestrator.manualCompactionUseBuiltin;
-    orchestrator.manualCompactionUseBuiltin = false;
-    if (useBuiltin) return;
+    // The opt-in rides on the request itself, not on orchestrator state: an
+    // automatic compaction firing between the menu selection and the manual
+    // compaction would otherwise consume a shared flag and be LLM-summarized.
+    if (typeof event?.customInstructions === "string" && event.customInstructions.includes(BUILTIN_COMPACTION_MARKER)) return;
     const prep = event.preparation;
     if (!prep) return;
     // Returning nothing (or throwing) hands the cut to the host's LLM
@@ -561,7 +563,6 @@ export function registerSubagentCompaction(
       firedThreshold: null,
       contaminatedMeasures: 0,
     },
-    manualCompactionUseBuiltin: false,
     manualCompactionPending: false,
     // A worker session has no continuation queue of its own.
     redeliverPendingContinuations() {},
@@ -598,7 +599,6 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     orchestrator.cwd = ctx.cwd;
     orchestrator.interactivePromptOpen = false;
     orchestrator.manualCompactionPending = false;
-    orchestrator.manualCompactionUseBuiltin = false;
     orchestrator.manualCompactionRequestId++;
     loadedSkills.clear();
     orchestrator.resetContinuation();

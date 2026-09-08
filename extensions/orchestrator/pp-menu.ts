@@ -37,6 +37,7 @@ import {
   updateRegistryFromAvailableModels,
 } from "./model-registry.js";
 import { compareModelVersion } from "./model-version.js";
+import { BUILTIN_COMPACTION_MARKER } from "./compaction-dispatch.js";
 import { enabledSkillLayers, listLayeredSkills } from "./skills-manifest.js";
 import { buildPoolRoster, unregisterAgentDefinitions } from "./agents/registry.js";
 import { setLogLevel } from "./log.js";
@@ -912,7 +913,7 @@ async function runManualCompaction(orchestrator: Orchestrator, ctx: any): Promis
     opt(BACK, "Return to the previous menu"),
   ]);
   if (!sel || sel === BACK) return;
-  orchestrator.manualCompactionUseBuiltin = sel === "builtin (LLM-based)";
+  const useBuiltin = sel === "builtin (LLM-based)";
   orchestrator.manualCompactionPending = true;
   // compact() resolves asynchronously and its callbacks can outlive the request
   // that initiated it, so settle only the request this call owns.
@@ -920,10 +921,12 @@ async function runManualCompaction(orchestrator: Orchestrator, ctx: any): Promis
   const settle = (): boolean => {
     if (orchestrator.manualCompactionRequestId !== requestId) return false;
     orchestrator.manualCompactionPending = false;
-    orchestrator.manualCompactionUseBuiltin = false;
     return true;
   };
   ctx.compact({
+    // Carries the opt-in on this request alone, so a concurrent automatic
+    // compaction cannot pick it up and get LLM-summarized instead.
+    customInstructions: useBuiltin ? BUILTIN_COMPACTION_MARKER : undefined,
     onComplete: () => {
       if (settle()) ctx.ui?.notify?.("Context compacted.", "info");
     },

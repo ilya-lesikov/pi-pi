@@ -50,7 +50,6 @@ export class Orchestrator {
     firedThreshold: number | null;
     contaminatedMeasures: number;
   } = { nextThreshold: null, inFlight: false, pendingProactiveMeasure: false, disabled: false, modelKey: null, window: null, firedThreshold: null, contaminatedMeasures: 0 };
-  manualCompactionUseBuiltin = false;
   manualCompactionPending = false;
   manualCompactionRequestId = 0;
   idlePollTimer: ReturnType<typeof setTimeout> | null = null;

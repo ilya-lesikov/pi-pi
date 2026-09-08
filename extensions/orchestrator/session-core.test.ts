@@ -7,6 +7,7 @@ import { Orchestrator } from "./orchestrator.js";
 import { buildAcpState } from "./acp.js";
 import { isSubscriptionFallbackActive, setSubscriptionFallbackActive } from "./model-registry.js";
 import { classifyContinuation, isMainTurnStalled, registerEventHandlers, registerLoadSkill, registerSubagentCompaction, renderGenericPrompt } from "./event-handlers.js";
+import { BUILTIN_COMPACTION_MARKER } from "./compaction-dispatch.js";
 import { createUsageTracker } from "./usage-tracker.js";
 import initExtension from "./index.js";
 
@@ -731,6 +732,26 @@ describe("session-first core", () => {
 
     // A preparation the host could not build is the only legitimate bail-out.
     expect(await beforeCompact({ branchEntries: [] })).toBeUndefined();
+  });
+
+  it("yields to the host LLM only for the manual request that opted in", async () => {
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi);
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    registerEventHandlers(orchestrator);
+    const beforeCompact = pi.handlers.get("session_before_compact")?.[0] as any;
+    const prep = { preparation: { messagesToSummarize: [{ role: "user", content: "detail" }], firstKeptEntryId: "kept", tokensBefore: 10 }, branchEntries: [{ id: "old", type: "message", message: {} }, { id: "kept", type: "message", message: {} }] };
+
+    // The opted-in manual request carries the marker and is the one that yields.
+    expect(await beforeCompact({ ...prep, customInstructions: BUILTIN_COMPACTION_MARKER })).toBeUndefined();
+
+    // An automatic compaction racing that request carries no marker, so it must
+    // still get vcc instead of consuming the opt-in and being LLM-summarized.
+    const auto = await beforeCompact(prep);
+    expect(auto?.compaction?.details?.compactor).toBe("pi-vcc");
+
+    // ...and the manual request that set it still gets the host summarizer.
+    expect(await beforeCompact({ ...prep, customInstructions: BUILTIN_COMPACTION_MARKER })).toBeUndefined();
   });
 
   it("makes layered skills loadable in worker processes", async () => {

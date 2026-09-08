@@ -1,5 +1,12 @@
 import type { PiVccCompactionDetails } from "../../3p/pi-vcc/index.js";
 
+/**
+ * Marks the one manual compaction request that asked for the host summarizer.
+ * The host appends this verbatim to its summarization prompt as "Additional
+ * focus: ...", so it has to read as a real instruction rather than a sentinel.
+ */
+export const BUILTIN_COMPACTION_MARKER = "Summarize the whole discarded history faithfully, preserving decisions, file paths, and unresolved work.";
+
 // Helpers for the in-phase (natural) compaction path that runs the vendored
 // pi-vcc engine from pi-pi's single session_before_compact dispatcher (item 1).
 // Ported from pi-vcc's dropped hooks/before-compact.ts so the persisted
