@@ -236,13 +236,19 @@ export default function (pi: ExtensionAPI) {
           line += "\n  " + parts.map(p => theme.fg("dim", p)).join(" " + theme.fg("dim", "·") + " ");
         }
 
-        // Line 3: result preview (collapsed) or full (expanded)
+        // Line 3: result preview (collapsed) or full (expanded).
+        // LOCAL PATCH (pi-pi): a failed agent has no result, so the body would
+        // read "No output." and the reason would live only in
+        // get_subagent_result. Show the error text instead.
+        const failed = d.status === "error" && !!d.error;
+        const body = failed ? d.error! : d.resultPreview;
+        const bodyColor = failed ? "error" : "dim";
         if (expanded) {
-          const lines = d.resultPreview.split("\n").slice(0, 30);
-          for (const l of lines) line += "\n" + theme.fg("dim", `  ${l}`);
+          const lines = body.split("\n").slice(0, 30);
+          for (const l of lines) line += "\n" + theme.fg(bodyColor, `  ${l}`);
         } else {
-          const preview = d.resultPreview.split("\n")[0]?.slice(0, 80) ?? "";
-          line += "\n  " + theme.fg("dim", `⎿  ${preview}`);
+          const preview = body.split("\n")[0]?.slice(0, 80) ?? "";
+          line += "\n  " + theme.fg(bodyColor, `⎿  ${preview}`);
         }
 
         // Line 4: output file link (if present)
