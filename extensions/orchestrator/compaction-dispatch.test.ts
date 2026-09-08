@@ -68,6 +68,25 @@ describe("renderSkillReattachment", () => {
     expect(out.indexOf('name="oldest"')).toBeLessThan(out.indexOf('name="newest"'));
   });
 
+  it("does not re-wrap a document that already carries its own skill tag", async () => {
+    const { renderSkillReattachment } = await import("./event-handlers.js");
+    const document = '<skill name="repository-work" source="bundled">\nbody text\n</skill>';
+    const out = renderSkillReattachment(new Map([["repository-work", document]]));
+    expect(out).toContain(document);
+    expect(out.match(/<skill /g)).toHaveLength(1);
+    expect(out.match(/<\/skill>/g)).toHaveLength(1);
+  });
+
+  it("keeps a truncated pre-tagged document closed", async () => {
+    const { renderSkillReattachment } = await import("./event-handlers.js");
+    const document = `<skill name="big" source="project">\n${"B".repeat(40_000)}\n</skill>`;
+    const out = renderSkillReattachment(new Map([["big", document]]));
+    expect(out).toContain('<skill name="big" source="project">');
+    expect(out.match(/<skill /g)).toHaveLength(1);
+    expect(out.trimEnd().endsWith("</skill>")).toBe(true);
+    expect(out).toContain("[… truncated]");
+  });
+
   it("truncates each skill to its per-skill cap and drops the oldest past the total budget", async () => {
     const { renderSkillReattachment } = await import("./event-handlers.js");
     const big = "X".repeat(30_000 * 4);

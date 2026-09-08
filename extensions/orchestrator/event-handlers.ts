@@ -313,8 +313,16 @@ export function renderSkillReattachment(skills: Map<string, string>): string {
   for (const [name, document] of [...skills].reverse()) {
     if (budget <= 0) break;
     const cap = Math.min(SKILL_REATTACH_TOKENS_EACH, budget) * 4;
-    const body = document.length > cap ? `${document.slice(0, cap)}\n[… truncated]` : document;
-    parts.push(`<skill name="${name}">\n${body}\n</skill>`);
+    // load_skill stores the document already wrapped in its own <skill> tag, so
+    // wrapping again would nest it; truncation still has to re-close the tag.
+    const tagged = document.trimStart().startsWith("<skill ");
+    if (document.length <= cap) {
+      parts.push(tagged ? document : `<skill name="${name}">\n${document}\n</skill>`);
+      budget -= Math.ceil(document.length / 4);
+      continue;
+    }
+    const body = `${document.slice(0, cap)}\n[… truncated]`;
+    parts.push(tagged ? `${body}\n</skill>` : `<skill name="${name}">\n${body}\n</skill>`);
     budget -= Math.ceil(body.length / 4);
   }
   return [
