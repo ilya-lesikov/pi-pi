@@ -407,7 +407,7 @@ function digestDiscarded(messages: any[]): string {
 }
 
 type CompactionState = Pick<Orchestrator,
-  "pi" | "config" | "lastCtx" | "lastEstimatedTokens" | "compactionArm" | "adaptiveCompaction" | "manualCompactionPending" | "resetAdaptiveCompaction" | "redeliverPendingContinuations"
+  "pi" | "config" | "lastCtx" | "lastEstimatedTokens" | "compactionArm" | "adaptiveCompaction" | "manualCompactionPending" | "startupModelCorrection" | "resetAdaptiveCompaction" | "redeliverPendingContinuations"
 >;
 
 // Switching providers resends the whole conversation with a cold prompt cache,
@@ -505,6 +505,11 @@ function registerCompaction(orchestrator: CompactionState, sessionSkills: Map<st
   });
   pi.on("model_select", (event: any, ctx: any) => {
     if (event?.source === "restore" || !event?.previousModel || !event?.model) return;
+    // A startup correction only undoes a restore that landed on the wrong model
+    // (a provider missing at extension load); the session is sent in full on the
+    // first turn either way, so there is no resend to save and no reason to fold
+    // away detail the user just came back to.
+    if (orchestrator.startupModelCorrection) return;
     const before = `${event.previousModel.provider}/${event.previousModel.id}`;
     const after = `${event.model.provider}/${event.model.id}`;
     if (before === after) return;
@@ -576,6 +581,7 @@ export function registerSubagentCompaction(
       contaminatedMeasures: 0,
     },
     manualCompactionPending: false,
+    startupModelCorrection: false,
     // A worker session has no continuation queue of its own.
     redeliverPendingContinuations() {},
     resetAdaptiveCompaction() {
@@ -663,8 +669,13 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     ctx.ui?.setFooter?.(createCustomFooter);
     orchestrator.applySubagentConcurrency();
     registerFeatureToolsAndAgents(orchestrator);
-    if (!await orchestrator.applyMainAgent(ctx)) {
-      ctx.ui?.notify?.(`Main agent model "${orchestrator.config.agents.main.model}" is not available; keeping the current model.`, "warning");
+    orchestrator.startupModelCorrection = true;
+    try {
+      if (!await orchestrator.applyMainAgent(ctx)) {
+        ctx.ui?.notify?.(`Main agent model "${orchestrator.config.agents.main.model}" is not available; keeping the current model.`, "warning");
+      }
+    } finally {
+      orchestrator.startupModelCorrection = false;
     }
     // The Claude OAuth token expires within hours. Turn-start refreshes cover
     // active work; this timer keeps the sub provider fresh through long idle

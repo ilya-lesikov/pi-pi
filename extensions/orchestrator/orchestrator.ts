@@ -52,6 +52,8 @@ export class Orchestrator {
   } = { nextThreshold: null, inFlight: false, pendingProactiveMeasure: false, disabled: false, modelKey: null, window: null, firedThreshold: null, contaminatedMeasures: 0 };
   manualCompactionPending = false;
   manualCompactionRequestId = 0;
+  /** Set while session_start routes the session back onto the configured main agent. */
+  startupModelCorrection = false;
   idlePollTimer: ReturnType<typeof setTimeout> | null = null;
   subFallbackActive = false;
   subFallbackModelId: string | null = null;

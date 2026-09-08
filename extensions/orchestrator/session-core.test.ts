@@ -403,6 +403,12 @@ describe("session-first core", () => {
     await emit(pi, "model_select", { source: "restore", previousModel: { provider: "p", id: "a" }, model: { provider: "q", id: "b" } }, ctx(120_000));
     await emit(pi, "model_select", { source: "set", previousModel: { provider: "p", id: "a" }, model: { provider: "p", id: "a" } }, ctx(120_000));
     expect(compact).toHaveBeenCalledTimes(1);
+
+    // Routing a just-restored session back onto the configured main agent is not
+    // a switch worth folding the session away for.
+    orchestrator.startupModelCorrection = true;
+    await emit(pi, "model_select", select("a", "b"), ctx(120_000));
+    expect(compact).toHaveBeenCalledTimes(1);
   });
 
   // The tracing toggle and the report bundle both promise recorded traces, but
