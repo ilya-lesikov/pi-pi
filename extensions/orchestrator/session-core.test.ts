@@ -322,10 +322,10 @@ describe("session-first core", () => {
   });
 
   it("classifies only objective stops and substantial action-backed prose stops for continuation", () => {
-    const idle = { hadTools: false, toolCallCount: 0, hadFileMutation: false };
-    const trivial = { hadTools: true, toolCallCount: 2, hadFileMutation: false };
-    const manyTools = { hadTools: true, toolCallCount: 4, hadFileMutation: false };
-    const mutated = { hadTools: true, toolCallCount: 1, hadFileMutation: true };
+    const idle = { hadTools: false, toolCallCount: 0, hadFileMutation: false, hadEdit: false };
+    const trivial = { hadTools: true, toolCallCount: 2, hadFileMutation: false, hadEdit: false };
+    const manyTools = { hadTools: true, toolCallCount: 4, hadFileMutation: false, hadEdit: false };
+    const mutated = { hadTools: true, toolCallCount: 1, hadFileMutation: true, hadEdit: true };
     expect(classifyContinuation({ stopReason: "length", content: [{ type: "text", text: "cut" }] }, idle)).toBe("objective");
     expect(classifyContinuation({ stopReason: "stop", content: [] }, idle)).toBe("objective");
     expect(classifyContinuation({ stopReason: "stop", content: [{ type: "text", text: "answer" }] }, idle)).toBe("none");
@@ -336,7 +336,7 @@ describe("session-first core", () => {
   });
 
   it("routes a turn that handed control back with a question to the check-in adjudicator", () => {
-    const mutated = { hadTools: true, toolCallCount: 8, hadFileMutation: true };
+    const mutated = { hadTools: true, toolCallCount: 8, hadFileMutation: true, hadEdit: true };
     // A closing question after real work is as often a check-in the user
     // already approved past as a decision they own, so it is adjudicated
     // rather than nudged or accepted on sight.
@@ -347,9 +347,9 @@ describe("session-first core", () => {
     expect(classifyContinuation({ stopReason: "stop", content: [{ type: "text", text: "Why did it fail? The cache was stale. Fixed and committed." }] }, mutated)).toBe("adjudicate");
     // Multi-part content: the last text part decides.
     expect(classifyContinuation({ stopReason: "stop", content: [{ type: "text", text: "Did the work." }, { type: "text", text: "Proceed with the rename?" }] }, mutated)).toBe("check-in");
-    // A question after a light exchange is a genuine hand-back: replaying it
-    // would cost a request to second-guess a stop nothing suggests is wrong.
-    expect(classifyContinuation({ stopReason: "stop", content: [{ type: "text", text: "Which one?" }] }, { hadTools: true, toolCallCount: 1, hadFileMutation: false })).toBe("none");
+    // Research and delegation are what clarification is made of, so a question
+    // that follows them is a genuine hand-back, however many calls it took.
+    expect(classifyContinuation({ stopReason: "stop", content: [{ type: "text", text: "Which one?" }] }, { hadTools: true, toolCallCount: 12, hadFileMutation: true, hadEdit: false })).toBe("none");
   });
 
   it("leaves a finished-looking turn alone when its own model says nothing is left", async () => {
@@ -683,6 +683,7 @@ describe("session-first core", () => {
       await emit(pi, "turn_start", {}, ctx);
       orchestrator.requestHadTools = true;
       orchestrator.requestToolCallCount = 6;
+      orchestrator.requestHadEdit = true;
       await emit(pi, "turn_end", { message: { stopReason: "stop", content: [{ type: "text", text: "Landed the first fix. Anything in that ordering you want changed?" }] } }, ctx);
     };
 
@@ -690,7 +691,7 @@ describe("session-first core", () => {
     expect(complete).toHaveBeenCalledTimes(1);
     expect(complete.mock.calls[0][1].messages.at(-1).content[0].text).toContain("BLOCKING or OPTIONAL");
     expect(pi.sendMessage).toHaveBeenCalledTimes(1);
-    expect(pi.sendMessage.mock.calls[0][0].content).toContain("was not blocking");
+    expect(pi.sendMessage.mock.calls[0][0].content).toContain("you did not need answered");
 
     // A decision the user owns keeps the turn ended, however much work is left.
     complete.mockResolvedValue({ content: [{ type: "text", text: "BLOCKING" }] });
@@ -824,6 +825,33 @@ describe("session-first core", () => {
     expect(message.display).toBe(false);
     expect(message.content).toContain("Continue exactly where you left off");
     expect(options).toEqual({ deliverAs: "followUp", triggerTurn: true });
+    await emit(pi, "session_shutdown", {}, ctx);
+  });
+
+  it("stops compacting proactively after consecutive failures", async () => {
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi);
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    orchestrator.config.compaction.floorTokens = 1_000;
+    orchestrator.config.compaction.fraction = 0.1;
+    registerEventHandlers(orchestrator);
+    const compact = vi.fn((options: any) => options.onError(new Error("summarizer down")));
+    const ctx = {
+      model: { provider: "test", id: "main-model" },
+      getContextUsage: () => ({ contextWindow: 100_000, tokens: 20_000 }),
+      compact,
+      isIdle: () => true,
+      ui: { notify: vi.fn() },
+    };
+    const toolLoopTurn = () => emit(pi, "turn_end", { message: { stopReason: "toolUse", content: [{ type: "toolCall", name: "edit" }] } }, ctx);
+
+    // A failure re-arms, so the next turn retries; a second one gives up and
+    // leaves the host's overflow recovery as the backstop, since mid-run every
+    // retry also costs the turn its resume has to pay for.
+    await toolLoopTurn();
+    await toolLoopTurn();
+    await toolLoopTurn();
+    expect(compact).toHaveBeenCalledTimes(2);
     await emit(pi, "session_shutdown", {}, ctx);
   });
 

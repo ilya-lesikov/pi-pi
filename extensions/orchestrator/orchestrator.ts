@@ -33,6 +33,7 @@ export class Orchestrator {
   requestHadTools = false;
   requestToolCallCount = 0;
   requestHadFileMutation = false;
+  requestHadEdit = false;
   continuationGeneration = 0;
   continuationCount = 0;
   objectiveContinuationCount = 0;
@@ -51,7 +52,8 @@ export class Orchestrator {
     window: number | null;
     firedThreshold: number | null;
     contaminatedMeasures: number;
-  } = { nextThreshold: null, inFlight: false, pendingProactiveMeasure: false, disabled: false, modelKey: null, window: null, firedThreshold: null, contaminatedMeasures: 0 };
+    failures: number;
+  } = { nextThreshold: null, inFlight: false, pendingProactiveMeasure: false, disabled: false, modelKey: null, window: null, firedThreshold: null, contaminatedMeasures: 0, failures: 0 };
   manualCompactionPending = false;
   manualCompactionRequestId = 0;
   /** Set while session_start routes the session back onto the configured main agent. */
@@ -227,6 +229,7 @@ export class Orchestrator {
       window: null,
       firedThreshold: null,
       contaminatedMeasures: 0,
+      failures: 0,
     };
     this.compactionArm.armed = true;
   }

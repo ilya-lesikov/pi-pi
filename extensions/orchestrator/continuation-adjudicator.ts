@@ -18,7 +18,8 @@ const ADJUDICATION_QUESTION = [
 const CHECK_IN_QUESTION = [
   "[PI-PI] Out-of-band check — this message is not part of the conversation and your answer is discarded.",
   "You ended that turn with a question. Answer with exactly one word, BLOCKING or OPTIONAL, and call no tools.",
-  "BLOCKING if you cannot go on without the user: the choice is theirs to make, you are handing back a blocker, or their own message asked you something this question is part of answering.",
+  "BLOCKING if you cannot go on without the user: the choice is theirs to make, or you are handing back a blocker.",
+  "BLOCKING if the user's own message asked you something and this turn answered it, or if you are putting an approach to them that they have not approved yet — either way they react before you carry on.",
   "OPTIONAL if you could settle it yourself under the safest reversible reading and keep working — a progress check, an offer to reorder your own queue, or permission for something the user already approved.",
 ].join("\n");
 

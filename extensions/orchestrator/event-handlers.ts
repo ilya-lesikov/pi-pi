@@ -34,7 +34,7 @@ const MAX_OBJECTIVE_CONTINUATIONS = 5;
 const CONTINUE_TRUNCATED = "[PI-PI] The previous response was truncated. Continue exactly where you stopped and complete the request.";
 const CONTINUE_EMPTY = "[PI-PI] The previous turn ended without a result. Continue with the next action and complete the request.";
 const CONTINUE_UNFINISHED = "[PI-PI] Continue where you left off and finish the request. Do not re-explain what you already did.";
-const CONTINUE_CHECK_IN = "[PI-PI] The question you ended on was not blocking. Settle it yourself under the safest reversible reading, carry on with the approved work, and record the assumption in your final report. If the decision really is the user's, ask it with ask_user — prose does not hold the turn open.";
+const CONTINUE_CHECK_IN = "[PI-PI] The question you ended on was put to your own model out of band, and came back as one you did not need answered — so the rule about leaving an unanswered question standing does not apply to it. Settle it under the safest reversible reading, carry on, and record the assumption in your final report. If the decision really is the user's, ask it with ask_user: prose does not hold the turn open.";
 const CONTINUE_STALLED = "[PI-PI] The previous turn stalled without completing. Continue where you left off and complete the request.";
 const CONTINUE_COMPACTED = "[PI-PI] Context was compacted mid-task, which cut the tool loop short. Continue exactly where you left off; do not restart the work or re-report what is already done.";
 
@@ -44,6 +44,8 @@ export interface RequestActivity {
   hadTools: boolean;
   toolCallCount: number;
   hadFileMutation: boolean;
+  /** A write of this session's own, which no amount of research implies. */
+  hadEdit: boolean;
 }
 
 // Trivial informational exchanges (a couple of read-only tool calls followed by
@@ -52,10 +54,12 @@ export interface RequestActivity {
 // enough work that an unfinished objective is plausible.
 const ADJUDICATE_TOOL_THRESHOLD = 4;
 
-// A turn whose last words are a question handed control back. After real
-// implementation work that is as often a check-in the user already approved
-// past, so such a turn is worth a look; a lighter one is left alone, since
-// nudging a genuine hand-back makes the agent act on its own approval.
+// A turn whose last words are a question handed control back. Once the request
+// has written something it is under way, and such a question is as often a
+// check-in the user already approved past as a decision they own, so it is
+// worth a look. Anything lighter is left alone: research and delegation are
+// what clarification is made of, and nudging a genuine hand-back makes the
+// agent act on its own approval.
 function endsWithQuestion(parts: any[]): boolean {
   const texts = parts.filter((part: any) => part?.type === "text" && typeof part.text === "string" && part.text.trim());
   const last = texts[texts.length - 1]?.text ?? "";
@@ -71,9 +75,9 @@ export function classifyContinuation(message: any, activity: RequestActivity): C
   const hasToolCall = parts.some((part: any) => part?.type === "toolCall");
   if (!hasText && !hasToolCall) return "objective";
   const substantial = activity.hadFileMutation || activity.toolCallCount >= ADJUDICATE_TOOL_THRESHOLD;
-  const worked = message?.stopReason === "stop" && hasText && activity.hadTools && substantial;
-  if (hasText && endsWithQuestion(parts)) return worked ? "check-in" : "none";
-  return worked ? "adjudicate" : "none";
+  const worked = message?.stopReason === "stop" && hasText && activity.hadTools;
+  if (hasText && endsWithQuestion(parts)) return worked && activity.hadEdit ? "check-in" : "none";
+  return worked && substantial ? "adjudicate" : "none";
 }
 
 export function isMainTurnStalled(orchestrator: Orchestrator, now = Date.now()): boolean {
@@ -96,6 +100,7 @@ function resetRequestActivity(orchestrator: Orchestrator): void {
   orchestrator.requestHadTools = false;
   orchestrator.requestToolCallCount = 0;
   orchestrator.requestHadFileMutation = false;
+  orchestrator.requestHadEdit = false;
 }
 
 function selectedSkills(orchestrator: Orchestrator) {
@@ -121,7 +126,7 @@ function requestPhasesBlock(canAsk: boolean): string {
     `2. Propose. State how you will solve it: the approach, what you will change, and anything you deliberately are not doing. ${ask}`,
     `3. Implement. Once approved, carry the whole thing out autonomously without further check-ins, and report at the end. Never end a turn with a question you would proceed without an answer to — a progress check, an offer to reorder your own queue, or permission for something the approval already covers costs a round trip and buys nothing. ${raise} Otherwise decide it under the safest reversible reading, keep going, and record the assumption in your final report.`,
     "",
-    "Never answer your own question. Once you have decided something needs the user, that decision stands: do not talk yourself into a default, and do not treat a prompt to continue as the answer. If you asked and have no answer yet, you are blocked — stop, and leave the question standing.",
+    "Never answer your own question. Once you have decided something needs the user, that decision stands: do not talk yourself into a default, and do not treat a prompt to continue as the answer. If you asked and have no answer yet, you are blocked — stop, and leave the question standing, unless pi-pi tells you the question itself was adjudicated as one you did not need answered.",
     "Collapse the phases only when the request is genuinely trivial (a lookup, a one-line fix, a question with no work attached) or the user told you to skip ahead. A request that spans several items is never trivial.",
     "Return to phase 1 mid-implementation only when you discover something that invalidates the approved approach — not for a detail you can decide yourself under the safest reversible reading.",
     "</request_phases>",
@@ -328,6 +333,7 @@ function registerLifecycle(orchestrator: Orchestrator): void {
     orchestrator.mainTurnToolInFlight++;
     orchestrator.requestHadTools = true;
     orchestrator.requestToolCallCount++;
+    if (event?.toolName === "edit" || event?.toolName === "write") orchestrator.requestHadEdit = true;
     if (event?.toolName === "edit" || event?.toolName === "write" || event?.toolName === "Agent") orchestrator.requestHadFileMutation = true;
     orchestrator.mainTurnLastActivity = Date.now();
     if (event?.toolName === "ask_user") orchestrator.interactivePromptOpen = true;
@@ -429,6 +435,10 @@ type CompactionState = Pick<Orchestrator,
 // away. Below this size the resend is too cheap to be worth that trade.
 const MODEL_SWITCH_COMPACTION_MIN_TOKENS = 40_000;
 
+// Consecutive proactive compaction failures after which the session stops
+// trying: the host's own overflow recovery is the remaining backstop.
+const MAX_COMPACTION_FAILURES = 2;
+
 function compactForModelSwitch(orchestrator: CompactionState, ctx: any): void {
   if (!orchestrator.config?.compaction?.enabled || typeof ctx?.compact !== "function") return;
   // The host runs one compaction at a time; starting a second one over a manual
@@ -508,6 +518,7 @@ function registerCompaction(orchestrator: CompactionState, sessionSkills: Map<st
   });
   pi.on("session_compact", (_event, ctx) => {
     orchestrator.lastCtx = ctx;
+    orchestrator.adaptiveCompaction.failures = 0;
     if (orchestrator.adaptiveCompaction.inFlight) {
       orchestrator.adaptiveCompaction.inFlight = false;
       orchestrator.adaptiveCompaction.pendingProactiveMeasure = true;
@@ -570,9 +581,13 @@ async function maybeCompact(orchestrator: CompactionState, ctx: any, midRun = fa
     onError: (err: any) => {
       // A failed compaction does not shrink the context, so the arm would
       // never re-arm via the lower band; re-arm here so the next turn retries.
+      // Mid-run each retry also costs the aborted turn its resume pays for, so
+      // a compaction that keeps failing stops being tried at all.
       orchestrator.adaptiveCompaction.inFlight = false;
       orchestrator.compactionArm.armed = true;
-      getLogger().error({ s: "compaction", err: err?.message }, "proactive compaction failed");
+      orchestrator.adaptiveCompaction.failures++;
+      if (orchestrator.adaptiveCompaction.failures >= MAX_COMPACTION_FAILURES) orchestrator.adaptiveCompaction.disabled = true;
+      getLogger().error({ s: "compaction", err: err?.message, failures: orchestrator.adaptiveCompaction.failures }, "proactive compaction failed");
     },
   });
 }
@@ -597,6 +612,7 @@ export function registerSubagentCompaction(
       window: null,
       firedThreshold: null,
       contaminatedMeasures: 0,
+      failures: 0,
     },
     manualCompactionPending: false,
     startupModelCorrection: false,
@@ -615,6 +631,7 @@ export function registerSubagentCompaction(
         window: null,
         firedThreshold: null,
         contaminatedMeasures: 0,
+        failures: 0,
       };
       state.compactionArm.armed = true;
     },
@@ -796,6 +813,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       hadTools: orchestrator.requestHadTools,
       toolCallCount: orchestrator.requestToolCallCount,
       hadFileMutation: orchestrator.requestHadFileMutation,
+      hadEdit: orchestrator.requestHadEdit,
     };
     const usage = tracker();
     if (usage && message?.usage) {
@@ -841,7 +859,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     }
     if (orchestrator.continuationCount >= MAX_CONTINUATIONS) {
       orchestrator.continuationHalted = true;
-      ctx.ui?.notify?.("Automatic continuation paused after repeated prose-only stops.", "warning");
+      ctx.ui?.notify?.("Automatic continuation paused after repeated automatic resumes.", "warning");
       return;
     }
     // Both stops are replayed to their own model rather than nudged on
