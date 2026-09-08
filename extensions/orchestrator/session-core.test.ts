@@ -88,6 +88,55 @@ describe("session-first core", () => {
     expect(prompt).not.toContain("Implement only the approved plan");
   });
 
+  it("front-loads clarification and gates implementation behind one approval", () => {
+    const orchestrator = new Orchestrator(makePi());
+    orchestrator.cwd = "/tmp/project";
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    orchestrator.config.contextInjection = {
+      globalAgents: false,
+      globalClaude: false,
+      ancestorAgents: false,
+      ancestorClaude: false,
+      projectAgents: false,
+      projectClaude: false,
+    };
+    const prompt = renderGenericPrompt(orchestrator, {
+      model: { provider: "test", id: "model" },
+      ui: { notify: vi.fn() },
+    }, ["read", "ask_user"]);
+    expect(prompt).toContain("<request_phases>");
+    // Questions in the request are answered before any implementation starts.
+    expect(prompt).toContain("answer every question the request contains");
+    // The proposal blocks, and it blocks via ask_user — a prose-only stop is
+    // nudged back into work by the continuation handler, so it cannot gate.
+    expect(prompt).toContain("WAIT for the answer");
+    expect(prompt).toContain("never a prose message");
+    // Phase 3 must not need the user again.
+    expect(prompt).toContain("without further check-ins");
+    // The old blanket instruction contradicted the gate and must be gone.
+    expect(prompt).not.toContain("wait for plan approval unless asked");
+  });
+
+  it("forbids interim prose so only the final message is written", () => {
+    const orchestrator = new Orchestrator(makePi());
+    orchestrator.cwd = "/tmp/project";
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    orchestrator.config.contextInjection = {
+      globalAgents: false,
+      globalClaude: false,
+      ancestorAgents: false,
+      ancestorClaude: false,
+      projectAgents: false,
+      projectClaude: false,
+    };
+    const prompt = renderGenericPrompt(orchestrator, {
+      model: { provider: "test", id: "model" },
+      ui: { notify: vi.fn() },
+    }, ["read"]);
+    expect(prompt).toContain("Do not write prose while working");
+    expect(prompt).toContain("one message, at the end");
+  });
+
   it("keeps root hooks live after a subagent session has loaded the extension in-process", async () => {
     const pi = makePi();
     const orchestrator = new Orchestrator(pi);
@@ -173,6 +222,22 @@ describe("session-first core", () => {
     expect(classifyContinuation({ stopReason: "stop", content: [{ type: "text", text: "done" }] }, manyTools)).toBe("adjudicate");
     expect(classifyContinuation({ stopReason: "stop", content: [{ type: "text", text: "done" }] }, mutated)).toBe("adjudicate");
     expect(classifyContinuation({ stopReason: "error", content: [] }, mutated)).toBe("none");
+  });
+
+  it("does not nudge a turn that stopped to await the user past the approval gate", async () => {
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi);
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    registerEventHandlers(orchestrator);
+    const queued: string[] = [];
+    orchestrator.queueContinuation = (text: string) => { queued.push(text); };
+    orchestrator.requestHadTools = true;
+    orchestrator.requestToolCallCount = 6;
+    await emit(pi, "turn_end", {
+      message: { stopReason: "stop", content: [{ type: "text", text: "Here is the approach. Approve?" }] },
+    }, { model: { provider: "test", id: "m" }, ui: { notify: vi.fn() } });
+    expect(queued).toHaveLength(1);
+    expect(queued[0]).toContain("waiting on an answer");
   });
 
   it("recognizes a stalled main turn only when recovery is safe", () => {

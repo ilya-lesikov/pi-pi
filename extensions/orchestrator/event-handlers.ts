@@ -31,7 +31,7 @@ const MAX_CONTINUATIONS = 3;
 const MAX_OBJECTIVE_CONTINUATIONS = 5;
 const CONTINUE_TRUNCATED = "[PI-PI] The previous response was truncated. Continue exactly where you stopped and complete the request.";
 const CONTINUE_EMPTY = "[PI-PI] The previous turn ended without a result. Continue with the next action and complete the request.";
-const CONTINUE_AMBIGUOUS = "[PI-PI] You stopped with a prose reply after taking actions. If the user's request is fully complete, state that concisely and stop. Otherwise continue with the next action without re-explaining.";
+const CONTINUE_AMBIGUOUS = "[PI-PI] You stopped with a prose reply after taking actions. If the user's request is fully complete, state that concisely and stop. If you are waiting on an answer or an approval, ask it with ask_user instead of stopping in prose — prose cannot hold the turn open. Otherwise continue with the next action without re-explaining.";
 const CONTINUE_STALLED = "[PI-PI] The previous turn stalled without completing. Continue where you left off and complete the request.";
 
 export type ContinuationDecision = "none" | "objective" | "adjudicate";
@@ -86,6 +86,29 @@ function selectedSkills(orchestrator: Orchestrator) {
   return listLayeredSkills(orchestrator.cwd, enabledSkillLayers(orchestrator.config.skills));
 }
 
+// Front-load everything that needs the user (item: two-phase requests), so the
+// user is present for clarification and design and absent for execution. The
+// gate has to be an ask_user call: a prose-only stop is classified as an
+// unfinished objective and nudged straight back into work (see
+// classifyContinuation), so prose could never hold a turn open for approval.
+function requestPhasesBlock(canAsk: boolean): string {
+  const ask = canAsk
+    ? "Put both in ONE ask_user call and WAIT for the answer — that call is the only thing that can hold the turn open for you; never a prose message."
+    : "State both and stop; you have no ask_user tool, so you cannot hold the turn open — do not start implementing on an unanswered question.";
+  return [
+    "<request_phases>",
+    "Every request runs in three phases. The user is present for 1 and 2 and absent for 3, so everything that needs them belongs in the first two.",
+    "",
+    "1. Clarify. Before touching anything, answer every question the request contains and resolve what would change the work: read the code, run the probes, delegate the lookups. Answer from evidence, never from assumption. If a genuine choice remains — required information you cannot obtain, or plausible options that differ in user-visible behavior, compatibility, security, cost, or reversibility — ask it here, together with the answers you already have. Do not spread questions across several turns.",
+    `2. Propose. State how you will solve it: the approach, what you will change, and anything you deliberately are not doing. ${ask}`,
+    "3. Implement. Once approved, carry the whole thing out autonomously without further check-ins, and report at the end.",
+    "",
+    "Collapse the phases only when the request is genuinely trivial (a lookup, a one-line fix, a question with no work attached) or the user told you to skip ahead. A request that spans several items is never trivial.",
+    "Return to phase 1 mid-implementation only when you discover something that invalidates the approved approach — not for a detail you can decide yourself under the safest reversible reading.",
+    "</request_phases>",
+  ].join("\n");
+}
+
 export function renderGenericPrompt(orchestrator: Orchestrator, ctx: any, toolNames: string[]): string {
   const modelSpec = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : orchestrator.config.agents.main.model;
   const info = getModelInfo(modelSpec);
@@ -109,12 +132,11 @@ export function renderGenericPrompt(orchestrator: Orchestrator, ctx: any, toolNa
       "- Own the request end to end. Continue autonomously until the outcome is implemented and proportionately validated, or you are blocked by missing information, permissions, or an external failure you cannot resolve.",
       "- Never report completion while validation relevant to your change fails. Distinguish failures you introduced from verified pre-existing ones.",
       "- After two failed attempts driven by the same hypothesis, stop repeating it: gather new evidence, change strategy, or delegate diagnosis.",
-      "- For multi-step work keep a lightweight checklist with the task tools (TaskCreate/TaskUpdate). Do not create plan documents or wait for plan approval unless asked.",
-      "- Ask the user only when required information is unavailable or plausible choices differ in user-visible behavior, compatibility, security, cost, or reversibility. For low-risk reversible ambiguity: follow repository precedent, state the assumption in one line, proceed.",
-      "- Pause for the user only when proceeding would be destructive, irreversible, or picks between materially different outcomes; otherwise take the safest reversible interpretation and continue.",
+      "- For multi-step work keep a lightweight checklist with the task tools (TaskCreate/TaskUpdate). Do not create plan documents.",
       "- When reporting finished work: what was done (not why), assumptions you made that the user should know about, and anything unresolved. Quote raw output only to explain a failure.",
       "</constraints>",
     ].join("\n"),
+    requestPhasesBlock(toolNames.includes("ask_user")),
     principlesBlock(),
     skillManifest,
     toolsBlock(toolNames),
