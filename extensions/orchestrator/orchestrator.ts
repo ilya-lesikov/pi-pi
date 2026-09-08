@@ -60,6 +60,12 @@ export class Orchestrator {
   subFallbackActive = false;
   subFallbackModelId: string | null = null;
   subFallbackMainPriorSpec: string | null = null;
+  /**
+   * The spec pi-pi last routed the root session onto. A live model still equal
+   * to it is one pi-pi chose, so re-routing it is safe; anything else is the
+   * user's own /model pick and must be left alone.
+   */
+  routedMainSpec: string | null = null;
   subSwitchBackTimer: ReturnType<typeof setTimeout> | null = null;
   tokenRefreshTimer: ReturnType<typeof setInterval> | null = null;
   private _interactivePromptOpen = false;
@@ -180,6 +186,31 @@ export class Orchestrator {
     return true;
   }
 
+  /**
+   * Re-route the root session onto the configured main model when its preferred
+   * provider tier became usable again. Without this a session that STARTED
+   * while the tier was down (its credential rejected, or the provider missing)
+   * stays on the lower tier for its whole life: only the rate-limit switch-back
+   * restores a model, and it never ran.
+   */
+  async restoreMainRouting(ctx: ExtensionContext): Promise<void> {
+    const main = this.config?.agents?.main;
+    // A live fallback owns the routing until its probe clears; re-resolving
+    // under it would just recompute the same demoted spec anyway.
+    if (!main || this.subFallbackActive || !this.routedMainSpec) return;
+    const live = ctx.model?.provider && ctx.model?.id ? `${ctx.model.provider}/${ctx.model.id}` : "";
+    if (live !== this.routedMainSpec) return;
+    const target = resolveModel(main.model);
+    if (target === live) return;
+    try {
+      if (await this.switchModel(ctx, target, main.thinking)) {
+        this.routedMainSpec = target;
+        getLogger().info({ s: "model", from: live, to: target }, "restored the main model after its tier became usable again");
+        (ctx as any).ui?.notify?.(`Provider tier recovered; switched back to ${target}.`, "info");
+      }
+    } catch {}
+  }
+
   updateStatus(ctx: any): void {
     this.lastCtx = ctx;
     publishAcpState(this);
@@ -287,7 +318,14 @@ export class Orchestrator {
     const main = this.config?.agents?.main;
     if (!main) return false;
     try {
-      return await this.switchModel(ctx, main.model, main.thinking);
+      if (!await this.switchModel(ctx, main.model, main.thinking)) return false;
+      // Recorded ONLY here and in restoreMainRouting: these are the two places
+      // pi-pi routes the session from the configured main model. Recording it
+      // for every switchModel would also claim the rate-limit switch-back's
+      // restore of the PRIOR spec — which may be a model the user picked by
+      // hand, and re-resolving would then overwrite that choice.
+      this.routedMainSpec = resolveModel(main.model);
+      return true;
     } catch {
       return false;
     }

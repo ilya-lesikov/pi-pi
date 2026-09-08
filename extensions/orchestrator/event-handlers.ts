@@ -18,13 +18,13 @@ import { identityBlock, principlesBlock, toolsBlock, delegationBlock } from "./a
 import { buildPoolRoster, getAgentConfigSnapshot, registeredAgentNames, setExtensionOnlyMode } from "./agents/registry.js";
 import { getModelInfo, resolveModel, setSubscriptionFallbackActive, updateRegistryFromAvailableModels } from "./model-registry.js";
 import { createCustomFooter, setFooterContext, setFooterTracker, setFooterOrchestrator } from "./custom-footer.js";
-import { createUsageTracker, dumpUsageSummary, loadUsageSummary, type UsageTracker } from "./usage-tracker.js";
+import { createUsageTracker, dumpUsageSummary, isSubscriptionRouted, loadUsageSummary, type UsageTracker } from "./usage-tracker.js";
 import { publishAcpState, resetAcpStateCache } from "./acp.js";
 import { runAfterEdit } from "./commands.js";
 import { checkDuplicateExtensions } from "./duplicate-extension-guard.js";
-import { handleMainRateLimit, handleSubagentRateLimit, isRateLimitError } from "./rate-limit-fallback.js";
+import { demoteUnusableSubscription, handleMainAuthFailure, handleMainRateLimit, handleSubagentAuthFailure, handleSubagentRateLimit, isAuthError, isRateLimitError } from "./rate-limit-fallback.js";
 import { adjudicateContinuation } from "./continuation-adjudicator.js";
-import { loadFlantSettings, refreshCopilotOAuthToken, refreshSubProvider, setModelRegistry, syncProviderTiers } from "./flant-infra.js";
+import { loadFlantSettings, noteSubscriptionCredentialAccepted, refreshCopilotOAuthToken, refreshSubProvider, reviveSubscriptionCredential, setModelRegistry, syncProviderTiers } from "./flant-infra.js";
 import type { Orchestrator } from "./orchestrator.js";
 
 const USAGE_TRACKER_KEY = Symbol.for("pi-pi:usage-tracker");
@@ -272,11 +272,13 @@ function registerLifecycle(orchestrator: Orchestrator): void {
       });
       (orchestrator.lastCtx?.ui as any)?.requestRender?.();
     }
+    if (data?.tokens && isSubscriptionRouted(data?.modelId)) noteSubscriptionCredentialAccepted();
     settle(data);
   });
   pi.events.on("subagents:failed", (data: any) => {
     settle(data);
     if (isRateLimitError(data?.error)) void handleSubagentRateLimit(orchestrator, orchestrator.lastCtx, data?.modelId);
+    else if (isAuthError(data?.error)) void handleSubagentAuthFailure(orchestrator, orchestrator.lastCtx, data?.modelId);
   });
   const startMainTurnWatchdog = () => {
     if (orchestrator.mainTurnTimer) return;
@@ -610,6 +612,29 @@ export function registerSubagentCompaction(
   });
 }
 
+// Confirm the stored subscription credential still works before the session
+// sends anything real. Deliberately not awaited by session_start: it is a
+// network round trip, and every other startup step (and the user's first
+// prompt) must not wait on it. Because it outlives its own turn, everything it
+// observed is re-checked before it acts: the session may have been replaced by
+// a /new or /resume, and the user may have picked another model meanwhile.
+async function verifySubscriptionCredential(orchestrator: Orchestrator, ctx: any, sessionId: string): Promise<void> {
+  const spec = ctx.model?.provider && ctx.model?.id ? `${ctx.model.provider}/${ctx.model.id}` : "";
+  if (!isSubscriptionRouted(spec, ctx.model?.provider)) return;
+  try {
+    // Only a hard failure justifies routing away at startup; a throttled
+    // rotation means one just happened and the first real request will show
+    // whether it took.
+    if (await reviveSubscriptionCredential(spec, orchestrator.pi) !== "failed") return;
+    if (ctx.sessionManager?.getSessionId?.() !== sessionId) return;
+    const live = ctx.model?.provider && ctx.model?.id ? `${ctx.model.provider}/${ctx.model.id}` : "";
+    if (live !== spec) return;
+    await demoteUnusableSubscription(orchestrator, ctx, spec);
+  } catch (error: any) {
+    getLogger().debug({ s: "flant", err: error?.message }, "the startup subscription credential check failed");
+  }
+}
+
 export function registerEventHandlers(orchestrator: Orchestrator): void {
   const pi = orchestrator.pi;
   registerTracing(pi);
@@ -690,6 +715,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       orchestrator.tokenRefreshTimer = setInterval(() => { void refreshSubProvider(pi).catch(() => {}); }, 4 * 60_000);
       orchestrator.tokenRefreshTimer.unref?.();
     }
+    if (sessionId) void verifySubscriptionCredential(orchestrator, ctx, sessionId);
     publishAcpState(orchestrator);
   });
 
@@ -761,10 +787,25 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (usage && message?.usage) {
       usage.recordTurn(message.model ?? ctx.model?.id ?? "unknown", message.provider ?? ctx.model?.provider ?? "unknown", message.usage.input ?? 0, message.usage.output ?? 0, message.usage.cacheRead ?? 0, message.usage.cacheWrite ?? 0, message.usage.cost?.total ?? 0, typeof message.usage.cacheRead === "number" || typeof message.usage.cacheWrite === "number");
     }
+    // A turn that produced usage on the subscription proves the credential
+    // works, which re-arms the one-rotation-per-rejection guard for the next
+    // genuine revocation.
+    if (message?.usage && isSubscriptionRouted(message?.model ?? ctx.model?.id, message?.provider ?? ctx.model?.provider)) {
+      noteSubscriptionCredentialAccepted();
+    }
     publishAcpState(orchestrator);
-    if (message?.stopReason !== "toolUse") await maybeCompact(orchestrator, ctx);
+    if (message?.stopReason !== "toolUse") {
+      await maybeCompact(orchestrator, ctx);
+      // Between requests only: switching providers mid-run would resend the
+      // whole conversation on a cold cache from inside a tool-call chain.
+      await orchestrator.restoreMainRouting(ctx);
+    }
     if (message?.stopReason === "error" && isRateLimitError(message?.errorMessage)) {
       await handleMainRateLimit(orchestrator, ctx, message?.model ?? ctx.model?.id, message?.provider ?? ctx.model?.provider);
+      return;
+    }
+    if (message?.stopReason === "error" && isAuthError(message?.errorMessage)) {
+      await handleMainAuthFailure(orchestrator, ctx, message?.model ?? ctx.model?.id, message?.provider ?? ctx.model?.provider);
       return;
     }
     if (orchestrator.spawnedAgentIds.size > 0) return;
@@ -824,6 +865,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       orchestrator.subFallbackActive = false;
       orchestrator.subFallbackModelId = null;
       orchestrator.subFallbackMainPriorSpec = null;
+      orchestrator.routedMainSpec = null;
       orchestrator.resetContinuation();
       delete (globalThis as any)[Symbol.for("pi-pi:root-session-source")];
     }

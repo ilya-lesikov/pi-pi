@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { getDefaultConfig, normalizeConfigDurations } from "./config.js";
 import { Orchestrator } from "./orchestrator.js";
 import { buildAcpState } from "./acp.js";
-import { isSubscriptionFallbackActive, setSubscriptionFallbackActive } from "./model-registry.js";
+import { isSubscriptionFallbackActive, setSubscriptionFallbackActive, setTierEnabled, updateRegistryFromAvailableModels } from "./model-registry.js";
 import { classifyContinuation, isMainTurnStalled, registerEventHandlers, registerLoadSkill, registerSubagentCompaction, renderGenericPrompt } from "./event-handlers.js";
 import { BUILTIN_COMPACTION_MARKER } from "./compaction-dispatch.js";
 import { createUsageTracker } from "./usage-tracker.js";
@@ -209,6 +209,101 @@ describe("session-first core", () => {
     orchestrator.config.agents.main = { model: "test/missing", thinking: "high" };
     expect(await orchestrator.applyMainAgent(ctx)).toBe(false);
     expect(pi.setModel).toHaveBeenCalledTimes(1);
+  });
+
+  // A session that STARTS while the preferred tier is unusable resolves main
+  // onto the lower one, and nothing else ever moves it back: the rate-limit
+  // switch-back is the only restore path and it never ran for this session.
+  it("restores the main model once its preferred tier is usable again", async () => {
+    const specs = ["pp-flant-anthropic-sub/sub/claude-opus-4-8", "github-copilot/claude-opus-4.5"];
+    updateRegistryFromAvailableModels(specs);
+    setTierEnabled({ "copilot": true, "flant-sub": false, "flant-api": true });
+    const pi = makePi();
+    pi.setModel = vi.fn(async () => true);
+    pi.setThinkingLevel = vi.fn();
+    const orchestrator = new Orchestrator(pi);
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    orchestrator.config.agents.main = { model: "pp-flant-anthropic-sub/sub/claude-opus-4-8", thinking: "high" };
+    const registry = {
+      find: vi.fn((provider: string, id: string) => (specs.includes(`${provider}/${id}`) ? { provider, id } : undefined)),
+    };
+
+    const ctx: any = { modelRegistry: registry, ui: { notify: vi.fn() } };
+    expect(await orchestrator.applyMainAgent(ctx)).toBe(true);
+    expect(orchestrator.routedMainSpec).toBe("github-copilot/claude-opus-4.5");
+
+    ctx.model = { provider: "github-copilot", id: "claude-opus-4.5" };
+    await orchestrator.restoreMainRouting(ctx);
+    expect(pi.setModel).toHaveBeenCalledTimes(1);
+
+    setTierEnabled({ "flant-sub": true });
+    await orchestrator.restoreMainRouting(ctx);
+    expect(pi.setModel).toHaveBeenLastCalledWith({ provider: "pp-flant-anthropic-sub", id: "sub/claude-opus-4-8" });
+
+    setTierEnabled({ "copilot": false, "flant-sub": true, "flant-api": true });
+    updateRegistryFromAvailableModels([]);
+  });
+
+  it("leaves a model the user picked alone, and holds off while a fallback is live", async () => {
+    const specs = ["pp-flant-anthropic-sub/sub/claude-opus-4-8", "github-copilot/claude-opus-4.5"];
+    updateRegistryFromAvailableModels(specs);
+    setTierEnabled({ "copilot": true, "flant-sub": false, "flant-api": true });
+    const pi = makePi();
+    pi.setModel = vi.fn(async () => true);
+    pi.setThinkingLevel = vi.fn();
+    const orchestrator = new Orchestrator(pi);
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    orchestrator.config.agents.main = { model: "pp-flant-anthropic-sub/sub/claude-opus-4-8", thinking: "high" };
+    const ctx: any = {
+      modelRegistry: { find: vi.fn((provider: string, id: string) => (specs.includes(`${provider}/${id}`) ? { provider, id } : undefined)) },
+      ui: { notify: vi.fn() },
+    };
+    await orchestrator.applyMainAgent(ctx);
+    pi.setModel.mockClear();
+    setTierEnabled({ "flant-sub": true });
+
+    ctx.model = { provider: "github-copilot", id: "gpt-5.6-sol" };
+    await orchestrator.restoreMainRouting(ctx);
+    expect(pi.setModel).not.toHaveBeenCalled();
+
+    ctx.model = { provider: "github-copilot", id: "claude-opus-4.5" };
+    orchestrator.subFallbackActive = true;
+    await orchestrator.restoreMainRouting(ctx);
+    expect(pi.setModel).not.toHaveBeenCalled();
+
+    setTierEnabled({ "copilot": false, "flant-sub": true, "flant-api": true });
+    updateRegistryFromAvailableModels([]);
+  });
+
+  // The rate-limit switch-back restores whatever model was live when the limit
+  // hit — possibly one the user picked by hand. Recording that as pi-pi's own
+  // routing choice would let the next turn overwrite it with the config main.
+  it("does not claim a model the rate-limit switch-back restored", async () => {
+    const specs = ["pp-flant-anthropic-sub/sub/claude-opus-4-8", "github-copilot/claude-opus-4.5"];
+    updateRegistryFromAvailableModels(specs);
+    setTierEnabled({ "copilot": true, "flant-sub": true, "flant-api": true });
+    const pi = makePi();
+    pi.setModel = vi.fn(async () => true);
+    pi.setThinkingLevel = vi.fn();
+    const orchestrator = new Orchestrator(pi);
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    orchestrator.config.agents.main = { model: "pp-flant-anthropic-sub/sub/claude-opus-4-8", thinking: "high" };
+    const ctx: any = {
+      modelRegistry: { find: vi.fn((provider: string, id: string) => (specs.includes(`${provider}/${id}`) ? { provider, id } : undefined)) },
+      ui: { notify: vi.fn() },
+    };
+
+    // The switch-back path: switchModel with the spec that was live before.
+    await orchestrator.switchModel(ctx, "github-copilot/claude-opus-4.5", "high");
+    expect(orchestrator.routedMainSpec).toBeNull();
+
+    ctx.model = { provider: "github-copilot", id: "claude-opus-4.5" };
+    pi.setModel.mockClear();
+    await orchestrator.restoreMainRouting(ctx);
+    expect(pi.setModel).not.toHaveBeenCalled();
+
+    setTierEnabled({ "copilot": false, "flant-sub": true, "flant-api": true });
+    updateRegistryFromAvailableModels([]);
   });
 
   it("publishes session activity rather than a phase plan", () => {
