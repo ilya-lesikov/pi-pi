@@ -23,7 +23,7 @@ import { publishAcpState, resetAcpStateCache } from "./acp.js";
 import { runAfterEdit } from "./commands.js";
 import { checkDuplicateExtensions } from "./duplicate-extension-guard.js";
 import { demoteUnusableSubscription, handleMainAuthFailure, handleMainRateLimit, handleSubagentAuthFailure, handleSubagentRateLimit, isAuthError, isRateLimitError } from "./rate-limit-fallback.js";
-import { adjudicateContinuation } from "./continuation-adjudicator.js";
+import { adjudicateCheckIn, adjudicateContinuation } from "./continuation-adjudicator.js";
 import { loadFlantSettings, noteSubscriptionCredentialAccepted, refreshCopilotOAuthToken, refreshSubProvider, reviveSubscriptionCredential, setModelRegistry, syncProviderTiers } from "./flant-infra.js";
 import type { Orchestrator } from "./orchestrator.js";
 
@@ -34,10 +34,11 @@ const MAX_OBJECTIVE_CONTINUATIONS = 5;
 const CONTINUE_TRUNCATED = "[PI-PI] The previous response was truncated. Continue exactly where you stopped and complete the request.";
 const CONTINUE_EMPTY = "[PI-PI] The previous turn ended without a result. Continue with the next action and complete the request.";
 const CONTINUE_UNFINISHED = "[PI-PI] Continue where you left off and finish the request. Do not re-explain what you already did.";
+const CONTINUE_CHECK_IN = "[PI-PI] The question you ended on was not blocking. Settle it yourself under the safest reversible reading, carry on with the approved work, and record the assumption in your final report. If the decision really is the user's, ask it with ask_user — prose does not hold the turn open.";
 const CONTINUE_STALLED = "[PI-PI] The previous turn stalled without completing. Continue where you left off and complete the request.";
 const CONTINUE_COMPACTED = "[PI-PI] Context was compacted mid-task, which cut the tool loop short. Continue exactly where you left off; do not restart the work or re-report what is already done.";
 
-export type ContinuationDecision = "none" | "objective" | "adjudicate";
+export type ContinuationDecision = "none" | "objective" | "adjudicate" | "check-in";
 
 export interface RequestActivity {
   hadTools: boolean;
@@ -51,9 +52,10 @@ export interface RequestActivity {
 // enough work that an unfinished objective is plausible.
 const ADJUDICATE_TOOL_THRESHOLD = 4;
 
-// A turn whose last words are a question handed control back on purpose.
-// Nudging it would make the agent answer itself and then act on its own
-// approval, so the question has to end the turn even after heavy tool work.
+// A turn whose last words are a question handed control back. After real
+// implementation work that is as often a check-in the user already approved
+// past, so such a turn is worth a look; a lighter one is left alone, since
+// nudging a genuine hand-back makes the agent act on its own approval.
 function endsWithQuestion(parts: any[]): boolean {
   const texts = parts.filter((part: any) => part?.type === "text" && typeof part.text === "string" && part.text.trim());
   const last = texts[texts.length - 1]?.text ?? "";
@@ -68,10 +70,10 @@ export function classifyContinuation(message: any, activity: RequestActivity): C
   const hasText = parts.some((part: any) => part?.type === "text" && part.text?.trim());
   const hasToolCall = parts.some((part: any) => part?.type === "toolCall");
   if (!hasText && !hasToolCall) return "objective";
-  if (hasText && endsWithQuestion(parts)) return "none";
   const substantial = activity.hadFileMutation || activity.toolCallCount >= ADJUDICATE_TOOL_THRESHOLD;
-  if (message?.stopReason === "stop" && hasText && activity.hadTools && substantial) return "adjudicate";
-  return "none";
+  const worked = message?.stopReason === "stop" && hasText && activity.hadTools && substantial;
+  if (hasText && endsWithQuestion(parts)) return worked ? "check-in" : "none";
+  return worked ? "adjudicate" : "none";
 }
 
 export function isMainTurnStalled(orchestrator: Orchestrator, now = Date.now()): boolean {
@@ -842,15 +844,18 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       ctx.ui?.notify?.("Automatic continuation paused after repeated prose-only stops.", "warning");
       return;
     }
-    // The turn is replayed to its own model with a yes/no question rather than
-    // nudged on suspicion: a prose stop after real work is as often a finished
-    // report as an abandoned one, and only the model that ran the turn can tell.
+    // Both stops are replayed to their own model rather than nudged on
+    // suspicion: a prose stop after real work is as often a finished report as
+    // an abandoned one, a closing question as often a decision the user owns as
+    // a courtesy check-in, and only the model that ran the turn can tell.
     const generation = orchestrator.continuationGeneration;
-    const unfinished = await adjudicateContinuation(pi, ctx, orchestrator.lastContextMessages, message);
-    if (!unfinished || generation !== orchestrator.continuationGeneration || orchestrator.continuationHalted) return;
+    const nudge = decision === "check-in"
+      ? await adjudicateCheckIn(pi, ctx, orchestrator.lastContextMessages, message) && CONTINUE_CHECK_IN
+      : await adjudicateContinuation(pi, ctx, orchestrator.lastContextMessages, message) && CONTINUE_UNFINISHED;
+    if (!nudge || generation !== orchestrator.continuationGeneration || orchestrator.continuationHalted) return;
     orchestrator.continuationCount++;
     resetRequestActivity(orchestrator);
-    orchestrator.queueContinuation(CONTINUE_UNFINISHED, true);
+    orchestrator.queueContinuation(nudge, true);
   });
 
   pi.on("session_shutdown", (_event, ctx) => {

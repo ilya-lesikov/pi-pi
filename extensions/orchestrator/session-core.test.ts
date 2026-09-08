@@ -335,17 +335,21 @@ describe("session-first core", () => {
     expect(classifyContinuation({ stopReason: "error", content: [] }, mutated)).toBe("none");
   });
 
-  it("leaves a turn that handed control back with a question alone", () => {
+  it("routes a turn that handed control back with a question to the check-in adjudicator", () => {
     const mutated = { hadTools: true, toolCallCount: 8, hadFileMutation: true };
-    // A question is a deliberate handoff, not an unfinished objective; nudging
-    // it makes the agent answer itself and act on its own approval.
-    expect(classifyContinuation({ stopReason: "stop", content: [{ type: "text", text: "Found two options. Want me to close that gap?" }] }, mutated)).toBe("none");
+    // A closing question after real work is as often a check-in the user
+    // already approved past as a decision they own, so it is adjudicated
+    // rather than nudged or accepted on sight.
+    expect(classifyContinuation({ stopReason: "stop", content: [{ type: "text", text: "Found two options. Want me to close that gap?" }] }, mutated)).toBe("check-in");
     // Trailing whitespace and closing blank lines must not defeat the check.
-    expect(classifyContinuation({ stopReason: "stop", content: [{ type: "text", text: "Which one?  \n\n" }] }, mutated)).toBe("none");
+    expect(classifyContinuation({ stopReason: "stop", content: [{ type: "text", text: "Which one?  \n\n" }] }, mutated)).toBe("check-in");
     // A question mid-report followed by a conclusion is NOT a handoff.
     expect(classifyContinuation({ stopReason: "stop", content: [{ type: "text", text: "Why did it fail? The cache was stale. Fixed and committed." }] }, mutated)).toBe("adjudicate");
     // Multi-part content: the last text part decides.
-    expect(classifyContinuation({ stopReason: "stop", content: [{ type: "text", text: "Did the work." }, { type: "text", text: "Proceed with the rename?" }] }, mutated)).toBe("none");
+    expect(classifyContinuation({ stopReason: "stop", content: [{ type: "text", text: "Did the work." }, { type: "text", text: "Proceed with the rename?" }] }, mutated)).toBe("check-in");
+    // A question after a light exchange is a genuine hand-back: replaying it
+    // would cost a request to second-guess a stop nothing suggests is wrong.
+    expect(classifyContinuation({ stopReason: "stop", content: [{ type: "text", text: "Which one?" }] }, { hadTools: true, toolCallCount: 1, hadFileMutation: false })).toBe("none");
   });
 
   it("leaves a finished-looking turn alone when its own model says nothing is left", async () => {
@@ -658,6 +662,40 @@ describe("session-first core", () => {
     orchestrator.queueContinuation("[PI-PI] older");
     const stale = await emitForResult(pi, "before_agent_start", { prompt: "[PI-PI] older\n[continuation:0]" }, ctx);
     expect(stale.systemPrompt).toContain("obsolete automatic continuation");
+    await emit(pi, "session_shutdown", {}, ctx);
+  });
+
+  it("nudges past a check-in its own model calls optional and leaves a blocking one standing", async () => {
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi);
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    registerEventHandlers(orchestrator);
+    const complete = vi.fn(async () => ({ content: [{ type: "text", text: "OPTIONAL" }] }));
+    const ctx = {
+      model: { provider: "test", id: "model" },
+      modelRegistry: { complete },
+      isIdle: () => true,
+      getContextUsage: () => null,
+      getSystemPrompt: () => "system",
+      ui: { notify: vi.fn() },
+    };
+    const checkIn = async () => {
+      await emit(pi, "turn_start", {}, ctx);
+      orchestrator.requestHadTools = true;
+      orchestrator.requestToolCallCount = 6;
+      await emit(pi, "turn_end", { message: { stopReason: "stop", content: [{ type: "text", text: "Landed the first fix. Anything in that ordering you want changed?" }] } }, ctx);
+    };
+
+    await checkIn();
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(complete.mock.calls[0][1].messages.at(-1).content[0].text).toContain("BLOCKING or OPTIONAL");
+    expect(pi.sendMessage).toHaveBeenCalledTimes(1);
+    expect(pi.sendMessage.mock.calls[0][0].content).toContain("was not blocking");
+
+    // A decision the user owns keeps the turn ended, however much work is left.
+    complete.mockResolvedValue({ content: [{ type: "text", text: "BLOCKING" }] });
+    await checkIn();
+    expect(pi.sendMessage).toHaveBeenCalledTimes(1);
     await emit(pi, "session_shutdown", {}, ctx);
   });
 

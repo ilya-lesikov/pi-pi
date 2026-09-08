@@ -13,10 +13,24 @@ const ADJUDICATION_QUESTION = [
   "NO if the user's last message asked you something and this turn answered it: they have to react to your answer before you carry on, however much of their request is still undone.",
 ].join("\n");
 
+// A turn that ends with a question stops the session dead, so the one thing
+// worth knowing is whether the user actually has to answer it.
+const CHECK_IN_QUESTION = [
+  "[PI-PI] Out-of-band check — this message is not part of the conversation and your answer is discarded.",
+  "You ended that turn with a question. Answer with exactly one word, BLOCKING or OPTIONAL, and call no tools.",
+  "BLOCKING if you cannot go on without the user: the choice is theirs to make, you are handing back a blocker, or their own message asked you something this question is part of answering.",
+  "OPTIONAL if you could settle it yourself under the safest reversible reading and keep working — a progress check, an offer to reorder your own queue, or permission for something the user already approved.",
+].join("\n");
+
 const ADJUDICATION_TIMEOUT_MS = 60_000;
 
 export function parseAdjudication(text: string): boolean {
   return /^[^a-z0-9]*yes\b/i.test(text.trim());
+}
+
+/** Only an unhedged OPTIONAL overrides a stop the agent chose deliberately. */
+export function parseCheckInAdjudication(text: string): boolean {
+  return /^[^a-z0-9]*optional\b/i.test(text.trim());
 }
 
 function responseText(message: any): string {
@@ -29,11 +43,11 @@ function responseText(message: any): string {
 }
 
 /**
- * Replay the finished turn to its own model with a yes/no question appended.
+ * Replay the finished turn to its own model with a one-word question appended.
  * The system prompt, tools and messages are the ones the turn itself ran with,
  * so the provider serves the shared prefix from its prompt cache.
  */
-export function buildAdjudicationContext(pi: ExtensionAPI, ctx: any, contextMessages: any[], finalMessage: any): any {
+export function buildAdjudicationContext(pi: ExtensionAPI, ctx: any, contextMessages: any[], finalMessage: any, question: string = ADJUDICATION_QUESTION): any {
   const active = new Set(typeof pi.getActiveTools === "function" ? pi.getActiveTools() : []);
   const tools = (typeof pi.getAllTools === "function" ? pi.getAllTools() : [])
     .filter((tool) => active.has(tool.name))
@@ -42,25 +56,20 @@ export function buildAdjudicationContext(pi: ExtensionAPI, ctx: any, contextMess
   return {
     systemPrompt: typeof ctx?.getSystemPrompt === "function" ? ctx.getSystemPrompt() : undefined,
     tools: tools.length > 0 ? tools : undefined,
-    messages: [...history, { role: "user", content: [{ type: "text", text: ADJUDICATION_QUESTION }], timestamp: Date.now() }],
+    messages: [...history, { role: "user", content: [{ type: "text", text: question }], timestamp: Date.now() }],
   };
 }
 
-/**
- * Whether the finished turn left work the agent can pick up by itself. Any
- * failure answers no: a missed continuation costs a turn the user can ask for,
- * an unwarranted one restarts work they consider finished.
- */
-export async function adjudicateContinuation(pi: ExtensionAPI, ctx: any, contextMessages: any[], finalMessage: any): Promise<boolean> {
+async function askOutOfBand(pi: ExtensionAPI, ctx: any, contextMessages: any[], finalMessage: any, question: string): Promise<string | undefined> {
   const log = getLogger();
   const registry = ctx?.modelRegistry;
   const model = ctx?.model;
   if (!model || !registry) {
     log.debug({ s: "continuation" }, "no completion surface for the continuation check");
-    return false;
+    return undefined;
   }
   try {
-    const context = buildAdjudicationContext(pi, ctx, contextMessages, finalMessage);
+    const context = buildAdjudicationContext(pi, ctx, contextMessages, finalMessage, question);
     const options = { maxTokens: 16, signal: AbortSignal.timeout(ADJUDICATION_TIMEOUT_MS) };
     // The host's own one-shot completion resolves auth and headers itself; the
     // provider call below is the path for hosts whose registry predates it.
@@ -69,17 +78,36 @@ export async function adjudicateContinuation(pi: ExtensionAPI, ctx: any, context
       result = await registry.complete(model, context, options);
     } else if (typeof registry.getApiKeyAndHeaders === "function" && typeof completeSimple === "function") {
       const auth = await registry.getApiKeyAndHeaders(model);
-      if (!auth?.ok) return false;
+      if (!auth?.ok) return undefined;
       result = await completeSimple(model, context, { ...options, apiKey: auth.apiKey, headers: auth.headers });
     } else {
       log.debug({ s: "continuation" }, "no completion surface for the continuation check");
-      return false;
+      return undefined;
     }
     const answer = responseText(result);
     log.debug({ s: "continuation", answer }, "continuation check answered");
-    return parseAdjudication(answer);
+    return answer;
   } catch (error: any) {
     log.debug({ s: "continuation", err: error?.message }, "continuation check failed");
-    return false;
+    return undefined;
   }
+}
+
+/**
+ * Whether the finished turn left work the agent can pick up by itself. Any
+ * failure answers no: a missed continuation costs a turn the user can ask for,
+ * an unwarranted one restarts work they consider finished.
+ */
+export async function adjudicateContinuation(pi: ExtensionAPI, ctx: any, contextMessages: any[], finalMessage: any): Promise<boolean> {
+  const answer = await askOutOfBand(pi, ctx, contextMessages, finalMessage, ADJUDICATION_QUESTION);
+  return answer === undefined ? false : parseAdjudication(answer);
+}
+
+/**
+ * Whether the question the turn ended on was one the agent could have settled
+ * itself. Any failure answers no, which leaves the question standing.
+ */
+export async function adjudicateCheckIn(pi: ExtensionAPI, ctx: any, contextMessages: any[], finalMessage: any): Promise<boolean> {
+  const answer = await askOutOfBand(pi, ctx, contextMessages, finalMessage, CHECK_IN_QUESTION);
+  return answer === undefined ? false : parseCheckInAdjudication(answer);
 }

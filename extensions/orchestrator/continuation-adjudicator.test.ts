@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { adjudicateContinuation, buildAdjudicationContext, parseAdjudication } from "./continuation-adjudicator.js";
+import { adjudicateCheckIn, adjudicateContinuation, buildAdjudicationContext, parseAdjudication, parseCheckInAdjudication } from "./continuation-adjudicator.js";
 
 const completeSimpleMock = vi.fn();
 vi.mock("@earendil-works/pi-ai", () => ({
@@ -49,6 +49,22 @@ describe("continuation adjudication", () => {
     // An answer the user asked for is a stop even with work left over: they
     // have to react to it before the agent carries on.
     expect(question.content[0].text).toContain("asked you something and this turn answered it");
+  });
+
+  // A question the agent chose to end on is overridden only on an unhedged
+  // verdict: the cost of a wrong OPTIONAL is the agent acting unasked.
+  it("overrides a closing question only on an unhedged optional", async () => {
+    expect(parseCheckInAdjudication("OPTIONAL")).toBe(true);
+    expect(parseCheckInAdjudication("**optional**")).toBe(true);
+    expect(parseCheckInAdjudication("BLOCKING")).toBe(false);
+    expect(parseCheckInAdjudication("probably optional")).toBe(false);
+    expect(parseCheckInAdjudication("")).toBe(false);
+
+    const pi = makePi();
+    const complete = vi.fn(async () => ({ content: [{ type: "text", text: "OPTIONAL" }] }));
+    const ctx = { model: { provider: "p", id: "m" }, modelRegistry: { complete }, getSystemPrompt: () => "SYSTEM" };
+    await expect(adjudicateCheckIn(pi, ctx, [], { role: "assistant", content: [{ type: "text", text: "Reorder it?" }] })).resolves.toBe(true);
+    expect(complete.mock.calls[0][1].messages.at(-1).content[0].text).toContain("BLOCKING or OPTIONAL");
   });
 
   it("answers no when the check cannot run or fails", async () => {
