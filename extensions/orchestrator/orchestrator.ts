@@ -56,6 +56,26 @@ export class Orchestrator {
   } = { nextThreshold: null, inFlight: false, pendingProactiveMeasure: false, disabled: false, modelKey: null, window: null, firedThreshold: null, contaminatedMeasures: 0, failures: 0 };
   manualCompactionPending = false;
   manualCompactionRequestId = 0;
+  /**
+   * A model switch pi-pi decided on while a request was still streaming, held
+   * until a turn boundary. Switching in place compacts the session, and the
+   * host's compaction aborts the run it is called from — which is the request
+   * the switch was meant to carry on serving.
+   */
+  pendingModelSwitch: (() => Promise<void>) | null = null;
+  modelSwitchPollTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Set while a parked switch is being carried out (compaction, then switch).
+   * Holds continuations back so the resumed request runs on the model the
+   * sequence lands on, and keeps the switch itself from compacting twice.
+   */
+  modelSwitchInFlight = false;
+  /**
+   * Set while switching from a point where the request is known to be over.
+   * The host only settles a run after its turn_end handlers return, so a switch
+   * made from one still looks live and would otherwise be owed a resume.
+   */
+  switchingBetweenRequests = false;
   /** Set while session_start routes the session back onto the configured main agent. */
   startupModelCorrection = false;
   idlePollTimer: ReturnType<typeof setTimeout> | null = null;
@@ -99,7 +119,7 @@ export class Orchestrator {
     // takes it sends, the rest find it gone and stop.
     const pending = this.pendingContinuations.get(text);
     if (!pending) return;
-    const compacting = this.adaptiveCompaction.inFlight || this.manualCompactionPending;
+    const compacting = this.adaptiveCompaction.inFlight || this.manualCompactionPending || this.modelSwitchInFlight;
     if (!compacting && (typeof ctx.isIdle !== "function" || ctx.isIdle())) {
       this.pendingContinuations.delete(text);
       // Put the claim back if the host refused it, so a later redelivery can
@@ -172,6 +192,58 @@ export class Orchestrator {
     }
   }
 
+  /**
+   * Whether a model switch can be carried out right now. A live request must
+   * not be switched under: the compaction a switch triggers aborts the run it
+   * is called from. A compaction already running is just as bad — the host
+   * reports idle throughout one, and switching would change the model out from
+   * under it.
+   */
+  private canSwitchModelNow(ctx: any): boolean {
+    if (this.modelSwitchInFlight || this.adaptiveCompaction.inFlight || this.manualCompactionPending) return false;
+    return !ctx || typeof ctx.isIdle !== "function" || ctx.isIdle();
+  }
+
+  /**
+   * Carry out a model switch pi-pi owns, but never from inside a live request.
+   * A streaming session parks the switch instead, and the next turn boundary
+   * compacts, switches, and resumes the request it cut short.
+   */
+  async runModelSwitchBetweenTurns(action: () => Promise<void>): Promise<void> {
+    if (!this.canSwitchModelNow(this.lastCtx)) {
+      this.pendingModelSwitch = action;
+      this.pollPendingModelSwitch();
+      return;
+    }
+    await action();
+  }
+
+  /**
+   * Backstop for a switch parked with no turn boundary left to drain it: a
+   * probe that lands after the last turn_end of a request would otherwise stay
+   * parked until some later request happened to end, running that one on the
+   * model the switch was supposed to leave behind.
+   */
+  pollPendingModelSwitch(): void {
+    if (this.modelSwitchPollTimer || !this.pendingModelSwitch) return;
+    this.modelSwitchPollTimer = setTimeout(() => {
+      this.modelSwitchPollTimer = null;
+      const action = this.pendingModelSwitch;
+      if (!action) return;
+      if (!this.canSwitchModelNow(this.lastCtx)) {
+        this.pollPendingModelSwitch();
+        return;
+      }
+      this.pendingModelSwitch = null;
+      // Between requests, so the compaction this switch triggers cuts nothing
+      // short and owes no resume.
+      void action().catch((error: any) => {
+        getLogger().error({ s: "model", err: error?.message }, "a parked model switch failed");
+      });
+    }, 1000);
+    this.modelSwitchPollTimer.unref?.();
+  }
+
   async switchModel(ctx: ExtensionContext, modelSpec: string, thinking: string): Promise<boolean> {
     const resolved = resolveModel(modelSpec);
     const separator = resolved.indexOf("/");
@@ -204,13 +276,16 @@ export class Orchestrator {
     if (live !== this.routedMainSpec) return;
     const target = resolveModel(main.model);
     if (target === live) return;
+    this.switchingBetweenRequests = true;
     try {
       if (await this.switchModel(ctx, target, main.thinking)) {
         this.routedMainSpec = target;
         getLogger().info({ s: "model", from: live, to: target }, "restored the main model after its tier became usable again");
         (ctx as any).ui?.notify?.(`Provider tier recovered; switched back to ${target}.`, "info");
       }
-    } catch {}
+    } catch {} finally {
+      this.switchingBetweenRequests = false;
+    }
   }
 
   updateStatus(ctx: any): void {

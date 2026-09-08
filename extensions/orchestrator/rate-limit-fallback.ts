@@ -179,31 +179,37 @@ export function armSwitchBackProbe(orchestrator: Orchestrator): void {
       armSwitchBackProbe(orchestrator);
       return;
     }
-    const ctx = orchestrator.lastCtx;
-    const prior = orchestrator.subFallbackMainPriorSpec;
-    // The prior spec is subscription-born, so the fallback flag has to come off
-    // before it is resolved: while the flag is set the flant-sub tier is
-    // disabled and the spec walks straight back down onto the fallback tier.
-    setSubscriptionFallbackActive(false);
-    if (prior) {
-      // Restore BEFORE tearing down the rest of the fallback state so a failed
-      // switch keeps the prior spec and the probe re-arms instead of stranding
-      // the session on the fallback tier while reporting success.
-      let restored = false;
-      try {
-        restored = await orchestrator.switchModel(ctx, resolveModel(prior), thinking(orchestrator));
-      } catch {}
-      if (!restored) {
-        setSubscriptionFallbackActive(true);
-        armSwitchBackProbe(orchestrator);
-        ctx?.ui?.notify?.(`Subscription limit cleared, but switching back to ${prior} failed; will retry.`, "warning");
-        return;
+    // The probe fires on wall-clock time, so it lands as readily inside a live
+    // request as between two; the restore below switches the model, which
+    // compacts, which aborts whatever run it interrupted.
+    await orchestrator.runModelSwitchBetweenTurns(async () => {
+      if (!orchestrator.subFallbackActive) return;
+      const ctx = orchestrator.lastCtx;
+      const prior = orchestrator.subFallbackMainPriorSpec;
+      // The prior spec is subscription-born, so the fallback flag has to come off
+      // before it is resolved: while the flag is set the flant-sub tier is
+      // disabled and the spec walks straight back down onto the fallback tier.
+      setSubscriptionFallbackActive(false);
+      if (prior) {
+        // Restore BEFORE tearing down the rest of the fallback state so a failed
+        // switch keeps the prior spec and the probe re-arms instead of stranding
+        // the session on the fallback tier while reporting success.
+        let restored = false;
+        try {
+          restored = await orchestrator.switchModel(ctx, resolveModel(prior), thinking(orchestrator));
+        } catch {}
+        if (!restored) {
+          setSubscriptionFallbackActive(true);
+          armSwitchBackProbe(orchestrator);
+          ctx?.ui?.notify?.(`Subscription limit cleared, but switching back to ${prior} failed; will retry.`, "warning");
+          return;
+        }
       }
-    }
-    orchestrator.subFallbackActive = false;
-    orchestrator.subFallbackMainPriorSpec = null;
-    orchestrator.subFallbackModelId = null;
-    ctx?.ui?.notify?.("Subscription limit cleared; switched back to personal subscription routing.", "info");
+      orchestrator.subFallbackActive = false;
+      orchestrator.subFallbackMainPriorSpec = null;
+      orchestrator.subFallbackModelId = null;
+      ctx?.ui?.notify?.("Subscription limit cleared; switched back to personal subscription routing.", "info");
+    });
   }, delay);
   orchestrator.subSwitchBackTimer.unref?.();
 }

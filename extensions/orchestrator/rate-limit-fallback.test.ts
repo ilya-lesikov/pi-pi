@@ -235,6 +235,54 @@ describe("session-first rate-limit fallback", () => {
     expect(orchestrator.subFallbackActive).toBe(false);
   });
 
+  // Switching the model compacts the session, and the host's compaction aborts
+  // the run it is called from — so a probe that fires mid-request would kill
+  // the very request it restored the subscription for.
+  it("parks the switch back until the live request reaches a turn boundary", async () => {
+    vi.useFakeTimers();
+    const { probeSubscriptionCleared } = await import("./flant-infra.js");
+    vi.mocked(probeSubscriptionCleared).mockResolvedValue("ok" as any);
+    setTierEnabled({ "copilot": true });
+    updateRegistryFromAvailableModels([
+      "pp-flant-anthropic-sub/sub/claude-opus-4-8",
+      "github-copilot/claude-opus-4.5",
+    ]);
+    const orchestrator = makeOrchestrator({ sendUserMessage: vi.fn() } as any);
+    let idle = false;
+    orchestrator.lastCtx = { isIdle: () => idle, ui: { notify: vi.fn() } };
+    orchestrator.switchModel = vi.fn(async () => true);
+    orchestrator.subFallbackActive = true;
+    orchestrator.subFallbackModelId = "sub/claude-opus-4-8";
+    orchestrator.subFallbackMainPriorSpec = "pp-flant-anthropic-sub/sub/claude-opus-4-8";
+    setSubscriptionFallbackActive(true);
+
+    armSwitchBackProbe(orchestrator);
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    await vi.waitFor(() => expect(orchestrator.pendingModelSwitch).not.toBeNull());
+
+    expect(orchestrator.switchModel).not.toHaveBeenCalled();
+    expect(orchestrator.subFallbackActive).toBe(true);
+    expect(isSubscriptionFallbackActive()).toBe(true);
+
+    // Still parked while the request runs, however long that takes.
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(orchestrator.switchModel).not.toHaveBeenCalled();
+
+    // A probe landing after the last turn boundary has no turn_end left to
+    // drain it, so the backstop poll has to carry out the whole restore.
+    idle = true;
+    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.waitFor(() => expect(orchestrator.subFallbackActive).toBe(false));
+    expect(orchestrator.switchModel).toHaveBeenCalledWith(orchestrator.lastCtx, "pp-flant-anthropic-sub/sub/claude-opus-4-8", expect.any(String));
+    expect(orchestrator.pendingModelSwitch).toBeNull();
+    expect(isSubscriptionFallbackActive()).toBe(false);
+
+    if (orchestrator.subSwitchBackTimer) clearTimeout(orchestrator.subSwitchBackTimer);
+    if (orchestrator.modelSwitchPollTimer) clearTimeout(orchestrator.modelSwitchPollTimer);
+    vi.mocked(probeSubscriptionCleared).mockResolvedValue("rate_limited" as any);
+    vi.useRealTimers();
+  });
+
   it("keeps the fallback in effect when switching back fails", async () => {
     vi.useFakeTimers();
     const { probeSubscriptionCleared } = await import("./flant-infra.js");
