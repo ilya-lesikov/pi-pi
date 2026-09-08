@@ -122,6 +122,9 @@ describe("session-first core", () => {
     // An answer that reshapes the approach needs a second call, since the
     // proposal cannot be written inside an already-issued question.
     expect(prompt).toContain("changes the shape of the solution");
+    // Self-approval is the specific failure to name: an agent that asks in
+    // prose, gets nudged, and answers its own question has not asked at all.
+    expect(prompt).toContain("Never answer your own question");
   });
 
   it("forbids interim prose so only the final message is written", () => {
@@ -231,6 +234,19 @@ describe("session-first core", () => {
     expect(classifyContinuation({ stopReason: "error", content: [] }, mutated)).toBe("none");
   });
 
+  it("leaves a turn that handed control back with a question alone", () => {
+    const mutated = { hadTools: true, toolCallCount: 8, hadFileMutation: true };
+    // A question is a deliberate handoff, not an unfinished objective; nudging
+    // it makes the agent answer itself and act on its own approval.
+    expect(classifyContinuation({ stopReason: "stop", content: [{ type: "text", text: "Found two options. Want me to close that gap?" }] }, mutated)).toBe("none");
+    // Trailing whitespace and closing blank lines must not defeat the check.
+    expect(classifyContinuation({ stopReason: "stop", content: [{ type: "text", text: "Which one?  \n\n" }] }, mutated)).toBe("none");
+    // A question mid-report followed by a conclusion is NOT a handoff.
+    expect(classifyContinuation({ stopReason: "stop", content: [{ type: "text", text: "Why did it fail? The cache was stale. Fixed and committed." }] }, mutated)).toBe("adjudicate");
+    // Multi-part content: the last text part decides.
+    expect(classifyContinuation({ stopReason: "stop", content: [{ type: "text", text: "Did the work." }, { type: "text", text: "Proceed with the rename?" }] }, mutated)).toBe("none");
+  });
+
   it("does not nudge a turn that stopped to await the user past the approval gate", async () => {
     const pi = makePi();
     const orchestrator = new Orchestrator(pi);
@@ -240,8 +256,10 @@ describe("session-first core", () => {
     orchestrator.queueContinuation = (text: string) => { queued.push(text); };
     orchestrator.requestHadTools = true;
     orchestrator.requestToolCallCount = 6;
+    // Prose that does not end in a question still gets nudged, and the nudge
+    // must point at ask_user rather than telling it to plough on.
     await emit(pi, "turn_end", {
-      message: { stopReason: "stop", content: [{ type: "text", text: "Here is the approach. Approve?" }] },
+      message: { stopReason: "stop", content: [{ type: "text", text: "Here is the approach. Let me know." }] },
     }, { model: { provider: "test", id: "m" }, ui: { notify: vi.fn() } });
     expect(queued).toHaveLength(1);
     expect(queued[0]).toContain("waiting on an answer");

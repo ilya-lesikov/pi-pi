@@ -48,6 +48,16 @@ export interface RequestActivity {
 // unfinished objective is plausible.
 const ADJUDICATE_TOOL_THRESHOLD = 4;
 
+// A turn whose last words are a question handed control back on purpose.
+// Nudging it would make the agent answer itself and then act on its own
+// approval, so the question has to end the turn even after heavy tool work.
+function endsWithQuestion(parts: any[]): boolean {
+  const texts = parts.filter((part: any) => part?.type === "text" && typeof part.text === "string" && part.text.trim());
+  const last = texts[texts.length - 1]?.text ?? "";
+  const lines = last.trimEnd().split("\n");
+  return (lines[lines.length - 1] ?? "").trimEnd().endsWith("?");
+}
+
 export function classifyContinuation(message: any, activity: RequestActivity): ContinuationDecision {
   if (message?.stopReason === "aborted" || message?.stopReason === "error") return "none";
   if (message?.stopReason === "length") return "objective";
@@ -55,6 +65,7 @@ export function classifyContinuation(message: any, activity: RequestActivity): C
   const hasText = parts.some((part: any) => part?.type === "text" && part.text?.trim());
   const hasToolCall = parts.some((part: any) => part?.type === "toolCall");
   if (!hasText && !hasToolCall) return "objective";
+  if (hasText && endsWithQuestion(parts)) return "none";
   const substantial = activity.hadFileMutation || activity.toolCallCount >= ADJUDICATE_TOOL_THRESHOLD;
   if (message?.stopReason === "stop" && hasText && activity.hadTools && substantial) return "adjudicate";
   return "none";
@@ -103,6 +114,7 @@ function requestPhasesBlock(canAsk: boolean): string {
     `2. Propose. State how you will solve it: the approach, what you will change, and anything you deliberately are not doing. ${ask}`,
     "3. Implement. Once approved, carry the whole thing out autonomously without further check-ins, and report at the end.",
     "",
+    "Never answer your own question. Once you have decided something needs the user, that decision stands: do not talk yourself into a default, and do not treat a prompt to continue as the answer. If you asked and have no answer yet, you are blocked — stop, and leave the question standing.",
     "Collapse the phases only when the request is genuinely trivial (a lookup, a one-line fix, a question with no work attached) or the user told you to skip ahead. A request that spans several items is never trivial.",
     "Return to phase 1 mid-implementation only when you discover something that invalidates the approved approach — not for a detail you can decide yourself under the safest reversible reading.",
     "</request_phases>",
