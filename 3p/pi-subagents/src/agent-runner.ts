@@ -313,6 +313,59 @@ const EMPTY_TURN_ATTEMPTS = 3;
 const EMPTY_TURN_NUDGE = "Your last turn produced no output. Provide your final answer now.";
 
 /**
+ * LOCAL PATCH (pi-pi): a compaction started from an extension aborts the run it
+ * fires in (AgentSession.compact() disconnects from the agent and awaits an
+ * abort), so a worker whose context is compacted between two tool-calling turns
+ * would otherwise return the narration it had streamed so far as its answer.
+ * The cut is waited out and the run re-prompted, bounded because each resume
+ * costs a full request and a wedged compaction must not spin.
+ */
+const COMPACTION_RESUME_NUDGE = "Your context was compacted mid-task, which cut your tool loop short. Continue exactly where you left off; do not restart the work or re-report what is already done.";
+const MAX_COMPACTION_RESUMES = 10;
+const COMPACTION_WAIT_MS = 120_000;
+
+/**
+ * LOCAL PATCH (pi-pi): track extension-triggered compactions across one
+ * `session.prompt()`. `prompt()` resolves as soon as the aborted loop settles,
+ * which is before the compaction it raced has finished, so the caller has to be
+ * able to wait for the cut. A compaction that FAILS still aborted the run, so
+ * the resume hangs on the compaction having started, not on its result.
+ */
+function watchCompactionCuts(session: AgentSession): { cutRun: () => Promise<boolean>; unsubscribe: () => void } {
+  let started = false;
+  let running = false;
+  let waiters: Array<() => void> = [];
+  const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
+    if (event.type === "compaction_start" && event.reason === "manual") {
+      started = true;
+      running = true;
+      return;
+    }
+    if (event.type !== "compaction_end" || event.reason !== "manual") return;
+    running = false;
+    const pending = waiters;
+    waiters = [];
+    for (const resolve of pending) resolve();
+  });
+  return {
+    cutRun: async () => {
+      if (running) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        await Promise.race([
+          new Promise<void>((resolve) => waiters.push(resolve)),
+          new Promise<void>((resolve) => { timer = setTimeout(resolve, COMPACTION_WAIT_MS); }),
+        ]);
+        if (timer) clearTimeout(timer);
+      }
+      const cut = started;
+      started = false;
+      return cut;
+    },
+    unsubscribe,
+  };
+}
+
+/**
  * Message prefix consumers match to distinguish an exhausted empty-turn retry
  * from a genuine model/API error. The class name does not survive the RPC
  * boundary (only `error` as a string does), so the prefix is the contract.
@@ -358,12 +411,25 @@ async function promptWithEmptyRetry(
       if (u) tokensSpent += (u.input ?? 0) + (u.output ?? 0);
     }
   });
+  const compactions = watchCompactionCuts(session);
   try {
     for (let attempt = 1; attempt <= EMPTY_TURN_ATTEMPTS; attempt++) {
-      const collector = collectResponseText(session);
-      const historyBefore = session.messages.length;
+      let collector = collectResponseText(session);
+      let historyBefore = session.messages.length;
       try {
         await session.prompt(attempt === 1 ? prompt : EMPTY_TURN_NUDGE);
+        // LOCAL PATCH (pi-pi): a compaction aborted the run mid tool loop, and
+        // the answer is still owed. Each resume gets its own collector and
+        // history mark: the compaction replaced the message array, so both the
+        // streamed text and the index captured before it describe a run that no
+        // longer exists.
+        for (let resume = 0; resume < MAX_COMPACTION_RESUMES; resume++) {
+          if (!await compactions.cutRun() || isStopped()) break;
+          collector.unsubscribe();
+          collector = collectResponseText(session);
+          historyBefore = session.messages.length;
+          await session.prompt(COMPACTION_RESUME_NUDGE);
+        }
       } finally {
         collector.unsubscribe();
       }
@@ -380,6 +446,7 @@ async function promptWithEmptyRetry(
     throw new EmptyResponseError(EMPTY_TURN_ATTEMPTS, tokensSpent);
   } finally {
     unsubUsage();
+    compactions.unsubscribe();
   }
 }
 

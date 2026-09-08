@@ -595,7 +595,9 @@ export function registerSubagentCompaction(
     },
     manualCompactionPending: false,
     startupModelCorrection: false,
-    // A worker session has no continuation queue of its own.
+    // A worker session has no continuation queue of its own: the pi-subagents
+    // runner owns the resume, waiting the cut out and re-prompting the run the
+    // compaction aborted.
     redeliverPendingContinuations() {},
     queueContinuation() {},
     resetAdaptiveCompaction() {
@@ -615,7 +617,7 @@ export function registerSubagentCompaction(
   registerCompaction(state, sessionSkills);
   pi.on("turn_end", async (event: any, ctx: any) => {
     state.lastCtx = ctx;
-    if (event?.message?.stopReason !== "toolUse") await maybeCompact(state, ctx);
+    await maybeCompact(state, ctx, event?.message?.stopReason === "toolUse");
   });
 }
 

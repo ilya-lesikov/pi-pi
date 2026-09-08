@@ -736,7 +736,7 @@ describe("session-first core", () => {
     await emit(pi, "session_shutdown", {}, ctx);
   });
 
-  it("does not compact a worker between a tool result and its next model step", async () => {
+  it("compacts a worker mid tool loop and leaves the resume to the runner", async () => {
     const pi = makePi();
     const config = normalizeConfigDurations(getDefaultConfig());
     config.compaction.floorTokens = 1_000;
@@ -749,7 +749,9 @@ describe("session-first core", () => {
       compact,
     };
     await emit(pi, "turn_end", { message: { stopReason: "toolUse" } }, ctx);
-    expect(compact).not.toHaveBeenCalled();
+    expect(compact).toHaveBeenCalledTimes(1);
+    expect(pi.sendMessage).not.toHaveBeenCalled();
+    expect(pi.sendUserMessage).not.toHaveBeenCalled();
   });
 
   it("compacts the main agent mid tool loop and hands the aborted run back", async () => {

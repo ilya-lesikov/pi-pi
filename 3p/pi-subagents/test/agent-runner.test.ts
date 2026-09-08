@@ -1574,3 +1574,64 @@ describe("agent-runner validateCompletion", () => {
     expect(validateCompletion).not.toHaveBeenCalled();
   });
 });
+
+// LOCAL PATCH (pi-pi) guard. pi-pi compacts a worker's context between two
+// tool-calling turns, and AgentSession.compact() aborts the run it fires in.
+// Without the resume the runner takes the narration streamed before the cut as
+// the worker's answer, which reads as a successful but truncated run.
+describe("agent-runner compaction resume", () => {
+  function createCutSession(finalText: string) {
+    const listeners: Array<(event: any) => void> = [];
+    const emit = (event: any) => { for (const listener of [...listeners]) listener(event); };
+    const session: any = {
+      messages: [] as any[],
+      subscribe: vi.fn((listener: (event: any) => void) => {
+        listeners.push(listener);
+        return () => { listeners.splice(listeners.indexOf(listener), 1); };
+      }),
+      prompt: vi.fn(async (text: string) => {
+        if (session.prompt.mock.calls.length > 1) {
+          session.messages.push({ role: "assistant", content: [{ type: "text", text: finalText }], stopReason: "stop" });
+          return;
+        }
+        // The compaction starts from a turn_end handler and outlives the run it
+        // aborted, so its end lands after prompt() has already resolved.
+        session.messages.push({ role: "assistant", content: [{ type: "toolCall", name: "read" }], stopReason: "toolUse" });
+        emit({ type: "compaction_start", reason: "manual" });
+        setTimeout(() => {
+          session.messages = [{ role: "custom", content: "[summary]" }];
+          emit({ type: "compaction_end", reason: "manual", aborted: false, result: { tokensBefore: 200_000 } });
+        }, 0);
+      }),
+      abort: vi.fn(),
+      steer: vi.fn(),
+      getActiveToolNames: vi.fn(() => ["read"]),
+      setActiveToolsByName: vi.fn(),
+      setSessionName: vi.fn(),
+      bindExtensions: vi.fn(async () => {}),
+    };
+    return session;
+  }
+
+  it("waits for the cut and re-prompts the run it aborted", async () => {
+    const session = createCutSession("FINAL ANSWER");
+    createAgentSession.mockResolvedValue({ session });
+
+    const result = await runAgent(ctx, "Explore", "go", { pi });
+
+    expect(session.prompt).toHaveBeenCalledTimes(2);
+    expect(session.prompt.mock.calls[1][0]).toContain("Continue exactly where you left off");
+    expect(result.responseText).toBe("FINAL ANSWER");
+  });
+
+  it("does not resume a run the user stopped", async () => {
+    const session = createCutSession("FINAL ANSWER");
+    createAgentSession.mockResolvedValue({ session });
+    const controller = new AbortController();
+    controller.abort();
+
+    await runAgent(ctx, "Explore", "go", { pi, signal: controller.signal });
+
+    expect(session.prompt).toHaveBeenCalledTimes(1);
+  });
+});
