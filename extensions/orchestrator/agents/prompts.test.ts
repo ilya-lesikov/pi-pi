@@ -132,6 +132,20 @@ describe("pre-1.0 principles", () => {
     }
   });
 
+  it("bans interim prose for every agent, main and worker", () => {
+    expect(principlesBlock()).toContain("Do not write prose while working");
+    expect(principlesBlock()).toContain("one message, at the end");
+    for (const [, f] of workerFactories()) {
+      expect(f.prompt).toContain("Do not write prose while working");
+    }
+  });
+
+  it("exempts the write points the phase gate requires, so the rules do not conflict", () => {
+    // Phases 1-2 (answers, proposal) and a blocking question must still be
+    // able to produce text; the ban targets narration during execution.
+    expect(principlesBlock()).toContain("asking a blocking question");
+  });
+
   it("read-only workers do NOT carry code-editing rules", () => {
     const readOnly = workerFactories().filter(([name]) => name !== "task");
     for (const [, f] of readOnly) {
