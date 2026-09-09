@@ -196,6 +196,23 @@ describe("fold", () => {
     expect(scaled.tokens).toBe(plain.tokens * 2);
   });
 
+  it("counts an image result's payload in the notice it leaves behind", () => {
+    const messages = [
+      user("go"),
+      call("t0", "read", { path: "/a.png" }),
+      {
+        role: "toolResult",
+        toolCallId: "t0",
+        toolName: "read",
+        content: [{ type: "text", text: "1024x768" }, { type: "image", data: "b".repeat(40_000), mimeType: "image/png" }],
+        isError: false,
+      },
+    ];
+    fold(messages, 0, { ceiling: 10, lowWater: 5 }, new FoldState());
+
+    expect(messages[2].content[0].text).toBe(`[omitted: ${40_000 + 8}B; t0]`);
+  });
+
   it("never folds the newest load of a skill", () => {
     const messages = [
       user("go"),

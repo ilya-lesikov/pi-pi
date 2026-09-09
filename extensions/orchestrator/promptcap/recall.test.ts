@@ -11,8 +11,14 @@ const userLine = (id: string, text: string) => line(id, { role: "user", content:
 const callLine = (id: string, callId: string, name: string, args: Record<string, unknown>) =>
   line(id, { role: "assistant", content: [{ type: "toolCall", id: callId, name, arguments: args }] });
 
-const resultLine = (id: string, callId: string, name: string, text: string) =>
-  line(id, { role: "toolResult", toolCallId: callId, toolName: name, content: [{ type: "text", text }], isError: false });
+const resultLine = (id: string, callId: string, name: string, text: string, image?: string) =>
+  line(id, {
+    role: "toolResult",
+    toolCallId: callId,
+    toolName: name,
+    content: [{ type: "text", text }, ...(image ? [{ type: "image", data: image, mimeType: "image/png" }] : [])],
+    isError: false,
+  });
 
 describe("recall tools", () => {
   let dir: string;
@@ -27,6 +33,8 @@ describe("recall tools", () => {
       callLine("m1", "toolu_1", "read", { path: "/etc/hosts", body: "y".repeat(4000) }),
       resultLine("m2", "toolu_1", "read", "line one\nline two\nline three\nneedle here\nline five"),
       userLine("m3", "gamma follow-up question"),
+      callLine("m4", "toolu_img", "read", { path: "/shot.png" }),
+      resultLine("m5", "toolu_img", "read", "1024x768", "AAAAIMAGEBYTES"),
     ].join("\n") + "\n", "utf-8");
 
     const registered: any[] = [];
@@ -60,6 +68,14 @@ describe("recall tools", () => {
     const out = await run("recall_tool_args", { call_id: "toolu_1" });
     expect(out).toContain("/etc/hosts");
     expect(out).toContain("y".repeat(4000));
+  });
+
+  // Folding removes an image with the rest of the result, so a recall that
+  // returned only its caption would be handing back the wrong thing.
+  it("hands back the image an image result carried", async () => {
+    const res = await tools.recall_tool_output.execute("id", { call_id: "toolu_img" }, undefined, undefined, ctx());
+    expect(res.content[0].text).toContain("1024x768");
+    expect(res.content[1]).toEqual({ type: "image", data: "AAAAIMAGEBYTES", mimeType: "image/png" });
   });
 
   it("names the call id it could not find", async () => {

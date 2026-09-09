@@ -247,6 +247,18 @@ function previousAnswerIndex(previous: AskToolDetails | undefined, options: Ques
    return index >= 0 ? index : 0;
 }
 
+// LOCAL PATCH (pi-pi): every row a revisited multi-select question had ticked.
+// Without these the list opens empty and a confirming Enter would silently
+// replace the previous multi-selection with whatever row the cursor sits on.
+function previousCheckedIndices(previous: AskToolDetails | undefined, options: QuestionOption[]): number[] | undefined {
+   const response = previous?.response;
+   if (!response || response.kind !== "selection") return undefined;
+   const indices = response.selections
+      .map((title) => options.findIndex((option) => option.title === title))
+      .filter((index) => index >= 0);
+   return indices.length > 0 ? indices : undefined;
+}
+
 function formatResponseSummary(response: AskResponse): string {
    if (response.kind === "freeform") return response.text;
 
@@ -526,6 +538,9 @@ class MultiSelectList implements Component {
       theme: Theme,
       keybindings: KeybindingsManager,
       commentSelect: ResolvedShortcut,
+      // LOCAL PATCH (pi-pi): rows already ticked, so a question revisited with
+      // alt+←/alt+→ opens on the answer it was given rather than on nothing.
+      checked?: number[],
    ) {
       this.options = options;
       this.allowFreeform = allowFreeform;
@@ -533,6 +548,9 @@ class MultiSelectList implements Component {
       this.theme = theme;
       this.keybindings = keybindings;
       this.commentSelect = commentSelect;
+      for (const index of checked ?? []) {
+         if (index >= 0 && index < options.length) this.checked.add(index);
+      }
    }
 
    invalidate(): void {
@@ -1033,7 +1051,9 @@ class AskComponent extends Container {
    private allowComment: boolean;
    private displayMode: AskDisplayMode;
    private initialIndex: number;
-   // LOCAL PATCH (pi-pi): undefined for a single-question call (no "1/1" title, no nav).
+   // LOCAL PATCH (pi-pi): rows to re-tick in multi-select, and undefined for a
+   // single-question call (no "1/1" title, no nav).
+   private checkedIndices?: number[];
    private navigation?: AskNavigationState;
    private tui: TUI;
    private theme: Theme;
@@ -1078,6 +1098,7 @@ class AskComponent extends Container {
       allowComment: boolean,
       displayMode: AskDisplayMode,
       initialIndex: number,
+      checkedIndices: number[] | undefined,
       navigation: AskNavigationState | undefined,
       tui: TUI,
       theme: Theme,
@@ -1094,6 +1115,7 @@ class AskComponent extends Container {
       this.allowComment = allowComment;
       this.displayMode = displayMode;
       this.initialIndex = initialIndex;
+      this.checkedIndices = checkedIndices;
       this.navigation = navigation;
       this.tui = tui;
       this.theme = theme;
@@ -1205,7 +1227,9 @@ class AskComponent extends Container {
       const commentHint = this.allowComment && !this.shortcuts.commentSelect.disabled
          ? literalHint(theme, this.shortcuts.commentSelect.spec, COMMENT_SELECT_LABEL)
          : null;
-      // LOCAL PATCH (pi-pi): only meaningful with a `questions` sequence to walk.
+      // LOCAL PATCH (pi-pi): only meaningful with a `questions` sequence to walk,
+      // and only in select mode — the editor keeps the chords as cursor movement,
+      // so the branch below deliberately omits this hint.
       const navHint = this.navigation
          ? literalHint(theme, `${NAV_PREV_LABEL}/${NAV_NEXT_LABEL}`, "prev/next question")
          : null;
@@ -1292,6 +1316,7 @@ class AskComponent extends Container {
          this.theme,
          this.keybindings,
          this.shortcuts.commentSelect,
+         this.checkedIndices,
       );
       list.onCancel = () => this.onDone(makeCancel("user"));
       list.onSubmit = (result, wantsComment) => this.handleSelectionSubmit(result, wantsComment);
@@ -1541,8 +1566,10 @@ export async function askUser(
       displayMode?: AskDisplayMode;
       overlayToggleKey?: string | null;
       initialIndex?: number;
-      // LOCAL PATCH (pi-pi): set only when this question is part of a `questions`
-      // sequence. Enables the "N/M" title and the alt+←/alt+→ navigation sentinels.
+      // LOCAL PATCH (pi-pi): rows to re-tick when a multi-select question is
+      // revisited, and the sequence position that enables the "N/M" title and
+      // the alt+←/alt+→ navigation sentinels.
+      checkedIndices?: number[];
       navigation?: AskNavigationState;
    },
 ): Promise<AskResponse | AskCancel | AskNavigate | null> {
@@ -1559,6 +1586,7 @@ export async function askUser(
       displayMode,
       overlayToggleKey,
       initialIndex = 0,
+      checkedIndices,
       navigation,
    } = opts;
 
@@ -1611,6 +1639,7 @@ export async function askUser(
             allowComment,
             effectiveDisplayMode,
             initialIndex,
+            checkedIndices,
             navigation,
             tui,
             theme,
@@ -1802,6 +1831,7 @@ export default function(pi: ExtensionAPI) {
                      signal,
                      navigation,
                      initialIndex: previousAnswerIndex(previous, itemOptions),
+                     checkedIndices: previousCheckedIndices(previous, itemOptions),
                   });
                } catch (error) {
                   const message = error instanceof Error ? error.message : String(error);

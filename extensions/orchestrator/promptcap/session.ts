@@ -71,8 +71,15 @@ export function activeLineageEntryIds(sessionManager: any): Set<string> {
  * prompt is where the content is missing from: folding edits the request on its
  * way to the provider and never the store.
  */
-export function findToolCall(entries: any[], callId: string): { args?: Record<string, unknown>; output?: string } | undefined {
-  let found: { args?: Record<string, unknown>; output?: string } | undefined;
+export interface RecalledCall {
+  args?: Record<string, unknown>;
+  output?: string;
+  /** Image parts of the result, which folding removed along with its text. */
+  images?: Array<{ data: string; mimeType: string }>;
+}
+
+export function findToolCall(entries: any[], callId: string): RecalledCall | undefined {
+  let found: RecalledCall | undefined;
   for (const entry of entries) {
     const message = entry?.message;
     if (!message) continue;
@@ -82,9 +89,12 @@ export function findToolCall(entries: any[], callId: string): { args?: Record<st
       }
       continue;
     }
-    if (message.role === "toolResult" && message.toolCallId === callId) {
-      found = { ...found, output: textOf(message.content) };
-    }
+    if (message.role !== "toolResult" || message.toolCallId !== callId) continue;
+    const parts = Array.isArray(message.content) ? message.content : [];
+    const images = parts
+      .filter((part: any) => part?.type === "image" && typeof part.data === "string")
+      .map((part: any) => ({ data: part.data, mimeType: part.mimeType ?? "image/png" }));
+    found = { ...found, output: textOf(message.content), ...(images.length > 0 && { images }) };
   }
   return found;
 }

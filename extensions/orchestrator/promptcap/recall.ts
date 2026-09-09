@@ -8,6 +8,7 @@ import { cutBytes } from "./fold.js";
 import {
   activeLineageEntryIds,
   findToolCall,
+  type RecalledCall,
   loadMessages,
   loadSessionEntries,
   renderMessage,
@@ -178,8 +179,18 @@ export function registerRecallTools(pi: ExtensionAPI, source?: SessionSource): v
     async execute(_toolCallId: string, params: any, _signal: any, _onUpdate: any, ctx: any) {
       const found = lookup(ctx, source, params);
       if (typeof found === "string") return text(found);
-      if (found.output === undefined) return text(`Call ${params.call_id} has no recorded output.`);
-      return text(slice(found.output, params.offset, params.limit, params.pattern));
+      if (found.output === undefined && !found.images) return text(`Call ${params.call_id} has no recorded output.`);
+      const body = slice(found.output ?? "", params.offset, params.limit, params.pattern);
+      // An image result folds to a notice like any other, so recall has to be
+      // able to hand the image itself back and not just its caption.
+      if (!found.images) return text(body);
+      return {
+        content: [
+          { type: "text" as const, text: body },
+          ...found.images.map((image) => ({ type: "image" as const, data: image.data, mimeType: image.mimeType })),
+        ],
+        details: undefined,
+      };
     },
   });
 
@@ -206,7 +217,7 @@ export function registerRecallTools(pi: ExtensionAPI, source?: SessionSource): v
   });
 }
 
-function lookup(ctx: any, source: SessionSource | undefined, params: any): { args?: Record<string, unknown>; output?: string } | string {
+function lookup(ctx: any, source: SessionSource | undefined, params: any): RecalledCall | string {
   const callId = String(params.call_id ?? "").trim();
   if (!callId) return "No call_id given; it is printed in the [omitted: …] notice.";
   const useCurrent = params.source === "current";

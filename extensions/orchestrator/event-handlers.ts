@@ -643,12 +643,16 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     // same content to a filter that objects to it too. The turn is nudged on
     // instead, once — a second refusal means the route around it is not there.
     if (message?.stopReason === "error" && isPolicyBlockError(message?.errorMessage)) {
-      ctx.ui?.notify?.("The provider refused that request under its usage policy. Continuing without the content it objected to.", "warning");
       getLogger().warn({ s: "policy", err: message?.errorMessage }, "the provider blocked a request under its usage policy");
-      if (!orchestrator.continuationHalted && orchestrator.objectiveContinuationCount < MAX_OBJECTIVE_CONTINUATIONS) {
-        orchestrator.objectiveContinuationCount++;
-        orchestrator.queueContinuation(CONTINUE_POLICY_BLOCKED, true);
+      const canRetry = !orchestrator.continuationHalted && orchestrator.objectiveContinuationCount < MAX_OBJECTIVE_CONTINUATIONS;
+      if (!canRetry) {
+        orchestrator.continuationHalted = true;
+        ctx.ui?.notify?.("The provider keeps refusing this request under its usage policy, and going round it is not working. Stopping; rephrase the task or start a new session.", "error");
+        return;
       }
+      ctx.ui?.notify?.("The provider refused that request under its usage policy. Continuing without the content it objected to.", "warning");
+      orchestrator.objectiveContinuationCount++;
+      orchestrator.queueContinuation(CONTINUE_POLICY_BLOCKED, true);
       return;
     }
     if (orchestrator.spawnedAgentIds.size > 0) return;

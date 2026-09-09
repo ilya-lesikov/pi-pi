@@ -786,21 +786,29 @@ describe("session-first core", () => {
     await emit(pi, "session_shutdown", {}, ctx);
   });
 
-  // A refusal that keeps coming back has no route around it, and nudging into
-  // it forever is worse than stopping.
-  it("stops nudging past repeated policy blocks", async () => {
+  // A refusal that keeps coming back has no route around it, and nudging into it
+  // forever is worse than stopping — but stopping silently is the bug this
+  // whole branch exists to fix, so the last word has to be an explanation.
+  it("stops nudging past repeated policy blocks and says why", async () => {
     const pi = makePi();
     const orchestrator = new Orchestrator(pi);
     orchestrator.cwd = "/tmp/project";
     orchestrator.config = normalizeConfigDurations(getDefaultConfig());
     registerEventHandlers(orchestrator);
-    const ctx = { isIdle: () => true, ui: { notify: vi.fn() } };
+    const notify = vi.fn();
+    const ctx = { isIdle: () => true, ui: { notify } };
     orchestrator.lastCtx = ctx as any;
     const blocked = { message: { stopReason: "error", content: [], errorMessage: "blocked under Anthropic's Usage Policy" } };
 
     for (let i = 0; i < 8; i++) await emit(pi, "turn_end", blocked, ctx);
 
     expect(pi.sendMessage.mock.calls.length).toBeLessThanOrEqual(5);
+    const last = notify.mock.calls[notify.mock.calls.length - 1];
+    expect(last[0]).toContain("Stopping");
+    expect(last[1]).toBe("error");
+    // Nothing may claim to be continuing on a turn that queued nothing.
+    expect(notify.mock.calls.filter((call: any[]) => call[0].includes("Continuing")).length)
+      .toBe(pi.sendMessage.mock.calls.length);
     await emit(pi, "session_shutdown", {}, ctx);
   });
 

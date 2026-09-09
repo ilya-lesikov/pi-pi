@@ -178,8 +178,10 @@ export class TaskWidget {
     // The budget covers the heading and both truncation markers.
     const limit = Math.max(1, Math.min(this.config.maxVisible ?? DEFAULT_MAX_VISIBLE_TASKS, rowBudget - 3));
     const hiddenAt = this.config.hiddenAt ?? "bottom";
-    // `showAll` is an explicit "print every one of them" and is left alone.
-    const { visible, hiddenAbove, hiddenBelow } = showAll
+    // `showAll` prints every task the terminal can hold. It cannot override the
+    // row budget: a widget taller than the screen is what scrolls the prompt
+    // away, and the marker says plainly that the rest did not fit.
+    const { visible, hiddenAbove, hiddenBelow } = showAll && tasks.length <= rowBudget - 2
       ? { visible: tasks, hiddenAbove: 0, hiddenBelow: 0 }
       : TRUNCATE_FNS[hiddenAt](tasks, limit);
 

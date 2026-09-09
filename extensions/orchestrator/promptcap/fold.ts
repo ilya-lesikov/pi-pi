@@ -248,11 +248,19 @@ function lastUserMessageIndex(messages: AgentMessage[]): number {
 /** What full folding would still be able to remove from here. */
 function foldableBytes(messages: AgentMessage[], calls: Call[], protectedFrom: number): number {
   let savings = 0;
+  // Parallel calls share one assistant message, and its reasoning goes with
+  // whichever of them is promoted first, so counting it once per call would
+  // overstate what is left to remove and put the floor below where folding can
+  // actually land.
+  const countedThinking = new Set<number>();
   for (const call of calls) {
     if (call.tier >= Tier.Breadcrumb) continue;
     const part = callPart(messages, call);
     if (part) savings += jsonBytesOf(part.arguments) - jsonBytesOf({});
-    if (call.callMessage < protectedFrom) savings += thinkingBytes(messages[call.callMessage]);
+    if (call.callMessage < protectedFrom && !countedThinking.has(call.callMessage)) {
+      countedThinking.add(call.callMessage);
+      savings += thinkingBytes(messages[call.callMessage]);
+    }
     const result = messages[call.resultMessage];
     if (!result) continue;
     const breadcrumb = byteLength(result.toolName ?? "") + byteLength(collapseResult(call, false, Tier.Breadcrumb)[0].text);
@@ -322,12 +330,23 @@ function callPart(messages: AgentMessage[], call: Call): any {
  * thousands of tokens across a session that folds hundreds of calls.
  */
 function collapseResult(call: Call, isError: boolean, to: Tier): any[] {
-  const text = call.resultContent.map((part: any) => (part?.type === "text" ? part.text ?? "" : "")).join("");
+  let text = "";
+  let bytes = 0;
+  for (const part of call.resultContent) {
+    if (part?.type === "text") {
+      text += part.text ?? "";
+      bytes += byteLength(part.text ?? "");
+      continue;
+    }
+    // An image's payload is most of what a result of this kind costs, so a
+    // notice that counted only its caption would understate what went.
+    if (part?.type === "image") bytes += (part.data ?? "").length;
+  }
   // A failure is worth more than a success of the same size: it is what stops
   // the model repeating a call that cannot work, so a digested one keeps both
   // ends of its text where a digested success keeps none.
   if (isError && to < Tier.Breadcrumb) return [{ type: "text", text: clampEnds(text, call.id) }];
-  return [{ type: "text", text: omission(byteLength(text), call.id) }];
+  return [{ type: "text", text: omission(bytes, call.id) }];
 }
 
 export function omission(size: number, id: string): string {

@@ -215,6 +215,22 @@ describe("TaskWidget", () => {
     expect(tall.length).toBe(12);
   });
 
+  // LOCAL PATCH (pi-pi): `showAll` cannot override the row budget — a widget
+  // taller than the screen is exactly what scrolls the prompt out of view.
+  it("truncates even showAll to what a short terminal can hold", () => {
+    widget = new TaskWidget(store, { showAll: true });
+    widget.setUICtx(ui.ctx);
+    for (let i = 0; i < 20; i++) store.create(`Task ${i}`, "Desc");
+    widget.update();
+
+    const short = renderWidget(ui.state, 20);
+    expect(short.length).toBeLessThanOrEqual(6);
+    expect(short[short.length - 1]).toContain("more");
+
+    // With no row count to go by, showAll still prints every task.
+    expect(renderWidget(ui.state).length).toBe(21);
+  });
+
   it("shows all tasks when showAll is true even with maxVisible set", () => {
     widget = new TaskWidget(store, { showAll: true, maxVisible: 5 });
     widget.setUICtx(ui.ctx);

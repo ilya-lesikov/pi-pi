@@ -2205,6 +2205,7 @@ describe("multi-question navigation (local patch)", () => {
    interface Visit {
       title: string;
       selectedIndex: number | undefined;
+      checked: number[] | undefined;
       helpText: string;
       resolved: boolean;
    }
@@ -2229,9 +2230,11 @@ describe("multi-question navigation (local patch)", () => {
                      }
                   },
                );
+               const multi = (component as any).multiSelectList as any;
                const visit: Visit = {
                   title: (component as any).titleText.render().join(""),
                   selectedIndex: ((component as any).singleSelectList as any)?.selectedIndex,
+                  checked: multi ? [...multi.checked].sort((a: number, b: number) => a - b) : undefined,
                   helpText: (component as any).helpText.render().join(""),
                   resolved: false,
                };
@@ -2318,6 +2321,38 @@ describe("multi-question navigation (local patch)", () => {
       expect(result.details.answers).toHaveLength(2);
       expect(result.details.answers[0].response).toEqual({ kind: "selection", selections: ["B"] });
       expect(result.details.answers[1].response).toEqual({ kind: "selection", selections: ["C"] });
+   });
+
+   // A multi-select opening empty is worse than merely losing the display: a
+   // confirming Enter submits the row under the cursor, silently replacing the
+   // several options the user had picked with one.
+   test("a revisited multi-select question opens with every earlier choice still ticked", async () => {
+      const tool = await setupTool();
+      const visits: Visit[] = [];
+
+      const result = await tool.execute(
+         "tool-call-id",
+         {
+            questions: [
+               { question: "Q1?", options: ["A", "B", "C"], allowMultiple: true },
+               { question: "Q2?", options: ["D", "E"] },
+            ],
+         },
+         undefined,
+         undefined,
+         createVisitingCtx(
+            [
+               ["space", "down", "down", "space", "enter"], // Q1 -> A and C
+               ["alt+left"],                                // back to Q1
+               ["enter"],                                   // confirm what is ticked
+               ["enter"],                                   // Q2 -> D
+            ],
+            visits,
+         ),
+      );
+
+      expect(visits[2]!.checked).toEqual([0, 2]);
+      expect(result.details.answers[0].response).toEqual({ kind: "selection", selections: ["A", "C"] });
    });
 
    test("re-answering a revisited question overwrites in place and keeps question order", async () => {
