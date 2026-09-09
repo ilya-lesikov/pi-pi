@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import lockfile from "proper-lockfile";
 import { refreshAnthropicToken, refreshGitHubCopilotToken } from "@earendil-works/pi-ai/oauth";
+import { getModel } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 import { getDefaultConfig, type PiPiConfig, readScopedFlantSettings, GLOBAL_CONFIG_PATH, writeConfigValue } from "./config.js";
 import { listRegisteredSpecs, updateRegistryFromAvailableModels, setTierEnabled, isSubscriptionFallbackActive } from "./model-registry.js";
@@ -162,7 +163,13 @@ interface CopilotOAuthCreds extends AnthropicOAuthCreds {
 // unavailable: the standalone pi binary (>= 0.84) bundles that subpath as an
 // empty module, so refreshAnthropicToken/refreshGitHubCopilotToken are
 // undefined at runtime there even though they type-check against node_modules.
-let modelRegistryRef: { getApiKeyForProvider?: (provider: string) => Promise<string | undefined> } | null = null;
+// Also the source of Claude model capabilities for the sub provider — pi keeps
+// its catalog fresher than the pinned pi-ai's static one, which lacks the very
+// models this matters for.
+let modelRegistryRef: {
+  getApiKeyForProvider?: (provider: string) => Promise<string | undefined>;
+  find?: (provider: string, modelId: string) => { compat?: unknown; thinkingLevelMap?: unknown } | undefined;
+} | null = null;
 
 export function setModelRegistry(registry: unknown): void {
   modelRegistryRef = registry && typeof (registry as any).getApiKeyForProvider === "function" ? registry as any : null;
@@ -1118,6 +1125,29 @@ function buildProviderModelConfig(
   };
 }
 
+/**
+ * Copy a Claude model's capability metadata from pi's own catalog entry for the
+ * bare id onto its `sub/`-prefixed twin. Without this the sub provider carries
+ * no `compat`, so pi-ai sends the LEGACY `thinking: {type: "enabled"}` form and
+ * the gateway returns a thinking block whose text is empty; only the adaptive
+ * form `forceAdaptiveThinking` selects yields readable summaries. The same gap
+ * drops `thinkingLevelMap`, silently clamping xhigh/max down to high.
+ *
+ * `allowedFallbackModels` is deliberately dropped: pi-ai turns it into a
+ * server-side `fallbacks` param naming a BARE claude id, which the gateway key
+ * cannot access (it only sees `sub/*`) and which would fail the whole request.
+ */
+function applyClaudeModelCapabilities(config: ProviderModelConfig, bareModelId: string): ProviderModelConfig {
+  const catalog = modelRegistryRef?.find?.("anthropic", bareModelId)
+    ?? (typeof getModel === "function" ? getModel("anthropic" as never, bareModelId as never) : undefined);
+  if (!catalog) return config;
+  const { allowedFallbackModels: _dropped, ...compat } = (catalog.compat ?? {}) as Record<string, unknown>;
+  const out: ProviderModelConfig = { ...config };
+  if (Object.keys(compat).length > 0) out.compat = compat as ProviderModelConfig["compat"];
+  if (catalog.thinkingLevelMap) out.thinkingLevelMap = catalog.thinkingLevelMap as ProviderModelConfig["thinkingLevelMap"];
+  return out;
+}
+
 export interface RegisterFlantOptions {
   /** Whether to also register the personal-subscription provider. Defaults to loadFlantSettings().subscription. */
   subscription?: boolean;
@@ -1225,7 +1255,7 @@ function registerSubProvider(
     // Model id carries the `sub/` prefix the gateway expects, while pricing/
     // metadata is looked up by the bare claude-* id.
     models: anthropicModels.map((m) => {
-      const cfg = buildProviderModelConfig(m, metadata);
+      const cfg = applyClaudeModelCapabilities(buildProviderModelConfig(m, metadata), m);
       return { ...cfg, id: `${SUB_MODEL_PREFIX}${m}` };
     }),
   });

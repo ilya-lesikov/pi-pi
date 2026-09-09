@@ -240,6 +240,80 @@ describe("flant-infra", () => {
     }
   });
 
+  it("carries pi's claude capabilities onto the sub models, minus the unusable fallback list", async () => {
+    const dir = makeTempDir();
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "auth.json"),
+      JSON.stringify({ anthropic: { type: "oauth", access: "sk-ant-oat01-test-token", expires: Date.now() + 3_600_000 } }),
+      "utf-8",
+    );
+    const prevKey = process.env.LLM_API_KEY;
+    process.env.LLM_API_KEY = "sk-gateway-test";
+    try {
+      const mod = await loadFlantInfraModule(dir);
+      mod.setModelRegistry({
+        getApiKeyForProvider: async () => undefined,
+        find: (provider: string, modelId: string) =>
+          provider === "anthropic" && modelId === "claude-opus-5"
+            ? {
+                compat: {
+                  forceAdaptiveThinking: true,
+                  supportsTemperature: false,
+                  allowedFallbackModels: [{ provider: "anthropic", model: "claude-opus-4-8" }],
+                },
+                thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
+              }
+            : undefined,
+      });
+      const registered = new Map<string, any>();
+      const pi = {
+        registerProvider: vi.fn((name: string, config: any) => registered.set(name, config)),
+        unregisterProvider: vi.fn((name: string) => registered.delete(name)),
+      } as any;
+
+      mod.registerFlantProviders(pi, ["sub/claude-opus-5"], {}, { subscription: true });
+
+      const model = registered.get("pp-flant-anthropic-sub").models[0];
+      expect(model.compat).toEqual({ forceAdaptiveThinking: true, supportsTemperature: false });
+      expect(model.thinkingLevelMap).toEqual({ off: null, xhigh: "xhigh", max: "max" });
+    } finally {
+      if (prevKey === undefined) delete process.env.LLM_API_KEY;
+      else process.env.LLM_API_KEY = prevKey;
+    }
+  });
+
+  it("leaves sub models untouched when pi's catalog does not know the claude id", async () => {
+    const dir = makeTempDir();
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "auth.json"),
+      JSON.stringify({ anthropic: { type: "oauth", access: "sk-ant-oat01-test-token", expires: Date.now() + 3_600_000 } }),
+      "utf-8",
+    );
+    const prevKey = process.env.LLM_API_KEY;
+    process.env.LLM_API_KEY = "sk-gateway-test";
+    try {
+      const mod = await loadFlantInfraModule(dir);
+      mod.setModelRegistry({ getApiKeyForProvider: async () => undefined, find: () => undefined });
+      const registered = new Map<string, any>();
+      const pi = {
+        registerProvider: vi.fn((name: string, config: any) => registered.set(name, config)),
+        unregisterProvider: vi.fn((name: string) => registered.delete(name)),
+      } as any;
+
+      mod.registerFlantProviders(pi, ["sub/claude-unreleased-9"], {}, { subscription: true });
+
+      const model = registered.get("pp-flant-anthropic-sub").models[0];
+      expect(model.id).toBe("sub/claude-unreleased-9");
+      expect(model.compat).toBeUndefined();
+      expect(model.thinkingLevelMap).toBeUndefined();
+    } finally {
+      if (prevKey === undefined) delete process.env.LLM_API_KEY;
+      else process.env.LLM_API_KEY = prevKey;
+    }
+  });
+
   it("falls back to all claude models for the sub provider when the model list has no sub/ ids", async () => {
     const dir = makeTempDir();
     mkdirSync(dir, { recursive: true });
