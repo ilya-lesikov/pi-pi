@@ -1,4 +1,4 @@
-import type { AgentMessage } from "./fold.js";
+type AgentMessage = Record<string, any>;
 
 // The divisor the estimate starts from. It counts UTF-8 bytes rather than
 // characters on purpose: a character count under-counts Cyrillic by around 40%,
