@@ -18,6 +18,17 @@ export function isAuthError(message?: string): boolean {
     && /\b401\b|\b403\b|authentication_error|permission_error|has been revoked|invalid[ _-]?(api[ _-]?key|token)|unauthorized/i.test(message);
 }
 
+/**
+ * The provider refused the content of the request rather than the credential or
+ * the quota. Nothing about routing fixes it: the same payload is refused by the
+ * next model too, and the offending text is still in the conversation, so a
+ * blind retry is refused again.
+ */
+export function isPolicyBlockError(message?: string): boolean {
+  return typeof message === "string"
+    && /usage polic|violative|content[ _-]?(policy|filter)|responsible_?ai|flagged by|was blocked under/i.test(message);
+}
+
 function thinking(orchestrator: Orchestrator): string {
   return orchestrator.config.agents.main.thinking;
 }

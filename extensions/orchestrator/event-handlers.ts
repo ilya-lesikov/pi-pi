@@ -20,7 +20,7 @@ import { createUsageTracker, dumpUsageSummary, isSubscriptionRouted, loadUsageSu
 import { publishAcpState, resetAcpStateCache } from "./acp.js";
 import { runAfterEdit } from "./commands.js";
 import { checkDuplicateExtensions } from "./duplicate-extension-guard.js";
-import { demoteUnusableSubscription, handleMainAuthFailure, handleMainRateLimit, handleSubagentAuthFailure, handleSubagentRateLimit, isAuthError, isRateLimitError } from "./rate-limit-fallback.js";
+import { demoteUnusableSubscription, handleMainAuthFailure, handleMainRateLimit, handleSubagentAuthFailure, handleSubagentRateLimit, isAuthError, isPolicyBlockError, isRateLimitError } from "./rate-limit-fallback.js";
 import { adjudicateCheckIn, adjudicateContinuation } from "./continuation-adjudicator.js";
 import { loadFlantSettings, noteSubscriptionCredentialAccepted, refreshCopilotOAuthToken, refreshSubProvider, reviveSubscriptionCredential, setModelRegistry, syncProviderTiers } from "./flant-infra.js";
 import type { Orchestrator } from "./orchestrator.js";
@@ -34,6 +34,7 @@ const CONTINUE_EMPTY = "[PI-PI] The previous turn ended without a result. Contin
 const CONTINUE_UNFINISHED = "[PI-PI] Continue where you left off and finish the request. Do not re-explain what you already did.";
 const CONTINUE_CHECK_IN = "[PI-PI] The question you ended on was put to your own model out of band, and came back as one you did not need answered — so the rule about leaving an unanswered question standing does not apply to it. Settle it under the safest reversible reading, carry on, and record the assumption in your final report. If the decision really is the user's, ask it with ask_user: prose does not hold the turn open.";
 const CONTINUE_STALLED = "[PI-PI] The previous turn stalled without completing. Continue where you left off and complete the request.";
+const CONTINUE_POLICY_BLOCKED = "[PI-PI] The provider refused that request under its usage policy and returned nothing. Retrying it unchanged will be refused again — the content it objected to is still in the conversation. Carry on with the request by another route: do not reproduce, quote or reconstruct the payload it refused, and if the objectionable part was incidental to what you were doing, do the rest without it. If the whole task genuinely cannot proceed without it, say so and stop.";
 const CONTINUE_COMPACTED = "[PI-PI] Context was compacted mid-task, which cut the tool loop short. Continue exactly where you left off; do not restart the work or re-report what is already done.";
 
 export type ContinuationDecision = "none" | "objective" | "adjudicate" | "check-in";
@@ -632,6 +633,18 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     }
     if (message?.stopReason === "error" && isAuthError(message?.errorMessage)) {
       await handleMainAuthFailure(orchestrator, ctx, message?.model ?? ctx.model?.id, message?.provider ?? ctx.model?.provider);
+      return;
+    }
+    // A refused payload is not a routing problem: switching models sends the
+    // same content to a filter that objects to it too. The turn is nudged on
+    // instead, once — a second refusal means the route around it is not there.
+    if (message?.stopReason === "error" && isPolicyBlockError(message?.errorMessage)) {
+      ctx.ui?.notify?.("The provider refused that request under its usage policy. Continuing without the content it objected to.", "warning");
+      getLogger().warn({ s: "policy", err: message?.errorMessage }, "the provider blocked a request under its usage policy");
+      if (!orchestrator.continuationHalted && orchestrator.objectiveContinuationCount < MAX_OBJECTIVE_CONTINUATIONS) {
+        orchestrator.objectiveContinuationCount++;
+        orchestrator.queueContinuation(CONTINUE_POLICY_BLOCKED, true);
+      }
       return;
     }
     if (orchestrator.spawnedAgentIds.size > 0) return;

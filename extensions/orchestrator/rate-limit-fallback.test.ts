@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Orchestrator } from "./orchestrator.js";
 import { getDefaultConfig, normalizeConfigDurations } from "./config.js";
-import { armSwitchBackProbe, handleMainAuthFailure, handleMainRateLimit, handleSubagentAuthFailure, isAuthError, isRateLimitError } from "./rate-limit-fallback.js";
+import { armSwitchBackProbe, handleMainAuthFailure, handleMainRateLimit, handleSubagentAuthFailure, isAuthError, isPolicyBlockError, isRateLimitError } from "./rate-limit-fallback.js";
 import { clearAllTierDemotions, isSubscriptionFallbackActive, setSubscriptionFallbackActive, setTierEnabled, updateRegistryFromAvailableModels } from "./model-registry.js";
 
 vi.mock("./flant-infra.js", async (original) => ({
@@ -136,6 +136,17 @@ describe("session-first rate-limit fallback", () => {
     expect(isAuthError("401 Unauthorized")).toBe(true);
     expect(isAuthError("HTTP 429 too many requests")).toBe(false);
     expect(isRateLimitError('{"type":"authentication_error"}')).toBe(false);
+  });
+
+  // A refused payload routes nowhere: the next provider's filter objects to the
+  // same content, and the credential and the quota are both fine.
+  it("tells a refused payload apart from a rejected credential and a quota", () => {
+    expect(isPolicyBlockError("This request triggered restrictions on violative cyber content and was blocked under Anthropic's Usage Policy.")).toBe(true);
+    expect(isPolicyBlockError("Response was flagged by the content filter")).toBe(true);
+    expect(isPolicyBlockError("401 Unauthorized")).toBe(false);
+    expect(isPolicyBlockError("HTTP 429 too many requests")).toBe(false);
+    expect(isAuthError("blocked under the Usage Policy")).toBe(false);
+    expect(isRateLimitError("blocked under the Usage Policy")).toBe(false);
   });
 
   it("rotates a rejected credential and resumes without demoting the tier", async () => {

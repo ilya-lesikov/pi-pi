@@ -750,6 +750,55 @@ describe("session-first core", () => {
     await emit(pi, "session_shutdown", {}, ctx);
   });
 
+  // The observed failure: a provider refusal ends the turn with stopReason
+  // "error", which every other recovery path ignores, so the session simply
+  // stopped mid-task with nothing said and nothing queued.
+  it("nudges past a provider policy block instead of stalling", async () => {
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi);
+    orchestrator.cwd = "/tmp/project";
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    registerEventHandlers(orchestrator);
+    const notify = vi.fn();
+    const ctx = { isIdle: () => true, ui: { notify } };
+    orchestrator.lastCtx = ctx as any;
+    const blocked = {
+      message: {
+        stopReason: "error",
+        content: [],
+        errorMessage: "This request triggered restrictions on violative cyber content and was blocked under Anthropic's Usage Policy.",
+      },
+    };
+
+    await emit(pi, "turn_start", {}, ctx);
+    await emit(pi, "turn_end", blocked, ctx);
+
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("usage policy"), "warning");
+    expect(pi.sendMessage).toHaveBeenCalledTimes(1);
+    const nudge = pi.sendMessage.mock.calls[0][0].content;
+    expect(nudge).toContain("do not reproduce");
+    expect(nudge).toContain("say so and stop");
+    await emit(pi, "session_shutdown", {}, ctx);
+  });
+
+  // A refusal that keeps coming back has no route around it, and nudging into
+  // it forever is worse than stopping.
+  it("stops nudging past repeated policy blocks", async () => {
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi);
+    orchestrator.cwd = "/tmp/project";
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    registerEventHandlers(orchestrator);
+    const ctx = { isIdle: () => true, ui: { notify: vi.fn() } };
+    orchestrator.lastCtx = ctx as any;
+    const blocked = { message: { stopReason: "error", content: [], errorMessage: "blocked under Anthropic's Usage Policy" } };
+
+    for (let i = 0; i < 8; i++) await emit(pi, "turn_end", blocked, ctx);
+
+    expect(pi.sendMessage.mock.calls.length).toBeLessThanOrEqual(5);
+    await emit(pi, "session_shutdown", {}, ctx);
+  });
+
   // The observed failure: the switch-back probe fired mid-request and switched
   // the model under a live tool loop, which resends the whole conversation on a
   // cold prompt cache from inside the chain.
