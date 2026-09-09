@@ -41,19 +41,19 @@ describe("detectDuplicateExtensions", () => {
     const tools = [
       tool("lsp", "/opt/pi-pi/3p/pi-lsp/extensions/lsp/index.ts"),
       tool("Agent", "/opt/pi-pi/3p/pi-subagents/src/index.ts"),
-      tool("vcc_recall", "/opt/pi-pi/3p/pi-vcc/index.ts"),
+      tool("vcc_recall", "/opt/pi-pi/extensions/orchestrator/promptcap/recall.ts"),
     ];
     expect(detectDuplicateExtensions(tools, [], ROOT)).toHaveLength(0);
   });
 
   it("flags a vendored package id appearing in an outside extension path", () => {
     const tools = [
-      // A tool with a NON-owned name but from a standalone pi-vcc install.
-      tool("some_other_tool", "/home/u/.pi/agent/npm/node_modules/@monotykamary/pi-vcc/dist/index.js"),
+      // A tool with a NON-owned name but from a standalone pi-subagents install.
+      tool("some_other_tool", "/home/u/.pi/agent/npm/node_modules/pi-subagents/dist/index.js"),
     ];
     const findings = detectDuplicateExtensions(tools, [], ROOT);
     expect(findings.some((f) => f.signal === "vendored-package-path")).toBe(true);
-    expect(findings.some((f) => f.detail.includes("pi-vcc"))).toBe(true);
+    expect(findings.some((f) => f.detail.includes("pi-subagents"))).toBe(true);
   });
 
   it("does not false-positive on a substring package match", () => {

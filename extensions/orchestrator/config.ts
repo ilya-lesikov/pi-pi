@@ -28,24 +28,20 @@ export interface PoolEntry {
   maxTurns?: number;
 }
 
-export interface CompactionConfig {
-  /** Enable proactive compaction. Off = never auto-compact. */
+export interface PromptcapModelConfig {
+  /** Prompt ceiling in tokens, applied when no context window is known (default 150000). */
+  maxPromptTokens?: number;
+  /** The model's total context window. Omitted means "ask the host", which
+   *  reports one for most models; declare it for a model whose provider
+   *  does not. */
+  contextWindow?: number;
+}
+
+export interface PromptcapConfig extends PromptcapModelConfig {
+  /** Fold old tool traffic out of the prompt. Off = send the whole conversation. */
   enabled: boolean;
-  /** Trigger fraction of the model's context window (default 0.30 = 30%). */
-  fraction: number;
-  /** Floor in tokens: never trigger below this even if the fraction is smaller
-   *  (default 250000 → 1M window ~300K, 500K window uses the 250K floor). */
-  floorTokens: number;
-  /** Adaptive headroom as a fraction of the context window (default 0.12).
-   *  The adaptive next-threshold keeps at least max(headroomFloorTokens,
-   *  headroomFraction*window) of working room above the post-compaction size,
-   *  so triggers don't creep down as the baseline grows. */
-  headroomFraction: number;
-  /** Adaptive headroom floor in tokens (default 40000). */
-  headroomFloorTokens: number;
-  /** Per-model overrides keyed by model id (bare or provider-prefixed). Each may
-   *  set any subset of { fraction, floorTokens, headroomFraction, headroomFloorTokens }. */
-  perModel: Record<string, { fraction?: number; floorTokens?: number; headroomFraction?: number; headroomFloorTokens?: number }>;
+  /** Per-model overrides keyed by model id, bare or provider-prefixed. */
+  perModel: Record<string, PromptcapModelConfig>;
 }
 
 export interface AfterEditCommandConfig {
@@ -79,7 +75,7 @@ export interface PiPiConfig {
     loadGlobal: boolean;
     loadProject: boolean;
   };
-  compaction: CompactionConfig;
+  promptcap: PromptcapConfig;
   // Durable Flant settings. These used to live in the regenerable
   // model-metadata cache file (cache/flant-models.json); they are user policy
   // and belong in scoped config. Only cachedFlantModels/cachedOpenRouterData/
@@ -153,12 +149,8 @@ const DEFAULT_CONFIG: PiPiConfig = {
     loadGlobal: true,
     loadProject: true,
   },
-  compaction: {
+  promptcap: {
     enabled: true,
-    fraction: 0.30,
-    floorTokens: 250000,
-    headroomFraction: 0.12,
-    headroomFloorTokens: 40000,
     perModel: {},
   },
   flant: {
@@ -236,21 +228,17 @@ function ensureNumberInRange(value: unknown, path: string, min: number, max: num
   }
 }
 
-function validateCompaction(value: unknown): void {
-  const c = requireObject(value, "config.compaction");
-  ensureBool(c.enabled, "config.compaction.enabled");
-  ensureNumberInRange(c.fraction, "config.compaction.fraction", 0.01, 1);
-  ensureNumberInRange(c.floorTokens, "config.compaction.floorTokens", 1000, 100_000_000);
-  ensureNumberInRange(c.headroomFraction, "config.compaction.headroomFraction", 0.01, 1);
-  ensureNumberInRange(c.headroomFloorTokens, "config.compaction.headroomFloorTokens", 1000, 100_000_000);
+function validatePromptcap(value: unknown): void {
+  const c = requireObject(value, "config.promptcap");
+  ensureBool(c.enabled, "config.promptcap.enabled");
+  ensureNumberInRange(c.maxPromptTokens, "config.promptcap.maxPromptTokens", 1000, 100_000_000);
+  ensureNumberInRange(c.contextWindow, "config.promptcap.contextWindow", 1000, 100_000_000);
   if (c.perModel !== undefined) {
-    const perModel = requireObject(c.perModel, "config.compaction.perModel");
+    const perModel = requireObject(c.perModel, "config.promptcap.perModel");
     for (const [modelId, override] of Object.entries(perModel)) {
-      const o = requireObject(override, `config.compaction.perModel.${modelId}`);
-      ensureNumberInRange(o.fraction, `config.compaction.perModel.${modelId}.fraction`, 0.01, 1);
-      ensureNumberInRange(o.floorTokens, `config.compaction.perModel.${modelId}.floorTokens`, 1000, 100_000_000);
-      ensureNumberInRange(o.headroomFraction, `config.compaction.perModel.${modelId}.headroomFraction`, 0.01, 1);
-      ensureNumberInRange(o.headroomFloorTokens, `config.compaction.perModel.${modelId}.headroomFloorTokens`, 1000, 100_000_000);
+      const o = requireObject(override, `config.promptcap.perModel.${modelId}`);
+      ensureNumberInRange(o.maxPromptTokens, `config.promptcap.perModel.${modelId}.maxPromptTokens`, 1000, 100_000_000);
+      ensureNumberInRange(o.contextWindow, `config.promptcap.perModel.${modelId}.contextWindow`, 1000, 100_000_000);
     }
   }
 }
@@ -362,7 +350,7 @@ export function validateConfig(config: Record<string, any>): void {
     ensureBool(sk.loadProject, "config.skills.loadProject");
   }
 
-  if (config.compaction !== undefined) validateCompaction(config.compaction);
+  if (config.promptcap !== undefined) validatePromptcap(config.promptcap);
   if (config.flant !== undefined) validateFlant(config.flant);
 
   if (config.commands !== undefined) {

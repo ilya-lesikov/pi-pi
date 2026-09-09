@@ -50,6 +50,16 @@ export interface Limits {
   lowWater: number;
 }
 
+/**
+ * Tools whose newest result is never folded.
+ *
+ * A skill document is operating guidance the agent believes is in effect, not
+ * a lookup it can repeat: folding it away silently changes how the agent works
+ * with nothing to show for it. An older load of the same skill still folds —
+ * only the newest of each is pinned.
+ */
+export const PINNED_TOOLS = new Set(["load_skill"]);
+
 export interface FoldResult {
   /** Estimated prompt size after folding, in tokens. */
   tokens: number;
@@ -206,7 +216,20 @@ function indexCalls(messages: AgentMessage[]): Call[] {
     calls.push(call);
   }
 
-  return calls;
+  return dropPinned(messages, calls);
+}
+
+/** Drops the newest call of each pinned tool, by the object it addressed. */
+function dropPinned(messages: AgentMessage[], calls: Call[]): Call[] {
+  const newest = new Map<string, Call>();
+  for (const call of calls) {
+    const part = callPart(messages, call);
+    if (!part || !PINNED_TOOLS.has(part.name)) continue;
+    newest.set(`${part.name}:${jsonText(part.arguments)}`, call);
+  }
+  if (newest.size === 0) return calls;
+  const pinned = new Set([...newest.values()]);
+  return calls.filter((call) => !pinned.has(call));
 }
 
 /**

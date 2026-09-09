@@ -6,8 +6,7 @@ import { getDefaultConfig, normalizeConfigDurations } from "./config.js";
 import { Orchestrator } from "./orchestrator.js";
 import { buildAcpState } from "./acp.js";
 import { isSubscriptionFallbackActive, setSubscriptionFallbackActive, setTierEnabled, updateRegistryFromAvailableModels } from "./model-registry.js";
-import { classifyContinuation, isMainTurnStalled, registerEventHandlers, registerLoadSkill, registerSubagentCompaction, renderGenericPrompt } from "./event-handlers.js";
-import { BUILTIN_COMPACTION_MARKER } from "./compaction-dispatch.js";
+import { classifyContinuation, isMainTurnStalled, registerEventHandlers, registerLoadSkill, registerSubagentPromptcap, renderGenericPrompt } from "./event-handlers.js";
 import { createUsageTracker } from "./usage-tracker.js";
 import initExtension from "./index.js";
 
@@ -76,10 +75,13 @@ describe("session-first core", () => {
     const prompt = renderGenericPrompt(orchestrator, {
       model: { provider: "test", id: "model" },
       ui: { notify: vi.fn() },
-    }, ["read", "vcc_recall", "load_skill"]);
+    }, ["read", "vcc_recall", "recall_tool_output", "load_skill"]);
     expect(prompt).toContain("Own the request end to end");
     expect(prompt).toContain("After two failed attempts driven by the same hypothesis");
     expect(prompt).toContain("vcc_recall: retrieve full detail");
+    // The [omitted: …] notice means nothing without the sentence that explains it.
+    expect(prompt).toContain("recall_tool_output");
+    expect(prompt).toContain("[omitted: <size>B; <call_id>]");
     expect(prompt).toContain("load_skill");
     expect(prompt).toContain("When reporting finished work");
     expect(prompt).not.toContain("ACTIVE PHASE");
@@ -386,16 +388,17 @@ describe("session-first core", () => {
     expect(isMainTurnStalled(orchestrator, 3000)).toBe(false);
   });
 
-  // The host reports idle while a compaction runs, so a continuation queued by
-  // the rate-limit fallback would otherwise land mid-rebuild.
-  it("holds a queued continuation until an in-flight compaction settles", () => {
+  // The host reports idle throughout a parked model switch, so a continuation
+  // queued by the rate-limit fallback would otherwise run on the model the
+  // switch is about to leave behind.
+  it("holds a queued continuation until an in-flight model switch settles", () => {
     vi.useFakeTimers();
     try {
       const pi = makePi();
       const orchestrator = new Orchestrator(pi);
       orchestrator.config = normalizeConfigDurations(getDefaultConfig());
       orchestrator.lastCtx = { isIdle: () => true } as any;
-      orchestrator.adaptiveCompaction.inFlight = true;
+      orchestrator.modelSwitchInFlight = true;
 
       orchestrator.queueContinuation("[PI-PI] continue");
       expect(pi.sendUserMessage).not.toHaveBeenCalled();
@@ -403,7 +406,7 @@ describe("session-first core", () => {
       vi.advanceTimersByTime(2000);
       expect(pi.sendUserMessage).not.toHaveBeenCalled();
 
-      orchestrator.adaptiveCompaction.inFlight = false;
+      orchestrator.modelSwitchInFlight = false;
       vi.advanceTimersByTime(1000);
       expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
     } finally {
@@ -411,9 +414,9 @@ describe("session-first core", () => {
     }
   });
 
-  // Polling gives up after two minutes, so a compaction that outlasts it has to
-  // hand the continuation back instead of dropping it.
-  it("redelivers a continuation stranded by a long compaction", async () => {
+  // Polling gives up after two minutes, so a switch that outlasts it has to hand
+  // the continuation back instead of dropping it.
+  it("redelivers a continuation stranded by a long model switch", async () => {
     vi.useFakeTimers();
     try {
       const pi = makePi();
@@ -422,14 +425,14 @@ describe("session-first core", () => {
       registerEventHandlers(orchestrator);
       const ctx = { isIdle: () => true } as any;
       orchestrator.lastCtx = ctx;
-      orchestrator.adaptiveCompaction.inFlight = true;
+      orchestrator.modelSwitchInFlight = true;
 
       orchestrator.queueContinuation("[PI-PI] continue");
       vi.advanceTimersByTime(200_000);
       expect(pi.sendUserMessage).not.toHaveBeenCalled();
 
-      orchestrator.adaptiveCompaction.inFlight = false;
-      await emit(pi, "session_compact", {}, ctx);
+      orchestrator.modelSwitchInFlight = false;
+      orchestrator.redeliverPendingContinuations();
       expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
@@ -447,12 +450,12 @@ describe("session-first core", () => {
       registerEventHandlers(orchestrator);
       const ctx = { isIdle: () => true } as any;
       orchestrator.lastCtx = ctx;
-      orchestrator.adaptiveCompaction.inFlight = true;
+      orchestrator.modelSwitchInFlight = true;
 
       orchestrator.queueContinuation("[PI-PI] continue");
       vi.advanceTimersByTime(3000);
-      orchestrator.adaptiveCompaction.inFlight = false;
-      await emit(pi, "session_compact", {}, ctx);
+      orchestrator.modelSwitchInFlight = false;
+      orchestrator.redeliverPendingContinuations();
       vi.advanceTimersByTime(5000);
 
       expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
@@ -476,42 +479,9 @@ describe("session-first core", () => {
     expect(orchestrator.pendingContinuations.size).toBe(1);
 
     pi.sendUserMessage = vi.fn();
-    await emit(pi, "session_compact", {}, ctx);
+    orchestrator.redeliverPendingContinuations();
     expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
     expect(orchestrator.pendingContinuations.size).toBe(0);
-  });
-
-  // A provider switch resends everything with a cold cache, so the pre-switch
-  // context is billed again in full at the new provider.
-  it("compacts a large context before a model switch, but not a small one", async () => {
-    const pi = makePi();
-    const orchestrator = new Orchestrator(pi);
-    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
-    registerEventHandlers(orchestrator);
-    const compact = vi.fn();
-    const ctx = (tokens: number) => ({ compact, getContextUsage: () => ({ tokens, contextWindow: 200_000 }) });
-    const select = (from: string, to: string) => ({
-      source: "set",
-      previousModel: { provider: "pp-flant-anthropic-sub", id: from },
-      model: { provider: "github-copilot", id: to },
-    });
-
-    await emit(pi, "model_select", select("a", "b"), ctx(5_000));
-    expect(compact).not.toHaveBeenCalled();
-
-    await emit(pi, "model_select", select("a", "b"), ctx(120_000));
-    expect(compact).toHaveBeenCalledTimes(1);
-
-    orchestrator.adaptiveCompaction.inFlight = false;
-    await emit(pi, "model_select", { source: "restore", previousModel: { provider: "p", id: "a" }, model: { provider: "q", id: "b" } }, ctx(120_000));
-    await emit(pi, "model_select", { source: "set", previousModel: { provider: "p", id: "a" }, model: { provider: "p", id: "a" } }, ctx(120_000));
-    expect(compact).toHaveBeenCalledTimes(1);
-
-    // Routing a just-restored session back onto the configured main agent is not
-    // a switch worth folding the session away for.
-    orchestrator.startupModelCorrection = true;
-    await emit(pi, "model_select", select("a", "b"), ctx(120_000));
-    expect(compact).toHaveBeenCalledTimes(1);
   });
 
   // The tracing toggle and the report bundle both promise recorded traces, but
@@ -780,191 +750,35 @@ describe("session-first core", () => {
     await emit(pi, "session_shutdown", {}, ctx);
   });
 
-  it("compacts a worker mid tool loop and leaves the resume to the runner", async () => {
-    const pi = makePi();
-    const config = normalizeConfigDurations(getDefaultConfig());
-    config.compaction.floorTokens = 1_000;
-    config.compaction.fraction = 0.1;
-    registerSubagentCompaction(pi, config);
-    const compact = vi.fn();
-    const ctx = {
-      model: { provider: "test", id: "worker-model" },
-      getContextUsage: () => ({ contextWindow: 100_000, tokens: 20_000 }),
-      compact,
-    };
-    await emit(pi, "turn_end", { message: { stopReason: "toolUse" } }, ctx);
-    expect(compact).toHaveBeenCalledTimes(1);
-    expect(pi.sendMessage).not.toHaveBeenCalled();
-    expect(pi.sendUserMessage).not.toHaveBeenCalled();
-  });
-
-  it("compacts the main agent mid tool loop and hands the aborted run back", async () => {
-    const pi = makePi();
-    const orchestrator = new Orchestrator(pi);
-    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
-    orchestrator.config.compaction.floorTokens = 1_000;
-    orchestrator.config.compaction.fraction = 0.1;
-    registerEventHandlers(orchestrator);
-    const compact = vi.fn();
-    const ctx = {
-      model: { provider: "test", id: "main-model" },
-      getContextUsage: () => ({ contextWindow: 100_000, tokens: 20_000 }),
-      compact,
-      isIdle: () => true,
-      ui: { notify: vi.fn() },
-    };
-    await emit(pi, "turn_end", { message: { stopReason: "toolUse", content: [{ type: "toolCall", name: "edit" }] } }, ctx);
-    expect(compact).toHaveBeenCalledTimes(1);
-    // The resume waits for the cut to land instead of racing the compaction.
-    expect(pi.sendMessage).not.toHaveBeenCalled();
-
-    await emit(pi, "session_compact", {}, ctx);
-    expect(pi.sendUserMessage).not.toHaveBeenCalled();
-    expect(pi.sendMessage).toHaveBeenCalledTimes(1);
-    const [message, options] = pi.sendMessage.mock.calls[0];
-    expect(message.display).toBe(false);
-    expect(message.content).toContain("Continue exactly where you left off");
-    expect(options).toEqual({ deliverAs: "followUp", triggerTurn: true });
-    await emit(pi, "session_shutdown", {}, ctx);
-  });
-
-  // The observed failure: the switch-back probe fired mid-request, its switch
-  // compacted, the host aborted the run with "The operation was aborted", and
-  // nothing resumed. The order has to be stop → compact → wait → switch → continue.
-  it("compacts, switches, then resumes a request a parked model switch cut short", async () => {
+  // The observed failure: the switch-back probe fired mid-request and switched
+  // the model under a live tool loop, which resends the whole conversation on a
+  // cold prompt cache from inside the chain.
+  it("carries out a parked model switch at the next turn boundary", async () => {
     const pi = makePi();
     const orchestrator = new Orchestrator(pi);
     orchestrator.config = normalizeConfigDurations(getDefaultConfig());
     registerEventHandlers(orchestrator);
-    let compactOptions: any;
-    const compact = vi.fn((options: any) => { compactOptions = options; });
-    const ctx = {
-      model: { provider: "test", id: "main-model" },
-      getContextUsage: () => ({ contextWindow: 200_000, tokens: 120_000 }),
-      compact,
-      isIdle: () => true,
-      ui: { notify: vi.fn() },
-    };
+    const ctx = { model: { provider: "test", id: "main-model" }, isIdle: () => true, ui: { notify: vi.fn() } };
     orchestrator.lastCtx = ctx as any;
     const switched = vi.fn(async () => {});
     orchestrator.pendingModelSwitch = switched;
 
     await emit(pi, "turn_end", { message: { stopReason: "toolUse", content: [{ type: "toolCall", name: "edit" }] } }, ctx);
-    // Compaction first, and nothing switches or resumes until the cut lands.
-    expect(compact).toHaveBeenCalledTimes(1);
-    expect(switched).not.toHaveBeenCalled();
-    expect(pi.sendMessage).not.toHaveBeenCalled();
 
-    // The resume must not go out before the switch: it would run the resumed
-    // request on the model the switch was meant to leave behind.
-    let switchedBeforeResume = false;
-    pi.sendMessage = vi.fn(() => { switchedBeforeResume = switched.mock.calls.length > 0; });
-
-    compactOptions.onComplete({});
-    await vi.waitFor(() => expect(switched).toHaveBeenCalledTimes(1));
-    await vi.waitFor(() => expect(pi.sendMessage).toHaveBeenCalledTimes(1));
-    expect(switchedBeforeResume).toBe(true);
-    expect(orchestrator.modelSwitchInFlight).toBe(false);
-    expect(orchestrator.adaptiveCompaction.inFlight).toBe(false);
-    expect(pi.sendMessage.mock.calls[0][0].content).toContain("Continue exactly where you left off");
-    await emit(pi, "session_shutdown", {}, ctx);
-  });
-
-  // Below the resend-cost threshold nothing compacts, so nothing is aborted and
-  // the request needs no resume.
-  it("switches a small context in place without compacting or resuming", async () => {
-    const pi = makePi();
-    const orchestrator = new Orchestrator(pi);
-    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
-    registerEventHandlers(orchestrator);
-    const compact = vi.fn();
-    const ctx = {
-      model: { provider: "test", id: "main-model" },
-      getContextUsage: () => ({ contextWindow: 200_000, tokens: 5_000 }),
-      compact,
-      isIdle: () => true,
-      ui: { notify: vi.fn() },
-    };
-    const switched = vi.fn(async () => {});
-    orchestrator.pendingModelSwitch = switched;
-
-    await emit(pi, "turn_end", { message: { stopReason: "toolUse", content: [{ type: "toolCall", name: "edit" }] } }, ctx);
     expect(switched).toHaveBeenCalledTimes(1);
-    expect(compact).not.toHaveBeenCalled();
-    expect(pi.sendMessage).not.toHaveBeenCalled();
-    await emit(pi, "session_shutdown", {}, ctx);
-  });
-
-  // A compaction the switch does not own is already writing this cut; racing it
-  // would have two passes on one cut and could change the model under it.
-  it("leaves a switch parked while another compaction owns the cut", async () => {
-    const pi = makePi();
-    const orchestrator = new Orchestrator(pi);
-    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
-    registerEventHandlers(orchestrator);
-    const compact = vi.fn();
-    const ctx = {
-      model: { provider: "test", id: "main-model" },
-      getContextUsage: () => ({ contextWindow: 200_000, tokens: 120_000 }),
-      compact,
-      isIdle: () => true,
-      ui: { notify: vi.fn() },
-    };
-    orchestrator.lastCtx = ctx as any;
-    const switched = vi.fn(async () => {});
-    orchestrator.pendingModelSwitch = switched;
-    orchestrator.manualCompactionPending = true;
-
-    await emit(pi, "turn_end", { message: { stopReason: "toolUse", content: [{ type: "toolCall", name: "edit" }] } }, ctx);
-    expect(switched).not.toHaveBeenCalled();
-    expect(compact).not.toHaveBeenCalled();
-    expect(orchestrator.pendingModelSwitch).toBe(switched);
-
-    await emit(pi, "session_shutdown", {}, ctx);
-  });
-
-  // Neither compaction callback fires when the host refuses the call outright,
-  // so the flags have to be released here or compaction and continuations both
-  // stay blocked for the rest of the session.
-  it("still switches and resumes when the host refuses the compaction", async () => {
-    const pi = makePi();
-    const orchestrator = new Orchestrator(pi);
-    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
-    registerEventHandlers(orchestrator);
-    const ctx = {
-      model: { provider: "test", id: "main-model" },
-      getContextUsage: () => ({ contextWindow: 200_000, tokens: 120_000 }),
-      compact: vi.fn(() => { throw new Error("stale ctx"); }),
-      isIdle: () => true,
-      ui: { notify: vi.fn() },
-    };
-    orchestrator.lastCtx = ctx as any;
-    const switched = vi.fn(async () => {});
-    orchestrator.pendingModelSwitch = switched;
-
-    await emit(pi, "turn_end", { message: { stopReason: "toolUse", content: [{ type: "toolCall", name: "edit" }] } }, ctx);
-    expect(switched).toHaveBeenCalledTimes(1);
+    expect(orchestrator.pendingModelSwitch).toBeNull();
     expect(orchestrator.modelSwitchInFlight).toBe(false);
-    expect(orchestrator.adaptiveCompaction.inFlight).toBe(false);
-    expect(pi.sendMessage).toHaveBeenCalledTimes(1);
     await emit(pi, "session_shutdown", {}, ctx);
   });
 
-  // A truncated or empty turn has recovery of its own, which the drain's resume
-  // does not stand in for; an error turn may reroute the session entirely.
+  // A truncated or empty turn has recovery of its own, which the drain does not
+  // stand in for; an error turn may reroute the session entirely.
   it("keeps a switch parked on a turn that did not run to completion", async () => {
     const pi = makePi();
     const orchestrator = new Orchestrator(pi);
     orchestrator.config = normalizeConfigDurations(getDefaultConfig());
     registerEventHandlers(orchestrator);
-    const compact = vi.fn();
-    const ctx = {
-      model: { provider: "test", id: "main-model" },
-      getContextUsage: () => ({ contextWindow: 200_000, tokens: 120_000 }),
-      compact,
-      isIdle: () => true,
-      ui: { notify: vi.fn() },
-    };
+    const ctx = { model: { provider: "test", id: "main-model" }, isIdle: () => true, ui: { notify: vi.fn() } };
     orchestrator.lastCtx = ctx as any;
     const switched = vi.fn(async () => {});
 
@@ -978,228 +792,56 @@ describe("session-first core", () => {
     await emit(pi, "session_shutdown", {}, ctx);
   });
 
-  // A user's own /model pick mid-request compacts too, which aborts the run the
-  // same way, so it owes the request the same resume.
-  it("resumes a live request a model-switch compaction cut short", async () => {
+  // Folding runs on the copy the host hands the context event, so the reply the
+  // handler returns is what reaches the provider and the store keeps every byte.
+  it("folds an oversized prompt on its way to the model, leaving the session whole", async () => {
     const pi = makePi();
     const orchestrator = new Orchestrator(pi);
     orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    orchestrator.config.promptcap.maxPromptTokens = 5_000;
     registerEventHandlers(orchestrator);
-    const ctx = (idle: boolean) => ({
-      compact: vi.fn(),
-      getContextUsage: () => ({ tokens: 120_000, contextWindow: 200_000 }),
-      isIdle: () => idle,
-    });
-    const select = {
-      source: "set",
-      previousModel: { provider: "pp-flant-anthropic-sub", id: "a" },
-      model: { provider: "github-copilot", id: "b" },
-    };
+    const ctx = { model: { provider: "test", id: "main-model" }, getSystemPrompt: () => "system", ui: { notify: vi.fn() } };
 
-    const live = ctx(false);
-    orchestrator.lastCtx = live as any;
-    await emit(pi, "model_select", select, live);
-    // Queued, not sent: the resume waits for the cut to land.
-    expect(orchestrator.pendingContinuations.size).toBe(1);
-    expect(pi.sendMessage).not.toHaveBeenCalled();
+    const messages: any[] = [{ role: "user", content: [{ type: "text", text: "go" }] }];
+    for (let i = 0; i < 40; i++) {
+      messages.push({ role: "assistant", content: [{ type: "toolCall", id: `t${i}`, name: "read", arguments: { path: `/f${i}` } }] });
+      messages.push({ role: "toolResult", toolCallId: `t${i}`, toolName: "read", content: [{ type: "text", text: "o".repeat(8000) }], isError: false });
+    }
 
-    orchestrator.adaptiveCompaction.inFlight = false;
-    await emit(pi, "session_compact", {}, { ...live, isIdle: () => true });
-    expect(pi.sendMessage).toHaveBeenCalledTimes(1);
-    expect(pi.sendMessage.mock.calls[0][0].content).toContain("Continue exactly where you left off");
+    const handler = pi.handlers.get("context")!.find((fn: any) => fn.length >= 2)!;
+    let folded: any;
+    for (const fn of pi.handlers.get("context")!) {
+      const out = await fn({ messages }, ctx);
+      if (out?.messages) folded = out.messages;
+    }
+    expect(handler).toBeTruthy();
 
-    // Between requests there is no run to cut short and nothing to resume.
-    pi.sendMessage.mockClear();
-    await emit(pi, "model_select", select, ctx(true));
-    expect(orchestrator.pendingContinuations.size).toBe(0);
-    expect(pi.sendMessage).not.toHaveBeenCalled();
-
-    // The host settles a run only after its turn_end handlers return, so a
-    // switch made from there still reads as live and would be owed a resume it
-    // does not need.
-    orchestrator.adaptiveCompaction.inFlight = false;
-    orchestrator.switchingBetweenRequests = true;
-    await emit(pi, "model_select", select, ctx(false));
-    orchestrator.switchingBetweenRequests = false;
-    expect(orchestrator.pendingContinuations.size).toBe(0);
-    expect(pi.sendMessage).not.toHaveBeenCalled();
-  });
-
-  it("stops compacting proactively after consecutive failures", async () => {
-    const pi = makePi();
-    const orchestrator = new Orchestrator(pi);
-    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
-    orchestrator.config.compaction.floorTokens = 1_000;
-    orchestrator.config.compaction.fraction = 0.1;
-    registerEventHandlers(orchestrator);
-    const compact = vi.fn((options: any) => options.onError(new Error("summarizer down")));
-    const ctx = {
-      model: { provider: "test", id: "main-model" },
-      getContextUsage: () => ({ contextWindow: 100_000, tokens: 20_000 }),
-      compact,
-      isIdle: () => true,
-      ui: { notify: vi.fn() },
-    };
-    const toolLoopTurn = () => emit(pi, "turn_end", { message: { stopReason: "toolUse", content: [{ type: "toolCall", name: "edit" }] } }, ctx);
-
-    // A failure re-arms, so the next turn retries; a second one gives up and
-    // leaves the host's overflow recovery as the backstop, since mid-run every
-    // retry also costs the turn its resume has to pay for.
-    await toolLoopTurn();
-    await toolLoopTurn();
-    await toolLoopTurn();
-    expect(compact).toHaveBeenCalledTimes(2);
+    expect(folded[2].content[0].text).toMatch(/^\[omitted: 8000B; t0\]$/);
+    // The newest call is left alone, and so is the user's own prose.
+    expect(folded[80].content[0].text).toBe("o".repeat(8000));
+    expect(folded[0].content[0].text).toBe("go");
     await emit(pi, "session_shutdown", {}, ctx);
   });
 
-  it("uses VCC and configured per-model thresholds in worker sessions", async () => {
+  it("applies a per-model prompt ceiling in worker sessions", async () => {
     const pi = makePi();
     const config = normalizeConfigDurations(getDefaultConfig());
-    config.compaction.floorTokens = 90_000;
-    config.compaction.fraction = 0.9;
-    config.compaction.perModel["worker-model"] = { fraction: 0.1, floorTokens: 1_000 };
-    registerSubagentCompaction(pi, config);
-    const compact = vi.fn();
-    const ctx = {
-      model: { provider: "test", id: "worker-model" },
-      getContextUsage: () => ({ contextWindow: 100_000, tokens: 20_000 }),
-      compact,
-    };
-    await emit(pi, "turn_end", { message: { stopReason: "stop" } }, ctx);
-    expect(compact).toHaveBeenCalledTimes(1);
+    config.promptcap.perModel["worker-model"] = { maxPromptTokens: 2_000 };
+    registerSubagentPromptcap(pi, config);
+    const ctx = { model: { provider: "test", id: "worker-model" }, getSystemPrompt: () => "system" };
 
-    const beforeCompact = pi.handlers.get("session_before_compact")?.[0] as any;
-    const result = await beforeCompact({
-      preparation: {
-        messagesToSummarize: [{ role: "user", content: "worker detail" }],
-        previousSummary: undefined,
-        firstKeptEntryId: "kept",
-        tokensBefore: 20_000,
-      },
-      branchEntries: [{ id: "old" }, { id: "kept" }],
-    });
-    expect(result.compaction.summary).toContain("[Session Goal]");
-    expect(result.compaction.details.compactor).toBe("pi-vcc");
+    const messages: any[] = [{ role: "user", content: [{ type: "text", text: "go" }] }];
+    for (let i = 0; i < 10; i++) {
+      messages.push({ role: "assistant", content: [{ type: "toolCall", id: `w${i}`, name: "read", arguments: { path: `/f${i}` } }] });
+      messages.push({ role: "toolResult", toolCallId: `w${i}`, toolName: "read", content: [{ type: "text", text: "o".repeat(4000) }], isError: false });
+    }
 
-    // On a split turn the host discards the prefix of the cut turn too, so it
-    // must reach the summary rather than vanishing with the dropped history.
-    const split = await beforeCompact({
-      preparation: {
-        messagesToSummarize: [{ role: "user", content: "older history" }],
-        turnPrefixMessages: [{ role: "assistant", content: "split-turn prefix detail" }],
-        firstKeptEntryId: "kept",
-        tokensBefore: 20_000,
-      },
-      branchEntries: [{ id: "old" }, { id: "kept" }],
-    });
-    expect(split.compaction.details.sourceMessageCount).toBe(2);
-  });
-
-  it("never hands a compaction back to the host LLM summarizer", async () => {
-    const pi = makePi();
-    registerSubagentCompaction(pi, normalizeConfigDurations(getDefaultConfig()));
-    const beforeCompact = pi.handlers.get("session_before_compact")?.[0] as any;
-
-    // Nothing to summarize: the host would otherwise LLM-summarize the split
-    // turn prefix, or write an LLM summary of an empty history.
-    const empty = await beforeCompact({
-      preparation: { messagesToSummarize: [], turnPrefixMessages: [], firstKeptEntryId: "kept", tokensBefore: 900_000 },
-      branchEntries: [{ id: "kept" }],
-    });
-    expect(empty.compaction.details.compactor).toBe("pi-vcc");
-    expect(typeof empty.compaction.summary).toBe("string");
-    expect(empty.compaction.firstKeptEntryId).toBe("kept");
-
-    // Messages that carry no extractable content compile to an empty summary,
-    // which is still ours rather than a fallback to the host.
-    const blank = await beforeCompact({
-      preparation: { messagesToSummarize: [{ role: "user", content: "" }], firstKeptEntryId: "kept", tokensBefore: 10 },
-      branchEntries: [{ id: "old" }, { id: "kept" }],
-    });
-    expect(blank.compaction.details.compactor).toBe("pi-vcc");
-    expect(blank.compaction.summary.length).toBeGreaterThan(0);
-
-    // A summarizer crash must not silently yield to the host either.
-    const crashed = await beforeCompact({
-      preparation: {
-        get messagesToSummarize(): never { throw new Error("boom"); },
-        firstKeptEntryId: "kept",
-        tokensBefore: 5,
-      },
-      branchEntries: [{ id: "old" }, { id: "kept" }],
-    });
-    expect(crashed.compaction.details.compactor).toBe("pi-vcc");
-    expect(crashed.compaction.firstKeptEntryId).toBe("kept");
-
-    // The host discards everything before firstKeptEntryId whatever the summary
-    // says, so a crash that yielded only a placeholder would erase this content
-    // from context outright. The fallback must carry the messages themselves.
-    const crashedWithHistory = await beforeCompact({
-      preparation: {
-        messagesToSummarize: [
-          { role: "user", content: "deploy the frobnicator to staging" },
-          { role: "assistant", content: [{ type: "text", text: "picked the blue-green path" }] },
-        ],
-        get fileOps(): never { throw new Error("boom"); },
-        firstKeptEntryId: "kept",
-        tokensBefore: 5,
-      },
-      branchEntries: [
-        { id: "old", type: "message", message: { role: "user" } },
-        { id: "kept", type: "message", message: { role: "user" } },
-      ],
-    });
-    expect(crashedWithHistory.compaction.details.compactor).toBe("pi-vcc");
-    expect(crashedWithHistory.compaction.summary).toContain("frobnicator");
-    expect(crashedWithHistory.compaction.summary).toContain("blue-green");
-    expect(crashedWithHistory.compaction.details.sourceMessageCount).toBe(2);
-    // Without a range, vcc_recall scope:'compaction:N' cannot resolve this cut.
-    expect(crashedWithHistory.compaction.details.messageRange).toEqual(["old", "kept"]);
-
-    // A throw while ASSEMBLING the result (not while summarizing) must not
-    // yield either: the host treats an exception as no result and LLM-compacts.
-    const brokenTail = await beforeCompact({
-      preparation: {
-        // Throws for the summarizer AND for the verbatim-tail fallback that
-        // runs after the try block.
-        messagesToSummarize: [{ role: "user", get content(): never { throw new Error("boom"); } }],
-        firstKeptEntryId: "kept",
-        tokensBefore: 10,
-      },
-      branchEntries: [{ id: "old", type: "message", message: {} }, { id: "kept", type: "message", message: {} }],
-    });
-    expect(brokenTail?.compaction?.details?.compactor).toBe("pi-vcc");
-    expect(brokenTail?.compaction?.firstKeptEntryId).toBe("kept");
-
-    // A preparation the host could not build is the only legitimate bail-out.
-    expect(await beforeCompact({ branchEntries: [] })).toBeUndefined();
-  });
-
-  it("yields to the host LLM only for the manual request that opted in", async () => {
-    const pi = makePi();
-    const orchestrator = new Orchestrator(pi);
-    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
-    registerEventHandlers(orchestrator);
-    const beforeCompact = pi.handlers.get("session_before_compact")?.[0] as any;
-    const prep = { preparation: { messagesToSummarize: [{ role: "user", content: "detail" }], firstKeptEntryId: "kept", tokensBefore: 10 }, branchEntries: [{ id: "old", type: "message", message: {} }, { id: "kept", type: "message", message: {} }] };
-
-    // The opted-in manual request carries the marker and is the one that yields.
-    expect(await beforeCompact({ ...prep, customInstructions: BUILTIN_COMPACTION_MARKER })).toBeUndefined();
-
-    // An automatic compaction racing that request carries no marker, so it must
-    // still get vcc instead of consuming the opt-in and being LLM-summarized.
-    const auto = await beforeCompact(prep);
-    expect(auto?.compaction?.details?.compactor).toBe("pi-vcc");
-
-    // ...and the manual request that set it still gets the host summarizer.
-    expect(await beforeCompact({ ...prep, customInstructions: BUILTIN_COMPACTION_MARKER })).toBeUndefined();
-
-    // `/compact <text>` feeds user prose into the same field, so the marker
-    // must not be something a user could plausibly type and thereby opt in
-    // without going through the menu.
-    const typed = await beforeCompact({ ...prep, customInstructions: "Summarize the whole discarded history faithfully, preserving decisions, file paths, and unresolved work." });
-    expect(typed?.compaction?.details?.compactor).toBe("pi-vcc");
-    expect(BUILTIN_COMPACTION_MARKER).toContain("pp:builtin");
+    let folded: any;
+    for (const fn of pi.handlers.get("context")!) {
+      const out = await fn({ messages }, ctx);
+      if (out?.messages) folded = out.messages;
+    }
+    expect(folded[2].content[0].text).toMatch(/^\[omitted: 4000B; w0\]$/);
   });
 
   it("makes layered skills loadable in worker processes", async () => {

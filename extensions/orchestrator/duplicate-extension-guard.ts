@@ -3,7 +3,7 @@ import { dirname, resolve, sep } from "node:path";
 import { getLogger } from "./log.js";
 
 // Install issue 8b: pi-pi VENDORS several upstream extensions (pi-lsp,
-// pi-subagents, pi-lsp, pi-ask-user, and the vendored pi-vcc engine.
+// pi-subagents, pi-lsp, and pi-ask-user.
 // engine). If the user ALSO installs any of them STANDALONE, both copies load
 // and their tools/commands collide — the framework only prints a non-fatal
 // warning ("Tool \"lsp\" conflicts with ..."). This guard HARD-FAILS instead,
@@ -23,7 +23,9 @@ export const PI_PI_OWNED_TOOL_NAMES: readonly string[] = [
   "Agent", // pi-subagents
   "TaskCreate", // pi-tasks
   "ask_user", // pi-ask-user
-  "vcc_recall", // vendored pi-vcc
+  "vcc_recall", // pi-pi's own recall tools
+  "recall_tool_output",
+  "recall_tool_args",
 ];
 
 export const PI_PI_OWNED_COMMAND_NAMES: readonly string[] = [];
@@ -36,8 +38,6 @@ export const PI_PI_VENDORED_PACKAGE_IDS: readonly string[] = [
   "pi-subagents",
   "pi-tasks",
   "pi-ask-user",
-  "@monotykamary/pi-vcc",
-  "pi-vcc",
 ];
 
 // pi-pi's own install root (the dir containing extensions/orchestrator/). Any

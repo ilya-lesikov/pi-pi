@@ -63,17 +63,18 @@ describe("validateConfig", () => {
     expect(() => validateConfig({ general: { tracing: "yes" } as any })).toThrow("config.general.tracing");
   });
 
-  it("defaults compaction to enabled 30%/250K and accepts a valid override", () => {
+  it("defaults promptcap to enabled with no declared sizes, and accepts an override", () => {
     const d = getDefaultConfig();
-    expect(d.compaction).toEqual({ enabled: true, fraction: 0.3, floorTokens: 250000, headroomFraction: 0.12, headroomFloorTokens: 40000, perModel: {} });
+    expect(d.promptcap).toEqual({ enabled: true, perModel: {} });
     expect(() =>
-      validateConfig({ compaction: { enabled: false, fraction: 0.4, floorTokens: 300000, perModel: { "gpt-5.6-sol": { fraction: 0.5 } } } }),
+      validateConfig({ promptcap: { enabled: false, maxPromptTokens: 200000, perModel: { "gpt-5.6-sol": { contextWindow: 400000 } } } }),
     ).not.toThrow();
   });
 
-  it("rejects an out-of-range compaction fraction", () => {
-    expect(() => validateConfig({ compaction: { fraction: 2 } })).toThrow("config.compaction.fraction");
-    expect(() => validateConfig({ compaction: { floorTokens: 10 } })).toThrow("config.compaction.floorTokens");
+  it("rejects an out-of-range promptcap size", () => {
+    expect(() => validateConfig({ promptcap: { maxPromptTokens: 10 } })).toThrow("config.promptcap.maxPromptTokens");
+    expect(() => validateConfig({ promptcap: { contextWindow: 10 } })).toThrow("config.promptcap.contextWindow");
+    expect(() => validateConfig({ promptcap: { perModel: { m: { maxPromptTokens: 1 } } } })).toThrow("config.promptcap.perModel.m.maxPromptTokens");
   });
 
   it("defaults the flant section to today's DEFAULT_SETTINGS and validates it", () => {
@@ -110,11 +111,10 @@ describe("validateConfig", () => {
     expect(() => validateConfig({ skills: { loadProject: 1 } as any })).toThrow("config.skills.loadProject");
   });
 
-  it("round-trips the compaction section through deep-merge", () => {
-    const merged = deepMerge(getDefaultConfig() as any, { compaction: { fraction: 0.25 } });
-    expect(merged.compaction.fraction).toBe(0.25);
-    expect(merged.compaction.floorTokens).toBe(250000);
-    expect(merged.compaction.enabled).toBe(true);
+  it("round-trips the promptcap section through deep-merge", () => {
+    const merged = deepMerge(getDefaultConfig() as any, { promptcap: { maxPromptTokens: 250000 } });
+    expect(merged.promptcap.maxPromptTokens).toBe(250000);
+    expect(merged.promptcap.enabled).toBe(true);
   });
 
   it("accepts a valid partial config", () => {

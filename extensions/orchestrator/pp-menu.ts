@@ -37,10 +37,10 @@ import {
   updateRegistryFromAvailableModels,
 } from "./model-registry.js";
 import { compareModelVersion } from "./model-version.js";
-import { BUILTIN_COMPACTION_MARKER } from "./compaction-dispatch.js";
 import { enabledSkillLayers, listLayeredSkills } from "./skills-manifest.js";
 import { buildPoolRoster, unregisterAgentDefinitions } from "./agents/registry.js";
 import { setLogLevel } from "./log.js";
+import { DEFAULT_MAX_PROMPT_TOKENS } from "./promptcap/limits.js";
 import { finalizeTracer, getTracer, initTracer } from "./tracer.js";
 import type { Orchestrator } from "./orchestrator.js";
 
@@ -898,126 +898,65 @@ async function showSkillsSettings(orchestrator: Orchestrator, ctx: any): Promise
   }
 }
 
-async function runManualCompaction(orchestrator: Orchestrator, ctx: any): Promise<void> {
-  if (orchestrator.manualCompactionPending) {
-    ctx.ui?.notify?.("A manual compaction is already in progress.", "warning");
-    return;
-  }
-  if (typeof ctx?.compact !== "function") {
-    ctx.ui?.notify?.("Compaction is not available in this session.", "error");
-    return;
-  }
-  const sel = await selectOption(ctx, "Compact context now", [
-    opt("VCC (default)", "Deterministic pi-pi summarizer; keeps vcc_recall able to resolve the summarized range"),
-    opt("builtin (LLM-based)", "Let the host summarize the discarded messages with the model"),
-    opt(BACK, "Return to the previous menu"),
-  ]);
-  if (!sel || sel === BACK) return;
-  const useBuiltin = sel === "builtin (LLM-based)";
-  orchestrator.manualCompactionPending = true;
-  // compact() resolves asynchronously and its callbacks can outlive the request
-  // that initiated it, so settle only the request this call owns.
-  const requestId = (orchestrator.manualCompactionRequestId += 1);
-  const settle = (): boolean => {
-    if (orchestrator.manualCompactionRequestId !== requestId) return false;
-    orchestrator.manualCompactionPending = false;
-    return true;
-  };
-  ctx.compact({
-    // Carries the opt-in on this request alone, so a concurrent automatic
-    // compaction cannot pick it up and get LLM-summarized instead.
-    customInstructions: useBuiltin ? BUILTIN_COMPACTION_MARKER : undefined,
-    onComplete: () => {
-      if (settle()) ctx.ui?.notify?.("Context compacted.", "info");
-    },
-    onError: (err: any) => {
-      if (settle()) ctx.ui?.notify?.(`Compaction failed: ${err?.message ?? String(err)}`, "error");
-    },
-  });
-}
-
-async function showCompactionSettings(orchestrator: Orchestrator, ctx: any): Promise<void> {
-  const pickers: Array<{ prefix: string; key: string; question: string; choices: Array<{ title: string; description: string }>; parse: (title: string) => number }> = [
+async function showPromptcapSettings(orchestrator: Orchestrator, ctx: any): Promise<void> {
+  const pickers: Array<{ prefix: string; key: "maxPromptTokens" | "contextWindow"; question: string; choices: Array<{ title: string; description: string }> }> = [
     {
-      prefix: "Trigger fraction:",
-      key: "fraction",
-      question: "Trigger fraction",
+      prefix: "Prompt ceiling:",
+      key: "maxPromptTokens",
+      question: "Prompt ceiling (tokens)",
       choices: [
-        { title: "20%", description: "Compact earlier (smaller working context)" },
-        { title: "30%", description: "Default" },
-        { title: "40%", description: "Compact later" },
-        { title: "50%", description: "Compact much later" },
+        { title: "100K", description: "Fold sooner, leaving less tool history in the prompt" },
+        { title: "150K", description: "Default" },
+        { title: "250K", description: "Fold later, keeping more tool history" },
+        { title: "400K", description: "Fold much later" },
       ],
-      parse: (title) => Number(title.replace("%", "")) / 100,
     },
     {
-      prefix: "Floor:",
-      key: "floorTokens",
-      question: "Floor (tokens)",
+      prefix: "Context window:",
+      key: "contextWindow",
+      question: "Context window (tokens)",
       choices: [
-        { title: "150K", description: "Lower floor" },
-        { title: "250K", description: "Default" },
-        { title: "400K", description: "Higher floor" },
+        { title: "Ask the host", description: "Use the window the host reports for the active model (default)" },
+        { title: "200K", description: "Declare a 200K window" },
+        { title: "400K", description: "Declare a 400K window" },
+        { title: "1M", description: "Declare a 1M window" },
       ],
-      parse: (title) => Number(title.replace("K", "")) * 1000,
-    },
-    {
-      prefix: "Headroom fraction:",
-      key: "headroomFraction",
-      question: "Headroom fraction",
-      choices: [
-        { title: "8%", description: "Less working room" },
-        { title: "12%", description: "Default" },
-        { title: "20%", description: "More working room" },
-        { title: "30%", description: "Much more working room" },
-      ],
-      parse: (title) => Number(title.replace("%", "")) / 100,
-    },
-    {
-      prefix: "Headroom floor:",
-      key: "headroomFloorTokens",
-      question: "Headroom floor (tokens)",
-      choices: [
-        { title: "20K", description: "Lower headroom floor" },
-        { title: "40K", description: "Default" },
-        { title: "80K", description: "Higher headroom floor" },
-        { title: "120K", description: "Much higher headroom floor" },
-      ],
-      parse: (title) => Number(title.replace("K", "")) * 1000,
     },
   ];
+  const parse = (title: string): number => {
+    if (title === "Ask the host") return 0;
+    if (title.endsWith("M")) return Number(title.replace("M", "")) * 1_000_000;
+    return Number(title.replace("K", "")) * 1000;
+  };
   for (;;) {
-    const c = orchestrator.config.compaction;
+    const c = orchestrator.config.promptcap;
     const options: OptionInput[] = [
-      opt(`Enable automatic compaction: ${c.enabled ? "ON" : "OFF"}`, "Proactively compact context when it grows past the threshold"),
+      opt(`Fold old tool calls: ${c.enabled ? "ON" : "OFF"}`, "Replace old tool output and arguments in the prompt with a recallable notice"),
     ];
     if (c.enabled) {
       options.push(
-        opt(`Trigger fraction: ${Math.round(c.fraction * 100)}% of context window`, "Compact once estimated context exceeds this fraction of the model's window"),
-        opt(`Floor: ${Math.round(c.floorTokens / 1000)}K tokens`, "Never trigger below this token count even if the fraction is smaller"),
-        opt(`Headroom fraction: ${Math.round(c.headroomFraction * 100)}% of context window`, "Working room kept above the post-compaction size"),
-        opt(`Headroom floor: ${Math.round(c.headroomFloorTokens / 1000)}K tokens`, "Minimum working room kept above the post-compaction size"),
+        opt(`Prompt ceiling: ${Math.round((c.maxPromptTokens ?? DEFAULT_MAX_PROMPT_TOKENS) / 1000)}K tokens`, "The size at which folding starts, when the model's window is unknown"),
+        opt(`Context window: ${c.contextWindow ? `${Math.round(c.contextWindow / 1000)}K tokens` : "ask the host"}`, "Declare the model's window, for a provider that does not report one"),
       );
+      const guard = orchestrator.promptGuard;
+      if (guard?.lastTokens != null && guard.lastCeiling != null) {
+        options.push(opt(`Last prompt: ${Math.round(guard.lastTokens / 1000)}K of ${Math.round(guard.lastCeiling / 1000)}K`, "What the most recent request was estimated at, against the ceiling it was held to"));
+      }
     }
-    options.push(opt("Compact context now", "Compact the current session immediately, choosing the summarizer"));
     options.push(opt(BACK, "Return to the previous menu"));
-    const choice = await selectOption(ctx, "Compaction", options);
+    const choice = await selectOption(ctx, "Prompt size", options);
     if (!choice || choice === BACK) return;
-    if (choice === "Compact context now") {
-      await runManualCompaction(orchestrator, ctx);
-      continue;
-    }
-    if (choice.startsWith("Enable automatic compaction:")) {
-      await showBooleanSetting(orchestrator, ctx, "Enable automatic compaction", ["compaction", "enabled"], "Proactively compact context when it grows past the threshold", "Never auto-compact");
+    if (choice.startsWith("Fold old tool calls:")) {
+      await showBooleanSetting(orchestrator, ctx, "Fold old tool calls", ["promptcap", "enabled"], "Replace old tool output and arguments in the prompt with a recallable notice", "Send the whole conversation");
       continue;
     }
     const picker = pickers.find((entry) => choice.startsWith(entry.prefix));
     if (!picker) continue;
     const sel = await selectOption(ctx, picker.question, [...picker.choices, opt(BACK, "Return to the previous menu")]);
     if (!sel || sel === BACK) continue;
-    const value = picker.parse(sel);
-    if (Number.isFinite(value) && value > 0) {
-      applyScopeChoice(orchestrator, ["compaction", picker.key], value, await pickScope(ctx, orchestrator));
+    const value = parse(sel);
+    if (Number.isFinite(value)) {
+      applyScopeChoice(orchestrator, ["promptcap", picker.key], value > 0 ? value : undefined, await pickScope(ctx, orchestrator));
     }
   }
 }
@@ -1715,7 +1654,7 @@ export async function showPpMenu(orchestrator: Orchestrator, ctx: any): Promise<
       opt("Copilot", "GitHub Copilot provider tier"),
       opt("Skills", "Bundled/global/project skill sources and catalog"),
       opt("Context", "AGENTS.md / CLAUDE.md injection (global/ancestor/project)"),
-      opt("Compaction", "Automatic compaction thresholds and manual compact"),
+      opt("Prompt size", "How much of the conversation reaches the model, and when old tool calls fold away"),
       opt("Commands", "Shell commands to run after file edits (formatters, linters)"),
       opt("General", "Log level and tracing"),
       opt("Performance", "Stale-turn and stale-worker time limits"),
@@ -1733,7 +1672,7 @@ export async function showPpMenu(orchestrator: Orchestrator, ctx: any): Promise<
     else if (choice === "Copilot") await showCopilotMenu(orchestrator, ctx);
     else if (choice === "Skills") await showSkillsSettings(orchestrator, ctx);
     else if (choice === "Context") await showContextSettings(orchestrator, ctx);
-    else if (choice === "Compaction") await showCompactionSettings(orchestrator, ctx);
+    else if (choice === "Prompt size") await showPromptcapSettings(orchestrator, ctx);
     else if (choice === "Commands") await showCommandsSettings(orchestrator, ctx);
     else if (choice === "General") await showGeneralSettings(orchestrator, ctx);
     else if (choice === "Performance") await showTimeoutsSettings(orchestrator, ctx);

@@ -5,7 +5,7 @@ import { toolsBlock, parseToolNames, identityBlock, principlesBlock } from "./to
 export function createLibrarianAgent(config: PiPiConfig) {
   const model = resolveModel(config.agents.subagents.simple.librarian.model);
   const thinking = config.agents.subagents.simple.librarian.thinking;
-  const tools = "read, bash, grep, find, vcc_recall, web_search, web_fetch";
+  const tools = "read, bash, grep, find, vcc_recall, recall_tool_output, recall_tool_args, web_search, web_fetch";
   const info = getModelInfo(model);
   return {
     frontmatter: {

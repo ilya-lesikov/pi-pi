@@ -23,13 +23,15 @@ Start Pi and talk to it normally. The initial Pi session owns all work; pi-pi do
 - session and context status;
 - bounded background workers;
 - reloadable skills;
-- VCC compaction and recall;
+- prompt size and recall;
 - main and worker model routing;
 - provider configuration.
 
 ## Memory
 
-Automatic compaction uses the bundled VCC engine. `vcc_recall` searches durable session history, including messages, tool calls, and tool results. Native Pi session restoration remains authoritative; pi-pi does not duplicate conversation state in task files.
+The prompt is kept inside the model's window by folding old tool traffic out of the copy on its way to the provider: arguments are capped per value, results become a `[omitted: <size>B; <call_id>]` notice, and what the user and the model said is never touched. Folding is oldest-first and never reversed, so the prompt's prefix stays stable between requests and the provider's cache survives.
+
+The session itself is never cut. `recall_tool_output` and `recall_tool_args` hand back a folded call by its id, and `vcc_recall` searches durable session history — messages, tool calls, and tool results. Native Pi session restoration remains authoritative; pi-pi does not duplicate conversation state in task files.
 
 ## Skills
 

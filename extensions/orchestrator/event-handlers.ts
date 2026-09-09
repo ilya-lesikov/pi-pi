@@ -1,6 +1,6 @@
 import { isAbsolute, relative, resolve, sep } from "path";
 import { Type } from "@sinclair/typebox";
-import { estimateTokens, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { loadConfig, getDefaultConfig, normalizeConfigDurations } from "./config.js";
 import { getLogger, initSessionLogger, setLogLevel, flushLogs } from "./log.js";
 import { initTracer, finalizeTracer, getTracer } from "./tracer.js";
@@ -8,10 +8,8 @@ import { registerCbmTools } from "./cbm.js";
 import { registerExaTools } from "./exa.js";
 import { registerAstSearchTool } from "./ast-search.js";
 import { registerBillingHook } from "./billing-spoof.js";
-import type { PiVccCompactionDetails } from "../../3p/pi-vcc/index.js";
-import { registerRecallTool, compile as vccCompile } from "../../3p/pi-vcc/index.js";
-import { BUILTIN_COMPACTION_MARKER, computeVccMessageRange, buildVccDetails } from "./compaction-dispatch.js";
-import { compactionThresholdTokens, shouldFireCompaction, shouldForceCompaction, applyBaselineMeasure } from "./compaction-trigger.js";
+import { OMISSION_INSTRUCTION, registerRecallTools } from "./promptcap/recall.js";
+import { PromptGuard, registerPromptGuard } from "./promptcap/guard.js";
 import { collectContextFiles, renderContextInjection, summarizeContextInjectionSize } from "./context-injection.js";
 import { enabledSkillLayers, listLayeredSkills, loadLayeredSkill } from "./skills-manifest.js";
 import { identityBlock, principlesBlock, toolsBlock, delegationBlock } from "./agents/tool-routing.js";
@@ -143,7 +141,7 @@ export function renderGenericPrompt(orchestrator: Orchestrator, ctx: any, toolNa
   const skills = selectedSkills(orchestrator);
   const skillManifest = skills.length === 0 ? "" : [
     "<skills>",
-    "Detailed operating guidance lives in skills, loaded via load_skill. Each entry below is the skill's own description and states WHEN it applies — a hard trigger: load the skill BEFORE starting matching work. Re-load it if a compaction dropped its content.",
+    "Detailed operating guidance lives in skills, loaded via load_skill. Each entry below is the skill's own description and states WHEN it applies — a hard trigger: load the skill BEFORE starting matching work. Skill documents are stateless and reloadable.",
     ...skills.map((skill) => `- ${skill.name}: ${skill.description} (${skill.layer})`),
     "</skills>",
   ].join("\n");
@@ -169,6 +167,10 @@ export function renderGenericPrompt(orchestrator: Orchestrator, ctx: any, toolNa
       reviewers: buildPoolRoster(orchestrator.config, "reviewers"),
       deepDebuggers: buildPoolRoster(orchestrator.config, "deepDebuggers"),
     }),
+    // Explained once here rather than beside every notice: a long session folds
+    // hundreds of calls, and repeating it would cost thousands of tokens out of
+    // the recent tool history the folding exists to protect.
+    orchestrator.config.promptcap.enabled && toolNames.includes("recall_tool_output") ? OMISSION_INSTRUCTION : "",
     projectContext ? `<project_context>\n${projectContext}\n</project_context>` : "",
     `<session>\nCurrent month: ${month}. Working directory: ${orchestrator.cwd}.\n</session>`,
   ].filter(Boolean).join("\n\n");
@@ -204,7 +206,7 @@ export function registerFeatureToolsAndAgents(orchestrator: Orchestrator): void 
   registerCbmTools(pi, orchestrator.cwd);
   registerExaTools(pi);
   registerAstSearchTool(pi, orchestrator.cwd);
-  registerRecallTool(pi);
+  registerRecallTools(pi);
   registerLoadSkill(pi, orchestrator.cwd, () => orchestrator.config?.skills);
   setExtensionOnlyMode(pi);
   orchestrator.registerAgents();
@@ -387,351 +389,47 @@ export function renderSkillReattachment(skills: Map<string, string>): string {
   ].join("\n");
 }
 
-// Stands in when a cut discards nothing that survives summarization, so the
-// dispatcher can still own the compaction instead of yielding to the host LLM.
-const EMPTY_COMPACTION_SUMMARY = "[Session Goal]\n- (nothing summarizable was discarded at this cut; use vcc_recall for earlier context)";
-
-const FALLBACK_SUMMARY_CHARS = 12_000;
-
-/**
- * Last-resort summary for a cut whose summarizer threw. The host drops every
- * message before `firstKeptEntryId` no matter what the summary says, so a
- * placeholder here would erase that history from context; quoting the tail
- * verbatim keeps the most recent content without another model call.
- */
-function digestDiscarded(messages: any[]): string {
-  const rendered: string[] = [];
-  let total = 0;
-  for (const message of [...messages].reverse()) {
-    const content = message?.content;
-    const text = typeof content === "string"
-      ? content
-      : Array.isArray(content)
-        ? content.map((part: any) => (typeof part?.text === "string" ? part.text : "")).filter(Boolean).join("\n")
-        : "";
-    if (!text.trim()) continue;
-    const line = `[${message?.role ?? "unknown"}] ${text.trim()}`;
-    if (total + line.length > FALLBACK_SUMMARY_CHARS) break;
-    rendered.unshift(line);
-    total += line.length;
-  }
-  if (rendered.length === 0) return "";
-  return [
-    "[Session Goal]",
-    "- Summarization failed at this cut; the most recent discarded messages are quoted verbatim below. Use vcc_recall for anything older.",
-    "",
-    "[Verbatim Tail]",
-    ...rendered,
-  ].join("\n");
-}
-
-type CompactionState = Pick<Orchestrator,
-  "pi" | "config" | "lastCtx" | "lastEstimatedTokens" | "compactionArm" | "adaptiveCompaction" | "manualCompactionPending" | "modelSwitchInFlight" | "switchingBetweenRequests" | "startupModelCorrection" | "resetAdaptiveCompaction" | "redeliverPendingContinuations" | "queueContinuation"
->;
-
-// Switching providers resends the whole conversation with a cold prompt cache,
-// so every retained token is billed again at the new provider. The vcc
-// summarizer runs locally, so compacting first costs only the detail it folds
-// away. Below this size the resend is too cheap to be worth that trade.
-const MODEL_SWITCH_COMPACTION_MIN_TOKENS = 40_000;
-
-// Consecutive proactive compaction failures after which the session stops
-// trying: the host's own overflow recovery is the remaining backstop.
-const MAX_COMPACTION_FAILURES = 2;
-
-/** Whether a compaction can be started right now, and is worth its cost. */
-function switchWorthCompacting(orchestrator: CompactionState, ctx: any): number | null {
-  if (!orchestrator.config?.compaction?.enabled || typeof ctx?.compact !== "function") return null;
-  // The host runs one compaction at a time; starting a second one over a manual
-  // or adaptive pass would have both writing compaction entries for one cut.
-  if (orchestrator.adaptiveCompaction.inFlight || orchestrator.manualCompactionPending) return null;
-  const usage = typeof ctx.getContextUsage === "function" ? ctx.getContextUsage() : null;
-  const tokens = usage?.tokens ?? orchestrator.lastEstimatedTokens;
-  if (typeof tokens !== "number" || tokens < MODEL_SWITCH_COMPACTION_MIN_TOKENS) return null;
-  return tokens;
-}
-
-function compactForModelSwitch(orchestrator: CompactionState, ctx: any): void {
-  // A parked switch compacts on its own terms, before it switches, and this
-  // hook fires from inside that switch.
-  if (orchestrator.modelSwitchInFlight) return;
-  const tokens = switchWorthCompacting(orchestrator, ctx);
-  if (tokens == null) return;
-  orchestrator.adaptiveCompaction.inFlight = true;
-  getLogger().debug({ s: "compaction", tokens }, "compacting before a model switch");
-  // A switch inside a live request aborts it, exactly as a mid-loop compaction
-  // does, so the resume has to be queued before the cut starts.
-  const live = !orchestrator.switchingBetweenRequests && typeof ctx.isIdle === "function" && !ctx.isIdle();
-  if (live) orchestrator.queueContinuation(CONTINUE_COMPACTED, true);
-  try {
-    ctx.compact({
-      onError: (err: any) => {
-        orchestrator.adaptiveCompaction.inFlight = false;
-        orchestrator.compactionArm.armed = true;
-        getLogger().error({ s: "compaction", err: err?.message }, "model-switch compaction failed");
-      },
-    });
-  } catch (error: any) {
-    // Neither callback will fire, so the in-flight flag would silence
-    // compaction for the rest of the session.
-    orchestrator.adaptiveCompaction.inFlight = false;
-    orchestrator.compactionArm.armed = true;
-    getLogger().error({ s: "compaction", err: error?.message }, "the host refused a model-switch compaction");
-    if (live) orchestrator.redeliverPendingContinuations();
-  }
-}
+type PromptcapState = Pick<Orchestrator, "pi" | "config" | "lastCtx" | "promptGuard">;
 
 /**
  * Carry out a switch parked by an earlier mid-request decision, now that the
- * turn has ended: compact first (the switch resends everything on a cold cache
- * at the new provider), and only switch once the cut has landed. Returns true
- * when a compaction took over, meaning the switch and the resume both happen
- * from its callbacks and this turn has nothing left to do.
+ * turn has ended. Parked rather than taken mid-run because switching providers
+ * inside a tool loop resends the whole conversation on a cold prompt cache.
  */
-async function drainPendingModelSwitch(orchestrator: Orchestrator, ctx: any, midRun: boolean): Promise<boolean> {
+async function drainPendingModelSwitch(orchestrator: Orchestrator): Promise<void> {
   const action = orchestrator.pendingModelSwitch;
-  if (!action) return false;
-  // A compaction already in flight owns this cut; leave the switch parked for
-  // its own backstop rather than racing it.
-  if (orchestrator.modelSwitchInFlight || orchestrator.adaptiveCompaction.inFlight || orchestrator.manualCompactionPending) {
-    orchestrator.pollPendingModelSwitch();
-    return false;
-  }
+  if (!action || orchestrator.modelSwitchInFlight) return;
   orchestrator.pendingModelSwitch = null;
-  const tokens = switchWorthCompacting(orchestrator, ctx);
-  if (tokens == null) {
-    // Nothing worth folding away, so nothing compacts and nothing is aborted:
-    // the run keeps the model it started on for its remaining turns.
-    await action();
-    return false;
-  }
   orchestrator.modelSwitchInFlight = true;
-  orchestrator.adaptiveCompaction.inFlight = true;
-  getLogger().debug({ s: "compaction", tokens, midRun }, "compacting before a parked model switch");
-  // The compaction cannot be awaited from here: the host aborts the live run
-  // and waits for it to settle, and this handler IS that run. So the switch and
-  // the resume both hang off its callbacks. The resume is queued only after the
-  // switch, and continuations hold while modelSwitchInFlight is set, so the
-  // request picks back up on the model this sequence landed on.
-  const finish = async () => {
-    orchestrator.adaptiveCompaction.inFlight = false;
-    try {
-      await action();
-    } catch (error: any) {
-      getLogger().error({ s: "model", err: error?.message }, "a parked model switch failed");
-    }
-    orchestrator.modelSwitchInFlight = false;
-    if (midRun) orchestrator.queueContinuation(CONTINUE_COMPACTED, true);
-    orchestrator.redeliverPendingContinuations();
-  };
   try {
-    ctx.compact({
-      onComplete: () => { void finish(); },
-      onError: (err: any) => {
-        orchestrator.compactionArm.armed = true;
-        getLogger().error({ s: "compaction", err: err?.message }, "the compaction before a parked model switch failed");
-        void finish();
-      },
-    });
+    await action();
   } catch (error: any) {
-    // Neither callback will fire, and both flags stay set without this: one
-    // silences compaction for the session, the other strands continuations.
-    getLogger().error({ s: "compaction", err: error?.message }, "the host refused a compaction before a parked model switch");
-    orchestrator.compactionArm.armed = true;
-    await finish();
-    return false;
-  }
-  return true;
-}
-
-function registerCompaction(orchestrator: CompactionState, sessionSkills: Map<string, string> = loadedSkills): void {
-  const pi = orchestrator.pi;
-  pi.on("context", (event: any) => {
-    const messages = event?.messages;
-    if (!Array.isArray(messages)) return;
-    orchestrator.lastEstimatedTokens = messages.reduce((sum: number, message: any) => sum + estimateTokens(message), 0);
-  });
-  pi.on("session_before_compact", async (event: any) => {
-    // The opt-in rides on the request itself, not on orchestrator state: an
-    // automatic compaction firing between the menu selection and the manual
-    // compaction would otherwise consume a shared flag and be LLM-summarized.
-    if (typeof event?.customInstructions === "string" && event.customInstructions.includes(BUILTIN_COMPACTION_MARKER)) return;
-    const prep = event.preparation;
-    if (!prep) return;
-    // Returning nothing (or throwing) hands the cut to the host's LLM
-    // summarizer, which is exactly what this dispatcher exists to replace, so
-    // every outcome below still produces a compaction. Nothing to summarize is
-    // not a reason to fall back either: the host needs a compaction entry to
-    // move the cut point, and would spend a model call producing one.
-    let discarded: any[] = [];
-    let summary = "";
-    let range: [string, string] | undefined;
-    let previousSummaryUsed = false;
-    let tokensBefore = 0;
-    try {
-      previousSummaryUsed = !!prep.previousSummary;
-      tokensBefore = prep.tokensBefore ?? 0;
-      const history = Array.isArray(prep.messagesToSummarize) ? prep.messagesToSummarize : [];
-      // On a split turn the host also discards the prefix of the turn it cut
-      // through, chronologically after the history it hands over separately.
-      // Summarizing only the history would drop those messages entirely.
-      const turnPrefix = Array.isArray(prep.turnPrefixMessages) ? prep.turnPrefixMessages : [];
-      discarded = [...history, ...turnPrefix];
-      // The range only locates the cut in the entry list, so it must survive a
-      // summarizer crash — without it vcc_recall cannot scope to this cut.
-      range = computeVccMessageRange(event.branchEntries ?? [], prep.firstKeptEntryId);
-      summary = vccCompile({
-        messages: discarded,
-        previousSummary: prep.previousSummary,
-        fileOps: prep.fileOps ? { readFiles: [...(prep.fileOps.read ?? [])], modifiedFiles: [...(prep.fileOps.written ?? []), ...(prep.fileOps.edited ?? [])] } : undefined,
-      });
-    } catch (error: any) {
-      getLogger().error({ s: "compaction", err: error?.message }, "vcc summarization failed; quoting the discarded tail verbatim");
-    }
-    // Assembling the result must not throw either: the host reads an exception
-    // as no result and falls back to its own LLM summarizer.
-    let fullSummary = EMPTY_COMPACTION_SUMMARY;
-    let details: PiVccCompactionDetails | undefined;
-    try {
-      fullSummary = (summary || digestDiscarded(discarded) || EMPTY_COMPACTION_SUMMARY) + renderSkillReattachment(sessionSkills);
-      details = buildVccDetails(fullSummary, discarded.length, previousSummaryUsed, tokensBefore, range);
-    } catch (error: any) {
-      getLogger().error({ s: "compaction", err: error?.message }, "vcc result assembly failed; emitting a placeholder summary");
-      fullSummary = EMPTY_COMPACTION_SUMMARY;
-      details = buildVccDetails(fullSummary, 0, previousSummaryUsed, tokensBefore, range);
-    }
-    return { compaction: { summary: fullSummary, details, firstKeptEntryId: prep.firstKeptEntryId, tokensBefore } };
-  });
-  pi.on("session_compact", (_event, ctx) => {
-    orchestrator.lastCtx = ctx;
-    orchestrator.adaptiveCompaction.failures = 0;
-    if (orchestrator.adaptiveCompaction.inFlight) {
-      orchestrator.adaptiveCompaction.inFlight = false;
-      orchestrator.adaptiveCompaction.pendingProactiveMeasure = true;
-    }
-    // Continuations hold off while a compaction runs and stop polling after two
-    // minutes, so a long one has to hand them back rather than strand them.
+    getLogger().error({ s: "model", err: error?.message }, "a parked model switch failed");
+  } finally {
+    orchestrator.modelSwitchInFlight = false;
     orchestrator.redeliverPendingContinuations();
-  });
-  pi.on("model_select", (event: any, ctx: any) => {
-    if (event?.source === "restore" || !event?.previousModel || !event?.model) return;
-    // A startup correction only undoes a restore that landed on the wrong model
-    // (a provider missing at extension load); the session is sent in full on the
-    // first turn either way, so there is no resend to save and no reason to fold
-    // away detail the user just came back to.
-    if (orchestrator.startupModelCorrection) return;
-    const before = `${event.previousModel.provider}/${event.previousModel.id}`;
-    const after = `${event.model.provider}/${event.model.id}`;
-    if (before === after) return;
-    compactForModelSwitch(orchestrator, ctx ?? orchestrator.lastCtx);
-  });
+  }
 }
 
-async function maybeCompact(orchestrator: CompactionState, ctx: any, midRun = false): Promise<void> {
-  const cfg = orchestrator.config?.compaction;
-  if (!cfg?.enabled || typeof ctx?.getContextUsage !== "function" || typeof ctx?.compact !== "function") return;
-  // The host runs one compaction at a time, so a second one started over a
-  // pass already in flight would have both writing entries for the same cut.
-  if (orchestrator.adaptiveCompaction.inFlight || orchestrator.manualCompactionPending) return;
-  const usage = ctx.getContextUsage();
-  if (!usage || typeof usage.contextWindow !== "number" || usage.contextWindow <= 0) return;
-  const modelKey = ctx.model?.provider && ctx.model?.id ? `${ctx.model.provider}/${ctx.model.id}` : ctx.model?.id ?? null;
-  if (orchestrator.adaptiveCompaction.modelKey !== modelKey || orchestrator.adaptiveCompaction.window !== usage.contextWindow) {
-    orchestrator.resetAdaptiveCompaction();
-    orchestrator.adaptiveCompaction.modelKey = modelKey;
-    orchestrator.adaptiveCompaction.window = usage.contextWindow;
-  }
-  const input = { contextWindow: usage.contextWindow, modelId: modelKey ?? undefined, config: cfg };
-  const base = compactionThresholdTokens(input);
-  const adaptive = orchestrator.adaptiveCompaction;
-  if (adaptive.pendingProactiveMeasure && typeof usage.tokens === "number") {
-    adaptive.pendingProactiveMeasure = false;
-    if (applyBaselineMeasure(input, adaptive, usage.tokens).rearm) orchestrator.compactionArm.armed = true;
-  }
-  const effectiveThreshold = Math.max(base, adaptive.nextThreshold ?? 0);
-  // Post-compaction blind window: getContextUsage() reports tokens:null until
-  // a SUCCESSFUL assistant response lands after the compaction, so an error
-  // storm would otherwise let context coast far past the threshold. Fall back
-  // to our own chars/4 estimate against the normal threshold; the arm state
-  // still bounds this to one firing until the estimate materially drops.
-  const tokens = usage.tokens ?? orchestrator.lastEstimatedTokens;
-  const forced = usage.tokens == null && orchestrator.lastEstimatedTokens != null && shouldForceCompaction(orchestrator.lastEstimatedTokens, usage.contextWindow);
-  const fire = forced || (!adaptive.disabled && shouldFireCompaction(tokens, effectiveThreshold, orchestrator.compactionArm));
-  if (!fire) return;
-  if (forced) orchestrator.compactionArm.armed = false;
-  adaptive.firedThreshold = effectiveThreshold;
-  adaptive.inFlight = true;
-  // ctx.compact() aborts the run it is called from, so a compaction fired
-  // between two tool-calling turns leaves the request half-done. Queue the
-  // resume BEFORE starting it: the queue holds while a compaction is in
-  // flight, and session_compact redelivers it once the cut has landed.
-  if (midRun) orchestrator.queueContinuation(CONTINUE_COMPACTED, true);
-  ctx.compact({
-    onError: (err: any) => {
-      // A failed compaction does not shrink the context, so the arm would
-      // never re-arm via the lower band; re-arm here so the next turn retries.
-      // Mid-run each retry also costs the aborted turn its resume pays for, so
-      // a compaction that keeps failing stops being tried at all.
-      orchestrator.adaptiveCompaction.inFlight = false;
-      orchestrator.compactionArm.armed = true;
-      orchestrator.adaptiveCompaction.failures++;
-      if (orchestrator.adaptiveCompaction.failures >= MAX_COMPACTION_FAILURES) orchestrator.adaptiveCompaction.disabled = true;
-      getLogger().error({ s: "compaction", err: err?.message, failures: orchestrator.adaptiveCompaction.failures }, "proactive compaction failed");
-    },
+/**
+ * Bounds the prompt by folding old tool traffic out of the copy on its way to
+ * the provider. Nothing is cut from the session: every byte stays in the store,
+ * which is what the transcript and the recall tools read.
+ */
+function registerPromptcap(orchestrator: PromptcapState): void {
+  const guard = new PromptGuard({
+    settings: () => orchestrator.config.promptcap,
+    notify: (message, level) => orchestrator.lastCtx?.ui?.notify?.(message, level),
+    log: (event, message) => getLogger().debug(event, message),
   });
+  orchestrator.promptGuard = guard;
+  registerPromptGuard(orchestrator.pi, guard);
 }
 
-export function registerSubagentCompaction(
-  pi: ExtensionAPI,
-  config: Orchestrator["config"],
-  sessionSkills: Map<string, string> = new Map(),
-): void {
-  const state: CompactionState = {
-    pi,
-    config,
-    lastCtx: null,
-    lastEstimatedTokens: null,
-    compactionArm: { armed: true },
-    adaptiveCompaction: {
-      nextThreshold: null,
-      inFlight: false,
-      pendingProactiveMeasure: false,
-      disabled: false,
-      modelKey: null,
-      window: null,
-      firedThreshold: null,
-      contaminatedMeasures: 0,
-      failures: 0,
-    },
-    manualCompactionPending: false,
-    modelSwitchInFlight: false,
-    switchingBetweenRequests: false,
-    startupModelCorrection: false,
-    // A worker session has no continuation queue of its own: the pi-subagents
-    // runner owns the resume, waiting the cut out and re-prompting the run the
-    // compaction aborted.
-    redeliverPendingContinuations() {},
-    queueContinuation() {},
-    resetAdaptiveCompaction() {
-      state.adaptiveCompaction = {
-        nextThreshold: null,
-        inFlight: false,
-        pendingProactiveMeasure: false,
-        disabled: false,
-        modelKey: null,
-        window: null,
-        firedThreshold: null,
-        contaminatedMeasures: 0,
-        failures: 0,
-      };
-      state.compactionArm.armed = true;
-    },
-  };
-  registerCompaction(state, sessionSkills);
-  pi.on("turn_end", async (event: any, ctx: any) => {
-    state.lastCtx = ctx;
-    await maybeCompact(state, ctx, event?.message?.stopReason === "toolUse");
-  });
+export function registerSubagentPromptcap(pi: ExtensionAPI, config: Orchestrator["config"]): void {
+  const state: PromptcapState = { pi, config, lastCtx: null, promptGuard: null };
+  registerPromptcap(state);
+  pi.on("turn_end", (_event: any, ctx: any) => { state.lastCtx = ctx; });
 }
 
 // Confirm the stored subscription credential still works before the session
@@ -762,14 +460,15 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   registerTracing(pi);
   registerBillingHook(pi);
   registerLifecycle(orchestrator);
-  registerCompaction(orchestrator);
+  registerPromptcap(orchestrator);
 
   pi.on("session_start", async (_event, ctx) => {
     orchestrator.lastCtx = ctx;
     orchestrator.cwd = ctx.cwd;
     orchestrator.interactivePromptOpen = false;
-    orchestrator.manualCompactionPending = false;
-    orchestrator.manualCompactionRequestId++;
+    // A replaced conversation is not the one whose folds were recorded: its
+    // calls would inherit tiers by id collision, or hold old ones folded.
+    orchestrator.promptGuard?.reset();
     orchestrator.pendingModelSwitch = null;
     orchestrator.modelSwitchInFlight = false;
     if (orchestrator.modelSwitchPollTimer) clearTimeout(orchestrator.modelSwitchPollTimer);
@@ -826,13 +525,8 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     ctx.ui?.setFooter?.(createCustomFooter);
     orchestrator.applySubagentConcurrency();
     registerFeatureToolsAndAgents(orchestrator);
-    orchestrator.startupModelCorrection = true;
-    try {
-      if (!await orchestrator.applyMainAgent(ctx)) {
-        ctx.ui?.notify?.(`Main agent model "${orchestrator.config.agents.main.model}" is not available; keeping the current model.`, "warning");
-      }
-    } finally {
-      orchestrator.startupModelCorrection = false;
+    if (!await orchestrator.applyMainAgent(ctx)) {
+      ctx.ui?.notify?.(`Main agent model "${orchestrator.config.agents.main.model}" is not available; keeping the current model.`, "warning");
     }
     // The Claude OAuth token expires within hours. Turn-start refreshes cover
     // active work; this timer keeps the sub provider fresh through long idle
@@ -921,21 +615,14 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       noteSubscriptionCredentialAccepted();
     }
     publishAcpState(orchestrator);
-    // A switch parked mid-request is carried out here, between two LLM calls:
-    // compact, wait for the cut, switch, then resume. Only a turn that ran to
-    // completion is drained: a truncated, empty or failed one has recovery of
-    // its own below, which the drain's resume would not stand in for, and an
-    // error may route the session itself — switching first would undo that.
+    // A switch parked mid-request is carried out here, between two LLM calls.
+    // Only a turn that ran to completion is drained: a truncated, empty or
+    // failed one has recovery of its own below, and an error may route the
+    // session itself — switching first would undo that.
     const drainable = message?.stopReason === "toolUse" || message?.stopReason === "stop";
-    // The threshold compaction below would otherwise compact the same cut.
-    if (drainable && await drainPendingModelSwitch(orchestrator, ctx, message?.stopReason === "toolUse")) return;
-    // A mid-loop turn is never a continuation candidate, and the compaction
-    // fired here aborts the run — which the queued resume picks back up.
-    if (message?.stopReason === "toolUse") {
-      await maybeCompact(orchestrator, ctx, true);
-      return;
-    }
-    await maybeCompact(orchestrator, ctx);
+    if (drainable) await drainPendingModelSwitch(orchestrator);
+    // A mid-loop turn is never a continuation candidate.
+    if (message?.stopReason === "toolUse") return;
     // Between requests only: switching providers mid-run would resend the
     // whole conversation on a cold cache from inside a tool-call chain.
     await orchestrator.restoreMainRouting(ctx);

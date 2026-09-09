@@ -110,13 +110,13 @@ export function modelKeyOf(ctx: any): string {
  * charged for the prompt that copy became.
  */
 export function registerPromptGuard(pi: ExtensionAPI, guard: PromptGuard): void {
-  pi.on("context", (event: any, ctx: any) => {
-    const messages = event?.messages;
-    if (!Array.isArray(messages)) return;
-    return { messages: guard.apply(messages, ctx, activeTools(pi)) };
+  pi.on("context", (event, ctx) => {
+    const messages = event?.messages as AgentMessage[] | undefined;
+    if (!Array.isArray(messages)) return undefined;
+    return { messages: guard.apply(messages, ctx, activeTools(pi)) as any };
   });
 
-  pi.on("turn_end", (event: any, ctx: any) => {
+  pi.on("turn_end", (event: any, ctx) => {
     const usage = event?.message?.usage;
     if (!usage) return;
     const charged = (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);

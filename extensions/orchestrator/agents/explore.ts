@@ -5,7 +5,7 @@ import { toolsBlock, parseToolNames, identityBlock, ALL_CBM_TOOLS, WEB_TOOLS, pr
 export function createExploreAgent(config: PiPiConfig) {
   const model = resolveModel(config.agents.subagents.simple.explore.model);
   const thinking = config.agents.subagents.simple.explore.thinking;
-  const tools = `read, bash, grep, find, ls, lsp, ast_search, vcc_recall, ${ALL_CBM_TOOLS}, ${WEB_TOOLS}`;
+  const tools = `read, bash, grep, find, ls, lsp, ast_search, vcc_recall, recall_tool_output, recall_tool_args, ${ALL_CBM_TOOLS}, ${WEB_TOOLS}`;
   const info = getModelInfo(model);
   return {
     frontmatter: {

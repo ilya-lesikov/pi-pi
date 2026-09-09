@@ -9,6 +9,7 @@ import { createReviewerAgent } from "./agents/reviewer.js";
 import { createDeepDebuggerAgent } from "./agents/deep-debugger.js";
 import { encodePoolVariant, registerAgentDefinitions } from "./agents/registry.js";
 import { publishAcpState } from "./acp.js";
+import type { PromptGuard } from "./promptcap/guard.js";
 import { getLogger } from "./log.js";
 
 function isEnabled(value: { enabled?: boolean } | undefined): boolean {
@@ -39,45 +40,22 @@ export class Orchestrator {
   objectiveContinuationCount = 0;
   continuationHalted = false;
   pendingContinuations = new Map<string, { invisible: boolean }>();
-  lastEstimatedTokens: number | null = null;
   /** Messages of the most recent LLM call, replayed by the continuation check. */
   lastContextMessages: any[] = [];
-  compactionArm = { armed: true };
-  adaptiveCompaction: {
-    nextThreshold: number | null;
-    inFlight: boolean;
-    pendingProactiveMeasure: boolean;
-    disabled: boolean;
-    modelKey: string | null;
-    window: number | null;
-    firedThreshold: number | null;
-    contaminatedMeasures: number;
-    failures: number;
-  } = { nextThreshold: null, inFlight: false, pendingProactiveMeasure: false, disabled: false, modelKey: null, window: null, firedThreshold: null, contaminatedMeasures: 0, failures: 0 };
-  manualCompactionPending = false;
-  manualCompactionRequestId = 0;
+  /** Set once the session registers one; the footer and the menu read its sizing. */
+  promptGuard: PromptGuard | null = null;
   /**
    * A model switch pi-pi decided on while a request was still streaming, held
-   * until a turn boundary. Switching in place compacts the session, and the
-   * host's compaction aborts the run it is called from — which is the request
-   * the switch was meant to carry on serving.
+   * until a turn boundary. Switching providers mid-run resends the whole
+   * conversation on a cold prompt cache from inside a tool-call chain.
    */
   pendingModelSwitch: (() => Promise<void>) | null = null;
   modelSwitchPollTimer: ReturnType<typeof setTimeout> | null = null;
   /**
-   * Set while a parked switch is being carried out (compaction, then switch).
-   * Holds continuations back so the resumed request runs on the model the
-   * sequence lands on, and keeps the switch itself from compacting twice.
+   * Set while a parked switch is being carried out. Holds continuations back so
+   * the resumed request runs on the model the switch lands on.
    */
   modelSwitchInFlight = false;
-  /**
-   * Set while switching from a point where the request is known to be over.
-   * The host only settles a run after its turn_end handlers return, so a switch
-   * made from one still looks live and would otherwise be owed a resume.
-   */
-  switchingBetweenRequests = false;
-  /** Set while session_start routes the session back onto the configured main agent. */
-  startupModelCorrection = false;
   idlePollTimer: ReturnType<typeof setTimeout> | null = null;
   subFallbackActive = false;
   subFallbackModelId: string | null = null;
@@ -111,16 +89,12 @@ export class Orchestrator {
   sendUserMessageWhenIdle(text: string, generation: number, attempt = 0): void {
     const ctx = this.lastCtx;
     if (!ctx || generation !== this.continuationGeneration) return;
-    // A compaction rebuilds the context the message would land in, and the host
-    // reports idle while one runs — so a continuation queued right after a
-    // model switch would race the compaction that switch just started.
     // Several polling chains can be alive for one text (a redelivery does not
     // cancel the chain it overlaps), so the queue entry is the claim: whoever
     // takes it sends, the rest find it gone and stop.
     const pending = this.pendingContinuations.get(text);
     if (!pending) return;
-    const compacting = this.adaptiveCompaction.inFlight || this.manualCompactionPending || this.modelSwitchInFlight;
-    if (!compacting && (typeof ctx.isIdle !== "function" || ctx.isIdle())) {
+    if (!this.modelSwitchInFlight && (typeof ctx.isIdle !== "function" || ctx.isIdle())) {
       this.pendingContinuations.delete(text);
       // Put the claim back if the host refused it, so a later redelivery can
       // still get the message out instead of losing it silently.
@@ -128,8 +102,8 @@ export class Orchestrator {
       return;
     }
     if (attempt >= 120) {
-      // Give up polling, but leave the text queued: a compaction that outlasted
-      // the window still fires session_compact, which redelivers it.
+      // Give up polling, but leave the text queued: whatever was blocking it
+      // redelivers on the way out.
       getLogger().warn({ s: "continuation", attempts: attempt }, "gave up waiting for an idle session");
       return;
     }
@@ -192,22 +166,15 @@ export class Orchestrator {
     }
   }
 
-  /**
-   * Whether a model switch can be carried out right now. A live request must
-   * not be switched under: the compaction a switch triggers aborts the run it
-   * is called from. A compaction already running is just as bad — the host
-   * reports idle throughout one, and switching would change the model out from
-   * under it.
-   */
+  /** Whether a model switch can be carried out right now. */
   private canSwitchModelNow(ctx: any): boolean {
-    if (this.modelSwitchInFlight || this.adaptiveCompaction.inFlight || this.manualCompactionPending) return false;
+    if (this.modelSwitchInFlight) return false;
     return !ctx || typeof ctx.isIdle !== "function" || ctx.isIdle();
   }
 
   /**
-   * Carry out a model switch pi-pi owns, but never from inside a live request.
-   * A streaming session parks the switch instead, and the next turn boundary
-   * compacts, switches, and resumes the request it cut short.
+   * Carry out a model switch pi-pi owns, but never from inside a live request:
+   * a streaming session parks it for the next turn boundary instead.
    */
   async runModelSwitchBetweenTurns(action: () => Promise<void>): Promise<void> {
     if (!this.canSwitchModelNow(this.lastCtx)) {
@@ -235,8 +202,6 @@ export class Orchestrator {
         return;
       }
       this.pendingModelSwitch = null;
-      // Between requests, so the compaction this switch triggers cuts nothing
-      // short and owes no resume.
       void action().catch((error: any) => {
         getLogger().error({ s: "model", err: error?.message }, "a parked model switch failed");
       });
@@ -276,37 +241,19 @@ export class Orchestrator {
     if (live !== this.routedMainSpec) return;
     const target = resolveModel(main.model);
     if (target === live) return;
-    this.switchingBetweenRequests = true;
     try {
       if (await this.switchModel(ctx, target, main.thinking)) {
         this.routedMainSpec = target;
         getLogger().info({ s: "model", from: live, to: target }, "restored the main model after its tier became usable again");
         (ctx as any).ui?.notify?.(`Provider tier recovered; switched back to ${target}.`, "info");
       }
-    } catch {} finally {
-      this.switchingBetweenRequests = false;
-    }
+    } catch {}
   }
 
   updateStatus(ctx: any): void {
     this.lastCtx = ctx;
     publishAcpState(this);
     ctx?.ui?.requestRender?.();
-  }
-
-  resetAdaptiveCompaction(): void {
-    this.adaptiveCompaction = {
-      nextThreshold: null,
-      inFlight: false,
-      pendingProactiveMeasure: false,
-      disabled: false,
-      modelKey: null,
-      window: null,
-      firedThreshold: null,
-      contaminatedMeasures: 0,
-      failures: 0,
-    };
-    this.compactionArm.armed = true;
   }
 
   abortAllSubagents(): void {

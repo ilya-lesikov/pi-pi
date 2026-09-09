@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Orchestrator } from "./orchestrator.js";
 import { registerCommandHandlers } from "./command-handlers.js";
-import { registerEventHandlers, registerLoadSkill, registerSubagentCompaction } from "./event-handlers.js";
+import { registerEventHandlers, registerLoadSkill, registerSubagentPromptcap } from "./event-handlers.js";
 import { registerCbmTools } from "./cbm.js";
 import { registerExaTools } from "./exa.js";
 import { registerAstSearchTool } from "./ast-search.js";
@@ -10,7 +10,7 @@ import { getDefaultConfig, loadConfig, normalizeConfigDurations } from "./config
 import { getLogger } from "./log.js";
 import { registerBillingHook } from "./billing-spoof.js";
 import { suppressPierreThemeSpam } from "./suppress-pierre-theme-spam.js";
-import { registerRecallTool } from "../../3p/pi-vcc/index.js";
+import { registerRecallTools } from "./promptcap/recall.js";
 
 const ORCHESTRATOR_KEY = Symbol.for("pi-pi:orchestrator-initialized");
 const ORCHESTRATOR_CWD_KEY = Symbol.for("pi-pi:orchestrator-cwd");
@@ -75,10 +75,10 @@ function registerSubagentTools(pi: ExtensionAPI): void {
   // session_start, so a value captured here would keep a subagent that outlives
   // a /new or /resume searching the previous session's history.
   const rootSession = () => (globalThis as any)[Symbol.for("pi-pi:root-session-source")];
-  registerRecallTool(pi, {
+  registerRecallTools(pi, {
     getSessionFile: () => rootSession()?.getSessionFile(),
     getSessionManager: () => rootSession()?.getSessionManager?.(),
   });
   registerLoadSkill(pi, cwd, () => config.skills, sessionSkills);
-  registerSubagentCompaction(pi, config, sessionSkills);
+  registerSubagentPromptcap(pi, config);
 }

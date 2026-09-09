@@ -4,7 +4,7 @@ import { toolsBlock, parseToolNames, identityBlock, ALL_CBM_TOOLS, WEB_TOOLS, pr
 
 export function createAdvisorAgent(entry: PoolEntry) {
   const model = resolveModel(entry.model);
-  const tools = `read, bash, grep, find, ls, lsp, ast_search, vcc_recall, ${ALL_CBM_TOOLS}, ${WEB_TOOLS}`;
+  const tools = `read, bash, grep, find, ls, lsp, ast_search, vcc_recall, recall_tool_output, recall_tool_args, ${ALL_CBM_TOOLS}, ${WEB_TOOLS}`;
   const info = getModelInfo(model);
   return {
     frontmatter: {

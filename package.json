@@ -26,9 +26,6 @@
     "3p/pi-ask-user/index.ts",
     "3p/pi-ask-user/single-select-layout.ts",
     "3p/pi-ask-user/package.json",
-    "3p/pi-vcc/index.ts",
-    "3p/pi-vcc/src/",
-    "3p/pi-vcc/package.json",
     "scripts/lib/"
   ],
   "scripts": {

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { registerRecallTool } from "../../3p/pi-vcc/index.js";
+import { registerRecallTools } from "./promptcap/recall.js";
 import registerOrchestrator from "./index.js";
 
 const dirs: string[] = [];
@@ -18,7 +18,7 @@ describe("worker recall source", () => {
     const rootFile = join(dir, "root.jsonl");
     writeFileSync(rootFile, JSON.stringify({ type: "message", id: "root-1", message: { role: "user", content: [{ type: "text", text: "owning-session-decision" }] } }) + "\n");
     const registered: any[] = [];
-    registerRecallTool({ registerTool: (tool: any) => registered.push(tool) } as any, {
+    registerRecallTools({ registerTool: (tool: any) => registered.push(tool) } as any, {
       getSessionFile: () => rootFile,
       getSessionManager: () => ({ getSessionFile: () => rootFile, getActiveLineage: () => [], getEntries: () => [] }),
     });
@@ -36,18 +36,17 @@ describe("worker recall source", () => {
     const rootFile = join(dir, "root.jsonl");
     writeFileSync(rootFile, JSON.stringify({ type: "message", id: "root-1", message: { role: "user", content: [{ type: "text", text: "root-only-detail" }] } }) + "\n");
     const registered: any[] = [];
-    registerRecallTool({ registerTool: (tool: any) => registered.push(tool) } as any, {
+    registerRecallTools({ registerTool: (tool: any) => registered.push(tool) } as any, {
       getSessionFile: () => rootFile,
       getSessionManager: () => ({ getSessionFile: () => rootFile, getBranch: () => [], getEntries: () => [] }),
     });
     const tool = registered.find((entry) => entry.name === "vcc_recall");
     const entries = [
-      { type: "message", id: "worker-1", message: { role: "assistant", content: [{ type: "text", text: "worker-compacted-detail" }] } },
-      { type: "compaction", id: "worker-c1", details: { compactor: "pi-vcc", messageRange: ["worker-1", "worker-1"] } },
+      { type: "message", id: "worker-1", message: { role: "assistant", content: [{ type: "text", text: "worker-only-detail" }] } },
     ];
     const current = { getSessionFile: () => undefined, getBranch: () => entries, getEntries: () => entries };
-    const result = await tool.execute("id", { query: "worker-compacted-detail", scope: "compaction:latest", source: "current" }, undefined, undefined, { sessionManager: current });
-    expect(result.content[0].text).toContain("worker-compacted-detail");
+    const result = await tool.execute("id", { query: "worker-only-detail", source: "current" }, undefined, undefined, { sessionManager: current });
+    expect(result.content[0].text).toContain("worker-only-detail");
     expect(result.content[0].text).not.toContain("No session file available");
   });
   // The root session replaces the shared source object on every session_start,

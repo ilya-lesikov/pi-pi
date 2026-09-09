@@ -48,7 +48,7 @@ describe("/pp session control panel", () => {
     await showPpMenu(orchestrator, { model: null, sessionManager: {}, ui: {} });
     const options = askUser.mock.calls[0][1].options.map((option: any) => option.title);
     expect(options).toEqual([
-      "Status", "Workers", "Usage", "Agents", "Flant", "Copilot", "Skills", "Context", "Compaction", "Commands", "General", "Performance", "LSP", "Report", "Doctor", "Close",
+      "Status", "Workers", "Usage", "Agents", "Flant", "Copilot", "Skills", "Context", "Prompt size", "Commands", "General", "Performance", "LSP", "Report", "Doctor", "Close",
     ]);
     expect(options).not.toContain("Task");
     expect(options).not.toContain("Settings");

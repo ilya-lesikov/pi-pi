@@ -195,6 +195,37 @@ describe("fold", () => {
 
     expect(scaled.tokens).toBe(plain.tokens * 2);
   });
+
+  it("never folds the newest load of a skill", () => {
+    const messages = [
+      user("go"),
+      call("s0", "load_skill", { name: "repository-work" }),
+      result("s0", "load_skill", "OLD skill text ".repeat(500)),
+      call("s1", "load_skill", { name: "repository-work" }),
+      result("s1", "load_skill", "NEW skill text ".repeat(500)),
+      call("t0", "read", { path: "/a" }),
+      result("t0", "read", "o".repeat(9000)),
+    ];
+    fold(messages, 0, { ceiling: 10, lowWater: 5 }, new FoldState());
+
+    expect(messages[4].content[0].text).toBe("NEW skill text ".repeat(500));
+    expect(messages[2].content[0].text).toMatch(/^\[omitted: /);
+    expect(messages[6].content[0].text).toMatch(/^\[omitted: /);
+  });
+
+  it("pins each distinct skill separately", () => {
+    const messages = [
+      user("go"),
+      call("s0", "load_skill", { name: "repository-work" }),
+      result("s0", "load_skill", "repo skill ".repeat(500)),
+      call("s1", "load_skill", { name: "software-engineering" }),
+      result("s1", "load_skill", "eng skill ".repeat(500)),
+    ];
+    fold(messages, 0, { ceiling: 10, lowWater: 5 }, new FoldState());
+
+    expect(messages[2].content[0].text).toBe("repo skill ".repeat(500));
+    expect(messages[4].content[0].text).toBe("eng skill ".repeat(500));
+  });
 });
 
 describe("cutBytes", () => {
