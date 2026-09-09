@@ -112,6 +112,11 @@ describe("session-first core", () => {
     // and the answer is a stop: the user reacts to it before the work begins.
     expect(prompt).toContain("answer every question the request contains");
     expect(prompt).toContain("not a step on the way to the work");
+    // The observed failure: the answer was given and the same turn carried on
+    // into the work, so the user never got to react to it.
+    expect(prompt).toContain("The turn in which you answer it ENDS on that answer");
+    expect(prompt).toContain("do not answer and announce that you are starting");
+    expect(prompt).toContain("never act on your own answer to theirs");
     // A courtesy check-in ends the turn for nothing, so phase 3 forbids it
     // rather than relying on the continuation handler to nudge past it.
     expect(prompt).toContain("Never end a turn with a question you would proceed without an answer to");
