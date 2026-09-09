@@ -146,6 +146,38 @@ export function isCancel(value: unknown): value is AskCancel {
    return typeof value === "object" && value !== null && (value as AskCancel).__cancel === true;
 }
 
+// LOCAL PATCH (pi-pi): back/forward navigation across a `questions` sequence.
+// askUser() resolves exactly one question, so the UI layer reports a navigation
+// request the same way it reports a cancel — a sentinel through `done()` — and the
+// loop in execute() owns the question index. Mirrors AskCancel/isCancel above.
+export type AskNavigateDirection = "prev" | "next";
+
+// `kind: "navigate"` is redundant for the `isNavigate` guard, but keeps the union
+// discriminated for callers that switch on `result.kind` without checking the guard.
+interface AskNavigate {
+   __navigate: true;
+   kind: "navigate";
+   direction: AskNavigateDirection;
+}
+
+function makeNavigate(direction: AskNavigateDirection): AskNavigate {
+   return { __navigate: true, kind: "navigate", direction };
+}
+
+export function isNavigate(value: unknown): value is AskNavigate {
+   return typeof value === "object" && value !== null && (value as AskNavigate).__navigate === true;
+}
+
+// Position of the current question inside a `questions` sequence, plus which
+// moves are legal. `canNext` is false while the current question is unanswered,
+// so forward navigation can never skip a question.
+interface AskNavigationState {
+   index: number;
+   total: number;
+   canPrev: boolean;
+   canNext: boolean;
+}
+
 interface AskToolDetails {
    question: string;
    context?: string;
@@ -158,7 +190,7 @@ interface AskToolDetails {
    answers?: AskToolDetails[];
 }
 
-type AskUIResult = AskResponse | AskCancel;
+type AskUIResult = AskResponse | AskCancel | AskNavigate;
 
 function normalizeOptions(options: AskOptionInput[]): QuestionOption[] {
    return options
@@ -201,6 +233,18 @@ function createSelectionResponse(selections: string[], comment?: string | null):
    return normalizedComment
       ? { kind: "selection", selections: normalizedSelections, comment: normalizedComment }
       : { kind: "selection", selections: normalizedSelections };
+}
+
+// LOCAL PATCH (pi-pi): cursor position to restore when a question is revisited via
+// alt+←/alt+→. A selection maps back to its option row; a freeform answer has no row
+// (the "Type something" row is outside the clamp range askUser applies), so it falls
+// back to the first option and the user re-enters the editor to change it.
+function previousAnswerIndex(previous: AskToolDetails | undefined, options: QuestionOption[]): number {
+   const response = previous?.response;
+   if (!response || response.kind !== "selection") return 0;
+   const first = response.selections[0];
+   const index = options.findIndex((option) => option.title === first);
+   return index >= 0 ? index : 0;
 }
 
 function formatResponseSummary(response: AskResponse): string {
@@ -393,6 +437,13 @@ const DEFAULT_OVERLAY_TOGGLE_KEY = "alt+o";
 // (which is arrows / ctrl+j/k / tab).
 const COMMENT_SELECT_KEY = "ctrl+e";
 const COMMENT_SELECT_LABEL = "add context";
+
+// LOCAL PATCH (pi-pi): chords that walk a `questions` sequence backward/forward.
+// Modified arrows, so the bare arrows stay cursor movement in the freeform editor.
+const NAV_PREV_KEY = Key.alt("left");
+const NAV_NEXT_KEY = Key.alt("right");
+const NAV_PREV_LABEL = "alt+←";
+const NAV_NEXT_LABEL = "alt+→";
 
 // Vim-style aliases for navigating option lists. ctrl+j/k are safe in the
 // searchable single-select because they don't collide with fuzzy-search input.
@@ -982,6 +1033,8 @@ class AskComponent extends Container {
    private allowComment: boolean;
    private displayMode: AskDisplayMode;
    private initialIndex: number;
+   // LOCAL PATCH (pi-pi): undefined for a single-question call (no "1/1" title, no nav).
+   private navigation?: AskNavigationState;
    private tui: TUI;
    private theme: Theme;
    private keybindings: KeybindingsManager;
@@ -1025,6 +1078,7 @@ class AskComponent extends Container {
       allowComment: boolean,
       displayMode: AskDisplayMode,
       initialIndex: number,
+      navigation: AskNavigationState | undefined,
       tui: TUI,
       theme: Theme,
       keybindings: KeybindingsManager,
@@ -1040,6 +1094,7 @@ class AskComponent extends Container {
       this.allowComment = allowComment;
       this.displayMode = displayMode;
       this.initialIndex = initialIndex;
+      this.navigation = navigation;
       this.tui = tui;
       this.theme = theme;
       this.keybindings = keybindings;
@@ -1133,7 +1188,9 @@ class AskComponent extends Container {
 
    private updateStaticText(): void {
       const theme = this.theme;
-      const title = this.mode === "comment" ? "Optional comment" : "Question";
+      // LOCAL PATCH (pi-pi): "Question 3/7" while walking a `questions` sequence.
+      const position = this.navigation ? ` ${this.navigation.index + 1}/${this.navigation.total}` : "";
+      const title = this.mode === "comment" ? "Optional comment" : `Question${position}`;
       this.titleText.setText(theme.fg("accent", theme.bold(title)));
       // Dimmed, non-bold so it stays visually subordinate to the "Question" title
       // (accent+bold) above and the richer model output rendered before the dialogue.
@@ -1147,6 +1204,10 @@ class AskComponent extends Container {
          : null;
       const commentHint = this.allowComment && !this.shortcuts.commentSelect.disabled
          ? literalHint(theme, this.shortcuts.commentSelect.spec, COMMENT_SELECT_LABEL)
+         : null;
+      // LOCAL PATCH (pi-pi): only meaningful with a `questions` sequence to walk.
+      const navHint = this.navigation
+         ? literalHint(theme, `${NAV_PREV_LABEL}/${NAV_NEXT_LABEL}`, "prev/next question")
          : null;
       if (this.mode === "freeform" || this.mode === "comment") {
          const alternateCancelKeys = this.keybindings
@@ -1170,6 +1231,7 @@ class AskComponent extends Container {
             literalHint(theme, "↑↓", "navigate"),
             literalHint(theme, "space", "toggle"),
             commentHint,
+            navHint,
             overlayHint,
             keybindingHint(theme, this.keybindings, "tui.select.confirm", "submit"),
             keybindingHint(theme, this.keybindings, "tui.select.cancel", "cancel"),
@@ -1186,6 +1248,7 @@ class AskComponent extends Container {
             keybindingHint(theme, this.keybindings, "tui.editor.deleteCharBackward", "erase"),
             literalHint(theme, "↑↓", "navigate"),
             commentHint,
+            navHint,
             overlayHint,
             keybindingHint(theme, this.keybindings, "tui.select.confirm", "select"),
             literalHint(theme, "esc", "clear/cancel"),
@@ -1374,6 +1437,19 @@ class AskComponent extends Container {
          return;
       }
 
+      // LOCAL PATCH (pi-pi): select-mode-only sequence navigation. Handled before the
+      // lists see the key so neither the fuzzy filter nor the cursor consumes it.
+      if (this.navigation) {
+         if (matchesKey(data, NAV_PREV_KEY)) {
+            if (this.navigation.canPrev) this.onDone(makeNavigate("prev"));
+            return;
+         }
+         if (matchesKey(data, NAV_NEXT_KEY)) {
+            if (this.navigation.canNext) this.onDone(makeNavigate("next"));
+            return;
+         }
+      }
+
       if (this.allowMultiple) {
          this.ensureMultiSelectList().handleInput?.(data);
          this.tui.requestRender();
@@ -1465,8 +1541,11 @@ export async function askUser(
       displayMode?: AskDisplayMode;
       overlayToggleKey?: string | null;
       initialIndex?: number;
+      // LOCAL PATCH (pi-pi): set only when this question is part of a `questions`
+      // sequence. Enables the "N/M" title and the alt+←/alt+→ navigation sentinels.
+      navigation?: AskNavigationState;
    },
-): Promise<AskResponse | AskCancel | null> {
+): Promise<AskResponse | AskCancel | AskNavigate | null> {
    const {
       question,
       context,
@@ -1480,6 +1559,7 @@ export async function askUser(
       displayMode,
       overlayToggleKey,
       initialIndex = 0,
+      navigation,
    } = opts;
 
    const requestedMode = displayMode ?? (overlay === undefined ? undefined : overlay ? "overlay" : "inline");
@@ -1531,6 +1611,7 @@ export async function askUser(
             allowComment,
             effectiveDisplayMode,
             initialIndex,
+            navigation,
             tui,
             theme,
             keybindings,
@@ -1684,16 +1765,29 @@ export default function(pi: ExtensionAPI) {
                };
             }
             const answers: AskToolDetails[] = [];
-            for (let i = 0; i < multiQuestions.length; i++) {
-               const item = multiQuestions[i]!;
+            // LOCAL PATCH (pi-pi): index-driven walk instead of a plain for-loop, so an
+            // AskNavigate sentinel from the UI can step the cursor back or forward.
+            // `answers` is kept in question order and overwritten in place on a revisit.
+            let index = 0;
+            while (index < multiQuestions.length) {
+               const item = multiQuestions[index]!;
                const itemOptions = normalizeOptions(item.options ?? []);
                const itemContext = item.context?.trim() || undefined;
+               const previous = answers[index];
+               const navigation: AskNavigationState = {
+                  index,
+                  total: multiQuestions.length,
+                  canPrev: index > 0,
+                  // Forward only from an already-answered question: the next one is then
+                  // either answered too or the furthest reached, never a skipped question.
+                  canNext: index < multiQuestions.length - 1 && previous !== undefined,
+               };
                onUpdate?.({
-                  content: [{ type: "text" as const, text: `Waiting for user input (${i + 1}/${multiQuestions.length})...` }],
+                  content: [{ type: "text" as const, text: `Waiting for user input (${index + 1}/${multiQuestions.length})...` }],
                   details: { question: item.question, context: itemContext, options: itemOptions, response: null, cancelled: false, answers },
                });
                pi.events.emit("ask:opened", { question: item.question, context: itemContext, options: itemOptions });
-               let result: AskResponse | AskCancel | null;
+               let result: AskResponse | AskCancel | AskNavigate | null;
                try {
                   result = await askUser(ctx, {
                      question: item.question,
@@ -1706,21 +1800,28 @@ export default function(pi: ExtensionAPI) {
                      overlayToggleKey: (params as AskParams).overlayToggleKey,
                      timeout: (params as AskParams).timeout,
                      signal,
+                     navigation,
+                     initialIndex: previousAnswerIndex(previous, itemOptions),
                   });
                } catch (error) {
                   const message = error instanceof Error ? error.message : String(error);
                   return { content: [{ type: "text" as const, text: `Ask tool failed: ${message}` }], isError: true, details: { error: message, answers } };
                }
+               if (isNavigate(result)) {
+                  index += result.direction === "prev" ? -1 : 1;
+                  continue;
+               }
                if (result === null || isCancel(result)) {
                   const cancelReason = isCancel(result) ? result.reason : undefined;
                   const cancelled: AskToolDetails = { question: item.question, context: itemContext, options: itemOptions, response: null, cancelled: true, cancelReason };
-                  answers.push(cancelled);
+                  answers[index] = cancelled;
                   pi.events.emit("ask:cancelled", { question: item.question, context: itemContext, options: itemOptions, reason: cancelReason });
-                  return { content: [{ type: "text" as const, text: `User cancelled question ${i + 1}/${multiQuestions.length}` }], details: { ...cancelled, answers } };
+                  return { content: [{ type: "text" as const, text: `User cancelled question ${index + 1}/${multiQuestions.length}` }], details: { ...cancelled, answers } };
                }
                const answered: AskToolDetails = { question: item.question, context: itemContext, options: itemOptions, response: result, cancelled: false };
-               answers.push(answered);
+               answers[index] = answered;
                pi.events.emit("ask:answered", { question: item.question, context: itemContext, response: result });
+               index++;
             }
             const last = answers[answers.length - 1]!;
             const summary = answers.map((answer, i) => `${i + 1}. ${answer.question}: ${formatResponseSummary(answer.response!)}`).join("\n");
@@ -1766,7 +1867,7 @@ export default function(pi: ExtensionAPI) {
             context: normalizedContext,
             options,
          });
-         let result: AskResponse | AskCancel | null;
+         let result: AskResponse | AskCancel | AskNavigate | null;
          try {
             result = await askUser(ctx, {
                question,
@@ -1795,7 +1896,10 @@ export default function(pi: ExtensionAPI) {
             };
          }
 
-         if (result === null || isCancel(result)) {
+         // LOCAL PATCH (pi-pi): a navigate sentinel is unreachable here — the single-question
+         // path passes no `navigation`, so AskComponent never binds alt+←/alt+→. Folded into
+         // the cancel branch so the union stays exhaustively handled.
+         if (result === null || isCancel(result) || isNavigate(result)) {
             // Only a deliberate top-level user ESC carries reason "user"; timeout and
             // programmatic signal aborts must NOT abort the LLM turn. A bare null
             // (e.g. empty submit) is treated as non-user.

@@ -2197,3 +2197,248 @@ describe("multi-question flow", () => {
       expect(result.content[0].text).toContain("2. Second question?: second answer");
    });
 });
+
+// LOCAL PATCH (pi-pi): position indicator + alt+←/alt+→ navigation across a `questions`
+// sequence. Each ctx.ui.custom() call is one visit of one question; the harness records what
+// the dialogue showed on entry and replays a scripted key sequence until the component resolves.
+describe("multi-question navigation (local patch)", () => {
+   interface Visit {
+      title: string;
+      selectedIndex: number | undefined;
+      helpText: string;
+      resolved: boolean;
+   }
+
+   function createVisitingCtx(scripts: string[][], visits: Visit[], keybindings = createKeybindings()) {
+      let call = 0;
+      return {
+         hasUI: true,
+         ui: {
+            custom: async (factory: any) => {
+               const script = scripts[call++] ?? [];
+               let resolved: any;
+               let hasResolved = false;
+               const component = factory(
+                  { requestRender() { }, terminal: { rows: 24 } },
+                  createTheme(),
+                  keybindings,
+                  (value: any) => {
+                     if (!hasResolved) {
+                        hasResolved = true;
+                        resolved = value;
+                     }
+                  },
+               );
+               const visit: Visit = {
+                  title: (component as any).titleText.render().join(""),
+                  selectedIndex: ((component as any).singleSelectList as any)?.selectedIndex,
+                  helpText: (component as any).helpText.render().join(""),
+                  resolved: false,
+               };
+               visits.push(visit);
+               for (const key of script) {
+                  if (hasResolved) break;
+                  component.handleInput(key);
+               }
+               visit.resolved = hasResolved;
+               return hasResolved ? resolved : null;
+            },
+         },
+      };
+   }
+
+   const THREE_QUESTIONS = [
+      { question: "Q1?", options: ["A", "B"] },
+      { question: "Q2?", options: ["C", "D"] },
+      { question: "Q3?", options: ["E", "F"] },
+   ];
+
+   test("titles each question with its position in the sequence", async () => {
+      const tool = await setupTool();
+      const visits: Visit[] = [];
+
+      const result = await tool.execute(
+         "tool-call-id",
+         { questions: THREE_QUESTIONS },
+         undefined,
+         undefined,
+         createVisitingCtx([["enter"], ["enter"], ["enter"]], visits),
+      );
+
+      expect(visits.map((visit) => visit.title)).toEqual(["Question 1/3", "Question 2/3", "Question 3/3"]);
+      expect(visits[0]!.helpText).toContain("alt+←/alt+→ prev/next question");
+      expect(result.details.answers).toHaveLength(3);
+   });
+
+   test("a single-question call keeps the bare title and no nav hint", async () => {
+      const tool = await setupTool();
+      const visits: Visit[] = [];
+
+      await tool.execute(
+         "tool-call-id",
+         { question: "Only one?", options: ["A", "B"] },
+         undefined,
+         undefined,
+         createVisitingCtx([["enter"]], visits),
+      );
+
+      expect(visits).toHaveLength(1);
+      expect(visits[0]!.title).toBe("Question");
+      expect(visits[0]!.helpText).not.toContain("prev/next question");
+   });
+
+   test("alt+← returns to the previous question with the earlier answer preselected", async () => {
+      const tool = await setupTool();
+      const visits: Visit[] = [];
+
+      const result = await tool.execute(
+         "tool-call-id",
+         { questions: THREE_QUESTIONS.slice(0, 2) },
+         undefined,
+         undefined,
+         createVisitingCtx(
+            [
+               ["down", "enter"], // Q1 -> "B" (option index 1)
+               ["alt+left"],      // back to Q1
+               ["enter"],         // re-confirm the preselected "B"
+               ["enter"],         // Q2 -> "C"
+            ],
+            visits,
+         ),
+      );
+
+      expect(visits.map((visit) => visit.title)).toEqual([
+         "Question 1/2",
+         "Question 2/2",
+         "Question 1/2",
+         "Question 2/2",
+      ]);
+      expect(visits[0]!.selectedIndex).toBe(0);
+      expect(visits[2]!.selectedIndex).toBe(1);
+      expect(result.details.answers).toHaveLength(2);
+      expect(result.details.answers[0].response).toEqual({ kind: "selection", selections: ["B"] });
+      expect(result.details.answers[1].response).toEqual({ kind: "selection", selections: ["C"] });
+   });
+
+   test("re-answering a revisited question overwrites in place and keeps question order", async () => {
+      const tool = await setupTool();
+      const visits: Visit[] = [];
+
+      const result = await tool.execute(
+         "tool-call-id",
+         { questions: THREE_QUESTIONS.slice(0, 2) },
+         undefined,
+         undefined,
+         createVisitingCtx(
+            [
+               ["down", "enter"],  // Q1 -> "B"
+               ["alt+left"],       // back to Q1
+               ["ctrl+k", "enter"], // Q1 -> "A" instead
+               ["down", "enter"],  // Q2 -> "D"
+            ],
+            visits,
+         ),
+      );
+
+      expect(result.details.answers).toHaveLength(2);
+      expect(result.details.answers.map((answer: any) => answer.question)).toEqual(["Q1?", "Q2?"]);
+      expect(result.details.answers[0].response).toEqual({ kind: "selection", selections: ["A"] });
+      expect(result.details.answers[1].response).toEqual({ kind: "selection", selections: ["D"] });
+      expect(result.content[0].text).toContain("1. Q1?: A");
+      expect(result.content[0].text).toContain("2. Q2?: D");
+   });
+
+   test("alt+← is a no-op on the first question", async () => {
+      const tool = await setupTool();
+      const visits: Visit[] = [];
+
+      const result = await tool.execute(
+         "tool-call-id",
+         { questions: THREE_QUESTIONS.slice(0, 2) },
+         undefined,
+         undefined,
+         createVisitingCtx([["alt+left", "enter"], ["enter"]], visits),
+      );
+
+      expect(visits.map((visit) => visit.title)).toEqual(["Question 1/2", "Question 2/2"]);
+      expect(result.details.answers).toHaveLength(2);
+   });
+
+   test("alt+→ never skips an unanswered question but does move forward from an answered one", async () => {
+      const tool = await setupTool();
+      const visits: Visit[] = [];
+
+      const result = await tool.execute(
+         "tool-call-id",
+         { questions: THREE_QUESTIONS.slice(0, 2) },
+         undefined,
+         undefined,
+         createVisitingCtx(
+            [
+               ["alt+right", "enter"], // Q1 unanswered: alt+→ ignored, then answered "A"
+               ["alt+left"],           // back to Q1 (now answered)
+               ["alt+right"],          // forward again, allowed
+               ["enter"],              // Q2 -> "C"
+            ],
+            visits,
+         ),
+      );
+
+      expect(visits.map((visit) => visit.title)).toEqual([
+         "Question 1/2",
+         "Question 2/2",
+         "Question 1/2",
+         "Question 2/2",
+      ]);
+      // The first visit resolved on "enter", not on the ignored alt+→.
+      expect(visits[0]!.resolved).toBe(true);
+      expect(result.details.answers).toHaveLength(2);
+      expect(result.details.answers[0].response).toEqual({ kind: "selection", selections: ["A"] });
+      expect(result.details.answers[1].response).toEqual({ kind: "selection", selections: ["C"] });
+   });
+
+   test("esc still cancels the whole call with reason 'user'", async () => {
+      const tool = await setupTool();
+      const visits: Visit[] = [];
+
+      const result = await tool.execute(
+         "tool-call-id",
+         { questions: THREE_QUESTIONS },
+         undefined,
+         undefined,
+         createVisitingCtx([["enter"], ["escape"]], visits),
+      );
+
+      expect(visits).toHaveLength(2);
+      expect(result.details.cancelled).toBe(true);
+      expect(result.details.cancelReason).toBe("user");
+      expect(result.content[0].text).toBe("User cancelled question 2/3");
+      expect(result.details.answers).toHaveLength(2);
+      expect(result.details.answers[1].cancelled).toBe(true);
+      expect(emittedEvents.filter((event) => event.name === "ask:cancelled")).toHaveLength(1);
+   });
+
+   test("a revisit re-emits ask:opened and ask:answered for that question", async () => {
+      const tool = await setupTool();
+      const visits: Visit[] = [];
+
+      await tool.execute(
+         "tool-call-id",
+         { questions: THREE_QUESTIONS.slice(0, 2) },
+         undefined,
+         undefined,
+         createVisitingCtx([["enter"], ["alt+left"], ["enter"], ["enter"]], visits),
+      );
+
+      const names = emittedEvents.map((event) => `${event.name}:${event.payload.question}`);
+      expect(names).toEqual([
+         "ask:opened:Q1?",
+         "ask:answered:Q1?",
+         "ask:opened:Q2?",
+         "ask:opened:Q1?",
+         "ask:answered:Q1?",
+         "ask:opened:Q2?",
+         "ask:answered:Q2?",
+      ]);
+   });
+});
