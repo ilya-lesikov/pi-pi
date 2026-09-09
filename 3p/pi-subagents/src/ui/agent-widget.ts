@@ -16,6 +16,21 @@ import { getLifetimeTotal, getSessionContextPercent, type LifetimeUsage, type Se
 /** Maximum number of rendered lines before overflow collapse kicks in. */
 const MAX_WIDGET_LINES = 12;
 
+// LOCAL PATCH (pi-pi): share of the terminal this widget may claim, whatever
+// MAX_WIDGET_LINES says. The host caps a widget only when it is a plain string
+// array; a callback widget like this one is composited whole, so on a short
+// terminal it can push the editor and the footer out of the visible area — and
+// pi-tui, which renders differentially against what it believes is on screen,
+// then keeps writing frames to rows that scrolled away.
+const MAX_WIDGET_ROWS_FRACTION = 0.3;
+const MIN_WIDGET_LINES = 4;
+
+function widgetLineBudget(tui: any): number {
+  const rows = tui?.terminal?.rows;
+  if (typeof rows !== "number" || rows <= 0) return MAX_WIDGET_LINES;
+  return Math.max(MIN_WIDGET_LINES, Math.min(MAX_WIDGET_LINES, Math.floor(rows * MAX_WIDGET_ROWS_FRACTION)));
+}
+
 /** Braille spinner frames for animated running indicator. */
 export const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -423,7 +438,7 @@ export class AgentWidget {
       : undefined;
 
     // Assemble with overflow cap (heading + overflow indicator = 2 reserved lines).
-    const maxBody = MAX_WIDGET_LINES - 1; // heading takes 1 line
+    const maxBody = widgetLineBudget(tui) - 1; // heading takes 1 line
     const totalBody = finishedLines.length + runningLines.length * 2 + (queuedLine ? 1 : 0);
 
     const lines: string[] = [truncate(theme.fg(headingColor, headingIcon) + " " + theme.fg(headingColor, "Agents"))];

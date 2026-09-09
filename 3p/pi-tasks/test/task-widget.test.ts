@@ -34,11 +34,11 @@ function mockUICtx() {
 }
 
 /** Render the widget and return its lines. */
-function renderWidget(state: ReturnType<typeof mockUICtx>["state"]): string[] {
+function renderWidget(state: ReturnType<typeof mockUICtx>["state"], rows?: number): string[] {
   const entry = state.widgets.get("tasks");
   if (!entry?.content) return [];
   const theme = mockTheme();
-  const tui = { terminal: { columns: 200 }, requestRender() {} };
+  const tui = { terminal: { columns: 200, ...(rows === undefined ? {} : { rows }) }, requestRender() {} };
   const result = entry.content(tui, theme);
   return result.render();
 }
@@ -197,6 +197,22 @@ describe("TaskWidget", () => {
     // header + 3 tasks, no overflow
     expect(lines).toHaveLength(4);
     expect(lines[lines.length - 1]).not.toContain("more");
+  });
+
+  // LOCAL PATCH (pi-pi): a callback widget is composited whole, so an unbounded
+  // one pushes the editor and the footer out of the visible area on a short
+  // terminal — and pi-tui then keeps painting frames onto rows that scrolled off.
+  it("keeps to a share of a short terminal", () => {
+    for (let i = 0; i < 20; i++) store.create({ subject: `Task ${i}`, description: "d" });
+    widget.update();
+
+    const short = renderWidget(ui.state, 20);
+    expect(short.length).toBeLessThanOrEqual(6);
+    expect(short[short.length - 1]).toContain("more");
+
+    // A tall terminal is still bounded by maxVisible, not by the share.
+    const tall = renderWidget(ui.state, 80);
+    expect(tall.length).toBe(12);
   });
 
   it("shows all tasks when showAll is true even with maxVisible set", () => {

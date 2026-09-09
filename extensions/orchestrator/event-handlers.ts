@@ -20,6 +20,7 @@ import { createUsageTracker, dumpUsageSummary, isSubscriptionRouted, loadUsageSu
 import { publishAcpState, resetAcpStateCache } from "./acp.js";
 import { runAfterEdit } from "./commands.js";
 import { checkDuplicateExtensions } from "./duplicate-extension-guard.js";
+import { installConsoleGuard } from "./console-guard.js";
 import { demoteUnusableSubscription, handleMainAuthFailure, handleMainRateLimit, handleSubagentAuthFailure, handleSubagentRateLimit, isAuthError, isPolicyBlockError, isRateLimitError } from "./rate-limit-fallback.js";
 import { adjudicateCheckIn, adjudicateContinuation } from "./continuation-adjudicator.js";
 import { loadFlantSettings, noteSubscriptionCredentialAccepted, refreshCopilotOAuthToken, refreshSubProvider, reviveSubscriptionCredential, setModelRegistry, syncProviderTiers } from "./flant-infra.js";
@@ -498,6 +499,9 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       return;
     }
     setLogLevel(orchestrator.config.general.logLevel);
+    // Only once the log has somewhere to go, and only when a TUI owns the
+    // terminal: in print and RPC mode console output IS the interface.
+    if (ctx.hasUI) installConsoleGuard();
     if (checkDuplicateExtensions(pi, ctx)) {
       orchestrator.duplicateExtensionError = true;
       publishAcpState(orchestrator);

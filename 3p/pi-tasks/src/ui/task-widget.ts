@@ -150,6 +150,17 @@ export class TaskWidget {
 
     if (tasks.length === 0) return [];
 
+    // LOCAL PATCH (pi-pi): never claim more than a share of the terminal. The
+    // host caps a widget only when it is a plain string array; a callback widget
+    // like this one is composited whole, so on a short terminal it can push the
+    // editor and the footer out of the visible area — and pi-tui, which renders
+    // differentially against what it believes is on screen, then keeps writing
+    // frames to rows that scrolled away.
+    const rows = tui?.terminal?.rows;
+    const rowBudget = typeof rows === "number" && rows > 0
+      ? Math.max(3, Math.floor(rows * 0.3))
+      : Number.POSITIVE_INFINITY;
+
     const completed = tasks.filter(t => t.status === "completed");
     const inProgress = tasks.filter(t => t.status === "in_progress");
     const pending = tasks.filter(t => t.status === "pending");
@@ -164,8 +175,10 @@ export class TaskWidget {
     const lines: string[] = [truncate(theme.fg("accent", "●") + " " + theme.fg("accent", statusText))];
 
     const showAll = this.config.showAll ?? false;
-    const limit = this.config.maxVisible ?? DEFAULT_MAX_VISIBLE_TASKS;
+    // The budget covers the heading and both truncation markers.
+    const limit = Math.max(1, Math.min(this.config.maxVisible ?? DEFAULT_MAX_VISIBLE_TASKS, rowBudget - 3));
     const hiddenAt = this.config.hiddenAt ?? "bottom";
+    // `showAll` is an explicit "print every one of them" and is left alone.
     const { visible, hiddenAbove, hiddenBelow } = showAll
       ? { visible: tasks, hiddenAbove: 0, hiddenBelow: 0 }
       : TRUNCATE_FNS[hiddenAt](tasks, limit);

@@ -107,6 +107,30 @@ describe("AgentWidget", () => {
       .join("\n");
   }
 
+  // LOCAL PATCH (pi-pi): a callback widget is composited whole, so an unbounded
+  // one pushes the editor and the footer out of the visible area on a short
+  // terminal — and pi-tui then keeps painting frames onto rows that scrolled off.
+  it("keeps to a share of a short terminal", () => {
+    const running = Array.from({ length: 8 }, (_, i) => makeRecord(`a${i}`));
+    const activity = new Map(running.map((record) => [record.id, makeActivity()]));
+    const widget = new AgentWidget({ listAgents: () => running } as any, activity);
+    let factory: any;
+    widget.setUICtx({ setStatus: () => {}, setWidget: (_k, content) => { factory = content; } });
+    widget.update();
+
+    const render = (rows?: number) =>
+      factory({ terminal: { columns: 120, ...(rows === undefined ? {} : { rows }) }, requestRender: () => {} }, theme).render();
+
+    const short = render(20);
+    expect(short.length).toBeLessThanOrEqual(6);
+    expect(short[short.length - 1]).toContain("more");
+
+    // A tall terminal is still bounded by the widget's own cap.
+    expect(render(120).length).toBeLessThanOrEqual(12);
+    // An unknown row count keeps the previous behaviour rather than guessing.
+    expect(render().length).toBe(12);
+  });
+
   // LOCAL PATCH (pi-pi): finished agents linger by wall time. Turn-based aging
   // dropped them at the main session's next tool call, often before the user
   // ever saw the result.
