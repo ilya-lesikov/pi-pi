@@ -254,13 +254,14 @@ describe("model-registry", () => {
 
   it("getModelFamilies returns all family definitions", () => {
     const families = getModelFamilies();
-    expect(families).toHaveLength(14);
+    expect(families).toHaveLength(15);
     expect(families.map((f) => f.family).sort()).toEqual([
       "deepseek",
       "fable",
       "gemini-flash",
       "gemini-pro",
       "gpt",
+      "gpt-astra",
       "gpt-luna",
       "gpt-mini",
       "gpt-sol",
@@ -289,6 +290,17 @@ describe("model-registry", () => {
     expect(getModelInfo("openai/gpt-5.6")).toMatchObject({ family: "gpt", tier: "regular" });
     expect(getModelInfo("openai/gpt-5.4")).toMatchObject({ family: "gpt", tier: "regular" });
     expect(getModelInfo("openai/gpt-5.6-mini")).toMatchObject({ family: "gpt-mini", tier: "stupid" });
+  });
+
+  it("classifies gpt-6 astra as its own top-tier family, not legacy gpt", () => {
+    // Astra is the strongest GPT the pools consult, so it must classify apart
+    // from Sol: same-family models are interchangeable to the tier resolver and
+    // to rate-limit fallback, and Astra is neither a Sol substitute nor a
+    // legacy gpt-6.
+    expect(getModelInfo("pp-flant-openai/gpt-6-astra")).toMatchObject({ family: "gpt-astra", tier: "xsmart" });
+    expect(getModelInfo("pp-flant-openai/gpt-6-astra-pro")).toMatchObject({ family: "gpt-astra", tier: "xsmart" });
+    expect(getModelInfo("github-copilot/gpt-6-astra")).toMatchObject({ family: "gpt-astra", tier: "xsmart" });
+    expect(getModelInfo("openai/gpt-6")).toMatchObject({ family: "gpt", tier: "regular" });
   });
 
   it("getModelFamilies exposes vendor and tier per family", () => {

@@ -1,7 +1,7 @@
 import { compareModelVersion } from "./model-version.js";
 
 export type Vendor = "anthropic" | "openai" | "google" | "deepseek" | "xai" | "qwen" | "unknown";
-export type Family = "opus" | "fable" | "sonnet" | "haiku" | "gpt-sol" | "gpt-terra" | "gpt-luna" | "gpt" | "gpt-mini" | "gemini-pro" | "gemini-flash" | "deepseek" | "grok" | "qwen" | "unknown";
+export type Family = "opus" | "fable" | "sonnet" | "haiku" | "gpt-astra" | "gpt-sol" | "gpt-terra" | "gpt-luna" | "gpt" | "gpt-mini" | "gemini-pro" | "gemini-flash" | "deepseek" | "grok" | "qwen" | "unknown";
 export type Tier = "stupid" | "regular" | "smart" | "xsmart" | "unknown";
 
 export interface ModelInfo {
@@ -13,7 +13,7 @@ export interface ModelInfo {
 
 type ProviderPrefix = "anthropic" | "openai" | "google" | "deepseek" | "x-ai" | "qwen" | "pp-flant-anthropic" | "pp-flant-anthropic-sub" | "pp-flant-openai" | "github-copilot";
 type KnownVendor = "anthropic" | "openai" | "google" | "deepseek" | "xai" | "qwen";
-type KnownFamily = "opus" | "fable" | "sonnet" | "haiku" | "gpt-sol" | "gpt-terra" | "gpt-luna" | "gpt" | "gpt-mini" | "gemini-pro" | "gemini-flash" | "deepseek" | "grok" | "qwen";
+type KnownFamily = "opus" | "fable" | "sonnet" | "haiku" | "gpt-astra" | "gpt-sol" | "gpt-terra" | "gpt-luna" | "gpt" | "gpt-mini" | "gemini-pro" | "gemini-flash" | "deepseek" | "grok" | "qwen";
 type KnownTier = "stupid" | "regular" | "smart" | "xsmart";
 
 export interface ModelFamilyDefinition {
@@ -77,12 +77,21 @@ export const MODEL_FAMILIES: ModelFamilyDefinition[] = [
     providers: ["anthropic", "pp-flant-anthropic", "pp-flant-anthropic-sub", "github-copilot"],
     nativeLatestProviders: ["anthropic"],
   },
-  // gpt-5.6 tier families. These MUST precede the legacy `gpt` family below,
+  // gpt-5.6+ tier families. These MUST precede the legacy `gpt` family below,
   // since findFamily returns the first matching entry and the legacy pattern
-  // would otherwise swallow `gpt-5.6-sol` etc. Each tier folds its `-pro`
-  // higher-effort variant into the SAME family (a costlier reasoning MODE, not
-  // a distinct tier); the base/-pro disambiguation that matters for role
-  // selection lives in flant-infra's gptSol/gptSolPro pickers, not here.
+  // would otherwise swallow `gpt-6-astra`, `gpt-5.6-sol` etc. Each tier folds its
+  // `-pro` higher-effort variant into the SAME family (a costlier reasoning MODE,
+  // not a distinct tier); the base/-pro disambiguation that matters for role
+  // selection lives in flant-infra's gptAstra/gptSol pickers, not here.
+  {
+    vendor: "openai",
+    family: "gpt-astra",
+    tier: "xsmart",
+    displayName: "GPT Astra",
+    patterns: [/^(openai|pp-flant-openai|github-copilot)\/gpt-[0-9.]+-astra(?:-pro)?$/],
+    aliasTemplate: "gpt-astra-latest",
+    providers: ["openai", "pp-flant-openai", "github-copilot"],
+  },
   {
     vendor: "openai",
     family: "gpt-sol",
@@ -115,10 +124,10 @@ export const MODEL_FAMILIES: ModelFamilyDefinition[] = [
     family: "gpt",
     tier: "regular",
     displayName: "GPT",
-    // Excludes -mini (handled below) AND the sol/terra/luna tier suffixes
+    // Excludes -mini (handled below) AND the astra/sol/terra/luna tier suffixes
     // (handled above) so pre-5.6 gpt ids still resolve to this legacy family.
     // github-copilot included so a copilot gpt pin (e.g. gpt-4.1) classifies.
-    patterns: [/^(openai|pp-flant-openai|github-copilot)\/gpt-(?!mini-)(?!.*-mini(?:$|[-.]))(?!.*-(?:sol|terra|luna)(?:-pro)?$)[a-z0-9.-]+$/],
+    patterns: [/^(openai|pp-flant-openai|github-copilot)\/gpt-(?!mini-)(?!.*-mini(?:$|[-.]))(?!.*-(?:astra|sol|terra|luna)(?:-pro)?$)[a-z0-9.-]+$/],
     aliasTemplate: "gpt-latest",
     providers: ["openai", "pp-flant-openai", "github-copilot"],
   },
