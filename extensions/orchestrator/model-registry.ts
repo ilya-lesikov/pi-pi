@@ -372,18 +372,15 @@ function isTierUsable(tier: ProviderTierName, family: Family): boolean {
   // The paid gateway no longer serves Claude at all — Claude routes ONLY via
   // the subscription (or Copilot). Never resolve a Claude family onto flant-api.
   if (tier === "flant-api" && isClaudeFamily(family)) return false;
-  // Copilot's Astra catalog stops at the base SKU, so every resolution onto that
-  // tier silently swaps the Astra Pro the pools ask for down to plain Astra —
-  // cheaper, but not the model that was requested. Astra therefore never touches
-  // copilot: it is served exclusively from pp-flant-openai.
-  if (tier === "copilot" && COPILOT_EXCLUDED_FAMILIES.has(family)) return false;
   return true;
 }
 
-// Families Copilot must never serve, however cheap flat-rate routing is. Only
-// families whose copilot catalog entry is a WEAKER SKU than the one the config
-// names belong here — the promotion is a cost win everywhere else.
-const COPILOT_EXCLUDED_FAMILIES = new Set<Family>(["gpt-astra"]);
+// Families that must never be routed ONTO copilot automatically: copilot's
+// catalog entry for them is a WEAKER SKU than the spec the config names (astra
+// ships without `-pro`), so the flat-rate promotion would quietly answer with a
+// different model. This bars the automatic move only — a spec that already NAMES
+// a registered copilot model is the user's own choice and still stands.
+const COPILOT_PROMOTION_EXCLUDED_FAMILIES = new Set<Family>(["gpt-astra"]);
 
 function isClaudeFamily(family: Family): boolean {
   return family === "opus" || family === "fable" || family === "sonnet" || family === "haiku";
@@ -463,8 +460,14 @@ function applyTierResolution(spec: string): string {
   // spec is NEVER rerouted upward — the subscription already outranks copilot,
   // and flant↔flant stays demote-only below (never promote a paid api spec onto
   // the subscription). An explicit copilot pin is handled by the current-tier
-  // branch, not here.
-  if (currentTier === "flant-api" && isTierUsable("copilot", family)) {
+  // branch, not here — which is why the exclusion below costs the user nothing
+  // they asked for: it declines to MOVE a family onto copilot, and never
+  // overrides a spec that named copilot itself.
+  if (
+    currentTier === "flant-api"
+    && isTierUsable("copilot", family)
+    && !COPILOT_PROMOTION_EXCLUDED_FAMILIES.has(family)
+  ) {
     const copilotSpec = registeredSpecForTier("copilot", family);
     if (copilotSpec) return copilotSpec;
   }

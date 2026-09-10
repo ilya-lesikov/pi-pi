@@ -530,7 +530,7 @@ describe("model-registry", () => {
       expect(resolveModel("pp-flant-openai/gpt-5.6-sol")).toBe("pp-flant-openai/gpt-5.6-sol");
     });
 
-    it("never routes astra onto copilot, even when copilot registers the family", () => {
+    it("never PROMOTES astra onto copilot, even when copilot registers the family", () => {
       // Copilot stocks only the base astra SKU, so promoting the pools' Astra Pro
       // would trade the requested model for a cheaper weaker one. Contrast the
       // sol family below, which copilot serves at parity and does get promoted.
@@ -547,16 +547,16 @@ describe("model-registry", () => {
       expect(resolveModel("pp-flant-openai/gpt-5.6-sol")).toBe("github-copilot/gpt-5.6-sol");
     });
 
-    it("reroutes an explicit copilot astra pin back onto flant", () => {
+    it("still honors an explicit copilot astra pin — the exclusion bars promotion, not choice", () => {
       updateRegistryFromAvailableModels([
         "github-copilot/gpt-6-astra",
         "pp-flant-openai/gpt-6-astra",
         "pp-flant-openai/gpt-6-astra-pro",
       ]);
       setTierEnabled({ "copilot": true });
-      // The one place an explicit copilot pin is NOT respected: astra has no
-      // usable copilot tier at all, so it falls to the family's flant SKU.
-      expect(resolveModel("github-copilot/gpt-6-astra")).toBe("pp-flant-openai/gpt-6-astra");
+      // Naming a registered copilot model is a deliberate provider choice and
+      // outranks the routing policy that would otherwise keep astra off copilot.
+      expect(resolveModel("github-copilot/gpt-6-astra")).toBe("github-copilot/gpt-6-astra");
     });
 
     it("routes a legacy flant-api Claude spec onto the subscription", () => {
