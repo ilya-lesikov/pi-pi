@@ -372,8 +372,18 @@ function isTierUsable(tier: ProviderTierName, family: Family): boolean {
   // The paid gateway no longer serves Claude at all — Claude routes ONLY via
   // the subscription (or Copilot). Never resolve a Claude family onto flant-api.
   if (tier === "flant-api" && isClaudeFamily(family)) return false;
+  // Copilot's Astra catalog stops at the base SKU, so every resolution onto that
+  // tier silently swaps the Astra Pro the pools ask for down to plain Astra —
+  // cheaper, but not the model that was requested. Astra therefore never touches
+  // copilot: it is served exclusively from pp-flant-openai.
+  if (tier === "copilot" && COPILOT_EXCLUDED_FAMILIES.has(family)) return false;
   return true;
 }
+
+// Families Copilot must never serve, however cheap flat-rate routing is. Only
+// families whose copilot catalog entry is a WEAKER SKU than the one the config
+// names belong here — the promotion is a cost win everywhere else.
+const COPILOT_EXCLUDED_FAMILIES = new Set<Family>(["gpt-astra"]);
 
 function isClaudeFamily(family: Family): boolean {
   return family === "opus" || family === "fable" || family === "sonnet" || family === "haiku";
