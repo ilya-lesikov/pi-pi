@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Estimator, fixedBytes } from "./estimate.js";
+import { danglingSignatureBytes, Estimator, fixedBytes, BYTES_PER_TOKEN } from "./estimate.js";
 import { fold, FoldState, incompressibleTokens, type AgentMessage } from "./fold.js";
 import { limitsFor, OVERFLOW_MARGIN, type PromptcapSettings } from "./limits.js";
 
@@ -21,7 +21,7 @@ export interface GuardHost {
 export class PromptGuard {
   private readonly estimator = new Estimator();
   private readonly folds = new FoldState();
-  private predicted: { modelKey: string; tokens: number } | null = null;
+  private predicted: { modelKey: string; tokens: number; danglingSignatures: number } | null = null;
   /** The size the last fold settled on, for the footer and the menu. */
   lastTokens: number | null = null;
   lastCeiling: number | null = null;
@@ -54,7 +54,11 @@ export class PromptGuard {
     }
 
     const result = fold(messages, fixed, limits, this.folds, ratio);
-    this.predicted = { modelKey, tokens: result.tokens };
+    // Carried to calibration so one real turn can answer whether reasoning
+    // blocks left with a signature and no text reach the provider: the adapters
+    // disagree, and this is the difference the answer would show up as.
+    const dangling = Math.floor(danglingSignatureBytes(messages) / BYTES_PER_TOKEN);
+    this.predicted = { modelKey, tokens: result.tokens, danglingSignatures: dangling };
     this.lastTokens = result.tokens;
     this.lastCeiling = limits.ceiling;
 
@@ -89,6 +93,19 @@ export class PromptGuard {
     // teaches the wrong estimator: the fallback path switches providers between
     // the fold and the response.
     if (predicted.modelKey !== modelKey) return;
+    if (predicted.danglingSignatures > 0) {
+      this.host.log?.(
+        {
+          s: "promptcap",
+          model: modelKey,
+          predicted: predicted.tokens,
+          charged,
+          danglingSignatures: predicted.danglingSignatures,
+          predictedWithout: predicted.tokens - predicted.danglingSignatures,
+        },
+        "signature-only reasoning blocks were in the prompt: charged sits at whichever prediction it matches",
+      );
+    }
     this.estimator.observe(modelKey, predicted.tokens, charged);
   }
 

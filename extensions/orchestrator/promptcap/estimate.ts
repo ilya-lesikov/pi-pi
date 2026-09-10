@@ -98,13 +98,46 @@ function messageBytes(message: AgentMessage): number {
   return size;
 }
 
+/**
+ * What one reasoning block costs.
+ *
+ * The signature is counted alongside the text because a provider that receives
+ * the block is charged for both, and because counting less than what might be
+ * sent is the dangerous direction: an underestimate is a turn the provider
+ * rejects, while an overestimate only folds sooner than it had to.
+ *
+ * Whether a block whose text is empty reaches the provider at all is
+ * adapter-specific, and `guard` logs what these blocks weigh against what the
+ * provider charged so the question can be settled from a real session rather
+ * than from reading adapters.
+ */
+export function thinkingBytes(part: any): number {
+  return byteLength(part?.thinking ?? "") + byteLength(part?.thinkingSignature ?? "");
+}
+
+/** The signature bytes of blocks carrying no reasoning text, which is what the
+ * adapters disagree about. Reported for diagnosis, not used in the estimate. */
+export function danglingSignatureBytes(messages: AgentMessage[]): number {
+  let size = 0;
+  for (const message of messages) {
+    const content = (message as any)?.content;
+    if (!Array.isArray(content)) continue;
+    for (const part of content) {
+      if (part?.type !== "thinking" || part.redacted) continue;
+      if ((part.thinking ?? "").trim().length > 0) continue;
+      size += byteLength(part.thinkingSignature ?? "");
+    }
+  }
+  return size;
+}
+
 function partBytes(part: any): number {
   if (!part || typeof part !== "object") return 0;
   switch (part.type) {
     case "text":
       return byteLength(part.text ?? "");
     case "thinking":
-      return byteLength(part.thinking ?? "") + byteLength(part.thinkingSignature ?? "");
+      return thinkingBytes(part);
     case "toolCall":
       return byteLength(part.name ?? "") + jsonBytes(part.arguments);
     case "image":

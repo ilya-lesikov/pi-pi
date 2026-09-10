@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { PromptGuard, registerPromptGuard, modelKeyOf } from "./guard.js";
-import type { PromptcapSettings } from "./limits.js";
+import { DEFAULT_HEADROOM_TOKENS, type PromptcapSettings } from "./limits.js";
 import type { AgentMessage } from "./fold.js";
 
 const settings = (over: Partial<PromptcapSettings> = {}): PromptcapSettings => ({
@@ -65,9 +65,43 @@ describe("PromptGuard", () => {
     const guard = new PromptGuard({ settings: () => settings() });
     guard.apply(conversation(2, 100), ctx(1_000_000), []);
 
-    // 25% of the window above the prose that cannot be folded.
-    expect(guard.lastCeiling!).toBeGreaterThanOrEqual(250_000);
-    expect(guard.lastCeiling!).toBeLessThan(251_000);
+    // The headroom above the prose that cannot be folded, which a reported
+    // window is enough to unlock: without one the ceiling would stay at the
+    // configured default.
+    expect(guard.lastCeiling!).toBeGreaterThanOrEqual(DEFAULT_HEADROOM_TOKENS);
+    expect(guard.lastCeiling!).toBeLessThan(DEFAULT_HEADROOM_TOKENS + 1_000);
+  });
+
+  it("reports what signature-only reasoning blocks weighed against what was charged", () => {
+    const log = vi.fn();
+    const guard = new PromptGuard({ settings: () => settings(), log });
+    const messages = conversation(2, 100);
+    // A reasoning block as the subscription gateway leaves them: a signature
+    // and no text. Whether the adapter sends it is what the log settles.
+    messages.splice(1, 0, {
+      role: "assistant",
+      content: [{ type: "thinking", thinking: "", thinkingSignature: "s".repeat(4000) }],
+    });
+    guard.apply(messages, ctx(1_000_000), []);
+
+    guard.calibrate(12_345, "anthropic/claude-opus-4-8");
+
+    const reported = log.mock.calls.find(([event]) => (event as any).danglingSignatures > 0);
+    expect(reported).toBeDefined();
+    const [event] = reported!;
+    expect((event as any).charged).toBe(12_345);
+    expect((event as any).danglingSignatures).toBe(1000);
+    expect((event as any).predictedWithout).toBe((event as any).predicted - 1000);
+  });
+
+  it("says nothing about signatures when there are none to explain", () => {
+    const log = vi.fn();
+    const guard = new PromptGuard({ settings: () => settings(), log });
+    guard.apply(conversation(2, 100), ctx(1_000_000), []);
+
+    guard.calibrate(999, "anthropic/claude-opus-4-8");
+
+    expect(log.mock.calls.some(([event]) => (event as any).danglingSignatures !== undefined)).toBe(false);
   });
 
   it("learns the ratio from what the provider charged", () => {

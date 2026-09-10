@@ -40,6 +40,14 @@ export interface PromptcapModelConfig {
 export interface PromptcapConfig extends PromptcapModelConfig {
   /** Fold old tool traffic out of the prompt. Off = send the whole conversation. */
   enabled: boolean;
+  /** Room kept above the unfoldable prose before folding starts, in tokens
+   *  (default 200000). Not per-model: it sizes the recent tool history the work
+   *  needs, and the model bounds it through its window instead. */
+  headroomTokens?: number;
+  /** The share of that headroom one fold consumes, between 0 and 1
+   *  (default 0.3). The rest is what the prompt grows back into before the
+   *  next fold. */
+  foldFraction?: number;
   /** Per-model overrides keyed by model id, bare or provider-prefixed. */
   perModel: Record<string, PromptcapModelConfig>;
 }
@@ -233,6 +241,16 @@ function validatePromptcap(value: unknown): void {
   ensureBool(c.enabled, "config.promptcap.enabled");
   ensureNumberInRange(c.maxPromptTokens, "config.promptcap.maxPromptTokens", 1000, 100_000_000);
   ensureNumberInRange(c.contextWindow, "config.promptcap.contextWindow", 1000, 100_000_000);
+  ensureNumberInRange(c.headroomTokens, "config.promptcap.headroomTokens", 1000, 100_000_000);
+  // Excludes both ends: at 0 a fold would aim at the ceiling it just crossed
+  // and fire again on the next request, and at 1 it would aim at the floor and
+  // strip every call it has.
+  if (c.foldFraction !== undefined) {
+    const f = c.foldFraction;
+    if (typeof f !== "number" || !Number.isFinite(f) || f <= 0 || f >= 1) {
+      throw new Error("config.promptcap.foldFraction must be a number between 0 and 1, exclusive");
+    }
+  }
   if (c.perModel !== undefined) {
     const perModel = requireObject(c.perModel, "config.promptcap.perModel");
     for (const [modelId, override] of Object.entries(perModel)) {
