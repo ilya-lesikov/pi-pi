@@ -240,7 +240,7 @@ describe("flant-infra", () => {
     }
   });
 
-  it("carries pi's claude capabilities onto the sub models, minus the unusable fallback list", async () => {
+  it("carries pi's claude capabilities onto the sub models, minus the settings the gateway cannot honor", async () => {
     const dir = makeTempDir();
     mkdirSync(dir, { recursive: true });
     writeFileSync(
@@ -260,6 +260,9 @@ describe("flant-infra", () => {
                 compat: {
                   forceAdaptiveThinking: true,
                   supportsTemperature: false,
+                  // The gateway does not pass the mid-conversation-output-config
+                  // beta upstream, so inheriting this flag 400s every turn.
+                  supportsMidConvoEffort: true,
                   allowedFallbackModels: [{ provider: "anthropic", model: "claude-opus-4-8" }],
                 },
                 thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
@@ -276,7 +279,44 @@ describe("flant-infra", () => {
 
       const model = registered.get("pp-flant-anthropic-sub").models[0];
       expect(model.compat).toEqual({ forceAdaptiveThinking: true, supportsTemperature: false });
+      expect(model.compat).not.toHaveProperty("supportsMidConvoEffort");
       expect(model.thinkingLevelMap).toEqual({ off: null, xhigh: "xhigh", max: "max" });
+    } finally {
+      if (prevKey === undefined) delete process.env.LLM_API_KEY;
+      else process.env.LLM_API_KEY = prevKey;
+    }
+  });
+
+  it("omits compat entirely when the only inherited setting is the unusable mid-conversation effort flag", async () => {
+    const dir = makeTempDir();
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "auth.json"),
+      JSON.stringify({ anthropic: { type: "oauth", access: "sk-ant-oat01-test-token", expires: Date.now() + 3_600_000 } }),
+      "utf-8",
+    );
+    const prevKey = process.env.LLM_API_KEY;
+    process.env.LLM_API_KEY = "sk-gateway-test";
+    try {
+      const mod = await loadFlantInfraModule(dir);
+      mod.setModelRegistry({
+        getApiKeyForProvider: async () => undefined,
+        find: (provider: string, modelId: string) =>
+          provider === "anthropic" && modelId === "claude-fable-5-1"
+            ? { compat: { supportsMidConvoEffort: true } }
+            : undefined,
+      });
+      const registered = new Map<string, any>();
+      const pi = {
+        registerProvider: vi.fn((name: string, config: any) => registered.set(name, config)),
+        unregisterProvider: vi.fn((name: string) => registered.delete(name)),
+      } as any;
+
+      mod.registerFlantProviders(pi, ["sub/claude-fable-5-1"], {}, { subscription: true });
+
+      const model = registered.get("pp-flant-anthropic-sub").models[0];
+      expect(model.id).toBe("sub/claude-fable-5-1");
+      expect(model).not.toHaveProperty("compat");
     } finally {
       if (prevKey === undefined) delete process.env.LLM_API_KEY;
       else process.env.LLM_API_KEY = prevKey;

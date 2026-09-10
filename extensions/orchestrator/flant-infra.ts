@@ -1136,12 +1136,28 @@ function buildProviderModelConfig(
  * `allowedFallbackModels` is deliberately dropped: pi-ai turns it into a
  * server-side `fallbacks` param naming a BARE claude id, which the gateway key
  * cannot access (it only sees `sub/*`) and which would fail the whole request.
+ *
+ * `supportsMidConvoEffort` is dropped for the same reason. pi 0.85 turns it into
+ * per-message `output_config` pseudo-turns plus `thinking.block_binding`, gated
+ * on the `mid-conversation-output-config-2026-07-01` and
+ * `thinking-binding-controls-2026-08-01` betas. The gateway does not pass those
+ * betas upstream — sent in the `anthropic-beta` header or as a body `betas`
+ * param alike, `sub/claude-opus-5` answers 400 `thinking.adaptive.block_binding:
+ * Extra inputs are not permitted` / `messages.N.output_config: Extra inputs are
+ * not permitted`, so EVERY turn on the flagged models (claude-opus-5,
+ * claude-fable-5-1) fails. Without the flag pi-ai sends the adaptive shape with
+ * a top-level effort, which the gateway accepts; the only loss is pi's per-turn
+ * effort persistence on the sub path.
  */
 function applyClaudeModelCapabilities(config: ProviderModelConfig, bareModelId: string): ProviderModelConfig {
   const catalog = modelRegistryRef?.find?.("anthropic", bareModelId)
     ?? (typeof getModel === "function" ? getModel("anthropic" as never, bareModelId as never) : undefined);
   if (!catalog) return config;
-  const { allowedFallbackModels: _dropped, ...compat } = (catalog.compat ?? {}) as Record<string, unknown>;
+  const {
+    allowedFallbackModels: _droppedFallbacks,
+    supportsMidConvoEffort: _droppedMidConvoEffort,
+    ...compat
+  } = (catalog.compat ?? {}) as Record<string, unknown>;
   const out: ProviderModelConfig = { ...config };
   if (Object.keys(compat).length > 0) out.compat = compat as ProviderModelConfig["compat"];
   if (catalog.thinkingLevelMap) out.thinkingLevelMap = catalog.thinkingLevelMap as ProviderModelConfig["thinkingLevelMap"];
