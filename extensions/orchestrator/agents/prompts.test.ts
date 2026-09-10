@@ -143,7 +143,11 @@ describe("pre-1.0 principles", () => {
   it("exempts the write points the phase gate requires, so the rules do not conflict", () => {
     // Phases 1-2 (answers, proposal) and a blocking question must still be
     // able to produce text; the ban targets narration during execution.
-    expect(principlesBlock()).toContain("asking a blocking question");
+    expect(principlesBlock()).toContain("alongside a blocking question");
+    // The reasoning belongs in that text, not stuffed into the question field:
+    // the earlier "(with the answers and reasoning...)" phrasing read as a
+    // licence to bundle both into the ask and write nothing at all.
+    expect(principlesBlock()).toContain("never the question field itself");
     // A worker with no ask_user cannot both stay silent and "state concerns
     // before implementing" — the concern has to route somewhere reachable.
     expect(principlesBlock()).toContain("cannot ask");

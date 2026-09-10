@@ -123,7 +123,19 @@ describe("session-first core", () => {
     // The proposal blocks, and it blocks via ask_user — a prose-only stop is
     // nudged back into work by the continuation handler, so it cannot gate.
     expect(prompt).toContain("WAIT for the answer");
-    expect(prompt).toContain("never a prose message");
+    // ...but the call alone cannot gate either: with nothing written above it,
+    // the de-emphasized question field is left carrying the whole proposal and
+    // the user sees a bare demand for approval. Both, always.
+    expect(prompt).toContain("Write both out as a message");
+    expect(prompt).toContain("a proposal in prose alone just ends the turn");
+    expect(prompt).toContain("an ask_user with nothing written above it");
+    expect(prompt).toContain("Never move the substance into the question field");
+    // A question can also arrive as the freeform answer to your own ask_user;
+    // the observed failure was answering it with another ask_user, four times
+    // running, instead of writing the answer out and stopping.
+    expect(prompt).toContain("including as the freeform answer to your own ask_user");
+    expect(prompt).toContain("is not a vote on your options");
+    expect(prompt).toContain("never put the answer in the next question field");
     // Phase 3 must not need the user again.
     expect(prompt).toContain("without further check-ins");
     // The old blanket instruction contradicted the gate and must be gone.

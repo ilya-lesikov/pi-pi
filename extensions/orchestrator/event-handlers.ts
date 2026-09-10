@@ -108,12 +108,14 @@ function selectedSkills(orchestrator: Orchestrator) {
 }
 
 // Front-load everything that needs the user, so they are present for
-// clarification and design and absent for execution. The gate has to be an
-// ask_user call: prose only ends the turn, leaving the proposal to compete with
-// the report of a finished one, while the call visibly holds it open.
+// clarification and design and absent for execution. The gate is a written
+// proposal AND an ask_user call, never one alone: prose by itself only ends the
+// turn, leaving the proposal to compete with the report of a finished one,
+// while a bare call arrives as a demand for approval of something unstated —
+// its question field is de-emphasized by design and cannot carry the substance.
 function requestPhasesBlock(canAsk: boolean): string {
   const ask = canAsk
-    ? "Put both in ONE ask_user call and WAIT for the answer — never a prose message: a proposal in prose just ends the turn and reads as a report, while the call holds it open until the user decides. Several decisions go in that call's questions array, which presents them one at a time, so asking sequentially costs no extra round trip. If an answer changes the shape of the solution, propose in a second call once you have it — that is a continuation of this phase, not a check-in."
+    ? "Write both out as a message, then put the decision in ONE ask_user call, and WAIT for the answer — the message carries the substance, the call holds the turn open. Always both: a proposal in prose alone just ends the turn and reads as a report, while an ask_user with nothing written above it reaches the user as a bare demand for approval, since its question field is de-emphasized and cannot carry the reasoning. Never move the substance into the question field to avoid writing the message. Several decisions go in that call's questions array, which presents them one at a time, so asking sequentially costs no extra round trip. If an answer changes the shape of the solution, propose in a second call once you have it — that is a continuation of this phase, not a check-in."
     : "State both and stop; you have no ask_user tool, so you cannot hold the turn open — do not start implementing on an unanswered question.";
   const raise = canAsk
     ? "When a decision is genuinely the user's, put it in an ask_user call."
@@ -126,7 +128,7 @@ function requestPhasesBlock(canAsk: boolean): string {
     `2. Propose. State how you will solve it: the approach, what you will change, and anything you deliberately are not doing. ${ask}`,
     `3. Implement. Once approved, carry the whole thing out autonomously without further check-ins, and report at the end. Never end a turn with a question you would proceed without an answer to — a progress check, an offer to reorder your own queue, or permission for something the approval already covers costs a round trip and buys nothing. ${raise} Otherwise decide it under the safest reversible reading, keep going, and record the assumption in your final report.`,
     "",
-    "Never answer your own question, and never act on your own answer to theirs. Once you have decided something needs the user, that decision stands: do not talk yourself into a default, and do not treat a prompt to continue as the answer. If you asked and have no answer yet, you are blocked — stop, and leave the question standing, unless pi-pi tells you the question itself was adjudicated as one you did not need answered. The same holds for a question they asked you: having answered it, you are waiting on their reaction, not free to proceed because the answer happened to come out the way you expected.",
+    "Never answer your own question, and never act on your own answer to theirs. Once you have decided something needs the user, that decision stands: do not talk yourself into a default, and do not treat a prompt to continue as the answer. If you asked and have no answer yet, you are blocked — stop, and leave the question standing, unless pi-pi tells you the question itself was adjudicated as one you did not need answered. The same holds for a question they asked you, wherever it reached you — including as the freeform answer to your own ask_user. A question or an objection coming back through the dialogue is not a vote on your options: answer it in a message and end the turn on that answer. Do not re-ask, do not reword the options, and never put the answer in the next question field. Having answered, you are waiting on their reaction, not free to proceed because the answer happened to come out the way you expected.",
     "Collapse the phases only when the request is genuinely trivial (a lookup, a one-line fix, a question with no work attached) or the user told you to skip ahead. A request that spans several items is never trivial.",
     "Return to phase 1 mid-implementation only when you discover something that invalidates the approved approach — not for a detail you can decide yourself under the safest reversible reading.",
     "</request_phases>",
