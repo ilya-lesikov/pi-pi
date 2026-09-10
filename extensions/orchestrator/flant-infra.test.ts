@@ -391,9 +391,9 @@ describe("flant-infra", () => {
     ) as any;
     expect(config.agents.main.model).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-9");
     expect(config.agents.subagents.simple.task.model).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-9");
-    expect(config.agents.subagents.pools.advisors[0].model).toBe("pp-flant-anthropic-sub/sub/claude-fable-5");
-    expect(config.agents.subagents.pools.advisors[1].model).toBe("pp-flant-openai/gpt-5.6-sol-pro");
-    expect(config.agents.subagents.pools.reviewers[0].model).toBe("pp-flant-openai/gpt-5.6-sol");
+    expect(config.agents.subagents.pools.advisors[0].model).toBe("pp-flant-openai/gpt-5.6-sol-pro");
+    expect(config.agents.subagents.pools.advisors[1].model).toBe("pp-flant-anthropic-sub/sub/claude-fable-5");
+    expect(config.agents.subagents.pools.reviewers[0].model).toBe("pp-flant-openai/gpt-5.6-sol-pro");
     expect(config.agents.subagents.presetGroups).toBeUndefined();
     expect(config.agents.orchestrators).toBeUndefined();
   });
@@ -664,7 +664,38 @@ describe("flant-infra", () => {
     expect(config.agents.subagents.simple.explore.thinking).toBe("medium");
     expect(config.agents.subagents.simple.librarian.model).toBe("pp-flant-openai/gpt-5-4-mini");
     expect(config.agents.subagents.simple.librarian.thinking).toBe("medium");
-    expect(config.agents.subagents.pools.advisors[1].model).toBe("pp-flant-openai/gpt-5-4");
+    expect(config.agents.subagents.pools.advisors[0].model).toBe("pp-flant-openai/gpt-5-4");
+  });
+
+  it("generateFlantConfig gives every pool the same astra-pro + fable pair at high", async () => {
+    const dir = makeTempDir();
+    const mod = await loadFlantInfraModule(dir);
+
+    const config = mod.generateFlantConfig(
+      ["sub/claude-fable-5-1", "sub/claude-fable-5", "sub/claude-opus-5", "gpt-5.6-sol", "gpt-5.6-sol-pro", "gpt-6-astra", "gpt-6-astra-pro"],
+      true,
+    ) as any;
+
+    const pools = config.agents.subagents.pools;
+    for (const key of ["advisors", "reviewers", "deepDebuggers"]) {
+      expect(pools[key]).toEqual([
+        { enabled: true, model: "pp-flant-openai/gpt-6-astra-pro", thinking: "high" },
+        { enabled: true, model: "pp-flant-anthropic-sub/sub/claude-fable-5-1", thinking: "high" },
+      ]);
+    }
+    // Astra is reserved for the pools: the main-line roles stay on their own
+    // pickers rather than following the top-end SKU.
+    expect(config.agents.main.model).toBe("pp-flant-anthropic-sub/sub/claude-opus-5");
+  });
+
+  it("generateFlantConfig degrades the pool gpt slot to sol-pro when astra is absent", async () => {
+    const dir = makeTempDir();
+    const mod = await loadFlantInfraModule(dir);
+
+    const config = mod.generateFlantConfig(["sub/claude-fable-5", "gpt-5.6-sol", "gpt-5.6-sol-pro"], true) as any;
+
+    expect(config.agents.subagents.pools.reviewers[0].model).toBe("pp-flant-openai/gpt-5.6-sol-pro");
+    expect(config.agents.subagents.pools.deepDebuggers[0].model).toBe("pp-flant-openai/gpt-5.6-sol-pro");
   });
 
   it("generateFlantConfig routes Claude roles through subs when subscription active", async () => {

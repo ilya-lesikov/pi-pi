@@ -431,11 +431,15 @@ describe("config regressions", () => {
     ).not.toThrow();
   });
 
-  it("default config ships enabled fable+gpt advisors and no fixed advisor role", () => {
+  it("default config ships enabled astra+fable pools and no fixed advisor role", () => {
     const config = getDefaultConfig();
-    const advisors = config.agents.subagents.pools.advisors;
-    expect(advisors.filter((a) => a.enabled !== false).length).toBe(2);
-    expect(advisors.some((a) => a.model.includes("fable"))).toBe(true);
+    const pools = config.agents.subagents.pools;
+    for (const key of ["advisors", "reviewers", "deepDebuggers"] as const) {
+      expect(pools[key]).toEqual([
+        { enabled: true, model: "openai/gpt-astra-latest", thinking: "high" },
+        { enabled: true, model: "anthropic/claude-fable-latest", thinking: "high" },
+      ]);
+    }
     expect("advisor" in (config.agents.subagents.simple as Record<string, unknown>)).toBe(false);
   });
 

@@ -1360,15 +1360,6 @@ function makeVariant(modelId: string | null, fallbackModelId: string): { enabled
   return { enabled: true, model: modelSpec(modelId), thinking: "high" };
 }
 
-function makeVariantWithThinking(
-  modelId: string | null,
-  fallbackModelId: string,
-  thinking: string,
-): { enabled: boolean; model: string; thinking: string } {
-  if (!modelId) return { enabled: false, model: modelSpec(fallbackModelId), thinking };
-  return { enabled: true, model: modelSpec(modelId), thinking };
-}
-
 export function generateFlantConfig(models: string[], subscriptionActive = false): Partial<PiPiConfig> {
   const rawModels = [...new Set(models)];
   if (rawModels.length === 0) return {};
@@ -1383,9 +1374,11 @@ export function generateFlantConfig(models: string[], subscriptionActive = false
   const latestOpus = pickLatest(uniqueModels.filter((m) => /^claude-opus-/.test(m)));
   const latestFable = pickLatest(uniqueModels.filter((m) => /^claude-fable-/.test(m)));
   const latestClaude = pickLatest(uniqueModels.filter((m) => /^claude-/.test(m)));
-  // gpt-5.6 tier pickers. Base and -pro are distinct SKUs within a tier: the
+  // gpt-5.6+ tier pickers. Base and -pro are distinct SKUs within a tier: the
   // `-pro` regexes are end-anchored on `-pro`, the base regexes negative-look
-  // ahead to exclude `-pro`, so gpt-5.6-sol and gpt-5.6-sol-pro never collide.
+  // ahead to exclude `-pro`, so gpt-6-astra and gpt-6-astra-pro never collide.
+  const gptAstra = pickLatest(uniqueModels.filter((m) => /^gpt-[0-9.]+-astra$/.test(m)));
+  const gptAstraPro = pickLatest(uniqueModels.filter((m) => /^gpt-[0-9.]+-astra-pro$/.test(m)));
   const gptSol = pickLatest(uniqueModels.filter((m) => /^gpt-[0-9.]+-sol$/.test(m)));
   const gptSolPro = pickLatest(uniqueModels.filter((m) => /^gpt-[0-9.]+-sol-pro$/.test(m)));
   const gptTerra = pickLatest(uniqueModels.filter((m) => /^gpt-[0-9.]+-terra$/.test(m)));
@@ -1399,6 +1392,11 @@ export function generateFlantConfig(models: string[], subscriptionActive = false
   // when the split tiers are absent (older catalogs / non-flant gateways).
   const gptSmartPro = gptSolPro ?? gptSol ?? latestGptLegacy;
   const gptSmart = gptSol ?? latestGptLegacy;
+  // The GPT the on-demand pools consult: the strongest SKU the gateway serves,
+  // Astra Pro first. The pools are the one place worth the top-end price — they
+  // run on demand, for judgment the session cannot produce itself — so they do
+  // NOT degrade to the Sol tier that main-line roles (debug, fast) run on.
+  const gptTop = gptAstraPro ?? gptAstra ?? gptSmartPro;
   const gptBalanced = gptTerra ?? gptSmart;
   const gptFast = gptLuna ?? gptBalanced;
   const latestGpt = gptSmart;
@@ -1423,16 +1421,19 @@ export function generateFlantConfig(models: string[], subscriptionActive = false
           task: { model: modelSpec(taskModel), thinking: "medium" },
         },
         pools: {
+          // Every pool is the same pair: the top-end GPT for a genuinely foreign
+          // read, the latest Fable for a same-vendor one. Roles differ in what
+          // they are ASKED, not in which models answer.
           advisors: [
+            makeVariant(gptTop, fallback),
             makeVariant(latestFable, fallback),
-            makeVariant(gptSmartPro, fallback),
           ],
           reviewers: [
-            makeVariant(gptSmart, fallback),
-            makeVariantWithThinking(latestFable, fallback, "medium"),
+            makeVariant(gptTop, fallback),
+            makeVariant(latestFable, fallback),
           ],
           deepDebuggers: [
-            makeVariant(gptSmartPro, fallback),
+            makeVariant(gptTop, fallback),
             makeVariant(latestFable, fallback),
           ],
         },

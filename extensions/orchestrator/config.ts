@@ -180,16 +180,19 @@ const DEFAULT_CONFIG: PiPiConfig = {
         task: { model: "anthropic/claude-opus-latest", thinking: "medium" },
       },
       pools: {
+        // Same pair in every pool: the top-end GPT for a genuinely foreign read,
+        // the latest Fable for a same-vendor one. Roles differ in what they are
+        // ASKED, not in which models answer.
         advisors: [
+          { enabled: true, model: "openai/gpt-astra-latest", thinking: "high" },
           { enabled: true, model: "anthropic/claude-fable-latest", thinking: "high" },
-          { enabled: true, model: "openai/gpt-latest", thinking: "high" },
         ],
         reviewers: [
-          { enabled: true, model: "openai/gpt-latest", thinking: "high" },
-          { enabled: true, model: "anthropic/claude-fable-latest", thinking: "medium" },
+          { enabled: true, model: "openai/gpt-astra-latest", thinking: "high" },
+          { enabled: true, model: "anthropic/claude-fable-latest", thinking: "high" },
         ],
         deepDebuggers: [
-          { enabled: true, model: "openai/gpt-latest", thinking: "high" },
+          { enabled: true, model: "openai/gpt-astra-latest", thinking: "high" },
           { enabled: true, model: "anthropic/claude-fable-latest", thinking: "high" },
         ],
       },
