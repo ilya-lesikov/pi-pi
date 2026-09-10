@@ -46,9 +46,19 @@ export class Estimator {
     return Math.floor(raw * ratio);
   }
 
-  observe(modelKey: string, predicted: number, charged: number): void {
-    if (!modelKey || predicted <= 0 || charged <= 0) return;
-    const observed = charged / predicted;
+  /**
+   * Records what a call was actually charged against what was predicted for it.
+   *
+   * The prediction has to be the uncalibrated one. A ratio learned from a
+   * prediction the previous ratio had already scaled measures how far the last
+   * correction fell short rather than how far the raw estimate does, and
+   * folding that back in drives the ratio to the square root of the truth: a
+   * model whose prompts really cost twice the raw estimate would settle at 1.41
+   * and understate every prompt by a third.
+   */
+  observe(modelKey: string, rawPredicted: number, charged: number): void {
+    if (!modelKey || rawPredicted <= 0 || charged <= 0) return;
+    const observed = charged / rawPredicted;
     const previous = this.ratios.get(modelKey);
     if (!previous || previous <= 0) {
       this.ratios.set(modelKey, observed);

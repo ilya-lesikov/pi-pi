@@ -104,6 +104,27 @@ describe("PromptGuard", () => {
     expect(log.mock.calls.some(([event]) => (event as any).danglingSignatures !== undefined)).toBe(false);
   });
 
+  it("keeps calibration on the raw estimate, so the ratio holds where it lands", () => {
+    const guard = new PromptGuard({ settings: () => settings() });
+    const messages = conversation(2, 4000);
+
+    // The first sizing is uncalibrated, so it is the raw estimate itself.
+    guard.apply(messages, ctx(1_000_000), []);
+    const raw = guard.lastTokens!;
+
+    // A provider that consistently charges twice what the bytes suggest. Fed
+    // its own scaled prediction instead, the ratio would drift to the square
+    // root of the truth and understate every prompt by a third.
+    guard.calibrate(raw * 2, "anthropic/claude-opus-4-8");
+    for (let i = 0; i < 40; i++) {
+      guard.apply(messages, ctx(1_000_000), []);
+      guard.calibrate(raw * 2, "anthropic/claude-opus-4-8");
+    }
+
+    expect(guard.ratioFor("anthropic/claude-opus-4-8")!).toBeGreaterThan(1.9);
+    expect(guard.ratioFor("anthropic/claude-opus-4-8")!).toBeLessThan(2.1);
+  });
+
   it("learns the ratio from what the provider charged", () => {
     const guard = new PromptGuard({ settings: () => settings() });
     guard.apply(conversation(2, 4000), ctx(), []);

@@ -282,6 +282,16 @@ describe("Estimator", () => {
     expect(estimator.ratioFor("m")).toBeCloseTo(1.75, 5);
   });
 
+  it("converges on what the provider really charges", () => {
+    // Every reading is the raw estimate against a charge twice its size, which
+    // is what the guard hands over. Feeding it a prediction the ratio had
+    // already scaled would make each reading describe the last correction
+    // instead, and settle the ratio at the square root of the truth.
+    const estimator = new Estimator();
+    for (let i = 0; i < 40; i++) estimator.observe("m", 1000, 2000);
+    expect(estimator.ratioFor("m")).toBeCloseTo(2, 3);
+  });
+
   it("ignores a reading with nothing to learn from", () => {
     const estimator = new Estimator();
     estimator.observe("m", 0, 100);
@@ -322,7 +332,7 @@ describe("limitsFor", () => {
     expect(ceiling).toBe(200_000 - 40_000 - 10_000);
   });
 
-  it("spends a fixed share of the headroom per fold, whatever the prose", () => {
+  it("keeps a fixed share of the headroom per fold, whatever the prose", () => {
     for (const floor of [10_000, 100_000, 400_000]) {
       const { ceiling, lowWater } = limitsFor(settings(), "m", floor, 1_000_000);
       expect(lowWater - floor).toBe(Math.floor(DEFAULT_HEADROOM_TOKENS * DEFAULT_KEEP_FRACTION));

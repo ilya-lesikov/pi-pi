@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { danglingSignatureBytes, Estimator, fixedBytes } from "./estimate.js";
+import { danglingSignatureBytes, Estimator, fixedBytes, messagesBytes } from "./estimate.js";
 import { fold, FoldState, incompressibleTokens, tokensOf, type AgentMessage } from "./fold.js";
 import { limitsFor, OVERFLOW_MARGIN, type PromptcapSettings } from "./limits.js";
 
@@ -21,7 +21,7 @@ export interface GuardHost {
 export class PromptGuard {
   private readonly estimator = new Estimator();
   private readonly folds = new FoldState();
-  private predicted: { modelKey: string; tokens: number; danglingSignatures: number } | null = null;
+  private predicted: { modelKey: string; tokens: number; rawTokens: number; danglingSignatures: number } | null = null;
   /** The size the last fold settled on, for the footer and the menu. */
   lastTokens: number | null = null;
   lastCeiling: number | null = null;
@@ -61,7 +61,15 @@ export class PromptGuard {
     // or the two would be in different units and the comparison would mean
     // nothing on any model that has learned a ratio.
     const dangling = tokensOf(danglingSignatureBytes(messages), ratio);
-    this.predicted = { modelKey, tokens: result.tokens, danglingSignatures: dangling };
+    // The raw count is what the next charge is measured against: a ratio
+    // learned from a prediction the last ratio already scaled would fold its
+    // own correction back in.
+    this.predicted = {
+      modelKey,
+      tokens: result.tokens,
+      rawTokens: tokensOf(fixed + messagesBytes(messages), 1),
+      danglingSignatures: dangling,
+    };
     this.lastTokens = result.tokens;
     this.lastCeiling = limits.ceiling;
 
@@ -109,7 +117,7 @@ export class PromptGuard {
         "signature-only reasoning blocks were in the prompt: charged sits at whichever prediction it matches",
       );
     }
-    this.estimator.observe(modelKey, predicted.tokens, charged);
+    this.estimator.observe(modelKey, predicted.rawTokens, charged);
   }
 
   ratioFor(modelKey: string): number | undefined {
