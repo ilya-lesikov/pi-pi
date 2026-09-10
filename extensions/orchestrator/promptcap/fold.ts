@@ -147,11 +147,10 @@ export function fold(
   }
 
   if (toTokens(bytes) > limits.ceiling) {
-    // The low-water mark is raised to clear the incompressible floor, because a
-    // target below it can never be reached: the loop would promote everything
-    // on every request and still sit above the target, leaving the model no
-    // recent tool history for no gain.
-    const target = Math.max(limits.lowWater, toTokens(bytes - foldableBytes(messages, calls, protectedFrom)));
+    // The low-water mark already clears the floor by construction — it is a
+    // share of the span between floor and ceiling — so an unreachable target
+    // cannot be chased here.
+    const target = limits.lowWater;
 
     for (const to of [Tier.Digest, Tier.Breadcrumb]) {
       for (const call of calls) {

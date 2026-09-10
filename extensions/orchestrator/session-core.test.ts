@@ -879,8 +879,9 @@ describe("session-first core", () => {
     expect(handler).toBeTruthy();
 
     expect(folded[2].content[0].text).toMatch(/^\[omitted: 8000B; t0\]$/);
-    // The newest call is left alone, and so is the user's own prose.
-    expect(folded[80].content[0].text).toBe("o".repeat(8000));
+    // A 5K ceiling leaves less room than one of these results occupies, so the
+    // fold reaches the newest call too. The user's own prose is never folded.
+    expect(folded[80].content[0].text).toMatch(/^\[omitted: 8000B; t39\]$/);
     expect(folded[0].content[0].text).toBe("go");
     await emit(pi, "session_shutdown", {}, ctx);
   });

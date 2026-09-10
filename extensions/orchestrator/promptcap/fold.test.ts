@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { fold, FoldState, Tier, incompressibleTokens, cutBytes, cutBytesFromEnd, type AgentMessage } from "./fold.js";
 import { byteLength, Estimator, fixedBytes, messagesBytes } from "./estimate.js";
-import { limitsFor, DEFAULT_MAX_PROMPT_TOKENS, type PromptcapSettings } from "./limits.js";
+import { limitsFor, DEFAULT_FOLD_FRACTION, DEFAULT_HEADROOM_TOKENS, DEFAULT_MAX_PROMPT_TOKENS, type PromptcapSettings } from "./limits.js";
 
 const call = (id: string, name: string, args: Record<string, unknown>, thinking?: string): AgentMessage => ({
   role: "assistant",
@@ -295,14 +295,26 @@ describe("limitsFor", () => {
   it("uses the default ceiling when no window is known", () => {
     const { ceiling, lowWater } = limitsFor(settings(), "some/model", 0);
     expect(ceiling).toBe(DEFAULT_MAX_PROMPT_TOKENS);
-    expect(lowWater).toBe(DEFAULT_MAX_PROMPT_TOKENS / 2);
+    expect(lowWater).toBe(Math.floor(DEFAULT_MAX_PROMPT_TOKENS * DEFAULT_FOLD_FRACTION));
+  });
+
+  it("leaves the configured ceiling alone when no window bounds the climb", () => {
+    const { ceiling } = limitsFor(settings({ maxPromptTokens: 150_000 }), "m", 400_000);
+    expect(ceiling).toBe(150_000);
   });
 
   it("climbs the ceiling with the incompressible floor when a window is known", () => {
     const roomy = limitsFor(settings(), "m", 0, 1_000_000);
     const grown = limitsFor(settings(), "m", 400_000, 1_000_000);
     expect(grown.ceiling).toBeGreaterThan(roomy.ceiling);
-    expect(grown.ceiling).toBe(650_000);
+    expect(grown.ceiling).toBe(400_000 + DEFAULT_HEADROOM_TOKENS);
+  });
+
+  it("keeps the headroom absolute, so the window does not scale it", () => {
+    const small = limitsFor(settings(), "m", 100_000, 400_000);
+    const large = limitsFor(settings(), "m", 100_000, 1_000_000);
+    expect(large.ceiling).toBe(100_000 + DEFAULT_HEADROOM_TOKENS);
+    expect(small.ceiling).toBe(large.ceiling);
   });
 
   it("never lets the ceiling reach the window", () => {
@@ -310,14 +322,31 @@ describe("limitsFor", () => {
     expect(ceiling).toBe(200_000 - 40_000 - 10_000);
   });
 
-  it("raises the low-water mark clear of the floor", () => {
-    const { ceiling, lowWater } = limitsFor(settings({ maxPromptTokens: 100_000 }), "m", 90_000);
-    expect(lowWater).toBe(Math.min(ceiling, 90_000 + 10_000));
+  it("spends a fixed share of the headroom per fold, whatever the prose", () => {
+    for (const floor of [10_000, 100_000, 400_000]) {
+      const { ceiling, lowWater } = limitsFor(settings(), "m", floor, 1_000_000);
+      expect(lowWater - floor).toBe(Math.floor(DEFAULT_HEADROOM_TOKENS * DEFAULT_FOLD_FRACTION));
+      expect(ceiling - lowWater).toBe(DEFAULT_HEADROOM_TOKENS - Math.floor(DEFAULT_HEADROOM_TOKENS * DEFAULT_FOLD_FRACTION));
+    }
+  });
+
+  it("aims at the floor when the floor already sits above the ceiling", () => {
+    const { ceiling, lowWater } = limitsFor(settings(), "m", 900_000, 200_000);
+    expect(lowWater).toBe(900_000);
+    expect(lowWater).toBeGreaterThan(ceiling);
+  });
+
+  it("honours a configured headroom and fold depth", () => {
+    // The floor clears the default ceiling, so the configured headroom is what
+    // decides where folding starts rather than that default.
+    const { ceiling, lowWater } = limitsFor(settings({ headroomTokens: 60_000, foldFraction: 0.5 }), "m", 200_000, 1_000_000);
+    expect(ceiling).toBe(260_000);
+    expect(lowWater).toBe(230_000);
   });
 
   it("prefers a declared window over the one the host reports", () => {
     const declared = limitsFor(settings({ perModel: { m: { contextWindow: 1_000_000 } } }), "m", 0, 200_000);
-    expect(declared.ceiling).toBe(250_000);
+    expect(declared.ceiling).toBe(DEFAULT_HEADROOM_TOKENS);
   });
 
   it("matches a per-model override on the bare id", () => {

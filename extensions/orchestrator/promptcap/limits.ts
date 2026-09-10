@@ -14,20 +14,24 @@ const OUTPUT_RESERVE = 40_000;
 // failing.
 const WINDOW_MARGIN = 0.05;
 
-// How much of a declared window is kept available above the prose that cannot
-// be folded, so a session whose prose has grown still has room to work in
-// rather than folding on every request.
-const HEADROOM_FRACTION = 0.25;
+// How much room is kept above the prose that cannot be folded, so a session
+// whose prose has grown still has somewhere to work rather than folding on
+// every request.
+//
+// It is an absolute count rather than a share of the window because it
+// describes the work, not the model: the same debugging session needs the same
+// recent tool history whether the model holds 200K tokens or a million. As a
+// share it also made the declared ceiling meaningless — a quarter of a 1M
+// window is 250K, so folding began a quarter of a million tokens above the
+// floor no matter what the operator asked for.
+export const DEFAULT_HEADROOM_TOKENS = 200_000;
 
-// How far below the ceiling a fold aims. The gap is what buys requests between
-// folds: each fold rewrites the prompt prefix and costs a cache miss, so
-// overshooting deeply is cheaper than landing on the ceiling and crossing it
-// again immediately.
-const LOW_WATER_FRACTION = 0.5;
-
-// Keeps the low-water mark clear of the incompressible floor, so a target that
-// cannot be reached is not chased.
-const FLOOR_HEADROOM = 0.1;
+// How much of that headroom one fold consumes, as a fraction: the rest is the
+// room the prompt grows back into before the next fold. Each fold rewrites the
+// prompt prefix and costs a cache miss, so leaving most of the headroom free is
+// what makes folds rare, while the part it does consume is the recent tool
+// history that survives verbatim.
+export const DEFAULT_FOLD_FRACTION = 0.3;
 
 // How far past the ceiling a prompt may sit before the turn is refused rather
 // than sent. Some overshoot is expected — the estimate is an approximation, and
@@ -47,6 +51,20 @@ export interface PromptcapModelSettings {
 
 export interface PromptcapSettings extends PromptcapModelSettings {
   enabled: boolean;
+  /**
+   * Room kept above the unfoldable floor before folding starts. Absent means
+   * {@link DEFAULT_HEADROOM_TOKENS}.
+   *
+   * Global rather than per-model: it describes how much recent tool history the
+   * work needs, which the model does not change. The model bounds it through
+   * its window, not through this.
+   */
+  headroomTokens?: number;
+  /**
+   * The share of that headroom one fold consumes, strictly between 0 and 1.
+   * Absent means {@link DEFAULT_FOLD_FRACTION}.
+   */
+  foldFraction?: number;
   /**
    * Overrides keyed by the model spec a turn asks for, matched on either the
    * full `provider/id` or the bare id.
@@ -72,10 +90,10 @@ export function resolveSettings(settings: PromptcapSettings, modelKey: string | 
  * The limits a turn answered by `modelKey` is held to, given how much of the
  * prompt cannot be folded.
  *
- * The ceiling climbs with that floor when a window is known, so a session whose
- * prose has grown keeps a working margin instead of folding harder and harder
- * around it. Without a declared window there is nothing safe to climb towards,
- * and the ceiling stays where it was configured.
+ * The ceiling climbs with that floor, so a session whose prose has grown keeps a
+ * working margin instead of folding harder and harder around it, and it is
+ * capped by what the window can actually hold: a model that admits 200K tokens
+ * must start folding below 200K, however much headroom was asked for.
  */
 export function limitsFor(
   settings: PromptcapSettings,
@@ -95,16 +113,31 @@ export function limitsFor(
     ? resolved.contextWindow
     : reportedWindow && reportedWindow > 0 ? reportedWindow : 0;
 
+  const headroom = settings.headroomTokens && settings.headroomTokens > 0
+    ? settings.headroomTokens
+    : DEFAULT_HEADROOM_TOKENS;
+
+  // The climb needs a window to be bounded by. Without one there is nothing
+  // safe to climb towards — the configured ceiling is the whole of what is
+  // known about the model — so it stays put, and a floor that outgrows it is
+  // reported by the overflow warning rather than papered over by raising the
+  // limit the operator set precisely because the window is unknown.
   if (window > 0) {
     const hard = window - OUTPUT_RESERVE - Math.floor(window * WINDOW_MARGIN);
-    const wanted = Math.min(hard, Math.max(ceiling, floorTokens + Math.floor(window * HEADROOM_FRACTION)));
-    if (wanted > 0) ceiling = wanted;
+    if (hard > 0) ceiling = Math.min(hard, Math.max(ceiling, floorTokens + headroom));
   }
 
-  const lowWater = Math.min(
-    ceiling,
-    Math.max(Math.floor(ceiling * LOW_WATER_FRACTION), floorTokens + Math.floor(ceiling * FLOOR_HEADROOM)),
-  );
+  // One fold takes the prompt this far down from the ceiling towards the floor.
+  // Expressed against the span between them rather than against either end, the
+  // recent history it keeps and the room it leaves are both a fixed share of the
+  // headroom, whatever the prose has grown to — where the old pair of rules
+  // crossed over and left the least history exactly where the headroom was
+  // fully spent.
+  const fraction = settings.foldFraction && settings.foldFraction > 0 && settings.foldFraction < 1
+    ? settings.foldFraction
+    : DEFAULT_FOLD_FRACTION;
+  const span = Math.max(0, ceiling - floorTokens);
+  const lowWater = floorTokens + Math.floor(span * fraction);
 
   return { ceiling, lowWater };
 }
