@@ -301,6 +301,64 @@ describe("Estimator", () => {
   });
 });
 
+describe("thinking signatures", () => {
+  it("counts a signature as foldable, so it does not sit in the floor", () => {
+    // A signature is several times the size of the text it certifies, and the
+    // adapter drops a block whose text is empty — so leaving it out of what
+    // folding can reach put the larger half of every thought in the floor.
+    const withSignature: AgentMessage[] = [
+      user("go"),
+      { role: "assistant", content: [
+        { type: "thinking", thinking: "мысль", thinkingSignature: "s".repeat(8000) },
+        { type: "toolCall", id: "t0", name: "read", arguments: { path: "/f" } },
+      ]},
+      result("t0", "read", "o".repeat(100)),
+      user("дальше"),
+    ];
+    const bare: AgentMessage[] = JSON.parse(JSON.stringify(withSignature));
+    (bare[1].content as any[])[0].thinkingSignature = "";
+
+    const gap = incompressibleTokens(withSignature, 0, 1) - incompressibleTokens(bare, 0, 1);
+    expect(gap).toBeLessThan(200);
+  });
+
+  it("drops the signature with the text it certifies", () => {
+    const messages: AgentMessage[] = [
+      user("go"),
+      { role: "assistant", content: [
+        { type: "thinking", thinking: "мысль", thinkingSignature: "s".repeat(8000) },
+        { type: "toolCall", id: "t0", name: "read", arguments: { path: "/f" } },
+      ]},
+      result("t0", "read", "o".repeat(8000)),
+      user("дальше"),
+    ];
+
+    fold(messages, 0, { ceiling: 100, lowWater: 50 }, new FoldState(), 1);
+
+    const block = (messages[1].content as any[])[0];
+    expect(block.thinking).toBe("");
+    expect(block.thinkingSignature).toBe("");
+  });
+
+  it("leaves redacted reasoning alone, signature and all", () => {
+    // There the signature is the payload the provider replays, not a
+    // certificate attached to text.
+    const messages: AgentMessage[] = [
+      user("go"),
+      { role: "assistant", content: [
+        { type: "thinking", thinking: "", thinkingSignature: "opaque", redacted: true },
+        { type: "toolCall", id: "t0", name: "read", arguments: { path: "/f" } },
+      ]},
+      result("t0", "read", "o".repeat(8000)),
+      user("дальше"),
+    ];
+
+    fold(messages, 0, { ceiling: 100, lowWater: 50 }, new FoldState(), 1);
+
+    expect((messages[1].content as any[])[0].thinkingSignature).toBe("opaque");
+  });
+});
+
 describe("limitsFor", () => {
   it("uses the default ceiling when no window is known", () => {
     const { ceiling, lowWater } = limitsFor(settings(), "some/model", 0);

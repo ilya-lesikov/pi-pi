@@ -268,12 +268,25 @@ function foldableBytes(messages: AgentMessage[], calls: Call[], protectedFrom: n
   return savings;
 }
 
+/**
+ * What a message's reasoning weighs, signatures included.
+ *
+ * The signature is opaque base64 several times the size of the text it
+ * certifies, and it goes when the text goes: a block left with a signature and
+ * no text is dropped whole by the provider adapter, so counting only the text
+ * as foldable leaves the larger half sitting in the floor as though nothing
+ * could ever move it.
+ *
+ * Redacted reasoning is the exception and is left alone: there the signature is
+ * the payload the provider replays, not a certificate attached to text.
+ */
 function thinkingBytes(message: AgentMessage | undefined): number {
   const content = message?.content;
   if (!Array.isArray(content)) return 0;
   let size = 0;
   for (const block of content) {
-    if (block?.type === "thinking" && !block.redacted) size += byteLength(block.thinking ?? "");
+    if (block?.type !== "thinking" || block.redacted) continue;
+    size += byteLength(block.thinking ?? "") + byteLength(block.thinkingSignature ?? "");
   }
   return size;
 }
@@ -298,9 +311,15 @@ function applyTier(messages: AgentMessage[], call: Call, to: Tier, protectedFrom
     const content = messages[call.callMessage]?.content;
     if (Array.isArray(content)) {
       for (const block of content) {
-        if (block?.type !== "thinking" || block.redacted || !block.thinking) continue;
-        saved += byteLength(block.thinking);
+        if (block?.type !== "thinking" || block.redacted) continue;
+        if (!block.thinking && !block.thinkingSignature) continue;
+        saved += byteLength(block.thinking ?? "") + byteLength(block.thinkingSignature ?? "");
         block.thinking = "";
+        // The signature is dropped with the text it certifies. The adapter
+        // already discards a block whose text is empty, so this changes no
+        // request; it is what keeps the estimate saying the same thing the
+        // wire does, and the signature is the larger half of what goes.
+        block.thinkingSignature = "";
       }
     }
   }
