@@ -1687,12 +1687,13 @@ export default function(pi: ExtensionAPI) {
       name: "ask_user",
       label: "Ask User",
       description:
-         "Ask the user one focused question with optional multiple-choice answers — or several related questions via `questions`, presented one by one. NEVER bundle multiple decisions into a single question's text or options; use `questions` for a sequence instead. Keep each `question` SHORT — one scannable line; put the substantive context, reasoning, and findings in your message (or the `context` field) BEFORE the call, so the terse question and options are interpretable. Do NOT add an option like 'I'll answer in a comment' — the built-in freeform 'Type something' path already covers custom answers.",
+         "Ask the user one focused question with optional multiple-choice answers — or several related questions via `questions`, presented one by one. NEVER bundle multiple decisions into a single question's text or options; use `questions` for a sequence instead. ALWAYS write the substantive context, reasoning, and findings as a message BEFORE the call — never call ask_user with nothing written above it, and never move that substance into `question` or `context` instead of writing it. Keep each `question` SHORT — one scannable line. Do NOT add an option like 'I'll answer in a comment' — the built-in freeform 'Type something' path already covers custom answers.",
       promptSnippet:
          "Ask the user one short, focused question with optional multiple-choice answers to gather information interactively",
       promptGuidelines: [
          "Keep the `question` field SHORT — a single scannable line (ideally under ~100 chars). The dialogue de-emphasizes it; the user reads your detail from the message rendered above the dialogue.",
-         "ALWAYS present substantive context BEFORE the ask (in your assistant message and/or the `context` field): the question and options are intentionally terse, so the surrounding context must make them interpretable.",
+         "ALWAYS write the substantive context as an assistant message BEFORE the ask: the question and options are intentionally terse, so the surrounding message must make them interpretable. `context` supplements that message, it does not replace it — a call with nothing written above it reaches the user as a bare demand for approval.",
+         "If the user answers with a question or an objection instead of picking an option, that is not a vote: answer it in a message and end the turn there. Do not re-ask, do not reword the options, and never put the answer in the next `question` field.",
          "Use ask_user when the user's intent is ambiguous, when a decision requires explicit user input, or when multiple valid options exist.",
          "Each question must carry exactly one decision. For several related decisions, pass them as the `questions` array (asked one by one) instead of merging them into one prompt or spawning separate calls.",
          "NEVER add an option that just says the user will answer in a comment / free text (e.g. 'I'll type my own answer') — the built-in 'Type something' freeform path already covers custom answers.",

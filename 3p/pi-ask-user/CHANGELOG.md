@@ -4,6 +4,8 @@
 
 ### Changed
 
+- Tightened the `ask_user` tool description and prompt guidelines so the assistant message before the call is mandatory rather than interchangeable with the `context` field. Agents were observed calling `ask_user` with nothing written above it and the substance stuffed into the de-emphasized `question` field, which reaches the user as a bare demand for approval. Also documents what to do when the user answers with a question or an objection instead of picking an option: answer in a message and end the turn, rather than re-asking.
+
 - Replaced the two-step `ctrl+g` "Add extra context after selection" toggle with a single fixed `ctrl+e` gesture that selects the highlighted option AND immediately opens the extra-context editor. Plain `enter` still selects with no comment. The toggle row is no longer rendered, and the `commentToggleKey` parameter / `PI_ASK_USER_COMMENT_TOGGLE_KEY` env var / `ctrl+g` default are removed. `allowComment: false` continues to suppress the gesture and editor entirely.
 
 ## [0.11.2](https://github.com/edlsh/pi-ask-user/releases/tag/v0.11.2) - 2026-06-03
