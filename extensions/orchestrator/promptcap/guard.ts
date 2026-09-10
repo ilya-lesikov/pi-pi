@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { danglingSignatureBytes, Estimator, fixedBytes, BYTES_PER_TOKEN } from "./estimate.js";
-import { fold, FoldState, incompressibleTokens, type AgentMessage } from "./fold.js";
+import { danglingSignatureBytes, Estimator, fixedBytes } from "./estimate.js";
+import { fold, FoldState, incompressibleTokens, tokensOf, type AgentMessage } from "./fold.js";
 import { limitsFor, OVERFLOW_MARGIN, type PromptcapSettings } from "./limits.js";
 
 export interface GuardHost {
@@ -56,8 +56,11 @@ export class PromptGuard {
     const result = fold(messages, fixed, limits, this.folds, ratio);
     // Carried to calibration so one real turn can answer whether reasoning
     // blocks left with a signature and no text reach the provider: the adapters
-    // disagree, and this is the difference the answer would show up as.
-    const dangling = Math.floor(danglingSignatureBytes(messages) / BYTES_PER_TOKEN);
+    // disagree, and this is the difference the answer would show up as. Scaled
+    // by the same learned ratio as the prediction it will be subtracted from,
+    // or the two would be in different units and the comparison would mean
+    // nothing on any model that has learned a ratio.
+    const dangling = tokensOf(danglingSignatureBytes(messages), ratio);
     this.predicted = { modelKey, tokens: result.tokens, danglingSignatures: dangling };
     this.lastTokens = result.tokens;
     this.lastCeiling = limits.ceiling;

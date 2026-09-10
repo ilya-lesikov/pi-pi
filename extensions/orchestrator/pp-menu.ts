@@ -40,7 +40,7 @@ import { compareModelVersion } from "./model-version.js";
 import { enabledSkillLayers, listLayeredSkills } from "./skills-manifest.js";
 import { buildPoolRoster, unregisterAgentDefinitions } from "./agents/registry.js";
 import { setLogLevel } from "./log.js";
-import { DEFAULT_FOLD_FRACTION, DEFAULT_HEADROOM_TOKENS, DEFAULT_MAX_PROMPT_TOKENS } from "./promptcap/limits.js";
+import { DEFAULT_KEEP_FRACTION, DEFAULT_HEADROOM_TOKENS, DEFAULT_MAX_PROMPT_TOKENS } from "./promptcap/limits.js";
 import { finalizeTracer, getTracer, initTracer } from "./tracer.js";
 import type { Orchestrator } from "./orchestrator.js";
 
@@ -901,7 +901,7 @@ async function showSkillsSettings(orchestrator: Orchestrator, ctx: any): Promise
 async function showPromptcapSettings(orchestrator: Orchestrator, ctx: any): Promise<void> {
   const pickers: Array<{
     prefix: string;
-    key: "maxPromptTokens" | "contextWindow" | "headroomTokens" | "foldFraction";
+    key: "maxPromptTokens" | "contextWindow" | "headroomTokens" | "keepFraction";
     question: string;
     choices: Array<{ title: string; description: string }>;
     parse?: (title: string) => number;
@@ -939,13 +939,13 @@ async function showPromptcapSettings(orchestrator: Orchestrator, ctx: any): Prom
       ],
     },
     {
-      prefix: "Fold depth:",
-      key: "foldFraction",
-      question: "How much of the headroom one fold consumes",
+      prefix: "History kept:",
+      key: "keepFraction",
+      question: "How much of the headroom a fold keeps as recent tool history",
       choices: [
-        { title: "20%", description: "Deeper folds: more room before the next one, less history kept" },
+        { title: "20%", description: "Less history kept, and longer before the next fold" },
         { title: "30%", description: "Default" },
-        { title: "50%", description: "Shallower folds: more history kept, folds more often" },
+        { title: "50%", description: "More history kept, at the cost of folding sooner" },
       ],
       parse: (title) => Number(title.replace("%", "")) / 100,
     },
@@ -965,7 +965,7 @@ async function showPromptcapSettings(orchestrator: Orchestrator, ctx: any): Prom
         opt(`Prompt ceiling: ${Math.round((c.maxPromptTokens ?? DEFAULT_MAX_PROMPT_TOKENS) / 1000)}K tokens`, "The size at which folding starts, when the model's window is unknown"),
         opt(`Context window: ${c.contextWindow ? `${Math.round(c.contextWindow / 1000)}K tokens` : "ask the host"}`, "Declare the model's window, for a provider that does not report one"),
         opt(`Headroom: ${Math.round((c.headroomTokens ?? DEFAULT_HEADROOM_TOKENS) / 1000)}K tokens`, "Room kept above the prose that cannot be folded, before folding starts"),
-        opt(`Fold depth: ${Math.round((c.foldFraction ?? DEFAULT_FOLD_FRACTION) * 100)}%`, "How much of that headroom one fold consumes; the rest is room to grow back into"),
+        opt(`History kept: ${Math.round((c.keepFraction ?? DEFAULT_KEEP_FRACTION) * 100)}%`, "How much of that headroom a fold keeps as recent tool history; the rest is room to grow back into"),
       );
       const guard = orchestrator.promptGuard;
       if (guard?.lastTokens != null && guard.lastCeiling != null) {

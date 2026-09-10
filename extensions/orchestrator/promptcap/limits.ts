@@ -26,12 +26,12 @@ const WINDOW_MARGIN = 0.05;
 // floor no matter what the operator asked for.
 export const DEFAULT_HEADROOM_TOKENS = 200_000;
 
-// How much of that headroom one fold consumes, as a fraction: the rest is the
-// room the prompt grows back into before the next fold. Each fold rewrites the
-// prompt prefix and costs a cache miss, so leaving most of the headroom free is
-// what makes folds rare, while the part it does consume is the recent tool
-// history that survives verbatim.
-export const DEFAULT_FOLD_FRACTION = 0.3;
+// How much of that headroom is kept as recent tool history when a fold lands:
+// the rest is the room the prompt grows back into before the next one. Each
+// fold rewrites the prompt prefix and costs a cache miss, so leaving most of
+// the headroom free is what makes folds rare, while what it does keep is the
+// tool traffic that survives verbatim.
+export const DEFAULT_KEEP_FRACTION = 0.3;
 
 // How far past the ceiling a prompt may sit before the turn is refused rather
 // than sent. Some overshoot is expected — the estimate is an approximation, and
@@ -61,10 +61,10 @@ export interface PromptcapSettings extends PromptcapModelSettings {
    */
   headroomTokens?: number;
   /**
-   * The share of that headroom one fold consumes, strictly between 0 and 1.
-   * Absent means {@link DEFAULT_FOLD_FRACTION}.
+   * The share of that headroom kept as recent tool history after a fold,
+   * strictly between 0 and 1. Absent means {@link DEFAULT_KEEP_FRACTION}.
    */
-  foldFraction?: number;
+  keepFraction?: number;
   /**
    * Overrides keyed by the model spec a turn asks for, matched on either the
    * full `provider/id` or the bare id.
@@ -127,17 +127,17 @@ export function limitsFor(
     if (hard > 0) ceiling = Math.min(hard, Math.max(ceiling, floorTokens + headroom));
   }
 
-  // One fold takes the prompt this far down from the ceiling towards the floor.
-  // Expressed against the span between them rather than against either end, the
-  // recent history it keeps and the room it leaves are both a fixed share of the
-  // headroom, whatever the prose has grown to — where the old pair of rules
+  // A fold lands this far above the floor, as a share of the span between floor
+  // and ceiling. Expressed against the span rather than against either end, the
+  // recent history it keeps and the room it leaves are both a fixed share of
+  // the headroom, whatever the prose has grown to — where the old pair of rules
   // crossed over and left the least history exactly where the headroom was
   // fully spent.
-  const fraction = settings.foldFraction && settings.foldFraction > 0 && settings.foldFraction < 1
-    ? settings.foldFraction
-    : DEFAULT_FOLD_FRACTION;
+  const keep = settings.keepFraction && settings.keepFraction > 0 && settings.keepFraction < 1
+    ? settings.keepFraction
+    : DEFAULT_KEEP_FRACTION;
   const span = Math.max(0, ceiling - floorTokens);
-  const lowWater = floorTokens + Math.floor(span * fraction);
+  const lowWater = floorTokens + Math.floor(span * keep);
 
   return { ceiling, lowWater };
 }

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { fold, FoldState, Tier, incompressibleTokens, cutBytes, cutBytesFromEnd, type AgentMessage } from "./fold.js";
 import { byteLength, Estimator, fixedBytes, messagesBytes } from "./estimate.js";
-import { limitsFor, DEFAULT_FOLD_FRACTION, DEFAULT_HEADROOM_TOKENS, DEFAULT_MAX_PROMPT_TOKENS, type PromptcapSettings } from "./limits.js";
+import { limitsFor, DEFAULT_KEEP_FRACTION, DEFAULT_HEADROOM_TOKENS, DEFAULT_MAX_PROMPT_TOKENS, type PromptcapSettings } from "./limits.js";
 
 const call = (id: string, name: string, args: Record<string, unknown>, thinking?: string): AgentMessage => ({
   role: "assistant",
@@ -295,7 +295,7 @@ describe("limitsFor", () => {
   it("uses the default ceiling when no window is known", () => {
     const { ceiling, lowWater } = limitsFor(settings(), "some/model", 0);
     expect(ceiling).toBe(DEFAULT_MAX_PROMPT_TOKENS);
-    expect(lowWater).toBe(Math.floor(DEFAULT_MAX_PROMPT_TOKENS * DEFAULT_FOLD_FRACTION));
+    expect(lowWater).toBe(Math.floor(DEFAULT_MAX_PROMPT_TOKENS * DEFAULT_KEEP_FRACTION));
   });
 
   it("leaves the configured ceiling alone when no window bounds the climb", () => {
@@ -325,8 +325,8 @@ describe("limitsFor", () => {
   it("spends a fixed share of the headroom per fold, whatever the prose", () => {
     for (const floor of [10_000, 100_000, 400_000]) {
       const { ceiling, lowWater } = limitsFor(settings(), "m", floor, 1_000_000);
-      expect(lowWater - floor).toBe(Math.floor(DEFAULT_HEADROOM_TOKENS * DEFAULT_FOLD_FRACTION));
-      expect(ceiling - lowWater).toBe(DEFAULT_HEADROOM_TOKENS - Math.floor(DEFAULT_HEADROOM_TOKENS * DEFAULT_FOLD_FRACTION));
+      expect(lowWater - floor).toBe(Math.floor(DEFAULT_HEADROOM_TOKENS * DEFAULT_KEEP_FRACTION));
+      expect(ceiling - lowWater).toBe(DEFAULT_HEADROOM_TOKENS - Math.floor(DEFAULT_HEADROOM_TOKENS * DEFAULT_KEEP_FRACTION));
     }
   });
 
@@ -339,7 +339,7 @@ describe("limitsFor", () => {
   it("honours a configured headroom and fold depth", () => {
     // The floor clears the default ceiling, so the configured headroom is what
     // decides where folding starts rather than that default.
-    const { ceiling, lowWater } = limitsFor(settings({ headroomTokens: 60_000, foldFraction: 0.5 }), "m", 200_000, 1_000_000);
+    const { ceiling, lowWater } = limitsFor(settings({ headroomTokens: 60_000, keepFraction: 0.5 }), "m", 200_000, 1_000_000);
     expect(ceiling).toBe(260_000);
     expect(lowWater).toBe(230_000);
   });
