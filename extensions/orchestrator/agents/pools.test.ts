@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { getDefaultConfig } from "../config.js";
-import { encodePoolVariant, buildPoolRoster, registeredAgentNames, baseRoleForName } from "./registry.js";
+import { updateRegistryFromAvailableModels } from "../model-registry.js";
+import { encodePoolVariant, buildPoolRoster, registeredAgentNames, baseRoleForName, remapPoolName } from "./registry.js";
 
 describe("encodePoolVariant", () => {
   it("keeps the model id and version but drops the provider, so a tier move never renames an agent", () => {
@@ -50,6 +51,54 @@ describe("registeredAgentNames", () => {
     // No stale fixed advisor/advisor2/advisor3 role names.
     expect(names).not.toContain("advisor");
     expect(names).not.toContain("advisor2");
+  });
+});
+
+describe("remapPoolName", () => {
+  const flantConfig = () => {
+    const config = getDefaultConfig();
+    config.agents.subagents.pools.reviewers = [
+      { enabled: true, model: "pp-flant-openai/gpt-6-astra-pro", thinking: "high" },
+      { enabled: true, model: "pp-flant-anthropic-sub/sub/claude-fable-5-1", thinking: "high" },
+    ];
+    return config;
+  };
+
+  it("resolves a name that still spells out the provider it used to route through", () => {
+    updateRegistryFromAvailableModels([
+      "pp-flant-anthropic-sub/sub/claude-fable-5-1",
+      "github-copilot/claude-fable-5.1",
+      "pp-flant-openai/gpt-6-astra-pro",
+    ]);
+    expect(remapPoolName(flantConfig(), "reviewer_github-copilot-claude-fable-5-1_high"))
+      .toBe("reviewer_claude-fable-5-1_high");
+    expect(remapPoolName(flantConfig(), "reviewer_pp-flant-anthropic-sub-sub-claude-fable-5-1_high"))
+      .toBe("reviewer_claude-fable-5-1_high");
+  });
+
+  it("resolves a superseded version onto the family's live member", () => {
+    updateRegistryFromAvailableModels(["pp-flant-openai/gpt-6-astra-pro"]);
+    expect(remapPoolName(flantConfig(), "reviewer_gpt-5-6-astra-pro_high"))
+      .toBe("reviewer_gpt-6-astra-pro_high");
+  });
+
+  it("stays within the requested pool", () => {
+    const config = flantConfig();
+    config.agents.subagents.pools.advisors = [
+      { enabled: true, model: "pp-flant-anthropic-sub/sub/claude-fable-5-1", thinking: "xhigh" },
+    ];
+    expect(remapPoolName(config, "advisor_claude-fable-4-5_high")).toBe("advisor_claude-fable-5-1_xhigh");
+  });
+
+  it("refuses a family the pool does not serve, an unknown model, and a non-pool name", () => {
+    const config = flantConfig();
+    config.agents.subagents.pools.reviewers = [
+      { enabled: true, model: "pp-flant-openai/gpt-6-astra-pro", thinking: "high" },
+    ];
+    expect(remapPoolName(config, "reviewer_claude-fable-5-1_high")).toBeNull();
+    expect(remapPoolName(config, "reviewer_not-a-model_high")).toBeNull();
+    expect(remapPoolName(config, "task")).toBeNull();
+    expect(remapPoolName(config, "reviewer")).toBeNull();
   });
 });
 

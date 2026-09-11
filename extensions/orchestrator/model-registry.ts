@@ -592,6 +592,11 @@ export function listRegisteredSpecs(): string[] {
   return [...registeredSpecs];
 }
 
+/** Every provider prefix a model spec can carry, for parsing one back apart. */
+export function listProviderPrefixes(): string[] {
+  return [...new Set(MODEL_FAMILIES.flatMap((family) => family.providers))];
+}
+
 export function updateRegistryFromAvailableModels(availableModels: string[]): void {
   const log = getLogger();
   const normalizedModels = collectNormalizedModels(availableModels).filter((modelId) => !modelId.endsWith("-latest"));

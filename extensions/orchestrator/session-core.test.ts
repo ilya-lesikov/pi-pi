@@ -172,6 +172,28 @@ describe("session-first core", () => {
     expect(prompt).toContain("one message, at the end");
   });
 
+  it("honors a pool name the roster has since renamed, and blocks one nothing serves", async () => {
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi);
+    orchestrator.cwd = "/tmp/project";
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    orchestrator.config.agents.subagents.pools.reviewers = [
+      { enabled: true, model: "pp-flant-anthropic-sub/sub/claude-fable-5-1", thinking: "high" },
+    ];
+    registerEventHandlers(orchestrator);
+    const ctx = { cwd: orchestrator.cwd, model: { provider: "test", id: "model" }, ui: { notify: vi.fn() }, sessionManager: {} };
+
+    const stale = { toolName: "Agent", input: { subagent_type: "reviewer_github-copilot-claude-fable-5.1_high", model: "openai/gpt-luna-latest" } };
+    expect(await emitForResult(pi, "tool_call", stale, ctx)).toBeUndefined();
+    expect(stale.input.subagent_type).toBe("reviewer_claude-fable-5-1_high");
+    // The registered definition decides the model, so the tool call's own
+    // argument is left alone rather than overwritten with a re-resolved spec.
+    expect(stale.input.model).toBe("openai/gpt-luna-latest");
+
+    const unknown = { toolName: "Agent", input: { subagent_type: "reviewer_gemini-3-pro_high" } };
+    expect((await emitForResult(pi, "tool_call", unknown, ctx))?.block).toBe(true);
+  });
+
   it("keeps root hooks live after a subagent session has loaded the extension in-process", async () => {
     const pi = makePi();
     const orchestrator = new Orchestrator(pi);

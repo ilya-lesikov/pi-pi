@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { PiPiConfig, PoolKey } from "../config.js";
-import { bareModelId, resolveModel, resolveModelAlias, getModelInfo } from "../model-registry.js";
+import { bareModelId, listProviderPrefixes, listRegisteredSpecs, resolveModel, resolveModelAlias, getModelInfo, type Family } from "../model-registry.js";
+import { SUB_MODEL_PREFIX } from "../flant-infra.js";
 import type { RosterEntry } from "./tool-routing.js";
 
 interface AgentFrontmatter {
@@ -92,6 +93,67 @@ export function baseRoleForName(name: string): string {
   if (name.startsWith("reviewer_")) return "reviewer";
   if (name.startsWith("deep-debugger_")) return "deep-debugger";
   return name;
+}
+
+const POOL_KEY_FOR_BASE: Record<string, PoolKey> = {
+  advisor: "advisors",
+  reviewer: "reviewers",
+  "deep-debugger": "deepDebuggers",
+};
+
+// Recover the family a pool name's model token refers to. Two spellings have to
+// resolve: a name this build produced (bare id, e.g. `claude-fable-5-1`) and one
+// an older build or an older session produced (the whole provider-prefixed spec
+// with its slashes flattened, e.g. `pp-flant-anthropic-sub-sub-claude-fable-5-1`).
+// The flattened form is matched against the live catalog rather than parsed,
+// since the flattening is not reversible.
+function familyOfModelToken(token: string): Family | null {
+  const normalized = token.replace(/\./g, "-");
+  for (const spec of listRegisteredSpecs()) {
+    if (spec.replace(/[^A-Za-z0-9._-]/g, "-").replace(/\./g, "-") !== normalized) continue;
+    const info = getModelInfo(spec);
+    if (info.family !== "unknown") return info.family;
+  }
+  const bare = new Set([normalized]);
+  for (const prefix of [...listProviderPrefixes(), SUB_MODEL_PREFIX.replace(/\/$/, "")]) {
+    for (const candidate of [...bare]) {
+      if (candidate.startsWith(`${prefix}-`)) bare.add(candidate.slice(prefix.length + 1));
+    }
+  }
+  for (const id of bare) {
+    // Version separators were normalized when the name was built, so a `-`
+    // between two digits may be a `.` in the catalog's spelling; both are probed.
+    for (const spelling of [id, id.replace(/(\d)-(\d)/g, "$1.$2")]) {
+      const probe = spelling.startsWith("claude-") ? `pp-flant-anthropic/${spelling}` : `pp-flant-openai/${spelling}`;
+      const info = getModelInfo(probe);
+      if (info.family !== "unknown") return info.family;
+    }
+  }
+  return null;
+}
+
+/**
+ * Resolve a pool name that is no longer registered onto the live member of the
+ * same pool and family, or null when the pool has no such member.
+ *
+ * The names the model spawns by come from a system prompt rendered at the start
+ * of its turn; a config reload or a provider-tier move during that turn can
+ * rewrite the roster underneath it. Blocking the call would cost the turn a
+ * round trip to learn a name it cannot otherwise know, so an obsolete spelling
+ * of a member that still exists is honored instead.
+ */
+export function remapPoolName(config: PiPiConfig, requested: string): string | null {
+  const base = baseRoleForName(requested);
+  const poolKey = POOL_KEY_FOR_BASE[base];
+  if (!poolKey || requested === base) return null;
+  const variant = requested.slice(base.length + 1);
+  const split = variant.lastIndexOf("_");
+  if (split <= 0) return null;
+  const family = familyOfModelToken(variant.slice(0, split));
+  if (!family) return null;
+  const thinking = variant.slice(split + 1);
+  const candidates = buildPoolRoster(config, poolKey).filter((r) => r.family === family);
+  return (candidates.find((r) => r.thinking === thinking) ?? candidates[0])?.name ?? null;
 }
 
 export function registerAgentDefinitions(

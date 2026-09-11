@@ -13,8 +13,8 @@ import { PromptGuard, registerPromptGuard } from "./promptcap/guard.js";
 import { collectContextFiles, renderContextInjection, summarizeContextInjectionSize } from "./context-injection.js";
 import { enabledSkillLayers, listLayeredSkills, loadLayeredSkill } from "./skills-manifest.js";
 import { identityBlock, principlesBlock, toolsBlock, delegationBlock } from "./agents/tool-routing.js";
-import { buildPoolRoster, getAgentConfigSnapshot, registeredAgentNames, setExtensionOnlyMode } from "./agents/registry.js";
-import { getModelInfo, resolveModel, setSubscriptionFallbackActive, updateRegistryFromAvailableModels } from "./model-registry.js";
+import { buildPoolRoster, registeredAgentNames, remapPoolName, setExtensionOnlyMode } from "./agents/registry.js";
+import { getModelInfo, setSubscriptionFallbackActive, updateRegistryFromAvailableModels } from "./model-registry.js";
 import { createCustomFooter, setFooterContext, setFooterTracker, setFooterOrchestrator } from "./custom-footer.js";
 import { createUsageTracker, dumpUsageSummary, isSubscriptionRouted, loadUsageSummary, type UsageTracker } from "./usage-tracker.js";
 import { publishAcpState, resetAcpStateCache } from "./acp.js";
@@ -569,15 +569,15 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   pi.on("tool_call", async (event: any) => {
     if (event.toolName !== "Agent" || !orchestrator.config) return;
     const input = event.input as Record<string, unknown>;
-    const type = String(input.subagent_type ?? "").toLowerCase();
+    const requested = String(input.subagent_type ?? "").toLowerCase();
     const valid = registeredAgentNames(orchestrator.config);
-    if (!valid.includes(type)) return { block: true, reason: `subagent_type must be one of: ${valid.join(", ")}` };
+    // The model/thinking a role runs with are NOT forced here: the registered
+    // definition already outranks the tool call's own arguments, and re-resolving
+    // a spec that was resolved at registration can only walk it further DOWN the
+    // provider tiers, never back up to the one it came from.
+    const type = valid.includes(requested) ? requested : remapPoolName(orchestrator.config, requested);
+    if (!type) return { block: true, reason: `subagent_type must be one of: ${valid.join(", ")}` };
     input.subagent_type = type;
-    const snapshot = getAgentConfigSnapshot(type);
-    if (snapshot) {
-      input.model = resolveModel(snapshot.model);
-      input.thinking = snapshot.thinking;
-    }
     input.inherit_context = false;
     input.isolation = undefined;
   });
