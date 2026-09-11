@@ -503,6 +503,13 @@ export default function (pi: ExtensionAPI) {
       spawn: (piRef: any, ctx: any, type: string, prompt: string, options: any) =>
         manager.spawn(piRef, ctx, type, prompt, options),
       getRecord: (id: string) => manager.getRecord(id),
+      // LOCAL PATCH (pi-pi): resume a retained session from outside this package.
+      // pi-pi re-routes a worker that died on a rate-limited provider and
+      // resumes it in place, so the transcript it had already built survives
+      // instead of a fresh agent redoing the work; `emitLifecycle` makes the
+      // resumed run report completion the way a spawned one does.
+      resume: (id: string, prompt: string, signal?: AbortSignal, options?: { emitLifecycle?: boolean }) =>
+        manager.resume(id, prompt, signal, options),
       // Refresh the above-editor widget from outside an LLM turn. Agents spawned
       // via cross-extension RPC (e.g. pi-pi orchestrator planners/reviewers)
       // start while the main agent is only waiting, so no tool_execution_start

@@ -135,4 +135,17 @@ describe("vendored pi-subagents contract — local patches", () => {
     expect(index).toContain("MODEL_CHOICE_GUIDELINES");
     expect(index).toMatch(/applyExtensionOnlyToolSurface\(data\.enabled\)/);
   });
+
+  // pi-pi resumes a worker that died on a rate-limited provider instead of
+  // respawning it, so the transcript it had already built survives. Both halves
+  // are droppable in silence: without the handle method the retry finds nothing
+  // to call, and without the lifecycle emit the resumed run finishes invisibly.
+  it("exposes resume on the manager handle and reports a lifecycle-emitting resume", () => {
+    const manager = readFileSync(join(vendoredSrc, "agent-manager.ts"), "utf-8");
+    const index = readFileSync(join(vendoredSrc, "index.ts"), "utf-8");
+    expect(orchestratorCode).toMatch(/manager\.resume\(/);
+    expect(index).toMatch(/resume:\s*\(id: string/);
+    expect(manager).toMatch(/options\?:\s*\{\s*emitLifecycle\?: boolean\s*\}/);
+    expect(manager).toMatch(/if \(options\?\.emitLifecycle\) \{\s*\n\s*try \{ this\.onComplete/);
+  });
 });

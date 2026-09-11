@@ -472,11 +472,18 @@ export class AgentManager {
 
   /**
    * Resume an existing agent session with a new prompt.
+   *
+   * LOCAL PATCH (pi-pi): `emitLifecycle` fires the completion callback the run
+   * path fires, so a resume started by something other than the Agent tool —
+   * which returns its result inline — reaches the subscribers that notify the
+   * parent and record usage. Without it such a resume finishes invisibly and
+   * anything waiting on the agent waits forever.
    */
   async resume(
     id: string,
     prompt: string,
     signal?: AbortSignal,
+    options?: { emitLifecycle?: boolean },
   ): Promise<AgentRecord | undefined> {
     const record = this.agents.get(id);
     if (!record?.session) return undefined;
@@ -486,6 +493,7 @@ export class AgentManager {
     record.completedAt = undefined;
     record.result = undefined;
     record.error = undefined;
+    if (options?.emitLifecycle) record.resultConsumed = false;
 
     try {
       const responseText = await resumeAgent(record.session, prompt, {
@@ -515,6 +523,9 @@ export class AgentManager {
       record.completedAt = Date.now();
     }
 
+    if (options?.emitLifecycle) {
+      try { this.onComplete?.(record); } catch { /* ignore completion side-effect errors */ }
+    }
     return record;
   }
 

@@ -23,6 +23,10 @@ export class Orchestrator {
   cwd = "";
   lastCtx: any = null;
   spawnedAgentIds = new Set<string>();
+  /** Workers already put back to work on a new provider tier, retried at most once. */
+  retriedSubagentIds = new Set<string>();
+  /** Retries in flight; they bypass the manager's queue, so they cap themselves. */
+  retryingSubagentIds = new Set<string>();
   agentDescriptions = new Map<string, string>();
   agentSpawnTimes = new Map<string, number>();
   staleAgentTimer: ReturnType<typeof setInterval> | null = null;

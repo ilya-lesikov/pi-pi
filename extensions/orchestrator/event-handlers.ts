@@ -23,6 +23,7 @@ import { checkDuplicateExtensions } from "./duplicate-extension-guard.js";
 import { installConsoleGuard } from "./console-guard.js";
 import { demoteUnusableSubscription, handleMainAuthFailure, handleMainRateLimit, handleSubagentAuthFailure, handleSubagentRateLimit, isAuthError, isPolicyBlockError, isRateLimitError } from "./rate-limit-fallback.js";
 import { adjudicateCheckIn, adjudicateContinuation } from "./continuation-adjudicator.js";
+import { retrySubagentOnNewRouting } from "./subagent-retry.js";
 import { loadFlantSettings, noteSubscriptionCredentialAccepted, refreshCopilotOAuthToken, refreshSubProvider, reviveSubscriptionCredential, setModelRegistry, syncProviderTiers } from "./flant-infra.js";
 import type { Orchestrator } from "./orchestrator.js";
 
@@ -294,8 +295,13 @@ function registerLifecycle(orchestrator: Orchestrator): void {
   });
   pi.events.on("subagents:failed", (data: any) => {
     settle(data);
-    if (isRateLimitError(data?.error)) void handleSubagentRateLimit(orchestrator, orchestrator.lastCtx, data?.modelId);
-    else if (isAuthError(data?.error)) void handleSubagentAuthFailure(orchestrator, orchestrator.lastCtx, data?.modelId);
+    if (isRateLimitError(data?.error)) {
+      void handleSubagentRateLimit(orchestrator, orchestrator.lastCtx, data?.modelId)
+        .then(() => retrySubagentOnNewRouting(orchestrator, data));
+    } else if (isAuthError(data?.error)) {
+      void handleSubagentAuthFailure(orchestrator, orchestrator.lastCtx, data?.modelId)
+        .then(() => retrySubagentOnNewRouting(orchestrator, data));
+    }
   });
   const startMainTurnWatchdog = () => {
     if (orchestrator.mainTurnTimer) return;

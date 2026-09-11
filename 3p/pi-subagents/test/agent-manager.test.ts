@@ -549,6 +549,38 @@ describe("AgentManager — lifetime usage + compaction count are eagerly initial
 
     expect(manager.getRecord(id)!.status).toBe("stopped");
   });
+
+  // LOCAL PATCH (pi-pi): pi-pi resumes a worker that died on a rate-limited
+  // provider once the routing has moved. Nothing returns that run's result
+  // inline the way the Agent tool does, so without the lifecycle callback the
+  // resumed agent finishes invisibly — no completion notification, no usage
+  // recorded, and anything waiting on it waits forever.
+  it("reports a resumed run through onComplete when the caller asks for it", async () => {
+    const completions: AgentRecord[] = [];
+    manager = new AgentManager((record) => { completions.push(record); });
+    vi.mocked(runAgent).mockResolvedValue({
+      responseText: "first",
+      session: { ...mockSession() } as any,
+      aborted: false,
+      steered: false,
+    });
+    const id = manager.spawn(mockPi, mockCtx, "general-purpose", "test", { description: "test", isBackground: true });
+    await manager.getRecord(id)!.promise;
+    completions.length = 0;
+    manager.getRecord(id)!.resultConsumed = true;
+
+    const { resumeAgent: resumeMock } = await import("../src/agent-runner.js");
+    vi.mocked(resumeMock).mockImplementation(async () => "second");
+
+    await manager.resume(id, "again");
+    expect(completions).toEqual([]);
+
+    await manager.resume(id, "again", undefined, { emitLifecycle: true });
+    expect(completions.map((r) => r.result)).toEqual(["second"]);
+    // The earlier failure's result was consumed; the new run's must be
+    // deliverable or the notification is suppressed.
+    expect(completions[0].resultConsumed).toBe(false);
+  });
 });
 
 // Regression: `isolation: "worktree"` MUST fail loud when the cwd can't host
