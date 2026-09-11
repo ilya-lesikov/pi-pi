@@ -324,7 +324,7 @@ export class Orchestrator {
     for (const [pool, factory] of Object.entries(factories) as Array<[PoolKey, typeof factories[PoolKey]]>) {
       for (const entry of this.config.agents.subagents.pools[pool]) {
         if (!isEnabled(entry)) continue;
-        add(factory.type, factory.create(entry), encodePoolVariant(resolveModel(entry.model), entry.thinking));
+        add(factory.type, factory.create(entry), encodePoolVariant(entry.model, entry.thinking));
       }
     }
     registerAgentDefinitions(this.pi, definitions);

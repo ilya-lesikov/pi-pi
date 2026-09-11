@@ -395,7 +395,7 @@ function tierOfSpec(spec: string): ProviderTierName | null {
 }
 
 // Extract the bare model id (no provider/sub prefix) from a resolved spec.
-function bareModelId(spec: string): string {
+export function bareModelId(spec: string): string {
   let s = spec;
   const slash = s.indexOf("/");
   if (slash >= 0) s = s.slice(slash + 1);
@@ -546,6 +546,15 @@ export function isSubscriptionFallbackActive(): boolean {
 }
 
 
+
+/**
+ * Resolve a `-latest` alias to the concrete id the catalog currently serves,
+ * WITHOUT the provider-tier walk. Callers that must stay stable while routing
+ * moves between tiers (agent naming) need the version but not the provider.
+ */
+export function resolveModelAlias(aliasOrId: string): string {
+  return aliasMap[aliasOrId] ?? aliasOrId;
+}
 
 export function resolveModel(aliasOrId: string): string {
   let resolved = aliasMap[aliasOrId] ?? aliasOrId;

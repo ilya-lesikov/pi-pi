@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { PiPiConfig, PoolKey } from "../config.js";
-import { resolveModel, getModelInfo } from "../model-registry.js";
+import { bareModelId, resolveModel, resolveModelAlias, getModelInfo } from "../model-registry.js";
 import type { RosterEntry } from "./tool-routing.js";
 
 interface AgentFrontmatter {
@@ -35,9 +35,18 @@ export function getAgentConfigSnapshot(name: string): AgentConfigSnapshot | unde
 // only [A-Za-z0-9._-], so any other char (notably the `/` in a provider/model
 // spec) is collapsed to `-`. Deterministic, so the same entry always yields the
 // same name.
+//
+// The token carries the model id INCLUDING its version but WITHOUT the provider,
+// because the provider is the one part that moves: the same Fable is
+// `pp-flant-anthropic-sub/sub/claude-fable-5-1` on the subscription and
+// `github-copilot/claude-fable-5.1` on Copilot, so a provider-bearing name is
+// renamed by every rate-limit demotion — mid-turn, invalidating the names the
+// model is holding from its system prompt. Version separators are normalized for
+// the same reason (the two catalogs spell the same version differently).
 export function encodePoolVariant(model: string, thinking: string): string {
   const sanitize = (s: string) => s.replace(/[^A-Za-z0-9._-]/g, "-");
-  return `${sanitize(model)}_${sanitize(thinking)}`;
+  const id = bareModelId(resolveModelAlias(model)).replace(/\./g, "-");
+  return `${sanitize(id)}_${sanitize(thinking)}`;
 }
 
 const POOL_BASE_TYPE: Record<PoolKey, "advisor" | "reviewer" | "deep-debugger"> = {
@@ -56,7 +65,7 @@ export function buildPoolRoster(config: PiPiConfig, poolKey: PoolKey): RosterEnt
   for (const entry of config.agents.subagents.pools[poolKey]) {
     if (entry.enabled === false) continue;
     const model = resolveModel(entry.model);
-    const name = `${base}_${encodePoolVariant(model, entry.thinking)}`;
+    const name = `${base}_${encodePoolVariant(entry.model, entry.thinking)}`;
     if (seen.has(name)) continue;
     seen.add(name);
     const info = getModelInfo(model);

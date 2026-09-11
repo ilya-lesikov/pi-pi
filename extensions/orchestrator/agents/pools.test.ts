@@ -3,10 +3,17 @@ import { getDefaultConfig } from "../config.js";
 import { encodePoolVariant, buildPoolRoster, registeredAgentNames, baseRoleForName } from "./registry.js";
 
 describe("encodePoolVariant", () => {
-  it("sanitizes the provider/model slash into a host-safe identifier", () => {
+  it("keeps the model id and version but drops the provider, so a tier move never renames an agent", () => {
     const v = encodePoolVariant("pp-flant-anthropic-sub/sub/claude-opus-4-8", "high");
-    expect(v).toBe("pp-flant-anthropic-sub-sub-claude-opus-4-8_high");
+    expect(v).toBe("claude-opus-4-8_high");
     expect(v).toMatch(/^[A-Za-z0-9._-]+$/);
+    expect(encodePoolVariant("github-copilot/claude-opus-4.8", "high")).toBe(v);
+    expect(encodePoolVariant("pp-flant-anthropic/claude-opus-4-8", "high")).toBe(v);
+  });
+
+  it("keeps distinct SKUs of one family distinct", () => {
+    expect(encodePoolVariant("pp-flant-openai/gpt-6-astra-pro", "high")).toBe("gpt-6-astra-pro_high");
+    expect(encodePoolVariant("pp-flant-openai/gpt-6-astra", "high")).toBe("gpt-6-astra_high");
   });
 
   it("is deterministic", () => {
