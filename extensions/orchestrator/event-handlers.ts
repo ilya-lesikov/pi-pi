@@ -410,14 +410,19 @@ type PromptcapState = Pick<Orchestrator, "pi" | "config" | "lastCtx" | "promptGu
  * inside a tool loop resends the whole conversation on a cold prompt cache.
  */
 async function drainPendingModelSwitch(orchestrator: Orchestrator): Promise<void> {
-  const action = orchestrator.pendingModelSwitch;
-  if (!action || orchestrator.modelSwitchInFlight) return;
-  orchestrator.pendingModelSwitch = null;
+  if (orchestrator.modelSwitchInFlight) return;
   orchestrator.modelSwitchInFlight = true;
   try {
-    await action();
-  } catch (error: any) {
-    getLogger().error({ s: "model", err: error?.message }, "a parked model switch failed");
+    let action = orchestrator.pendingModelSwitches.shift();
+    if (!action) return;
+    do {
+      try {
+        await action();
+      } catch (error: any) {
+        getLogger().error({ s: "model", err: error?.message }, "a parked model switch failed");
+      }
+      action = orchestrator.pendingModelSwitches.shift();
+    } while (action);
   } finally {
     orchestrator.modelSwitchInFlight = false;
     orchestrator.redeliverPendingContinuations();
@@ -482,7 +487,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     // A replaced conversation is not the one whose folds were recorded: its
     // calls would inherit tiers by id collision, or hold old ones folded.
     orchestrator.promptGuard?.reset();
-    orchestrator.pendingModelSwitch = null;
+    orchestrator.pendingModelSwitches = [];
     orchestrator.modelSwitchInFlight = false;
     if (orchestrator.modelSwitchPollTimer) clearTimeout(orchestrator.modelSwitchPollTimer);
     orchestrator.modelSwitchPollTimer = null;
@@ -732,7 +737,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       orchestrator.subFallbackModelId = null;
       orchestrator.subFallbackMainPriorSpec = null;
       orchestrator.routedMainSpec = null;
-      orchestrator.pendingModelSwitch = null;
+      orchestrator.pendingModelSwitches = [];
       orchestrator.modelSwitchInFlight = false;
       orchestrator.resetContinuation();
       delete (globalThis as any)[Symbol.for("pi-pi:root-session-source")];

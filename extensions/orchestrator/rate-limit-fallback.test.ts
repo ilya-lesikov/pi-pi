@@ -386,7 +386,7 @@ describe("session-first rate-limit fallback", () => {
 
     armSwitchBackProbe(orchestrator);
     await vi.advanceTimersByTimeAsync(10 * 60_000);
-    await vi.waitFor(() => expect(orchestrator.pendingModelSwitch).not.toBeNull());
+    await vi.waitFor(() => expect(orchestrator.pendingModelSwitches.length).toBe(1));
 
     expect(orchestrator.switchModel).not.toHaveBeenCalled();
     expect(orchestrator.subFallbackActive).toBe(true);
@@ -402,7 +402,7 @@ describe("session-first rate-limit fallback", () => {
     await vi.advanceTimersByTimeAsync(2_000);
     await vi.waitFor(() => expect(orchestrator.subFallbackActive).toBe(false));
     expect(orchestrator.switchModel).toHaveBeenCalledWith(orchestrator.lastCtx, "pp-flant-anthropic-sub/sub/claude-opus-4-8", expect.any(String));
-    expect(orchestrator.pendingModelSwitch).toBeNull();
+    expect(orchestrator.pendingModelSwitches).toEqual([]);
     expect(isSubscriptionFallbackActive()).toBe(false);
 
     if (orchestrator.subSwitchBackTimer) clearTimeout(orchestrator.subSwitchBackTimer);

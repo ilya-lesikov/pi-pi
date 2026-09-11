@@ -153,7 +153,21 @@ export function remapPoolName(config: PiPiConfig, requested: string): string | n
   if (!family) return null;
   const thinking = variant.slice(split + 1);
   const candidates = buildPoolRoster(config, poolKey).filter((r) => r.family === family);
-  return (candidates.find((r) => r.thinking === thinking) ?? candidates[0])?.name ?? null;
+  // Prefer the effort the caller asked for, then the nearest one ABOVE it: a
+  // judgment call silently answered at a weaker effort is worse than one that
+  // costs more than intended.
+  const wanted = THINKING_ORDER.indexOf(thinking);
+  const ranked = [...candidates].sort((a, b) => rankThinking(a.thinking, wanted) - rankThinking(b.thinking, wanted));
+  return ranked[0]?.name ?? null;
+}
+
+const THINKING_ORDER = ["off", "minimal", "low", "medium", "high", "xhigh"];
+
+function rankThinking(thinking: string, wanted: number): number {
+  const index = THINKING_ORDER.indexOf(thinking);
+  if (wanted < 0 || index < 0) return index === wanted ? 0 : 100;
+  const distance = index - wanted;
+  return distance >= 0 ? distance : 10 - distance;
 }
 
 export function registerAgentDefinitions(

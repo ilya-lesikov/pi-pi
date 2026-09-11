@@ -616,6 +616,47 @@ describe("AgentManager — lifetime usage + compaction count are eagerly initial
     await resumed;
     await expect(manager.getRecord(id)!.promise).resolves.toBeDefined();
   });
+
+  // The Agent tool's own resume passes a signal, and a stop has to reach the
+  // session through it too — the controller the finished run left behind no
+  // longer does anything.
+  it("still routes a stop to the session when the caller supplied a signal", async () => {
+    manager = new AgentManager();
+    vi.mocked(runAgent).mockResolvedValue({
+      responseText: "first",
+      session: { ...mockSession() } as any,
+      aborted: false,
+      steered: false,
+    });
+    const id = manager.spawn(mockPi, mockCtx, "general-purpose", "test", { description: "test", isBackground: true });
+    await manager.getRecord(id)!.promise;
+
+    const { resumeAgent: resumeMock } = await import("../src/agent-runner.js");
+    let sawAbort = false;
+    let release: (() => void) | undefined;
+    vi.mocked(resumeMock).mockImplementation(async (_session, _prompt, opts: any) => {
+      opts.signal?.addEventListener?.("abort", () => { sawAbort = true; });
+      await new Promise<void>((resolve) => { release = resolve; });
+      return "second";
+    });
+
+    const caller = new AbortController();
+    const resumed = manager.resume(id, "again", caller.signal);
+    await vi.waitFor(() => expect(release).toBeDefined());
+    manager.abort(id);
+    expect(sawAbort).toBe(true);
+    release!();
+    await resumed;
+
+    // The caller's own signal still reaches a later run.
+    sawAbort = false;
+    const second = manager.resume(id, "again", caller.signal);
+    await vi.waitFor(() => expect(manager.getRecord(id)!.status).toBe("running"));
+    caller.abort();
+    expect(sawAbort).toBe(true);
+    release!();
+    await second;
+  });
 });
 
 // Regression: `isolation: "worktree"` MUST fail loud when the cwd can't host

@@ -45,9 +45,10 @@ export async function retrySubagentOnNewRouting(orchestrator: Orchestrator, data
   // A resumed run bypasses the manager's background queue, so the limit has to
   // be enforced here — and against the workers actually running, not just other
   // retries: the failure freed this agent's slot and the manager will already
-  // have drained a queued worker into it.
+  // have drained a queued worker into it. Retries in flight are themselves
+  // running, so they are counted by the same pass.
   const running = (manager.listAgents?.() ?? []).filter((entry: any) => entry.status === "running").length;
-  if (running + orchestrator.retryingSubagentIds.size >= orchestrator.config.agents.maxConcurrentSubagents) return false;
+  if (running >= orchestrator.config.agents.maxConcurrentSubagents) return false;
 
   orchestrator.retriedSubagentIds.add(id);
   orchestrator.retryingSubagentIds.add(id);
@@ -66,6 +67,11 @@ export async function retrySubagentOnNewRouting(orchestrator: Orchestrator, data
     // already demoted — the fallback would then route nowhere and attribute this
     // worker's usage to a tier it no longer runs on.
     record.resolvedModelId = target;
+    // Usage accumulates across a record's runs but the completion event reports
+    // the total against ONE model id, so the tokens burned on the provider that
+    // refused this worker would be billed to the one it moved to. A failed run
+    // reports no usage at all, which is where they stay.
+    record.lifetimeUsage = { input: 0, output: 0, cacheWrite: 0 };
     await manager.resume(id, RESUME_PROMPT, undefined, { emitLifecycle: true });
     return true;
   } catch (error: any) {

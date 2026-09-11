@@ -49,11 +49,16 @@ export class Orchestrator {
   /** Set once the session registers one; the footer and the menu read its sizing. */
   promptGuard: PromptGuard | null = null;
   /**
-   * A model switch pi-pi decided on while a request was still streaming, held
+   * Model switches pi-pi decided on while a request was still streaming, held
    * until a turn boundary. Switching providers mid-run resends the whole
    * conversation on a cold prompt cache from inside a tool-call chain.
+   *
+   * A queue, not a slot: the rate-limit machinery parks from several timers,
+   * and a second one replacing the first would drop, among others, the
+   * subscription probe's restore — the only code that lifts the fallback latch,
+   * leaving the session pinned to the fallback tier for the rest of its life.
    */
-  pendingModelSwitch: (() => Promise<void>) | null = null;
+  pendingModelSwitches: Array<() => Promise<void>> = [];
   modelSwitchPollTimer: ReturnType<typeof setTimeout> | null = null;
   /**
    * Set while a parked switch is being carried out. Holds continuations back so
@@ -185,7 +190,7 @@ export class Orchestrator {
    */
   async runModelSwitchBetweenTurns(action: () => Promise<void>): Promise<void> {
     if (!this.canSwitchModelNow(this.lastCtx)) {
-      this.pendingModelSwitch = action;
+      this.pendingModelSwitches.push(action);
       this.pollPendingModelSwitch();
       return;
     }
@@ -199,19 +204,20 @@ export class Orchestrator {
    * model the switch was supposed to leave behind.
    */
   pollPendingModelSwitch(): void {
-    if (this.modelSwitchPollTimer || !this.pendingModelSwitch) return;
+    if (this.modelSwitchPollTimer || this.pendingModelSwitches.length === 0) return;
     this.modelSwitchPollTimer = setTimeout(() => {
       this.modelSwitchPollTimer = null;
-      const action = this.pendingModelSwitch;
-      if (!action) return;
+      if (this.pendingModelSwitches.length === 0) return;
       if (!this.canSwitchModelNow(this.lastCtx)) {
         this.pollPendingModelSwitch();
         return;
       }
-      this.pendingModelSwitch = null;
-      void action().catch((error: any) => {
-        getLogger().error({ s: "model", err: error?.message }, "a parked model switch failed");
-      });
+      const action = this.pendingModelSwitches.shift()!;
+      void action()
+        .catch((error: any) => {
+          getLogger().error({ s: "model", err: error?.message }, "a parked model switch failed");
+        })
+        .finally(() => this.pollPendingModelSwitch());
     }, 1000);
     this.modelSwitchPollTimer.unref?.();
   }

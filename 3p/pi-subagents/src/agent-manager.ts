@@ -500,9 +500,13 @@ export class AgentManager {
     // stopped while the resumed run kept executing tools, `waitForAll()` would
     // spin on a settled promise for as long as it ran, and a waiting
     // `get_subagent_result` would return the previous run's result at once.
-    const controller = signal ? undefined : new AbortController();
-    if (controller) record.abortController = controller;
-    const run = this.runResume(record, prompt, signal ?? controller?.signal);
+    const controller = new AbortController();
+    const forwardAbort = () => controller.abort();
+    if (signal?.aborted) controller.abort();
+    else signal?.addEventListener("abort", forwardAbort);
+    record.abortController = controller;
+    const run = this.runResume(record, prompt, controller.signal)
+      .finally(() => signal?.removeEventListener("abort", forwardAbort));
     record.promise = run.then(() => record.result ?? "");
     await run;
 

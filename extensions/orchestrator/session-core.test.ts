@@ -857,13 +857,38 @@ describe("session-first core", () => {
     const ctx = { model: { provider: "test", id: "main-model" }, isIdle: () => true, ui: { notify: vi.fn() } };
     orchestrator.lastCtx = ctx as any;
     const switched = vi.fn(async () => {});
-    orchestrator.pendingModelSwitch = switched;
+    orchestrator.pendingModelSwitches = [switched];
 
     await emit(pi, "turn_end", { message: { stopReason: "toolUse", content: [{ type: "toolCall", name: "edit" }] } }, ctx);
 
     expect(switched).toHaveBeenCalledTimes(1);
-    expect(orchestrator.pendingModelSwitch).toBeNull();
+    expect(orchestrator.pendingModelSwitches).toEqual([]);
     expect(orchestrator.modelSwitchInFlight).toBe(false);
+    await emit(pi, "session_shutdown", {}, ctx);
+  });
+
+  // Both restore paths park through the same queue: the subscription probe's
+  // restore is the only code that lifts the fallback latch, so a tier restore
+  // landing on top of it used to pin the session to the fallback tier for good.
+  it("carries out every switch parked during one request, in order", async () => {
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi);
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    registerEventHandlers(orchestrator);
+    const ctx = { model: { provider: "test", id: "main-model" }, isIdle: () => false, ui: { notify: vi.fn() } };
+    orchestrator.lastCtx = ctx as any;
+    const order: string[] = [];
+    await orchestrator.runModelSwitchBetweenTurns(async () => { order.push("first"); });
+    await orchestrator.runModelSwitchBetweenTurns(async () => { throw new Error("boom"); });
+    await orchestrator.runModelSwitchBetweenTurns(async () => { order.push("third"); });
+    expect(order).toEqual([]);
+
+    ctx.isIdle = () => true;
+    await emit(pi, "turn_end", { message: { stopReason: "toolUse", content: [{ type: "toolCall", name: "edit" }] } }, ctx);
+
+    // A failure in one parked switch must not strand the ones behind it.
+    expect(order).toEqual(["first", "third"]);
+    expect(orchestrator.pendingModelSwitches).toEqual([]);
     await emit(pi, "session_shutdown", {}, ctx);
   });
 
@@ -879,10 +904,10 @@ describe("session-first core", () => {
     const switched = vi.fn(async () => {});
 
     for (const stopReason of ["length", "error", "aborted"]) {
-      orchestrator.pendingModelSwitch = switched;
+      orchestrator.pendingModelSwitches = [switched];
       await emit(pi, "turn_end", { message: { stopReason, content: [], errorMessage: "boom" } }, ctx);
       expect(switched).not.toHaveBeenCalled();
-      expect(orchestrator.pendingModelSwitch).toBe(switched);
+      expect(orchestrator.pendingModelSwitches).toEqual([switched]);
     }
 
     await emit(pi, "session_shutdown", {}, ctx);

@@ -90,6 +90,15 @@ describe("remapPoolName", () => {
     expect(remapPoolName(config, "advisor_claude-fable-4-5_high")).toBe("advisor_claude-fable-5-1_xhigh");
   });
 
+  it("answers a lost effort level with the nearest one above it", () => {
+    const config = flantConfig();
+    config.agents.subagents.pools.advisors = [
+      { enabled: true, model: "pp-flant-anthropic-sub/sub/claude-fable-5-1", thinking: "low" },
+      { enabled: true, model: "pp-flant-anthropic-sub/sub/claude-fable-5-1", thinking: "xhigh" },
+    ];
+    expect(remapPoolName(config, "advisor_claude-fable-5-1_high")).toBe("advisor_claude-fable-5-1_xhigh");
+  });
+
   it("refuses a family the pool does not serve, an unknown model, and a non-pool name", () => {
     const config = flantConfig();
     config.agents.subagents.pools.reviewers = [
