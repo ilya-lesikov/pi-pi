@@ -332,6 +332,9 @@ function registerLifecycle(orchestrator: Orchestrator): void {
       // Unconditional: refreshSubProvider above may have revived a subscription
       // token that was expired when the tiers were last computed.
       syncProviderTiers(flant);
+      // A tier that just went up or down changes which model each worker
+      // definition names; the guard inside makes this a no-op when it did not.
+      orchestrator.registerAgents();
     } catch {}
     publishAcpState(orchestrator);
   });

@@ -38,7 +38,7 @@ import {
 } from "./model-registry.js";
 import { compareModelVersion } from "./model-version.js";
 import { enabledSkillLayers, listLayeredSkills } from "./skills-manifest.js";
-import { buildPoolRoster, unregisterAgentDefinitions } from "./agents/registry.js";
+import { buildPoolRoster } from "./agents/registry.js";
 import { setLogLevel } from "./log.js";
 import { DEFAULT_KEEP_FRACTION, DEFAULT_HEADROOM_TOKENS, DEFAULT_MAX_PROMPT_TOKENS } from "./promptcap/limits.js";
 import { finalizeTracer, getTracer, initTracer } from "./tracer.js";
@@ -260,8 +260,7 @@ function tryClearConfigOverride(orchestrator: Orchestrator, scope: Scope, keyPat
 function refreshRuntimeAfterConfigChange(orchestrator: Orchestrator, keyPath: string[]): void {
   const key = keyPath.join(".");
   if (keyPath[0] === "agents") {
-    unregisterAgentDefinitions(orchestrator.pi);
-    orchestrator.registerAgents();
+    orchestrator.registerAgents(true);
     if (keyPath[1] === "maxConcurrentSubagents") orchestrator.applySubagentConcurrency();
     if (keyPath[1] === "main" && orchestrator.lastCtx) {
       void orchestrator.applyMainAgent(orchestrator.lastCtx).then((ok) => {
@@ -292,8 +291,7 @@ function reconcileAfterFlantChange(orchestrator: Orchestrator, ctx: any): void {
   if (Array.isArray(available)) {
     updateRegistryFromAvailableModels(available.flatMap((m: any) => (m?.provider && m?.id ? [`${m.provider}/${m.id}`] : [])));
   }
-  unregisterAgentDefinitions(orchestrator.pi);
-  orchestrator.registerAgents();
+  orchestrator.registerAgents(true);
   void orchestrator.applyMainAgent(ctx).then((ok) => {
     if (!ok) ctx?.ui?.notify?.(`Main agent model "${orchestrator.config.agents.main.model}" is not available; keeping the current model.`, "warning");
   });

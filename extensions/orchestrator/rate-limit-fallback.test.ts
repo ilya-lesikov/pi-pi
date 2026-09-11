@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Orchestrator } from "./orchestrator.js";
 import { getDefaultConfig, normalizeConfigDurations } from "./config.js";
-import { armSwitchBackProbe, handleMainAuthFailure, handleMainRateLimit, handleSubagentAuthFailure, isAuthError, isPolicyBlockError, isRateLimitError } from "./rate-limit-fallback.js";
+import { armSwitchBackProbe, handleMainAuthFailure, handleMainRateLimit, handleSubagentAuthFailure, handleSubagentRateLimit, isAuthError, isPolicyBlockError, isRateLimitError } from "./rate-limit-fallback.js";
 import { clearAllTierDemotions, isSubscriptionFallbackActive, setSubscriptionFallbackActive, setTierEnabled, updateRegistryFromAvailableModels } from "./model-registry.js";
 
 vi.mock("./flant-infra.js", async (original) => ({
@@ -10,6 +10,10 @@ vi.mock("./flant-infra.js", async (original) => ({
   probeSubscriptionCleared: vi.fn(async () => "rate_limited"),
   reviveSubscriptionCredential: vi.fn(async () => "failed"),
 }));
+
+function makePi(): any {
+  return { sendUserMessage: vi.fn(), events: { emit: vi.fn(), on: vi.fn(() => () => {}) } };
+}
 
 function makeOrchestrator(pi: any): Orchestrator {
   const orchestrator = new Orchestrator(pi);
@@ -44,7 +48,7 @@ describe("session-first rate-limit fallback", () => {
   });
 
   it("waits without switching when Claude has no fallback tier", async () => {
-    const pi = { sendUserMessage: vi.fn() } as any;
+    const pi = makePi();
     const orchestrator = makeOrchestrator(pi);
     orchestrator.switchModel = vi.fn(async () => true);
     const ctx = subCtx();
@@ -65,7 +69,7 @@ describe("session-first rate-limit fallback", () => {
       "pp-flant-anthropic-sub/sub/claude-opus-4-8",
       "github-copilot/claude-opus-4.5",
     ]);
-    const pi = { sendUserMessage: vi.fn() } as any;
+    const pi = makePi();
     const orchestrator = makeOrchestrator(pi);
     orchestrator.switchModel = vi.fn(async () => true);
     const ctx = subCtx();
@@ -83,7 +87,7 @@ describe("session-first rate-limit fallback", () => {
       "pp-flant-anthropic-sub/sub/claude-opus-4-8",
       "github-copilot/claude-opus-4.5",
     ]);
-    const pi = { sendUserMessage: vi.fn() } as any;
+    const pi = makePi();
     const orchestrator = makeOrchestrator(pi);
     orchestrator.switchModel = vi.fn(async () => {
       if (failure === "throw") throw new Error("unavailable");
@@ -95,6 +99,40 @@ describe("session-first rate-limit fallback", () => {
     expect(orchestrator.subFallbackMainPriorSpec).toBeNull();
     expect(pi.sendUserMessage).not.toHaveBeenCalled();
     expect(orchestrator.subSwitchBackTimer).not.toBeNull();
+    if (orchestrator.subSwitchBackTimer) clearTimeout(orchestrator.subSwitchBackTimer);
+  });
+
+  // The failure this reproduces: a worker definition carries the model it was
+  // built with, and pi-subagents lets that model outrank the spawning tool
+  // call's argument. A definition left behind by the demotion therefore sends
+  // every subsequent worker straight back to the tier that just refused them.
+  it("rebuilds worker definitions onto the fallback tier and back again", async () => {
+    setTierEnabled({ "copilot": true });
+    updateRegistryFromAvailableModels([
+      "pp-flant-anthropic-sub/sub/claude-opus-4-8",
+      "github-copilot/claude-opus-4.5",
+    ]);
+    const pi = makePi();
+    const orchestrator = makeOrchestrator(pi);
+    orchestrator.config.agents.subagents.simple.task.model = "pp-flant-anthropic-sub/sub/claude-opus-4-8";
+    orchestrator.switchModel = vi.fn(async () => true);
+    const taskModel = () => {
+      const calls = pi.events.emit.mock.calls.filter((c: any[]) => c[0] === "subagents:register-agents");
+      return calls.at(-1)?.[1].agents.get("task").model;
+    };
+
+    orchestrator.registerAgents();
+    expect(taskModel()).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
+    const emitted = pi.events.emit.mock.calls.length;
+    orchestrator.registerAgents();
+    expect(pi.events.emit.mock.calls.length).toBe(emitted);
+
+    await handleSubagentRateLimit(orchestrator, subCtx(), "pp-flant-anthropic-sub/sub/claude-opus-4-8");
+    expect(taskModel()).toBe("github-copilot/claude-opus-4.5");
+
+    setSubscriptionFallbackActive(false);
+    orchestrator.registerAgents();
+    expect(taskModel()).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
     if (orchestrator.subSwitchBackTimer) clearTimeout(orchestrator.subSwitchBackTimer);
   });
 
@@ -110,7 +148,7 @@ describe("session-first rate-limit fallback", () => {
       "pp-flant-anthropic-sub/sub/claude-opus-4-8",
       "github-copilot/claude-opus-4.5",
     ]);
-    const orchestrator = makeOrchestrator({ sendUserMessage: vi.fn() } as any);
+    const orchestrator = makeOrchestrator(makePi());
     orchestrator.lastCtx = { isIdle: () => true, ui: { notify: vi.fn() } };
     orchestrator.switchModel = vi.fn(async () => true);
     orchestrator.subFallbackActive = true;
@@ -152,7 +190,7 @@ describe("session-first rate-limit fallback", () => {
   it("rotates a rejected credential and resumes without demoting the tier", async () => {
     const { reviveSubscriptionCredential } = await import("./flant-infra.js");
     vi.mocked(reviveSubscriptionCredential).mockResolvedValue("rotated");
-    const pi = { sendUserMessage: vi.fn() } as any;
+    const pi = makePi();
     const orchestrator = makeOrchestrator(pi);
     orchestrator.switchModel = vi.fn(async () => true);
     const ctx = subCtx();
@@ -171,7 +209,7 @@ describe("session-first rate-limit fallback", () => {
   it("resumes without rotating when the credential already works again", async () => {
     const { reviveSubscriptionCredential } = await import("./flant-infra.js");
     vi.mocked(reviveSubscriptionCredential).mockResolvedValue("ok");
-    const pi = { sendUserMessage: vi.fn() } as any;
+    const pi = makePi();
     const orchestrator = makeOrchestrator(pi);
     orchestrator.switchModel = vi.fn(async () => true);
     const ctx = subCtx();
@@ -189,7 +227,7 @@ describe("session-first rate-limit fallback", () => {
       "pp-flant-anthropic-sub/sub/claude-opus-4-8",
       "github-copilot/claude-opus-4.5",
     ]);
-    const orchestrator = makeOrchestrator({ sendUserMessage: vi.fn() } as any);
+    const orchestrator = makeOrchestrator(makePi());
     orchestrator.switchModel = vi.fn(async () => true);
     const ctx = subCtx();
     await handleMainAuthFailure(orchestrator, ctx, "sub/claude-opus-4-8", "pp-flant-anthropic-sub");
@@ -211,7 +249,7 @@ describe("session-first rate-limit fallback", () => {
       "pp-flant-anthropic-sub/sub/claude-opus-4-8",
       "github-copilot/claude-opus-4.5",
     ]);
-    const pi = { sendUserMessage: vi.fn() } as any;
+    const pi = makePi();
     const orchestrator = makeOrchestrator(pi);
     orchestrator.switchModel = vi.fn(async () => true);
     const ctx = subCtx();
@@ -226,7 +264,7 @@ describe("session-first rate-limit fallback", () => {
   it("recovers a worker's rejected credential without touching the main model", async () => {
     const { reviveSubscriptionCredential } = await import("./flant-infra.js");
     vi.mocked(reviveSubscriptionCredential).mockResolvedValue("rotated");
-    const pi = { sendUserMessage: vi.fn() } as any;
+    const pi = makePi();
     const orchestrator = makeOrchestrator(pi);
     orchestrator.switchModel = vi.fn(async () => true);
     await handleSubagentAuthFailure(orchestrator, subCtx(), "pp-flant-anthropic-sub/sub/claude-fable-5");
@@ -239,7 +277,7 @@ describe("session-first rate-limit fallback", () => {
   it("ignores a rejected credential on a model the subscription does not route", async () => {
     const { reviveSubscriptionCredential } = await import("./flant-infra.js");
     vi.mocked(reviveSubscriptionCredential).mockClear();
-    const orchestrator = makeOrchestrator({ sendUserMessage: vi.fn() } as any);
+    const orchestrator = makeOrchestrator(makePi());
     orchestrator.switchModel = vi.fn(async () => true);
     await handleMainAuthFailure(orchestrator, subCtx(), "gpt-5.6-sol", "github-copilot");
     expect(reviveSubscriptionCredential).not.toHaveBeenCalled();
@@ -258,7 +296,7 @@ describe("session-first rate-limit fallback", () => {
       "pp-flant-anthropic-sub/sub/claude-opus-4-8",
       "github-copilot/claude-opus-4.5",
     ]);
-    const orchestrator = makeOrchestrator({ sendUserMessage: vi.fn() } as any);
+    const orchestrator = makeOrchestrator(makePi());
     let idle = false;
     orchestrator.lastCtx = { isIdle: () => idle, ui: { notify: vi.fn() } };
     orchestrator.switchModel = vi.fn(async () => true);
@@ -303,7 +341,7 @@ describe("session-first rate-limit fallback", () => {
       "pp-flant-anthropic-sub/sub/claude-opus-4-8",
       "github-copilot/claude-opus-4.5",
     ]);
-    const orchestrator = makeOrchestrator({ sendUserMessage: vi.fn() } as any);
+    const orchestrator = makeOrchestrator(makePi());
     orchestrator.lastCtx = { isIdle: () => true, ui: { notify: vi.fn() } };
     orchestrator.switchModel = vi.fn(async () => false);
     orchestrator.subFallbackActive = true;

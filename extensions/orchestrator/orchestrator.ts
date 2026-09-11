@@ -7,7 +7,7 @@ import { createTaskAgent } from "./agents/task.js";
 import { createAdvisorAgent } from "./agents/advisor.js";
 import { createReviewerAgent } from "./agents/reviewer.js";
 import { createDeepDebuggerAgent } from "./agents/deep-debugger.js";
-import { encodePoolVariant, registerAgentDefinitions } from "./agents/registry.js";
+import { encodePoolVariant, registerAgentDefinitions, unregisterAgentDefinitions } from "./agents/registry.js";
 import { publishAcpState } from "./acp.js";
 import type { PromptGuard } from "./promptcap/guard.js";
 import { getLogger } from "./log.js";
@@ -66,6 +66,7 @@ export class Orchestrator {
    * user's own /model pick and must be left alone.
    */
   routedMainSpec: string | null = null;
+  private agentRegistrationSignature = "";
   subSwitchBackTimer: ReturnType<typeof setTimeout> | null = null;
   tokenRefreshTimer: ReturnType<typeof setInterval> | null = null;
   private _interactivePromptOpen = false;
@@ -308,7 +309,18 @@ export class Orchestrator {
     this.pi.events.emit("subagents:set-max-concurrent", { maxConcurrent: this.config.agents.maxConcurrentSubagents });
   }
 
-  registerAgents(): void {
+  /**
+   * (Re)register every agent definition from the current config, so a routing
+   * change reaches the NEXT spawn: a definition carries the model it was built
+   * with, and pi-subagents lets that model outrank the spawning tool call's own
+   * argument — a definition left behind by a provider-tier move therefore keeps
+   * sending workers to the tier that just failed.
+   *
+   * Idempotent, so routing paths can call it unconditionally; `force` re-emits
+   * regardless, for a config reload that may have changed a prompt the signature
+   * below does not cover.
+   */
+  registerAgents(force = false): void {
     const definitions: Array<{ type: string; variant: string | null; frontmatter: any; prompt: string }> = [];
     const add = (type: string, value: { frontmatter: any; prompt: string }, variant: string | null = null) => {
       definitions.push({ type, variant, frontmatter: value.frontmatter, prompt: value.prompt });
@@ -327,6 +339,12 @@ export class Orchestrator {
         add(factory.type, factory.create(entry), encodePoolVariant(entry.model, entry.thinking));
       }
     }
+    const signature = definitions
+      .map((d) => `${d.type}_${d.variant ?? ""}:${d.frontmatter.model}:${d.frontmatter.thinking}:${d.frontmatter.max_turns ?? ""}`)
+      .join("|");
+    if (!force && signature === this.agentRegistrationSignature) return;
+    this.agentRegistrationSignature = signature;
+    unregisterAgentDefinitions(this.pi);
     registerAgentDefinitions(this.pi, definitions);
   }
 

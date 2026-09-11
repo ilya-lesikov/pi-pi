@@ -63,6 +63,7 @@ async function activate(
   orchestrator.subFallbackActive = true;
   orchestrator.subFallbackModelId = modelId;
   setSubscriptionFallbackActive(true);
+  orchestrator.registerAgents();
 
   const originSpec = origin === "main" ? modelId : mainSpec;
   const next = resolveModel(originSpec);
@@ -201,6 +202,7 @@ export function armSwitchBackProbe(orchestrator: Orchestrator): void {
       // before it is resolved: while the flag is set the flant-sub tier is
       // disabled and the spec walks straight back down onto the fallback tier.
       setSubscriptionFallbackActive(false);
+      orchestrator.registerAgents();
       if (prior) {
         // Restore BEFORE tearing down the rest of the fallback state so a failed
         // switch keeps the prior spec and the probe re-arms instead of stranding
@@ -211,6 +213,7 @@ export function armSwitchBackProbe(orchestrator: Orchestrator): void {
         } catch {}
         if (!restored) {
           setSubscriptionFallbackActive(true);
+          orchestrator.registerAgents();
           armSwitchBackProbe(orchestrator);
           ctx?.ui?.notify?.(`Subscription limit cleared, but switching back to ${prior} failed; will retry.`, "warning");
           return;
