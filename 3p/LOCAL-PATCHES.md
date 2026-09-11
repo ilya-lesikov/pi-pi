@@ -48,6 +48,7 @@ cd 3p/pi-subagents
 npx vitest run test/agent-runner.test.ts -t validateCompletion
 npx vitest run test/agent-runner.test.ts -t "compaction resume"
 npx vitest run test/agent-manager.test.ts -t first_tool
+npx vitest run test/tool-description-mode.test.ts
 ```
 
 To review every local divergence from pristine upstream, diff against the
@@ -75,6 +76,7 @@ that marker on anything you add, and list it here.
 | pi-subagents | `subagents:created` carries the spawning `toolCallId`, so a subscriber can correlate a worker with the turn that spawned it | `src/index.ts` (background Agent-tool spawn) |
 | pi-subagents | The conversation viewer is full-screen (100% width/height, no margin) and the agents widget is parked while it is open — pi-tui composites overlays into the same line buffer it diffs, so a partial-height overlay tears whenever the content behind it changes | `src/index.ts` (`viewAgentConversation`), `src/ui/conversation-viewer.ts` (`VIEWPORT_HEIGHT_PCT`), `src/ui/agent-widget.ts` (`suspend`, `resume`) |
 | pi-subagents | The completion notification renders a failed agent's error text instead of the "No output." placeholder — a failure's reason was otherwise reachable only through `get_subagent_result` | `src/index.ts` (`subagent-notification` renderer), guarded by `test/notification-error-rendering.test.ts` |
+| pi-subagents | Extension-only mode drops the `model`/`thinking` guidance from the Agent tool description and marks both parameters inert — the host extension pins them per agent type, and an agent config's model outranks the tool call's argument, so advertising them describes a choice the caller does not have | `src/index.ts` (`MODEL_CHOICE_GUIDELINES`, `applyExtensionOnlyToolSurface`), guarded by `test/tool-description-mode.test.ts` "drops the model and thinking guidance" |
 | pi-subagents | The agents widget keeps to a share of the terminal's rows, not just its own 12-line cap — a callback widget is composited whole, so an unbounded one scrolls the editor and footer out of the area pi-tui renders differentially against | `src/ui/agent-widget.ts` (`widgetLineBudget`), guarded by `test/agent-widget.test.ts` "share of a short terminal" |
 | pi-tasks | The task widget keeps to a share of the terminal's rows, for the same reason (`showAll` too: a widget taller than the screen is what scrolls the prompt away) | `src/ui/task-widget.ts` (`rowBudget`), guarded by `test/task-widget.test.ts` "share of a short terminal" |
 | pi-tasks | `clearAll` on the global store API; skip lifecycle hooks and shared-handle publication in in-process subagent sessions, snapshotting the `pi-pi:subagent-session-scope` scope at factory time | `src/index.ts` (`isSubagentSession`, store API) |

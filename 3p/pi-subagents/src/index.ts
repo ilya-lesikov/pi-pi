@@ -50,6 +50,17 @@ import { addUsage, getLifetimeTotal, getSessionContextPercent, type LifetimeUsag
 
 // ---- Shared helpers ----
 
+// LOCAL PATCH (pi-pi): factored out of the Agent tool description so the two
+// bullets can be dropped in extension-only mode, where the host extension owns
+// the roster and pins each agent type's model and effort — an agent config's
+// model outranks the tool call's own argument (see resolveAgentInvocationConfig),
+// so advertising these two there describes a choice the caller does not have.
+const MODEL_CHOICE_GUIDELINES = `- Use model to specify a different model (as "provider/modelId", or fuzzy e.g. "haiku", "sonnet").
+- Use thinking to control extended thinking level.
+`;
+const MODEL_PARAM_DESC = 'Optional model override. Accepts "provider/modelId" or fuzzy name (e.g. "haiku", "sonnet"). Omit to use the agent type\'s default.';
+const THINKING_PARAM_DESC = "Thinking level: off, minimal, low, medium, high, xhigh. Overrides agent default.";
+
 /** Tool execute return value for a text response. */
 function textResult(msg: string, details?: AgentDetails) {
   return { content: [{ type: "text" as const, text: msg }], details: details as any };
@@ -273,6 +284,28 @@ export default function (pi: ExtensionAPI) {
   let subagentTypeSchema: { description?: string } | undefined;
   const buildSubagentTypeDesc = (): string =>
     `The type of specialized agent to use. Available types: ${getAvailableTypes().join(", ")}. Custom agents from .pi/agents/*.md (project) or ${getAgentDir()}/agents/*.md (global) are also available.`;
+
+  // LOCAL PATCH (pi-pi): in extension-only mode the host extension owns the
+  // roster and pins each type's model and effort, and an agent config's model
+  // outranks the tool call's argument (resolveAgentInvocationConfig) — so both
+  // parameters are inert there and must stop advertising a choice the caller
+  // does not have. The description is re-registered rather than mutated: unlike
+  // a parameter schema, it is copied by value when the tool is wrapped.
+  let modelParamSchema: { description?: string } | undefined;
+  let thinkingParamSchema: { description?: string } | undefined;
+  let agentToolDefinition: { description: string } | undefined;
+  const applyExtensionOnlyToolSurface = (enabled: boolean): void => {
+    const pinned = "Ignored in this session: the agent type fixes this.";
+    if (modelParamSchema) modelParamSchema.description = enabled ? pinned : MODEL_PARAM_DESC;
+    if (thinkingParamSchema) thinkingParamSchema.description = enabled ? pinned : THINKING_PARAM_DESC;
+    if (!agentToolDefinition) return;
+    const next = enabled
+      ? agentToolDescription.replace(MODEL_CHOICE_GUIDELINES, "")
+      : agentToolDescription;
+    if (next === agentToolDefinition.description) return;
+    agentToolDefinition.description = next;
+    pi.registerTool(agentToolDefinition as any);
+  };
 
   /** Reload agents from .pi/agents/*.md and merge with defaults (called on init and each Agent invocation). */
   const reloadCustomAgents = () => {
@@ -542,6 +575,7 @@ export default function (pi: ExtensionAPI) {
   const unsubExtensionOnly = pi.events.on("subagents:set-extension-only", (data: any) => {
     if (typeof data?.enabled === "boolean") {
       setExtensionOnlyMode(data.enabled);
+      applyExtensionOnlyToolSurface(data.enabled);
       reloadCustomAgents();
     }
   });
@@ -780,9 +814,7 @@ If the target is already known, use a direct tool — \`read\` for a known path,
 - Use steer_subagent to send mid-run messages to a running background agent.
 - Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, etc.), since it is not aware of the user's intent.
 - If an agent's description says it should be used proactively, try to use it without the user having to ask for it first.
-- Use model to specify a different model (as "provider/modelId", or fuzzy e.g. "haiku", "sonnet").
-- Use thinking to control extended thinking level.
-- Use inherit_context if the agent needs the parent conversation history.
+${MODEL_CHOICE_GUIDELINES}- Use inherit_context if the agent needs the parent conversation history.
 - Use isolation: "worktree" to run the agent in an isolated git worktree (safe parallel file modifications). The worktree is automatically cleaned up if the agent makes no changes; otherwise the path and branch are returned in the result.${scheduleGuideline}
 
 ## Writing the prompt
@@ -845,7 +877,7 @@ Terse command-style prompts produce shallow, generic work.
     return fullAgentToolDescription;
   })();
 
-  pi.registerTool(defineTool({
+  pi.registerTool(agentToolDefinition = defineTool({
     name: SUBAGENT_TOOL_NAMES.AGENT,
     label: "Agent",
     description: agentToolDescription,
@@ -866,17 +898,16 @@ Terse command-style prompts produce shallow, generic work.
       subagent_type: (subagentTypeSchema = Type.String({
         description: buildSubagentTypeDesc(),
       })),
-      model: Type.Optional(
+      model: (modelParamSchema = Type.Optional(
         Type.String({
-          description:
-            'Optional model override. Accepts "provider/modelId" or fuzzy name (e.g. "haiku", "sonnet"). Omit to use the agent type\'s default.',
+          description: MODEL_PARAM_DESC,
         }),
-      ),
-      thinking: Type.Optional(
+      )),
+      thinking: (thinkingParamSchema = Type.Optional(
         Type.String({
-          description: "Thinking level: off, minimal, low, medium, high, xhigh. Overrides agent default.",
+          description: THINKING_PARAM_DESC,
         }),
-      ),
+      )),
       max_turns: Type.Optional(
         Type.Number({
           description: "Maximum number of agentic turns before stopping. Omit for unlimited (default).",

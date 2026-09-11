@@ -112,4 +112,26 @@ describe("toolDescriptionMode", () => {
     expect(tools.get("Agent").parameters.properties.subagent_type).toBe(schema);
     expect(schema.description).toContain("advisor_pp-flant-anthropic-sub_sub-claude-fable-5_high");
   });
+
+  // LOCAL PATCH (pi-pi): in extension-only mode the host extension pins each
+  // agent type's model and effort, and an agent config's model outranks the
+  // tool call's own argument, so the two parameters must stop advertising a
+  // choice the caller does not have.
+  it("drops the model and thinking guidance once a host extension takes over the roster", () => {
+    const { tools, handlers } = setup();
+    expect(tools.get("Agent").description).toContain("- Use model to specify a different model");
+    expect(tools.get("Agent").parameters.properties.model.description).toContain("Optional model override");
+
+    handlers.get("evt:subagents:set-extension-only")({ enabled: true });
+    const pinned = tools.get("Agent");
+    expect(pinned.description).not.toContain("- Use model to specify a different model");
+    expect(pinned.description).not.toContain("- Use thinking to control extended thinking level");
+    expect(pinned.description).toContain("## Usage notes");
+    expect(pinned.parameters.properties.model.description).toContain("the agent type fixes this");
+    expect(pinned.parameters.properties.thinking.description).toContain("the agent type fixes this");
+
+    handlers.get("evt:subagents:set-extension-only")({ enabled: false });
+    expect(tools.get("Agent").description).toContain("- Use model to specify a different model");
+    expect(tools.get("Agent").parameters.properties.model.description).toContain("Optional model override");
+  });
 });

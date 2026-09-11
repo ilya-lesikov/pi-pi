@@ -124,3 +124,15 @@ describe("vendored pi-subagents contract — manager handle", () => {
     expect(vendoredCode).toContain(`Symbol.for("${key}")`);
   });
 });
+
+describe("vendored pi-subagents contract — local patches", () => {
+  // pi-pi pins every agent type's model and effort, and an agent config's model
+  // outranks the tool call's own argument, so the Agent tool must stop
+  // advertising both in extension-only mode. A subtree update that drops this
+  // leaves the tool inviting an override that is silently discarded.
+  it("strips the model/thinking guidance in extension-only mode", () => {
+    const index = readFileSync(join(vendoredSrc, "index.ts"), "utf-8");
+    expect(index).toContain("MODEL_CHOICE_GUIDELINES");
+    expect(index).toMatch(/applyExtensionOnlyToolSurface\(data\.enabled\)/);
+  });
+});
