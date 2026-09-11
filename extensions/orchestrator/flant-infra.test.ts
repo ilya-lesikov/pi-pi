@@ -240,7 +240,7 @@ describe("flant-infra", () => {
     }
   });
 
-  it("carries pi's claude capabilities onto the sub models, minus the settings the gateway cannot honor", async () => {
+  it("carries pi's claude capabilities onto the sub models, minus the unusable fallback list", async () => {
     const dir = makeTempDir();
     mkdirSync(dir, { recursive: true });
     writeFileSync(
@@ -260,8 +260,6 @@ describe("flant-infra", () => {
                 compat: {
                   forceAdaptiveThinking: true,
                   supportsTemperature: false,
-                  // The gateway does not pass the mid-conversation-output-config
-                  // beta upstream, so inheriting this flag 400s every turn.
                   supportsMidConvoEffort: true,
                   allowedFallbackModels: [{ provider: "anthropic", model: "claude-opus-4-8" }],
                 },
@@ -278,8 +276,8 @@ describe("flant-infra", () => {
       mod.registerFlantProviders(pi, ["sub/claude-opus-5"], {}, { subscription: true });
 
       const model = registered.get("pp-flant-anthropic-sub").models[0];
-      expect(model.compat).toEqual({ forceAdaptiveThinking: true, supportsTemperature: false });
-      expect(model.compat).not.toHaveProperty("supportsMidConvoEffort");
+      expect(model.compat).toEqual({ forceAdaptiveThinking: true, supportsTemperature: false, supportsMidConvoEffort: true });
+      expect(model.compat).not.toHaveProperty("allowedFallbackModels");
       expect(model.thinkingLevelMap).toEqual({ off: null, xhigh: "xhigh", max: "max" });
     } finally {
       if (prevKey === undefined) delete process.env.LLM_API_KEY;
@@ -287,7 +285,7 @@ describe("flant-infra", () => {
     }
   });
 
-  it("omits compat entirely when the only inherited setting is the unusable mid-conversation effort flag", async () => {
+  it("omits compat entirely when the only inherited setting is the unusable fallback list", async () => {
     const dir = makeTempDir();
     mkdirSync(dir, { recursive: true });
     writeFileSync(
@@ -303,7 +301,7 @@ describe("flant-infra", () => {
         getApiKeyForProvider: async () => undefined,
         find: (provider: string, modelId: string) =>
           provider === "anthropic" && modelId === "claude-fable-5-1"
-            ? { compat: { supportsMidConvoEffort: true } }
+            ? { compat: { allowedFallbackModels: [{ provider: "anthropic", model: "claude-opus-4-8" }] } }
             : undefined,
       });
       const registered = new Map<string, any>();
