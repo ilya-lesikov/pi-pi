@@ -194,7 +194,25 @@ export class Orchestrator {
       this.pollPendingModelSwitch();
       return;
     }
-    await action();
+    await this.runSwitchAction(action);
+  }
+
+  /**
+   * Carry out one switch under the in-flight flag, whichever path reached it.
+   * The flag is what holds continuations back until the session is on the model
+   * the switch lands on, and what keeps a second path from switching underneath
+   * this one while it awaits.
+   */
+  async runSwitchAction(action: () => Promise<void>): Promise<void> {
+    this.modelSwitchInFlight = true;
+    try {
+      await action();
+    } catch (error: any) {
+      getLogger().error({ s: "model", err: error?.message }, "a model switch failed");
+    } finally {
+      this.modelSwitchInFlight = false;
+      this.redeliverPendingContinuations();
+    }
   }
 
   /**
@@ -213,11 +231,7 @@ export class Orchestrator {
         return;
       }
       const action = this.pendingModelSwitches.shift()!;
-      void action()
-        .catch((error: any) => {
-          getLogger().error({ s: "model", err: error?.message }, "a parked model switch failed");
-        })
-        .finally(() => this.pollPendingModelSwitch());
+      void this.runSwitchAction(action).finally(() => this.pollPendingModelSwitch());
     }, 1000);
     this.modelSwitchPollTimer.unref?.();
   }

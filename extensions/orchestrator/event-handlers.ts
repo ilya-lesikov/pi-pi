@@ -411,21 +411,10 @@ type PromptcapState = Pick<Orchestrator, "pi" | "config" | "lastCtx" | "promptGu
  */
 async function drainPendingModelSwitch(orchestrator: Orchestrator): Promise<void> {
   if (orchestrator.modelSwitchInFlight) return;
-  orchestrator.modelSwitchInFlight = true;
-  try {
-    let action = orchestrator.pendingModelSwitches.shift();
-    if (!action) return;
-    do {
-      try {
-        await action();
-      } catch (error: any) {
-        getLogger().error({ s: "model", err: error?.message }, "a parked model switch failed");
-      }
-      action = orchestrator.pendingModelSwitches.shift();
-    } while (action);
-  } finally {
-    orchestrator.modelSwitchInFlight = false;
-    orchestrator.redeliverPendingContinuations();
+  let action = orchestrator.pendingModelSwitches.shift();
+  while (action) {
+    await orchestrator.runSwitchAction(action);
+    action = orchestrator.pendingModelSwitches.shift();
   }
 }
 
@@ -737,6 +726,13 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       orchestrator.subFallbackModelId = null;
       orchestrator.subFallbackMainPriorSpec = null;
       orchestrator.routedMainSpec = null;
+      // A worker settles by lifecycle event; one still in flight at shutdown
+      // never sends it, and the watchdog that would have swept it is gone.
+      orchestrator.spawnedAgentIds.clear();
+      orchestrator.agentSpawnTimes.clear();
+      orchestrator.agentDescriptions.clear();
+      orchestrator.retriedSubagentIds.clear();
+      orchestrator.retryingSubagentIds.clear();
       orchestrator.pendingModelSwitches = [];
       orchestrator.modelSwitchInFlight = false;
       orchestrator.resetContinuation();

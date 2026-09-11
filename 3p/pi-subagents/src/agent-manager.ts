@@ -487,6 +487,12 @@ export class AgentManager {
   ): Promise<AgentRecord | undefined> {
     const record = this.agents.get(id);
     if (!record?.session) return undefined;
+    // LOCAL PATCH (pi-pi): a record already running owns its promise, status and
+    // abort controller; a second resume would replace all three, the session
+    // would refuse the prompt as already processing, and the resulting error
+    // would be written over the live run's record — which `abort()` then skips,
+    // because it no longer looks like it is running.
+    if (record.status === "running" || record.status === "queued") return undefined;
 
     record.status = "running";
     record.startedAt = Date.now();
@@ -505,6 +511,18 @@ export class AgentManager {
     if (signal?.aborted) controller.abort();
     else signal?.addEventListener("abort", forwardAbort);
     record.abortController = controller;
+    // The run below issues its request before it consults the signal, so an
+    // already-cancelled resume would otherwise execute a full turn, tools
+    // included, before noticing.
+    if (controller.signal.aborted) {
+      record.status = "stopped";
+      record.completedAt = Date.now();
+      record.promise = Promise.resolve("");
+      if (options?.emitLifecycle) {
+        try { this.onComplete?.(record); } catch { /* ignore completion side-effect errors */ }
+      }
+      return record;
+    }
     const run = this.runResume(record, prompt, controller.signal)
       .finally(() => signal?.removeEventListener("abort", forwardAbort));
     record.promise = run.then(() => record.result ?? "");

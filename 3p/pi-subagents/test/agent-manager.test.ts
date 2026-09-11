@@ -657,6 +657,44 @@ describe("AgentManager — lifetime usage + compaction count are eagerly initial
     release!();
     await second;
   });
+
+  // LOCAL PATCH (pi-pi): a second resume on a live run would replace the
+  // record's promise, status and controller under it — and the session refuses
+  // the prompt as already processing, so the error would be written over the
+  // run that is still going, which `abort()` then skips.
+  it("refuses a record that is already running, and does not start an already-cancelled one", async () => {
+    manager = new AgentManager();
+    vi.mocked(runAgent).mockResolvedValue({
+      responseText: "first",
+      session: { ...mockSession() } as any,
+      aborted: false,
+      steered: false,
+    });
+    const id = manager.spawn(mockPi, mockCtx, "general-purpose", "test", { description: "test", isBackground: true });
+    await manager.getRecord(id)!.promise;
+
+    const { resumeAgent: resumeMock } = await import("../src/agent-runner.js");
+    let release: (() => void) | undefined;
+    let starts = 0;
+    vi.mocked(resumeMock).mockImplementation(async () => {
+      starts++;
+      await new Promise<void>((resolve) => { release = resolve; });
+      return "second";
+    });
+
+    const first = manager.resume(id, "again");
+    await vi.waitFor(() => expect(starts).toBe(1));
+    expect(await manager.resume(id, "and again")).toBeUndefined();
+    expect(starts).toBe(1);
+    release!();
+    await first;
+
+    // The run issues its request before it consults the signal, so a resume
+    // handed a spent one must not reach it at all.
+    const cancelled = await manager.resume(id, "once more", AbortSignal.abort());
+    expect(starts).toBe(1);
+    expect(cancelled!.status).toBe("stopped");
+  });
 });
 
 // Regression: `isolation: "worktree"` MUST fail loud when the cwd can't host

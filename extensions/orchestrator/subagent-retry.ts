@@ -45,13 +45,18 @@ export async function retrySubagentOnNewRouting(orchestrator: Orchestrator, data
   // A resumed run bypasses the manager's background queue, so the limit has to
   // be enforced here — and against the workers actually running, not just other
   // retries: the failure freed this agent's slot and the manager will already
-  // have drained a queued worker into it. Retries in flight are themselves
-  // running, so they are counted by the same pass.
+  // have drained a queued worker into it. A retry counts as running from the
+  // moment `resume` is entered, and `retryingSubagentIds` covers the window
+  // before that, so two failures landing together cannot claim one slot.
   const running = (manager.listAgents?.() ?? []).filter((entry: any) => entry.status === "running").length;
-  if (running >= orchestrator.config.agents.maxConcurrentSubagents) return false;
+  if (running + orchestrator.retryingSubagentIds.size >= orchestrator.config.agents.maxConcurrentSubagents) return false;
 
   orchestrator.retriedSubagentIds.add(id);
   orchestrator.retryingSubagentIds.add(id);
+  // The manager admits fresh background workers against its own counter, which
+  // a resume never touches; lowering the ceiling by the number of retries keeps
+  // the configured limit honest while they run.
+  applyRetryHeadroom(orchestrator, manager);
   // The failure already settled this agent; re-track it so the turn gating and
   // the stale-agent watchdog account for the run that is starting again.
   orchestrator.spawnedAgentIds.add(id);
@@ -60,6 +65,11 @@ export async function retrySubagentOnNewRouting(orchestrator: Orchestrator, data
   orchestrator.startStaleAgentWatchdog();
   getTracer()?.traceSubagent(id, "subagent_retried", { from: data?.modelId, to: target });
 
+  const untrack = () => {
+    orchestrator.spawnedAgentIds.delete(id);
+    orchestrator.agentSpawnTimes.delete(id);
+    orchestrator.agentDescriptions.delete(id);
+  };
   try {
     await record.session.setModel(model);
     // Every lifecycle payload reports this field, so a retry that leaves it
@@ -72,15 +82,29 @@ export async function retrySubagentOnNewRouting(orchestrator: Orchestrator, data
     // refused this worker would be billed to the one it moved to. A failed run
     // reports no usage at all, which is where they stay.
     record.lifetimeUsage = { input: 0, output: 0, cacheWrite: 0 };
-    await manager.resume(id, RESUME_PROMPT, undefined, { emitLifecycle: true });
+    const resumed = manager.resume(id, RESUME_PROMPT, undefined, { emitLifecycle: true });
+    // `resume` marks the record running before it awaits anything, so the slot
+    // this retry reserved is now held by the manager's own view of the fleet.
+    orchestrator.retryingSubagentIds.delete(id);
+    // Nothing to resume: a shutdown disposed the record, or something else
+    // claimed it while the model was being switched. No lifecycle event will
+    // arrive for it, so the tracking has to come off here.
+    if (!await resumed) {
+      untrack();
+      return false;
+    }
     return true;
   } catch (error: any) {
     getLogger().error({ s: "agents", id, model: target, err: error?.message }, "failed to resume a rate-limited worker on the new routing");
-    orchestrator.spawnedAgentIds.delete(id);
-    orchestrator.agentSpawnTimes.delete(id);
-    orchestrator.agentDescriptions.delete(id);
+    untrack();
     return false;
   } finally {
     orchestrator.retryingSubagentIds.delete(id);
+    applyRetryHeadroom(orchestrator, manager);
   }
+}
+
+function applyRetryHeadroom(orchestrator: Orchestrator, manager: any): void {
+  const configured = orchestrator.config.agents.maxConcurrentSubagents;
+  manager.setMaxConcurrent?.(Math.max(1, configured - orchestrator.retryingSubagentIds.size));
 }

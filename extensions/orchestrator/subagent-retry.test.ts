@@ -53,6 +53,7 @@ function installManager(record: any, running: any[] = []) {
   (globalThis as any)[MANAGER_KEY] = {
     getRecord: (id: string) => (id === record.id ? record : undefined),
     listAgents: () => running,
+    setMaxConcurrent: vi.fn(),
     resume,
   };
   return resume;
@@ -148,6 +149,41 @@ describe("retrying a rate-limited worker on the new routing", () => {
 
     expect(await retrySubagentOnNewRouting(orchestrator, { id: "agent-1", modelId: SUB_SPEC })).toBe(false);
     expect(resume).not.toHaveBeenCalled();
+    orchestrator.stopStaleAgentWatchdog();
+  });
+
+  // Shutdown disposes the manager's records; a retry that was between the model
+  // switch and the resume gets no lifecycle event, so nothing else would take
+  // this agent back out of the in-flight bookkeeping.
+  it("stops tracking the agent when there is no longer a record to resume", async () => {
+    const orchestrator = makeOrchestrator(makePi());
+    const record = makeRecord();
+    installManager(record);
+    (globalThis as any)[MANAGER_KEY].resume = vi.fn(async () => undefined);
+    setSubscriptionFallbackActive(true);
+    orchestrator.registerAgents();
+
+    expect(await retrySubagentOnNewRouting(orchestrator, { id: "agent-1", modelId: SUB_SPEC })).toBe(false);
+    expect(orchestrator.spawnedAgentIds.has("agent-1")).toBe(false);
+    expect(orchestrator.agentSpawnTimes.has("agent-1")).toBe(false);
+    orchestrator.stopStaleAgentWatchdog();
+  });
+
+  // A resume never touches the manager's own background counter, so the ceiling
+  // has to come down while one runs or a fresh spawn is admitted past the limit.
+  it("lowers the manager's ceiling while a retry occupies a slot", async () => {
+    const orchestrator = makeOrchestrator(makePi());
+    orchestrator.config.agents.maxConcurrentSubagents = 3;
+    const record = makeRecord();
+    installManager(record);
+    const manager = (globalThis as any)[MANAGER_KEY];
+    const seen: number[] = [];
+    manager.setMaxConcurrent = vi.fn((n: number) => { seen.push(n); });
+    setSubscriptionFallbackActive(true);
+    orchestrator.registerAgents();
+
+    await retrySubagentOnNewRouting(orchestrator, { id: "agent-1", modelId: SUB_SPEC });
+    expect(seen).toEqual([2, 3]);
     orchestrator.stopStaleAgentWatchdog();
   });
 
