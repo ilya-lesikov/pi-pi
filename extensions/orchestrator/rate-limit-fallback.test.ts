@@ -155,13 +155,35 @@ describe("session-first rate-limit fallback", () => {
     await handleMainRateLimit(orchestrator, ctx, "gpt-6-astra", "github-copilot");
     expect(listTierDemotions()).toEqual(["copilot:gpt-astra"]);
     expect(orchestrator.switchModel).toHaveBeenCalledWith(ctx, "pp-flant-openai/gpt-6-astra", expect.any(String));
-    expect(orchestrator.routedMainSpec).toBe("pp-flant-openai/gpt-6-astra");
+    // The live model may be one the user picked by hand, so the demotion does
+    // not claim it: its own timer puts back the exact spec it moved off.
+    expect(orchestrator.routedMainSpec).toBeNull();
     // The subscription's global latch stays untouched — this is not its limit.
     expect(orchestrator.subFallbackActive).toBe(false);
     expect(resolveModel("github-copilot/claude-opus-4.5")).toBe("github-copilot/claude-opus-4.5");
 
+    orchestrator.lastCtx = { isIdle: () => true, ui: { notify: vi.fn() }, model: { provider: "pp-flant-openai", id: "gpt-6-astra" } } as any;
     await vi.advanceTimersByTimeAsync(10 * 60_000);
     expect(listTierDemotions()).toEqual([]);
+    await vi.waitFor(() => expect(orchestrator.switchModel).toHaveBeenCalledWith(orchestrator.lastCtx, "github-copilot/gpt-6-astra", expect.any(String)));
+    vi.useRealTimers();
+  });
+
+  it("leaves the model alone at restore time when the session moved on", async () => {
+    vi.useFakeTimers();
+    setTierEnabled({ "copilot": true });
+    updateRegistryFromAvailableModels(["github-copilot/gpt-6-astra", "pp-flant-openai/gpt-6-astra"]);
+    const orchestrator = makeOrchestrator(makePi());
+    orchestrator.switchModel = vi.fn(async () => true);
+    const ctx = { abort: vi.fn(), model: { provider: "github-copilot", id: "gpt-6-astra" }, ui: { notify: vi.fn() } };
+
+    await handleMainRateLimit(orchestrator, ctx, "gpt-6-astra", "github-copilot");
+    vi.mocked(orchestrator.switchModel).mockClear();
+    // The user picked something else in the meantime.
+    orchestrator.lastCtx = { isIdle: () => true, ui: { notify: vi.fn() }, model: { provider: "pp-flant-anthropic-sub", id: "sub/claude-opus-4-8" } } as any;
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(listTierDemotions()).toEqual([]);
+    expect(orchestrator.switchModel).not.toHaveBeenCalled();
     vi.useRealTimers();
   });
 

@@ -503,6 +503,11 @@ export default function (pi: ExtensionAPI) {
       spawn: (piRef: any, ctx: any, type: string, prompt: string, options: any) =>
         manager.spawn(piRef, ctx, type, prompt, options),
       getRecord: (id: string) => manager.getRecord(id),
+      // LOCAL PATCH (pi-pi): the fleet view, the ACP state feed and "stop all
+      // workers" call these on the handle; without them they silently see no
+      // agents and stop nothing.
+      listAgents: () => manager.listAgents(),
+      abortAll: () => manager.abortAll(),
       // LOCAL PATCH (pi-pi): resume a retained session from outside this package.
       // pi-pi re-routes a worker that died on a rate-limited provider and
       // resumes it in place, so the transcript it had already built survives

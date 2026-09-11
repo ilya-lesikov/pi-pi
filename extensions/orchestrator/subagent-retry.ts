@@ -42,9 +42,12 @@ export async function retrySubagentOnNewRouting(orchestrator: Orchestrator, data
   const model = ctx?.modelRegistry?.find?.(provider, modelId)
     ?? ctx?.modelRegistry?.getAvailable?.().find((entry: any) => entry.provider === provider && entry.id === modelId);
   if (!model) return false;
-  // A resumed run bypasses the manager's background queue, so the retries have
-  // to respect the concurrency limit themselves.
-  if (orchestrator.retryingSubagentIds.size >= orchestrator.config.agents.maxConcurrentSubagents) return false;
+  // A resumed run bypasses the manager's background queue, so the limit has to
+  // be enforced here — and against the workers actually running, not just other
+  // retries: the failure freed this agent's slot and the manager will already
+  // have drained a queued worker into it.
+  const running = (manager.listAgents?.() ?? []).filter((entry: any) => entry.status === "running").length;
+  if (running + orchestrator.retryingSubagentIds.size >= orchestrator.config.agents.maxConcurrentSubagents) return false;
 
   orchestrator.retriedSubagentIds.add(id);
   orchestrator.retryingSubagentIds.add(id);
@@ -58,6 +61,11 @@ export async function retrySubagentOnNewRouting(orchestrator: Orchestrator, data
 
   try {
     await record.session.setModel(model);
+    // Every lifecycle payload reports this field, so a retry that leaves it
+    // behind makes the next failure look like one from the provider that is
+    // already demoted — the fallback would then route nowhere and attribute this
+    // worker's usage to a tier it no longer runs on.
+    record.resolvedModelId = target;
     await manager.resume(id, RESUME_PROMPT, undefined, { emitLifecycle: true });
     return true;
   } catch (error: any) {

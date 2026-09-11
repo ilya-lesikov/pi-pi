@@ -147,5 +147,17 @@ describe("vendored pi-subagents contract — local patches", () => {
     expect(index).toMatch(/resume:\s*\(id: string/);
     expect(manager).toMatch(/options\?:\s*\{\s*emitLifecycle\?: boolean\s*\}/);
     expect(manager).toMatch(/if \(options\?\.emitLifecycle\) \{\s*\n\s*try \{ this\.onComplete/);
+    // A resumed run must own its promise and abort controller, or a waiter gets
+    // the previous run's result and a stop never reaches the session.
+    expect(manager).toMatch(/record\.promise = run\.then/);
+    expect(manager).toMatch(/record\.abortController = controller/);
+  });
+
+  it("exposes the fleet operations the orchestrator calls on the handle", () => {
+    const index = readFileSync(join(vendoredSrc, "index.ts"), "utf-8");
+    const handle = index.slice(index.indexOf("[MANAGER_KEY] = {"));
+    for (const method of ["listAgents", "abortAll", "getRecord", "resume"]) {
+      expect(handle.slice(0, handle.indexOf("\n    };")), `${method} is missing from the published manager handle`).toContain(`${method}:`);
+    }
   });
 });

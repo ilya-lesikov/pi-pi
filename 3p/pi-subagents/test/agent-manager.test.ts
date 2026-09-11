@@ -581,6 +581,41 @@ describe("AgentManager — lifetime usage + compaction count are eagerly initial
     // deliverable or the notification is suppressed.
     expect(completions[0].resultConsumed).toBe(false);
   });
+
+  // LOCAL PATCH (pi-pi): the run that installed the record's promise and abort
+  // controller is over. Left as they were, a waiter would get the previous
+  // run's result at once (and `waitForAll` would spin on a settled promise for
+  // as long as the resume ran), while `abort()` would mark the record stopped
+  // without the resumed run ever hearing about it.
+  it("gives a resumed run its own promise and a live abort", async () => {
+    manager = new AgentManager();
+    vi.mocked(runAgent).mockResolvedValue({
+      responseText: "first",
+      session: { ...mockSession() } as any,
+      aborted: false,
+      steered: false,
+    });
+    const id = manager.spawn(mockPi, mockCtx, "general-purpose", "test", { description: "test", isBackground: true });
+    await manager.getRecord(id)!.promise;
+    const settled = manager.getRecord(id)!.promise;
+
+    const { resumeAgent: resumeMock } = await import("../src/agent-runner.js");
+    let sawAbort = false;
+    let release: (() => void) | undefined;
+    vi.mocked(resumeMock).mockImplementation(async (_session, _prompt, opts: any) => {
+      opts.signal?.addEventListener?.("abort", () => { sawAbort = true; });
+      await new Promise<void>((resolve) => { release = resolve; });
+      return "second";
+    });
+
+    const resumed = manager.resume(id, "again");
+    await vi.waitFor(() => expect(manager.getRecord(id)!.promise).not.toBe(settled));
+    expect(manager.abort(id)).toBe(true);
+    expect(sawAbort).toBe(true);
+    release!();
+    await resumed;
+    await expect(manager.getRecord(id)!.promise).resolves.toBeDefined();
+  });
 });
 
 // Regression: `isolation: "worktree"` MUST fail loud when the cwd can't host

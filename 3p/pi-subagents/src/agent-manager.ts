@@ -494,9 +494,27 @@ export class AgentManager {
     record.result = undefined;
     record.error = undefined;
     if (options?.emitLifecycle) record.resultConsumed = false;
+    // LOCAL PATCH (pi-pi): the run that settled `abortController` and `promise`
+    // is over — its abort no longer reaches the session, and the promise is
+    // already resolved. Left as they were, `abort()` would mark this record
+    // stopped while the resumed run kept executing tools, `waitForAll()` would
+    // spin on a settled promise for as long as it ran, and a waiting
+    // `get_subagent_result` would return the previous run's result at once.
+    const controller = signal ? undefined : new AbortController();
+    if (controller) record.abortController = controller;
+    const run = this.runResume(record, prompt, signal ?? controller?.signal);
+    record.promise = run.then(() => record.result ?? "");
+    await run;
 
+    if (options?.emitLifecycle) {
+      try { this.onComplete?.(record); } catch { /* ignore completion side-effect errors */ }
+    }
+    return record;
+  }
+
+  private async runResume(record: AgentRecord, prompt: string, signal?: AbortSignal): Promise<void> {
     try {
-      const responseText = await resumeAgent(record.session, prompt, {
+      const responseText = await resumeAgent(record.session!, prompt, {
         onToolActivity: (activity) => {
           if (activity.type === "end") record.toolUses++;
         },
@@ -522,11 +540,6 @@ export class AgentManager {
       record.error = err instanceof Error ? err.message : String(err);
       record.completedAt = Date.now();
     }
-
-    if (options?.emitLifecycle) {
-      try { this.onComplete?.(record); } catch { /* ignore completion side-effect errors */ }
-    }
-    return record;
   }
 
   /**

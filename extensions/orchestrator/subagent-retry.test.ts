@@ -48,9 +48,13 @@ function makeRecord(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function installManager(record: any) {
+function installManager(record: any, running: any[] = []) {
   const resume = vi.fn(async () => record);
-  (globalThis as any)[MANAGER_KEY] = { getRecord: (id: string) => (id === record.id ? record : undefined), resume };
+  (globalThis as any)[MANAGER_KEY] = {
+    getRecord: (id: string) => (id === record.id ? record : undefined),
+    listAgents: () => running,
+    resume,
+  };
   return resume;
 }
 
@@ -93,6 +97,9 @@ describe("retrying a rate-limited worker on the new routing", () => {
 
     expect(await retrySubagentOnNewRouting(orchestrator, { id: "agent-1", modelId: SUB_SPEC })).toBe(true);
     expect(record.session.setModel).toHaveBeenCalledWith({ provider: "github-copilot", id: "claude-opus-4.5" });
+    // Every lifecycle payload reports this, so a second failure has to name the
+    // provider the worker actually ran on, not the one it was moved off.
+    expect((record as any).resolvedModelId).toBe(COPILOT_SPEC);
     expect(resume).toHaveBeenCalledWith("agent-1", expect.stringContaining("continue from where you stopped"), undefined, { emitLifecycle: true });
     // The failure settled the agent; the run starting again must be tracked, or
     // the turn proceeds as though nothing were in flight.
@@ -120,6 +127,26 @@ describe("retrying a rate-limited worker on the new routing", () => {
     const sessionless = makeRecord({ id: "agent-3", session: undefined });
     installManager(sessionless);
     expect(await retrySubagentOnNewRouting(orchestrator, { id: "agent-3", modelId: SUB_SPEC })).toBe(false);
+    expect(resume).not.toHaveBeenCalled();
+    orchestrator.stopStaleAgentWatchdog();
+  });
+
+  // The failure freed this agent's slot, and the manager drains a queued worker
+  // into it before the fallback has even finished — so a resume that skips the
+  // queue has to count the workers that are actually running.
+  it("does not resume past the worker concurrency limit", async () => {
+    const orchestrator = makeOrchestrator(makePi());
+    orchestrator.config.agents.maxConcurrentSubagents = 2;
+    const record = makeRecord();
+    const resume = installManager(record, [
+      { id: "other-1", status: "running" },
+      { id: "other-2", status: "running" },
+      { id: "other-3", status: "completed" },
+    ]);
+    setSubscriptionFallbackActive(true);
+    orchestrator.registerAgents();
+
+    expect(await retrySubagentOnNewRouting(orchestrator, { id: "agent-1", modelId: SUB_SPEC })).toBe(false);
     expect(resume).not.toHaveBeenCalled();
     orchestrator.stopStaleAgentWatchdog();
   });

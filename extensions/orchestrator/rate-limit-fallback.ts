@@ -123,46 +123,71 @@ async function demoteFamilyTier(orchestrator: Orchestrator, ctx: any, spec: stri
   }
   demoteTierForFamily(tier, family);
   orchestrator.registerAgents();
-  armTierRestore(orchestrator, tier, family);
 
   const mainSpec = ctx?.model?.provider && ctx?.model?.id ? `${ctx.model.provider}/${ctx.model.id}` : "";
   const mainAffected = origin === "main"
     || (tierOfSpec(mainSpec) === tier && getModelInfo(mainSpec).family === family);
   if (!mainAffected) {
+    armTierRestore(orchestrator, tier, family);
     ctx?.ui?.notify?.(`Rate limit on ${spec} for a worker; that provider is paused for this model until it clears.`, "warning");
     return;
   }
-  const next = resolveModel(mainSpec || spec);
-  if (next === (mainSpec || spec)) {
+  const prior = mainSpec || spec;
+  const next = resolveModel(prior);
+  if (next === prior) {
+    armTierRestore(orchestrator, tier, family);
     ctx?.ui?.notify?.(`Rate limit on ${spec}, and there is no lower provider tier for it; waiting for it to clear.`, "warning");
     return;
   }
   try {
     if (!await orchestrator.switchModel(ctx, next, thinking(orchestrator))) {
+      armTierRestore(orchestrator, tier, family);
       ctx?.ui?.notify?.(`Rate limit on ${spec}, but ${next} is unavailable; waiting for it to clear.`, "error");
       return;
     }
   } catch {
+    armTierRestore(orchestrator, tier, family);
     ctx?.ui?.notify?.(`Rate limit on ${spec}, but switching to ${next} failed; waiting for it to clear.`, "error");
     return;
   }
-  // Recorded so the turn-end restore owns moving the session back once the
-  // demotion lifts, instead of a second timer racing it.
-  orchestrator.routedMainSpec = next;
+  // The restore carries the exact spec this moved off, rather than re-resolving
+  // the configured main model: the session may have been on a model the user
+  // picked by hand, and that choice must come back, not pi-pi's own.
+  armTierRestore(orchestrator, tier, family, { from: prior, to: next });
   ctx?.ui?.notify?.(`Rate limit on ${spec}; switched to ${next} until it clears.`, "warning");
   orchestrator.queueContinuation("[PI-PI] Provider routing changed after a rate limit. Continue the current request.");
 }
 
-function armTierRestore(orchestrator: Orchestrator, tier: ProviderTierName, family: Family): void {
+function armTierRestore(
+  orchestrator: Orchestrator,
+  tier: ProviderTierName,
+  family: Family,
+  mainRestore?: { from: string; to: string },
+): void {
   const key = `${tier}:${family}`;
   const existing = orchestrator.tierRestoreTimers.get(key);
   if (existing) clearTimeout(existing);
   let minutes = 10;
   try { minutes = loadFlantSettings(orchestrator.cwd).switchBackIntervalMinutes; } catch {}
-  const timer = setTimeout(() => {
+  const timer = setTimeout(async () => {
     orchestrator.tierRestoreTimers.delete(key);
     restoreTierForFamily(tier, family);
     orchestrator.registerAgents();
+    if (!mainRestore) return;
+    // Wall-clock time, so this lands as readily inside a live request as between
+    // two, and switching the model compacts and aborts whatever it interrupts.
+    await orchestrator.runModelSwitchBetweenTurns(async () => {
+      const ctx = orchestrator.lastCtx as any;
+      const live = ctx?.model?.provider && ctx?.model?.id ? `${ctx.model.provider}/${ctx.model.id}` : "";
+      // Anything else means the session moved on — the user's own pick, or
+      // another demotion — and is not this timer's to undo.
+      if (live !== mainRestore.to) return;
+      try {
+        if (await orchestrator.switchModel(ctx, mainRestore.from, thinking(orchestrator))) {
+          ctx?.ui?.notify?.(`Rate limit window elapsed; switched back to ${mainRestore.from}.`, "info");
+        }
+      } catch {}
+    });
   }, Math.max(1, minutes) * 60_000);
   timer.unref?.();
   orchestrator.tierRestoreTimers.set(key, timer);
