@@ -14,7 +14,7 @@ import { collectContextFiles, renderContextInjection, summarizeContextInjectionS
 import { enabledSkillLayers, listLayeredSkills, loadLayeredSkill } from "./skills-manifest.js";
 import { identityBlock, principlesBlock, toolsBlock, delegationBlock } from "./agents/tool-routing.js";
 import { buildPoolRoster, registeredAgentNames, remapPoolName, setExtensionOnlyMode } from "./agents/registry.js";
-import { getModelInfo, setSubscriptionFallbackActive, updateRegistryFromAvailableModels } from "./model-registry.js";
+import { clearAllTierDemotions, getModelInfo, setSubscriptionFallbackActive, updateRegistryFromAvailableModels } from "./model-registry.js";
 import { createCustomFooter, setFooterContext, setFooterTracker, setFooterOrchestrator } from "./custom-footer.js";
 import { createUsageTracker, dumpUsageSummary, isSubscriptionRouted, loadUsageSummary, type UsageTracker } from "./usage-tracker.js";
 import { publishAcpState, resetAcpStateCache } from "./acp.js";
@@ -709,6 +709,9 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       if (orchestrator.mainTurnTimer) clearInterval(orchestrator.mainTurnTimer);
       if (orchestrator.staleAgentTimer) clearInterval(orchestrator.staleAgentTimer);
       if (orchestrator.subSwitchBackTimer) clearTimeout(orchestrator.subSwitchBackTimer);
+      for (const timer of orchestrator.tierRestoreTimers.values()) clearTimeout(timer);
+      orchestrator.tierRestoreTimers.clear();
+      clearAllTierDemotions();
       if (orchestrator.idlePollTimer) clearTimeout(orchestrator.idlePollTimer);
       if (orchestrator.tokenRefreshTimer) clearInterval(orchestrator.tokenRefreshTimer);
       if (orchestrator.modelSwitchPollTimer) clearTimeout(orchestrator.modelSwitchPollTimer);

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Orchestrator } from "./orchestrator.js";
 import { getDefaultConfig, normalizeConfigDurations } from "./config.js";
 import { armSwitchBackProbe, handleMainAuthFailure, handleMainRateLimit, handleSubagentAuthFailure, handleSubagentRateLimit, isAuthError, isPolicyBlockError, isRateLimitError } from "./rate-limit-fallback.js";
-import { clearAllTierDemotions, isSubscriptionFallbackActive, setSubscriptionFallbackActive, setTierEnabled, updateRegistryFromAvailableModels } from "./model-registry.js";
+import { clearAllTierDemotions, isSubscriptionFallbackActive, listTierDemotions, resolveModel, setSubscriptionFallbackActive, setTierEnabled, updateRegistryFromAvailableModels } from "./model-registry.js";
 
 vi.mock("./flant-infra.js", async (original) => ({
   ...(await original<any>()),
@@ -134,6 +134,63 @@ describe("session-first rate-limit fallback", () => {
     orchestrator.registerAgents();
     expect(taskModel()).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
     if (orchestrator.subSwitchBackTimer) clearTimeout(orchestrator.subSwitchBackTimer);
+  });
+
+  // A tier that is not the subscription is limited per model family, and the
+  // session lands on one of them (Copilot) as soon as the subscription is
+  // demoted — before this, a 429 there did nothing at all.
+  it("demotes just the limited family of a non-subscription tier and restores it", async () => {
+    vi.useFakeTimers();
+    setTierEnabled({ "copilot": true });
+    updateRegistryFromAvailableModels([
+      "github-copilot/gpt-6-astra",
+      "pp-flant-openai/gpt-6-astra",
+      "github-copilot/claude-opus-4.5",
+    ]);
+    const pi = makePi();
+    const orchestrator = makeOrchestrator(pi);
+    orchestrator.switchModel = vi.fn(async () => true);
+    const ctx = { abort: vi.fn(), model: { provider: "github-copilot", id: "gpt-6-astra" }, ui: { notify: vi.fn() } };
+
+    await handleMainRateLimit(orchestrator, ctx, "gpt-6-astra", "github-copilot");
+    expect(listTierDemotions()).toEqual(["copilot:gpt-astra"]);
+    expect(orchestrator.switchModel).toHaveBeenCalledWith(ctx, "pp-flant-openai/gpt-6-astra", expect.any(String));
+    expect(orchestrator.routedMainSpec).toBe("pp-flant-openai/gpt-6-astra");
+    // The subscription's global latch stays untouched — this is not its limit.
+    expect(orchestrator.subFallbackActive).toBe(false);
+    expect(resolveModel("github-copilot/claude-opus-4.5")).toBe("github-copilot/claude-opus-4.5");
+
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(listTierDemotions()).toEqual([]);
+    vi.useRealTimers();
+  });
+
+  it("waits instead of switching when the limited tier has nothing below it", async () => {
+    setTierEnabled({ "copilot": true });
+    updateRegistryFromAvailableModels(["github-copilot/claude-opus-4.5"]);
+    const orchestrator = makeOrchestrator(makePi());
+    orchestrator.switchModel = vi.fn(async () => true);
+    const ctx = { abort: vi.fn(), model: { provider: "github-copilot", id: "claude-opus-4.5" }, ui: { notify: vi.fn() } };
+
+    await handleMainRateLimit(orchestrator, ctx, "claude-opus-4.5", "github-copilot");
+    expect(listTierDemotions()).toEqual(["copilot:opus"]);
+    expect(orchestrator.switchModel).not.toHaveBeenCalled();
+    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("no lower provider tier"), "warning");
+    for (const timer of orchestrator.tierRestoreTimers.values()) clearTimeout(timer);
+  });
+
+  it("leaves the main model alone when the limit hit a worker on another tier", async () => {
+    setTierEnabled({ "copilot": true });
+    updateRegistryFromAvailableModels(["github-copilot/gpt-6-astra", "pp-flant-openai/gpt-6-astra"]);
+    const orchestrator = makeOrchestrator(makePi());
+    orchestrator.switchModel = vi.fn(async () => true);
+    const ctx = { model: { provider: "pp-flant-anthropic-sub", id: "sub/claude-opus-4-8" }, ui: { notify: vi.fn() } };
+
+    await handleSubagentRateLimit(orchestrator, ctx, "github-copilot/gpt-6-astra");
+    expect(listTierDemotions()).toEqual(["copilot:gpt-astra"]);
+    expect(orchestrator.switchModel).not.toHaveBeenCalled();
+    expect(orchestrator.subFallbackActive).toBe(false);
+    for (const timer of orchestrator.tierRestoreTimers.values()) clearTimeout(timer);
   });
 
   // The prior spec is subscription-born, so it only resolves back to the

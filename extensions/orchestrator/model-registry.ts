@@ -350,6 +350,10 @@ export function restoreTierForFamily(tier: ProviderTierName, family: Family): vo
   demotedTierFamily.delete(`${tier}:${family}`);
 }
 
+export function isTierDemoted(tier: ProviderTierName, family: Family): boolean {
+  return demotedTierFamily.has(`${tier}:${family}`);
+}
+
 // Read-only snapshot of the current `${tier}:${family}` demotions (sorted for
 // stable display). Used by the /pp menu to hide the clear action when empty.
 export function listTierDemotions(): string[] {
@@ -387,7 +391,7 @@ function isClaudeFamily(family: Family): boolean {
 }
 
 // Identify which tier a resolved spec currently points at.
-function tierOfSpec(spec: string): ProviderTierName | null {
+export function tierOfSpec(spec: string): ProviderTierName | null {
   if (spec.startsWith(`${COPILOT_PROVIDER}/`)) return "copilot";
   if (spec.startsWith(`${SUB_PROVIDER}/`) || spec.startsWith(SUB_MODEL_PREFIX)) return "flant-sub";
   if (spec.startsWith("pp-flant-anthropic/") || spec.startsWith("pp-flant-openai/")) return "flant-api";

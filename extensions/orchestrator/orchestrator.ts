@@ -68,6 +68,8 @@ export class Orchestrator {
   routedMainSpec: string | null = null;
   private agentRegistrationSignature = "";
   subSwitchBackTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Pending per-family tier restores, keyed `${tier}:${family}`. */
+  tierRestoreTimers = new Map<string, ReturnType<typeof setTimeout>>();
   tokenRefreshTimer: ReturnType<typeof setInterval> | null = null;
   private _interactivePromptOpen = false;
 
