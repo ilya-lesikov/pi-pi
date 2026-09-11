@@ -964,7 +964,11 @@ Terse command-style prompts produce shallow, generic work.
 
     renderResult(result, { expanded, isPartial }, theme) {
       const details = result.details as AgentDetails | undefined;
-      if (!details) {
+      // LOCAL PATCH (pi-pi): a call the host rejects before the tool runs (pi-pi
+      // blocks a spawn naming an unregistered agent) carries its reason as text
+      // and an empty — but truthy — details object. There is no run to describe,
+      // and the branches below would invent an abort for it.
+      if (!details?.status) {
         const text = result.content[0]?.type === "text" ? result.content[0].text : "";
         return new Text(text, 0, 0);
       }
@@ -1036,7 +1040,9 @@ Terse command-style prompts produce shallow, generic work.
       if (details.status === "error") {
         line += "\n" + theme.fg("error", `  ⎿  Error: ${details.error ?? "unknown"}`);
       } else {
-        line += "\n" + theme.fg("warning", "  ⎿  Aborted (max turns exceeded)");
+        // LOCAL PATCH (pi-pi): name the turn limit only when there was one.
+        const label = details.maxTurns != null ? "Aborted (max turns exceeded)" : "Aborted";
+        line += "\n" + theme.fg("warning", `  ⎿  ${label}`);
       }
 
       return new Text(line, 0, 0);

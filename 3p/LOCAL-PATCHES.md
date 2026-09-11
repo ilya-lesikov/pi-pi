@@ -50,6 +50,7 @@ npx vitest run test/agent-runner.test.ts -t "compaction resume"
 npx vitest run test/agent-manager.test.ts -t first_tool
 npx vitest run test/agent-manager.test.ts -t "resumed run"
 npx vitest run test/tool-description-mode.test.ts
+npx vitest run test/blocked-call-rendering.test.ts
 ```
 
 To review every local divergence from pristine upstream, diff against the
@@ -77,6 +78,7 @@ that marker on anything you add, and list it here.
 | pi-subagents | `subagents:created` carries the spawning `toolCallId`, so a subscriber can correlate a worker with the turn that spawned it | `src/index.ts` (background Agent-tool spawn) |
 | pi-subagents | The conversation viewer is full-screen (100% width/height, no margin) and the agents widget is parked while it is open — pi-tui composites overlays into the same line buffer it diffs, so a partial-height overlay tears whenever the content behind it changes | `src/index.ts` (`viewAgentConversation`), `src/ui/conversation-viewer.ts` (`VIEWPORT_HEIGHT_PCT`), `src/ui/agent-widget.ts` (`suspend`, `resume`) |
 | pi-subagents | The completion notification renders a failed agent's error text instead of the "No output." placeholder — a failure's reason was otherwise reachable only through `get_subagent_result` | `src/index.ts` (`subagent-notification` renderer), guarded by `test/notification-error-rendering.test.ts` |
+| pi-subagents | The Agent result renderer shows the text of a call the host rejected before the tool ran (pi-pi blocks a spawn naming an unregistered agent — the reason arrives with an empty but truthy `details`, which fell through to the abort branch), and it names the turn limit only when the run actually had one | `src/index.ts` (Agent `renderResult`), guarded by `test/blocked-call-rendering.test.ts` |
 | pi-subagents | Extension-only mode drops the `model`/`thinking` guidance from the Agent tool description and marks both parameters inert — the host extension pins them per agent type, and an agent config's model outranks the tool call's argument, so advertising them describes a choice the caller does not have | `src/index.ts` (`MODEL_CHOICE_GUIDELINES`, `applyExtensionOnlyToolSurface`), guarded by `test/tool-description-mode.test.ts` "drops the model and thinking guidance" |
 | pi-subagents | `resume` takes an `emitLifecycle` option and is exposed on the published manager handle, so pi-pi can re-point a worker that died on a rate-limited provider and resume it in place — keeping the transcript it had already built — with the resumed run reporting completion the way a spawned one does. It also installs its own promise and abort controller, since the ones left by the finished run are already settled and no longer reach the session | `src/agent-manager.ts` (`resume`, `runResume`), `src/index.ts` (manager handle), guarded by `test/agent-manager.test.ts` "reports a resumed run through onComplete" and "its own promise and a live abort" |
 | pi-subagents | `listAgents`/`abortAll` on the published manager handle — pi-pi's fleet view, ACP state feed and "stop all workers" call them there, and without them they see no agents and stop nothing | `src/index.ts` (manager handle) |
