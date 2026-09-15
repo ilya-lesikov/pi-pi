@@ -7,6 +7,7 @@ import { GLOBAL_CONFIG_PATH, mergeConfigLayers, readRawConfig, type NormalizedPi
 import { isCopilotTierActive, loadFlantSettings, readClaudeOAuthToken, readGatewayApiKey, resolveAgentDir } from "./flant-infra.js";
 import { resolveModel } from "./model-registry.js";
 import { listLayeredSkills } from "./skills-manifest.js";
+import { readProviderRetry } from "./provider-retry.js";
 import type { Orchestrator } from "./orchestrator.js";
 
 type Severity = "pass" | "warning" | "failure";
@@ -150,6 +151,11 @@ export async function runDoctor(orchestrator: Orchestrator, ctx: any): Promise<v
   add(subagentsReady ? "pass" : "warning", "pi-subagents worker manager registered");
   const lspReady = !!(globalThis as any)[Symbol.for("pi-lsp:api")];
   add(lspReady ? "pass" : "warning", "pi-lsp API registered");
+  const retry = readProviderRetry();
+  add(
+    (retry.maxRetries ?? 0) > 3 ? "pass" : "warning",
+    `Provider retries: ${retry.maxRetries ?? "pi's default"}, backoff ceiling ${retry.maxRetryDelayMs ?? "pi's default"}`,
+  );
   for (const other of foreignPiPiPackages()) {
     add("warning", `Settings declare another pi-pi copy at ${other} — workers load that one, not this checkout`);
   }
