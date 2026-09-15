@@ -24,6 +24,7 @@ import { installConsoleGuard } from "./console-guard.js";
 import { demoteUnusableSubscription, handleMainAuthFailure, handleMainRateLimit, handleSubagentAuthFailure, handleSubagentRateLimit, isAuthError, isPolicyBlockError, isRateLimitError } from "./rate-limit-fallback.js";
 import { adjudicateCheckIn, adjudicateContinuation } from "./continuation-adjudicator.js";
 import { retrySubagentOnNewRouting } from "./subagent-retry.js";
+import { ensureProviderRetrySettings } from "./provider-retry.js";
 import { loadFlantSettings, noteSubscriptionCredentialAccepted, refreshCopilotOAuthToken, refreshSubProvider, reviveSubscriptionCredential, setModelRegistry, syncProviderTiers } from "./flant-infra.js";
 import type { Orchestrator } from "./orchestrator.js";
 
@@ -491,6 +492,10 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     };
     (globalThis as any)[Symbol.for("pi-pi:orchestrator-cwd")] = ctx.cwd;
     initSessionLogger(`${ctx.cwd}/.pp`, "info");
+    // pi gives up on a turn after a handful of provider retries, and a burst of
+    // connection errors outlasts them. The ceiling lives in pi's settings, out
+    // of reach of any extension API, so it is raised where the user has set none.
+    ensureProviderRetrySettings();
     setModelRegistry((ctx as any).modelRegistry);
     const available = (ctx as any).modelRegistry?.getAvailable?.();
     if (Array.isArray(available)) updateRegistryFromAvailableModels(available.flatMap((model: any) => model?.provider && model?.id ? [`${model.provider}/${model.id}`] : []));
