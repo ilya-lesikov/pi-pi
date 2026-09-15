@@ -93,7 +93,7 @@ export async function openSettingsMenu(
           "on_list_complete: cleared automatically after all tasks are done. " +
           "on_task_complete: each task cleared shortly after it completes. " +
           `Clearing lags ~${clearDelayTurns} turns.`,
-        currentValue: cfg.autoClearCompleted ?? "on_list_complete",
+        currentValue: cfg.autoClearCompleted ?? "on_task_complete",
         values: ["never", "on_list_complete", "on_task_complete"],
       },
     ];

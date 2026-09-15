@@ -67,6 +67,15 @@ export class AutoClearManager {
     let cleared = false;
 
     if (mode === "on_task_complete") {
+      // A task completed before this process started — carried in from an earlier
+      // session, or from before the mode was switched — has no countdown of its
+      // own, and without one it would sit in the list forever. Adopting it here
+      // starts the same linger every freshly completed task gets.
+      for (const task of this.getStore().list()) {
+        if (task.status === "completed" && !this.completedAtTurn.has(task.id)) {
+          this.completedAtTurn.set(task.id, currentTurn);
+        }
+      }
       for (const [taskId, turn] of this.completedAtTurn) {
         const task = this.getStore().get(taskId);
         if (!task || task.status !== "completed") {

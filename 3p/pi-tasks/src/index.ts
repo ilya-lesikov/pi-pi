@@ -220,7 +220,7 @@ export default function (pi: ExtensionAPI) {
     return prompt;
   }
 
-  const autoClear = new AutoClearManager(() => store, () => cfg.autoClearCompleted ?? "on_list_complete", AUTO_CLEAR_DELAY);
+  const autoClear = new AutoClearManager(() => store, () => cfg.autoClearCompleted ?? "on_task_complete", AUTO_CLEAR_DELAY);
 
   // ── Subagent completion listener ──
   // Listens for subagent lifecycle events to update task status and optionally cascade.

@@ -36,6 +36,30 @@ describe("auto-clear: on_task_complete mode", () => {
     expect(store.list()).toHaveLength(0);
   });
 
+  it("ages out a task completed before this process started", () => {
+    // A store carried in from an earlier session: completed, but never tracked,
+    // so nothing here ever started its countdown.
+    store.create("Old", "Desc");
+    store.update("1", { status: "completed" });
+
+    manager.onTurnStart(10);
+    expect(store.get("1")).toBeDefined();
+
+    manager.onTurnStart(14);
+    expect(store.get("1")).toBeUndefined();
+  });
+
+  it("leaves an open task alone however old it is", () => {
+    store.create("Still open", "Desc");
+    store.create("Done", "Desc");
+    store.update("2", { status: "completed" });
+
+    for (let turn = 1; turn <= 40; turn++) manager.onTurnStart(turn);
+
+    expect(store.get("1")).toBeDefined();
+    expect(store.get("2")).toBeUndefined();
+  });
+
   it("clears each task independently based on its own completion turn", () => {
     store.create("Task A", "Desc");
     store.create("Task B", "Desc");
