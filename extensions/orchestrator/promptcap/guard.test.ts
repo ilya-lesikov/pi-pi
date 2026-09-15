@@ -145,7 +145,7 @@ describe("PromptGuard", () => {
   });
 
   it("forgets its folds on reset, so a new session starts whole", () => {
-    const guard = new PromptGuard({ settings: () => settings({ maxPromptTokens: 100 }) });
+    const guard = new PromptGuard({ settings: () => settings({ maxPromptTokens: 1_000 }) });
     guard.apply(conversation(10, 8000), ctx(), []);
     guard.reset();
 

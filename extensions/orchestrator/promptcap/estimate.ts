@@ -6,6 +6,16 @@ type AgentMessage = Record<string, any>;
 // while its UTF-8 length is roughly double.
 const BYTES_PER_TOKEN = 4;
 
+// What a tool call costs on top of its name and arguments: the JSON block that
+// carries it, and the result block that answers it.
+//
+// It is counted per call rather than left to the learned ratio because it does
+// not scale with the conversation's bytes. A ratio asked to absorb it stops
+// measuring token density and starts tracking the calls-to-bytes proportion —
+// in a session of thousands of small calls it climbs without bound, and since
+// the floor is scaled by that ratio, the ceiling climbs with it.
+const TOOL_CALL_ENVELOPE_BYTES = 126;
+
 // How far the learned ratio moves towards each new reading. One reading
 // describes one prompt, and a turn that happens to be all YAML or all prose
 // would otherwise swing the estimate for every turn after it.
@@ -97,7 +107,9 @@ function messageBytes(message: AgentMessage): number {
   if (!message || typeof message !== "object") return 0;
   const role = (message as any).role;
   if (role === "toolResult") {
-    let size = byteLength((message as any).toolName ?? "");
+    // The call id is sent back to name the call being answered, so it is paid
+    // for twice over a call's life.
+    let size = byteLength((message as any).toolName ?? "") + byteLength((message as any).toolCallId ?? "");
     for (const part of (message as any).content ?? []) size += partBytes(part);
     return size;
   }
@@ -141,6 +153,11 @@ export function danglingSignatureBytes(messages: AgentMessage[]): number {
   return size;
 }
 
+/** What one tool call costs: its own block, and the envelope carrying it. */
+export function toolCallBytes(part: any): number {
+  return byteLength(part?.name ?? "") + byteLength(part?.id ?? "") + jsonBytes(part?.arguments) + TOOL_CALL_ENVELOPE_BYTES;
+}
+
 function partBytes(part: any): number {
   if (!part || typeof part !== "object") return 0;
   switch (part.type) {
@@ -149,7 +166,7 @@ function partBytes(part: any): number {
     case "thinking":
       return thinkingBytes(part);
     case "toolCall":
-      return byteLength(part.name ?? "") + jsonBytes(part.arguments);
+      return toolCallBytes(part);
     case "image":
       return (part.data ?? "").length;
     default:

@@ -1,4 +1,4 @@
-import { byteLength, messagesBytes, BYTES_PER_TOKEN } from "./estimate.js";
+import { byteLength, messagesBytes, toolCallBytes, BYTES_PER_TOKEN } from "./estimate.js";
 
 export type AgentMessage = Record<string, any>;
 
@@ -20,13 +20,62 @@ export enum Tier {
    * saving over a bare name is not worth trading a structural invariant for.
    */
   Breadcrumb = 2,
+  /**
+   * Gone: the call and the result answering it are both removed, and a run of
+   * them leaves one line naming what went.
+   *
+   * This is the only tier that reclaims what a breadcrumb still costs. A
+   * breadcrumb keeps the call, and a call carries its id twice over its life —
+   * once on the call, once on the result that answers it — which is the larger
+   * part of what an old call weighs once its arguments and output are gone. In
+   * a session of thousands of calls that residue is most of the floor, and
+   * because the ceiling is set above the floor, a floor that cannot fall is a
+   * prompt that cannot stop growing.
+   *
+   * Removing one half alone is what the provider rejects, so both go together;
+   * a whole turn leaves at once and the alternation the provider expects is
+   * preserved.
+   */
+  Drop = 3,
 }
 
 // Caps one argument value in a digested call. The cap is per value rather than
 // over the serialized blob because JSON key order is arbitrary: cutting the
 // blob drops whichever keys sort last, which can mean losing the path or the
 // object name while keeping a file body.
-const ARG_LEAF_BYTES = 200;
+const ARG_LEAF_BYTES = 400;
+
+// What an argument carrying literal payload is capped at instead. A command or
+// a file body is something the model reproduces rather than looks up, and a cut
+// one is worse than an absent one: it reads as content, so it gets retyped —
+// a severed heredoc, a path ending mid-segment, a marker written into a file.
+// The wider cap buys the room to keep such a value whole.
+const ARG_CONTENT_BYTES = 2_000;
+
+// Argument names whose value is literal payload rather than a reference to
+// something the model could look up again.
+const CONTENT_ARG_KEYS = new Set(["command", "content", "oldText", "newText", "patch", "body"]);
+
+// How many of the newest calls are never dropped, however tight the budget.
+// Recent tool traffic is what the model is still working from, so it is trimmed
+// as before and left in place; only what it has finished with leaves entirely.
+const DROP_KEEP_RECENT = 150;
+
+// At most this many tool names are listed in the line standing for a dropped
+// run, so one long run cannot cost more than the calls it replaced.
+const DROP_NAMES_LISTED = 6;
+
+// Held back from each dropped call against the line that will stand for it.
+// The line is written after the budget has been met, so without a reserve a
+// fold could land on target and then overshoot it by what the lines cost.
+//
+// One line covers a whole run of adjacent turns, and only a turn carrying
+// nothing but calls is droppable, so prose cannot fragment a run into a line
+// per call: the total is bounded by how often prose interrupts the tool
+// traffic, not by how many calls were made. What is reserved here is therefore
+// a per-run cost charged once, where a run is what survives between two pieces
+// of prose.
+const DROP_LINE_RESERVE_BYTES = 64;
 
 // A list-valued argument is capped by element count before its bytes are, so
 // what reaches the model is still a list rather than a JSON document cut in
@@ -142,9 +191,16 @@ export function fold(
   for (const call of calls) {
     const remembered = state.tierOf(call.id);
     if (remembered === Tier.Verbatim) continue;
-    bytes -= applyTier(messages, call, remembered, protectedFrom);
+    // A dropped call is removed structurally in one pass once every tier is
+    // settled, so here it only has to stop counting towards the prompt.
+    bytes -= remembered >= Tier.Drop
+      ? dropSavings(messages, call) + stripReasoning(messages, call, protectedFrom)
+      : applyTier(messages, call, remembered, protectedFrom);
     call.tier = remembered;
   }
+  // Remembered drops are charged their lines here; newly promoted ones add
+  // theirs as they are chosen.
+  bytes += dropLineReserve(messages, calls.filter((call) => call.tier >= Tier.Drop));
 
   if (toTokens(bytes) > limits.ceiling) {
     // The low-water mark already clears the floor by construction — it is a
@@ -161,6 +217,26 @@ export function fold(
         state.promote(call.id, to);
       }
     }
+
+    const droppable = droppableCalls(messages, calls, protectedFrom);
+    const newlyDropped: Call[] = [];
+    for (const call of droppable) {
+      if (toTokens(bytes - dropLineReserve(messages, newlyDropped)) <= target) break;
+      if (call.tier >= Tier.Drop) continue;
+      bytes -= dropSavings(messages, call) + stripReasoning(messages, call, protectedFrom);
+      call.tier = Tier.Drop;
+      state.promote(call.id, Tier.Drop);
+      newlyDropped.push(call);
+    }
+    bytes += dropLineReserve(messages, newlyDropped);
+  }
+
+  const dropped = calls.filter((call) => call.tier >= Tier.Drop);
+  if (dropped.length > 0) {
+    // The reserve stood in for these lines while the budget was being met; what
+    // they actually cost replaces it now they exist.
+    bytes -= dropLineReserve(messages, dropped);
+    bytes += applyDrops(messages, dropped);
   }
 
   return {
@@ -168,6 +244,187 @@ export function fold(
     tokensBefore,
     folded: calls.filter((call) => call.tier !== Tier.Verbatim).length,
   };
+}
+
+/**
+ * Blanks the reasoning that produced a call, reporting the bytes it freed.
+ *
+ * The reasoning that produced a call is what the model needed to make it, not
+ * something it re-reads twenty calls later — so it goes at the same moment,
+ * except in the tail the provider requires intact. Emptying the text rather
+ * than removing the block keeps every later index valid; the provider adapter
+ * drops a thinking block whose text is blank.
+ */
+function stripReasoning(messages: AgentMessage[], call: Call, protectedFrom: number): number {
+  if (call.callMessage >= protectedFrom) return 0;
+  const content = messages[call.callMessage]?.content;
+  if (!Array.isArray(content)) return 0;
+  let saved = 0;
+  for (const block of content) {
+    if (block?.type !== "thinking" || block.redacted) continue;
+    if (!block.thinking && !block.thinkingSignature) continue;
+    saved += byteLength(block.thinking ?? "") + byteLength(block.thinkingSignature ?? "");
+    block.thinking = "";
+    // The signature is dropped with the text it certifies. The adapter already
+    // discards a block whose text is empty, so this changes no request; it is
+    // what keeps the estimate saying the same thing the wire does, and the
+    // signature is the larger half of what goes.
+    block.thinkingSignature = "";
+  }
+  return saved;
+}
+
+/**
+ * The oldest calls that can leave without stranding the turn they belong to.
+ *
+ * A turn goes whole or not at all. Dropping only some of an assistant message's
+ * calls leaves the message standing while the results answering them go, and a
+ * turn left standing with no results beside it ends up adjacent to another
+ * assistant turn — the shape the provider rejects. So a call is droppable only
+ * when every call in its message is droppable too and the message carries
+ * nothing else: text the model would lose, or reasoning in the tail that has to
+ * be replayed intact and so cannot be blanked.
+ */
+function droppableCalls(messages: AgentMessage[], calls: Call[], protectedFrom: number): Call[] {
+  const candidates = calls.slice(0, Math.max(0, calls.length - DROP_KEEP_RECENT));
+  const byMessage = new Map<number, Call[]>();
+  for (const call of candidates) {
+    const group = byMessage.get(call.callMessage);
+    if (group) group.push(call);
+    else byMessage.set(call.callMessage, [call]);
+  }
+
+  const droppable: Call[] = [];
+  for (const [index, group] of byMessage) {
+    const content = messages[index]?.content;
+    if (!Array.isArray(content)) continue;
+    let callParts = 0;
+    let carriesMore = false;
+    for (const part of content) {
+      if (part?.type === "toolCall") {
+        callParts++;
+      } else if (part?.type === "thinking") {
+        if (index >= protectedFrom && (part.thinking || part.thinkingSignature)) carriesMore = true;
+      } else {
+        carriesMore = true;
+      }
+    }
+    // A pinned call is kept out of `calls` entirely, so a message holding one
+    // fails this count and stays — which is what pinning is for.
+    if (carriesMore || callParts !== group.length) continue;
+    droppable.push(...group);
+  }
+  return droppable;
+}
+
+/** What removing a call and the result answering it would take off the prompt. */
+function dropSavings(messages: AgentMessage[], call: Call): number {
+  let saved = 0;
+  const part = callPart(messages, call);
+  if (part) saved += toolCallBytes(part);
+  const result = messages[call.resultMessage];
+  if (result) saved += messagesBytes([result]);
+  return saved;
+}
+
+/**
+ * What the lines standing for `dropped` will cost, charged once per run.
+ *
+ * Two dropped turns belong to the same run when nothing but the results they
+ * are losing lies between them, so a prefix of pure tool traffic collapses to a
+ * single line however many calls it held.
+ */
+function dropLineReserve(messages: AgentMessage[], dropped: Call[]): number {
+  const turns = [...new Set(dropped.map((call) => call.callMessage))].sort((a, b) => a - b);
+  let runs = 0;
+  let previous = -1;
+  for (const turn of turns) {
+    if (previous < 0 || !onlyResultsBetween(messages, previous, turn)) runs++;
+    previous = turn;
+  }
+  return runs * DROP_LINE_RESERVE_BYTES;
+}
+
+function onlyResultsBetween(messages: AgentMessage[], from: number, to: number): boolean {
+  for (let m = from + 1; m < to; m++) {
+    if (messages[m]?.role !== "toolResult") return false;
+  }
+  return true;
+}
+
+/**
+ * Removes dropped calls and their results, leaving one line per run naming what
+ * went, and reports what those lines cost.
+ *
+ * The line lands on the next surviving assistant message rather than in one of
+ * its own: an assistant turn and the results answering it leave together, so
+ * deleting them keeps the alternation the provider expects, while inserting a
+ * message between two assistant turns would break it.
+ */
+function applyDrops(messages: AgentMessage[], dropped: Call[]): number {
+  const ids = new Set(dropped.map((call) => call.id));
+  const kept: AgentMessage[] = [];
+  let tally = new Map<string, number>();
+  let cost = 0;
+
+  const flushInto = (message: AgentMessage): void => {
+    if (tally.size === 0) return;
+    const text = dropLine(tally);
+    (message.content as any[]).unshift({ type: "text", text });
+    cost += byteLength(text);
+    tally = new Map();
+  };
+
+  for (const message of messages) {
+    if (message?.role === "toolResult") {
+      if (!ids.has(message.toolCallId)) kept.push(message);
+      continue;
+    }
+    const content = message?.content;
+    if (!Array.isArray(content)) {
+      kept.push(message);
+      continue;
+    }
+    const survivors = content.filter((part: any) => {
+      if (part?.type !== "toolCall" || !ids.has(part.id)) return true;
+      tally.set(part.name ?? "", (tally.get(part.name ?? "") ?? 0) + 1);
+      return false;
+    });
+    // A turn whose calls have all gone is left holding nothing the model can
+    // read: its reasoning was blanked when the calls were folded, and a block
+    // with neither text nor signature is already discarded by the adapter.
+    // Keeping it would leave two assistant turns adjacent with no result
+    // between them, which is the shape the provider rejects.
+    const speaks = survivors.some((part: any) => part?.type !== "thinking" || part.thinking || part.thinkingSignature);
+    if (!speaks) continue;
+    message.content = survivors;
+    if (message.role === "assistant") flushInto(message);
+    kept.push(message);
+  }
+
+  // A run reaching the end of the conversation has no later assistant turn to
+  // land on, so it goes on the last one there is.
+  if (tally.size > 0) {
+    for (let m = kept.length - 1; m >= 0; m--) {
+      if (kept[m]?.role !== "assistant" || !Array.isArray(kept[m].content)) continue;
+      flushInto(kept[m]);
+      break;
+    }
+  }
+
+  messages.length = 0;
+  messages.push(...kept);
+  return cost;
+}
+
+/** Names what a run of dropped calls was, commonest tool first. */
+function dropLine(tally: Map<string, number>): string {
+  const ranked = [...tally.entries()].sort((a, b) => b[1] - a[1]);
+  const total = ranked.reduce((sum, [, count]) => sum + count, 0);
+  const listed = ranked.slice(0, DROP_NAMES_LISTED).map(([name, count]) => `${name} \u00d7${count}`);
+  const rest = ranked.length - listed.length;
+  if (rest > 0) listed.push(`+${rest} more`);
+  return `[dropped ${total} earlier calls: ${listed.join(", ")}]`;
 }
 
 /**
@@ -215,6 +472,10 @@ function indexCalls(messages: AgentMessage[]): Call[] {
     calls.push(call);
   }
 
+  // Ordered by where the call was made, not by when its result arrived: calls
+  // issued together are answered in whatever order they finish, and folding
+  // oldest-first has to mean oldest as the conversation reads.
+  calls.sort((a, b) => a.callMessage - b.callMessage || a.callPart - b.callPart);
   return dropPinned(messages, calls);
 }
 
@@ -244,7 +505,14 @@ function lastUserMessageIndex(messages: AgentMessage[]): number {
   return messages.length;
 }
 
-/** What full folding would still be able to remove from here. */
+/**
+ * What full folding would still be able to remove from here.
+ *
+ * Drop is part of "full", so a call old enough to leave counts for everything it
+ * weighs rather than for the breadcrumb it would otherwise be stuck at. This is
+ * what keeps the floor — and with it the ceiling standing above the floor —
+ * from rising with every call a long session makes.
+ */
 function foldableBytes(messages: AgentMessage[], calls: Call[], protectedFrom: number): number {
   let savings = 0;
   // Parallel calls share one assistant message, and its reasoning goes with
@@ -252,20 +520,30 @@ function foldableBytes(messages: AgentMessage[], calls: Call[], protectedFrom: n
   // overstate what is left to remove and put the floor below where folding can
   // actually land.
   const countedThinking = new Set<number>();
+  const droppable = new Set(droppableCalls(messages, calls, protectedFrom).map((call) => call.id));
+  const droppedHere: Call[] = [];
   for (const call of calls) {
-    if (call.tier >= Tier.Breadcrumb) continue;
-    const part = callPart(messages, call);
-    if (part) savings += jsonBytesOf(part.arguments) - jsonBytesOf({});
+    if (call.tier >= Tier.Drop) continue;
     if (call.callMessage < protectedFrom && !countedThinking.has(call.callMessage)) {
       countedThinking.add(call.callMessage);
       savings += thinkingBytes(messages[call.callMessage]);
     }
+    if (droppable.has(call.id)) {
+      savings += dropSavings(messages, call);
+      droppedHere.push(call);
+      continue;
+    }
+    if (call.tier >= Tier.Breadcrumb) continue;
+    const part = callPart(messages, call);
+    if (part) savings += jsonBytesOf(part.arguments) - jsonBytesOf({});
     const result = messages[call.resultMessage];
     if (!result) continue;
-    const breadcrumb = byteLength(result.toolName ?? "") + byteLength(collapseResult(call, false, Tier.Breadcrumb)[0].text);
+    const breadcrumb = byteLength(result.toolName ?? "") + byteLength(result.toolCallId ?? "")
+      + byteLength(collapseResult(call, false, Tier.Breadcrumb)[0].text);
     savings += Math.max(0, messagesBytes([result]) - breadcrumb);
   }
-  return savings;
+  // What full folding leaves behind includes the lines standing for what left.
+  return Math.max(0, savings - dropLineReserve(messages, droppedHere));
 }
 
 /**
@@ -298,31 +576,11 @@ function applyTier(messages: AgentMessage[], call: Call, to: Tier, protectedFrom
   const part = callPart(messages, call);
   if (part) {
     const before = jsonBytesOf(part.arguments);
-    part.arguments = to >= Tier.Breadcrumb ? {} : trimArgs(part.arguments);
+    part.arguments = to >= Tier.Breadcrumb ? {} : trimArgs(part.arguments, call.id);
     saved += before - jsonBytesOf(part.arguments);
   }
 
-  // The reasoning that produced a call is what the model needed to make it, not
-  // something it re-reads twenty calls later — so it goes at the same moment,
-  // except in the tail the provider requires intact. Emptying the text rather
-  // than removing the block keeps every later index valid; the provider adapter
-  // drops a thinking block whose text is blank.
-  if (call.callMessage < protectedFrom) {
-    const content = messages[call.callMessage]?.content;
-    if (Array.isArray(content)) {
-      for (const block of content) {
-        if (block?.type !== "thinking" || block.redacted) continue;
-        if (!block.thinking && !block.thinkingSignature) continue;
-        saved += byteLength(block.thinking ?? "") + byteLength(block.thinkingSignature ?? "");
-        block.thinking = "";
-        // The signature is dropped with the text it certifies. The adapter
-        // already discards a block whose text is empty, so this changes no
-        // request; it is what keeps the estimate saying the same thing the
-        // wire does, and the signature is the larger half of what goes.
-        block.thinkingSignature = "";
-      }
-    }
-  }
+  saved += stripReasoning(messages, call, protectedFrom);
 
   const result = messages[call.resultMessage];
   if (result) {
@@ -381,20 +639,25 @@ function clampEnds(text: string, id: string): string {
 }
 
 /** Caps each argument value, leaving every key in place. */
-function trimArgs(args: unknown): Record<string, unknown> {
+function trimArgs(args: unknown, callId: string): Record<string, unknown> {
   if (!args || typeof args !== "object" || Array.isArray(args)) return (args ?? {}) as Record<string, unknown>;
   const trimmed: Record<string, unknown> = {};
   for (const [key, raw] of Object.entries(args as Record<string, unknown>)) {
     const value = Array.isArray(raw) && raw.length > ARG_LIST_KEEP
-      ? [...raw.slice(0, ARG_LIST_KEEP), `…[+${raw.length - ARG_LIST_KEEP}]`]
+      ? [...raw.slice(0, ARG_LIST_KEEP), `[dropped ${raw.length - ARG_LIST_KEEP} more; ${callId}]`]
       : raw;
     const encoded = typeof value === "string" ? value : jsonText(value);
     const size = byteLength(encoded);
-    if (size <= ARG_LEAF_BYTES) {
+    const cap = CONTENT_ARG_KEYS.has(key) ? ARG_CONTENT_BYTES : ARG_LEAF_BYTES;
+    if (size <= cap) {
       trimmed[key] = value;
       continue;
     }
-    trimmed[key] = `${cutBytes(encoded, ARG_LEAF_BYTES)}…[+${size - ARG_LEAF_BYTES}B]`;
+    // The notice names the call so the whole value can be asked for back, and
+    // is worded as a notice rather than as an ellipsis: what stood here was
+    // content, and a cut that still looks like content gets reproduced as if
+    // it were the whole of it.
+    trimmed[key] = `${cutBytes(encoded, cap)}[args cut: ${size - cap}B; ${callId}]`;
   }
   return trimmed;
 }

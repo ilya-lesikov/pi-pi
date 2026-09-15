@@ -32,6 +32,17 @@ const conversation = (n: number, size: number): AgentMessage[] => {
   return messages;
 };
 
+/** A conversation of `n` answered calls carrying no reasoning. */
+const plain = (n: number, size: number): AgentMessage[] => {
+  const messages: AgentMessage[] = [user("go")];
+  for (let i = 0; i < n; i++) {
+    const name = i % 3 === 0 ? "bash" : "read";
+    messages.push(call(`t${i}`, name, { path: `/f${i}` }));
+    messages.push(result(`t${i}`, name, "o".repeat(size)));
+  }
+  return messages;
+};
+
 const settings = (over: Partial<PromptcapSettings> = {}): PromptcapSettings => ({
   enabled: true,
   perModel: {},
@@ -61,14 +72,14 @@ describe("fold", () => {
   it("caps a digested call's arguments per value, keeping every key", () => {
     const messages = [user("go"), call("t0", "write", { path: "/a", body: "y".repeat(5000) }), result("t0", "write", "ok")];
     const state = new FoldState();
-    fold(messages, 0, { ceiling: 1000, lowWater: 200 }, state);
+    fold(messages, 0, { ceiling: 1000, lowWater: 600 }, state);
 
     expect(state.tierOf("t0")).toBe(Tier.Digest);
     const args = messages[1].content[0].arguments;
     expect(Object.keys(args).sort()).toEqual(["body", "path"]);
     expect(args.path).toBe("/a");
-    expect(byteLength(args.body)).toBeLessThan(300);
-    expect(args.body).toMatch(/…\[\+4800B\]$/);
+    expect(byteLength(args.body)).toBeLessThan(2100);
+    expect(args.body).toMatch(/\[args cut: 3000B; t0\]$/);
   });
 
   it("caps a list argument by element count before bytes", () => {
@@ -81,7 +92,7 @@ describe("fold", () => {
     fold(messages, 0, { ceiling: 1000, lowWater: 900 }, state);
 
     expect(state.tierOf("t0")).toBe(Tier.Digest);
-    expect(messages[1].content[0].arguments.files).toEqual(["a", "b", "c", "d", "e", "…[+2]"]);
+    expect(messages[1].content[0].arguments.files).toEqual(["a", "b", "c", "d", "e", "[dropped 2 more; t0]"]);
   });
 
   it("keeps both ends of a digested error", () => {
@@ -89,7 +100,7 @@ describe("fold", () => {
     const messages = [user("go"), call("t0", "bash", { cmd: "make" }), result("t0", "bash", failure, true)];
     const state = new FoldState();
 
-    fold(messages, 0, { ceiling: 420, lowWater: 390 }, state);
+    fold(messages, 0, { ceiling: 450, lowWater: 430 }, state);
 
     expect(state.tierOf("t0")).toBe(Tier.Digest);
     const digested = messages[2].content[0].text;
@@ -186,6 +197,114 @@ describe("fold", () => {
     const out = fold(messages, 0, { ceiling: 1, lowWater: 1 }, new FoldState());
 
     expect(out.tokens).toBe(floor);
+  });
+
+  it("drops the oldest calls outright, naming what went in one line", () => {
+    const messages = plain(200, 500);
+    const state = new FoldState();
+
+    fold(messages, 0, { ceiling: 100, lowWater: 50 }, state);
+
+    expect(state.tierOf("t0")).toBe(Tier.Drop);
+    expect(messages[1].content[0]).toEqual({ type: "text", text: "[dropped 50 earlier calls: read \u00d733, bash \u00d717]" });
+  });
+
+  it("keeps the newest calls whatever the budget, trimming them as before", () => {
+    const messages = plain(200, 500);
+    const state = new FoldState();
+
+    fold(messages, 0, { ceiling: 1, lowWater: 1 }, state);
+
+    expect(state.tierOf("t49")).toBe(Tier.Drop);
+    expect(state.tierOf("t50")).toBe(Tier.Breadcrumb);
+    expect(state.tierOf("t199")).toBe(Tier.Breadcrumb);
+  });
+
+  it("leaves neither half of a dropped call behind", () => {
+    const messages = plain(200, 500);
+    fold(messages, 0, { ceiling: 100, lowWater: 50 }, new FoldState());
+
+    const calls = new Set<string>();
+    const answers = new Set<string>();
+    for (const message of messages) {
+      if (message.role === "toolResult") answers.add(message.toolCallId);
+      for (const part of (message.content ?? [])) {
+        if (part?.type === "toolCall") calls.add(part.id);
+      }
+    }
+
+    expect(calls.has("t0")).toBe(false);
+    expect(answers.has("t0")).toBe(false);
+    expect(calls.has("t50")).toBe(true);
+    // Every surviving result still has the call it answers, which is the
+    // invariant that stopped anything below Drop from removing either half.
+    expect([...answers].every((id) => calls.has(id))).toBe(true);
+  });
+
+  it("never leaves two assistant turns adjacent when a turn is dropped", () => {
+    const messages = plain(200, 500);
+    fold(messages, 0, { ceiling: 100, lowWater: 50 }, new FoldState());
+
+    const roles = messages.map((m: AgentMessage) => m.role);
+    const adjacent = roles.filter((role, i) => i > 0 && role === "assistant" && roles[i - 1] === "assistant");
+    expect(adjacent).toEqual([]);
+  });
+
+  it("takes the reasoning with a call dropped on an earlier request", () => {
+    const state = new FoldState();
+    const first = conversation(200, 500);
+    first.push(user("next"));
+    fold(first, 0, { ceiling: 100, lowWater: 50 }, state);
+
+    // The host hands over a fresh copy of the conversation every request, so a
+    // call dropped earlier arrives whole and has to be removed again — this
+    // time without the tier ladder having run over it on the way.
+    const second = conversation(200, 500);
+    second.push(user("next"));
+    fold(second, 0, { ceiling: 1e9, lowWater: 1e9 }, state);
+
+    const parts = second.flatMap((m: AgentMessage) => m.content ?? []);
+    expect(parts.filter((p: any) => p?.type === "toolCall" && p.id === "t0")).toEqual([]);
+    expect(parts.filter((p: any) => p?.type === "thinking" && p.thinking)).toEqual([]);
+  });
+
+  it("keeps a turn whose call it drops but whose prose it cannot", () => {
+    // An assistant turn that both said something and called something: dropping
+    // the call alone would leave the turn standing with its result gone, next
+    // to the turn after it.
+    const messages: AgentMessage[] = [user("go")];
+    for (let i = 0; i < 200; i++) {
+      const content: any[] = [{ type: "toolCall", id: `t${i}`, name: "read", arguments: { path: `/f${i}` } }];
+      if (i % 20 === 0) content.unshift({ type: "text", text: `note ${i}` });
+      messages.push({ role: "assistant", content });
+      messages.push(result(`t${i}`, "read", "o".repeat(500)));
+    }
+
+    fold(messages, 0, { ceiling: 100, lowWater: 50 }, new FoldState());
+
+    const roles = messages.map((m: AgentMessage) => m.role);
+    expect(roles.filter((role, i) => i > 0 && role === "assistant" && roles[i - 1] === "assistant")).toEqual([]);
+
+    // The prose survives, and so does the call that shared its turn.
+    const parts = messages.flatMap((m: AgentMessage) => m.content ?? []);
+    expect(parts.some((p: any) => p?.type === "text" && p.text === "note 0")).toBe(true);
+    expect(parts.some((p: any) => p?.type === "toolCall" && p.id === "t0")).toBe(true);
+    // Its neighbours, carrying nothing but calls, still went.
+    expect(parts.some((p: any) => p?.type === "toolCall" && p.id === "t1")).toBe(false);
+
+    const answered = new Set(parts.filter((p: any) => p?.type === "toolCall").map((p: any) => p.id));
+    for (const m of messages) {
+      if (m.role === "toolResult") expect(answered.has(m.toolCallId)).toBe(true);
+    }
+  });
+
+  it("stops the floor climbing with the number of calls made", () => {
+    const shorter = incompressibleTokens(plain(200, 500), 0, 1);
+    const longer = incompressibleTokens(plain(400, 500), 0, 1);
+
+    // Twice the calls, the same floor: what the conversation has finished with
+    // can leave, so only the recent history it is still working from is fixed.
+    expect(longer).toBeLessThan(shorter * 1.1);
   });
 
   it("scales the estimate by the calibration ratio", () => {

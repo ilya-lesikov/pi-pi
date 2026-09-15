@@ -33,11 +33,18 @@ const RECALL_LIMIT = 8000;
 export const OMISSION_INSTRUCTION = [
   "<folded_history>",
   "Older tool output in this conversation may appear as a notice of the form [omitted: <size>B; <call_id>],",
-  "and older tool arguments may be cut short with a …[+NB] marker. The conversation outgrew the model's",
-  "context window, so the prompt you see was folded on its way here. The session itself is complete.",
+  "and older tool arguments may be cut short with an [args cut: <size>B; <call_id>] notice. Older calls the",
+  "conversation has finished with are removed outright, leaving one [dropped N earlier calls: name \u00d7count, \u2026]",
+  "line in their place. The conversation outgrew the model's context window, so the prompt you see was folded",
+  "on its way here. The session itself is complete.",
   "",
-  "To read what was folded away, call recall_tool_output with that call_id — page a long one with offset and",
-  "limit, or narrow it with pattern. recall_tool_args does the same for a call's arguments.",
+  "A cut argument is a notice, not content. Never reproduce one \u2014 retyping a cut command, path or file body",
+  "runs a severed version of it, and writes the notice itself into whatever it addressed. Recall the argument",
+  "and use what comes back.",
+  "",
+  "To read what was folded away, call recall_tool_output with that call_id \u2014 page a long one with offset and",
+  "limit, or narrow it with pattern. recall_tool_args does the same for a call's arguments. Both reach a",
+  "dropped call too: the session store keeps every byte, whatever the prompt shows.",
   "",
   "A recalled result is what the tool returned at the time, not the state of the world now. When you need to",
   "know how things are now, call the tool again, narrowed so its answer is smaller than the one that had to",
@@ -198,7 +205,7 @@ export function registerRecallTools(pi: ExtensionAPI, source?: SessionSource): v
     name: "recall_tool_args",
     label: "Recall arguments",
     description:
-      "Read the full arguments of an earlier tool call whose arguments were shortened with a …[+NB] marker. " +
+      "Read the full arguments of an earlier tool call whose arguments were shortened with an [args cut: …] notice. " +
       "Takes the call_id shown in the [omitted: …] notice of the same call.",
     parameters: Type.Object({
       call_id: Type.String({ description: "The call id printed in the [omitted: …] notice." }),
