@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   __resetWebToolStateForTest,
   callExa,
+  INITIAL_COOLDOWN_MS,
   isExaRateLimited,
   normalizeTavilyExtract,
   normalizeTavilySearch,
@@ -267,7 +268,7 @@ describe("all tiers exhausted", () => {
 });
 
 describe("cooldown re-probe", () => {
-  it("skips the higher tier within the cooldown window and re-probes after it elapses", async () => {
+  it("skips the higher tier within the initial cooldown and re-probes once it elapses", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     let exaHealthy = false;
@@ -285,14 +286,154 @@ describe("cooldown re-probe", () => {
     expect(fn.mock.calls.filter((c: any[]) => c[0] === EXA_URL).length).toBe(1);
 
     exaHealthy = true;
-    vi.setSystemTime(PROBE_COOLDOWN_MS - 1);
+    vi.setSystemTime(INITIAL_COOLDOWN_MS - 1);
     res = await pi.tools.get("web_search").execute("id", { query: "q2" });
     expect(res.content[0].text).toContain("tavily result");
     expect(fn.mock.calls.filter((c: any[]) => c[0] === EXA_URL).length).toBe(1);
 
-    vi.setSystemTime(PROBE_COOLDOWN_MS);
+    vi.setSystemTime(INITIAL_COOLDOWN_MS);
     res = await pi.tools.get("web_search").execute("id", { query: "q3" });
     expect(res.content[0].text).toContain("exa is back");
     expect(fn.mock.calls.filter((c: any[]) => c[0] === EXA_URL).length).toBe(2);
+  });
+
+  it("doubles the lockout for each consecutive rate limit and resets it on success", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    let exaHealthy = false;
+    const fn = routeFetch((url) => {
+      if (url === EXA_URL) return { body: exaSseText(exaHealthy ? "exa is back" : EXA_LIMIT_TEXT) };
+      if (url === TAVILY_SEARCH)
+        return { body: JSON.stringify({ results: [{ url: "http://z", content: "tavily result" }] }) };
+      throw new Error(`unexpected url ${url}`);
+    });
+    const pi = makePi();
+    registerExaTools(pi as any);
+    const exaCalls = () => fn.mock.calls.filter((c: any[]) => c[0] === EXA_URL).length;
+
+    await pi.tools.get("web_search").execute("id", { query: "q1" });
+    expect(exaCalls()).toBe(1);
+
+    vi.setSystemTime(INITIAL_COOLDOWN_MS);
+    await pi.tools.get("web_search").execute("id", { query: "q2" });
+    expect(exaCalls()).toBe(2);
+
+    vi.setSystemTime(INITIAL_COOLDOWN_MS * 2);
+    await pi.tools.get("web_search").execute("id", { query: "q3" });
+    expect(exaCalls()).toBe(2);
+
+    exaHealthy = true;
+    vi.setSystemTime(INITIAL_COOLDOWN_MS * 3);
+    let res = await pi.tools.get("web_search").execute("id", { query: "q4" });
+    expect(res.content[0].text).toContain("exa is back");
+    expect(exaCalls()).toBe(3);
+
+    exaHealthy = false;
+    vi.setSystemTime(INITIAL_COOLDOWN_MS * 4);
+    await pi.tools.get("web_search").execute("id", { query: "q5" });
+    expect(exaCalls()).toBe(4);
+
+    vi.setSystemTime(INITIAL_COOLDOWN_MS * 5);
+    await pi.tools.get("web_search").execute("id", { query: "q6" });
+    expect(exaCalls()).toBe(5);
+  });
+
+  it("lets only one caller re-probe an expired lockout", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const fn = routeFetch((url) => {
+      if (url === EXA_URL) return { body: exaSseText(EXA_LIMIT_TEXT) };
+      if (url === TAVILY_SEARCH)
+        return { body: JSON.stringify({ results: [{ url: "http://z", content: "tavily result" }] }) };
+      throw new Error(`unexpected url ${url}`);
+    });
+    const pi = makePi();
+    registerExaTools(pi as any);
+    const search = pi.tools.get("web_search");
+
+    await search.execute("id", { query: "q0" });
+    expect(fn.mock.calls.filter((c: any[]) => c[0] === EXA_URL).length).toBe(1);
+
+    vi.setSystemTime(INITIAL_COOLDOWN_MS);
+    await Promise.all([
+      search.execute("a", { query: "qa" }),
+      search.execute("b", { query: "qb" }),
+      search.execute("c", { query: "qc" }),
+    ]);
+    expect(fn.mock.calls.filter((c: any[]) => c[0] === EXA_URL).length).toBe(2);
+  });
+});
+
+describe("provider concurrency gate", () => {
+  it("keeps keyless Exa calls below the endpoint's concurrency ceiling", async () => {
+    let inflight = 0;
+    let peak = 0;
+    const release: Array<() => void> = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      if (url === EXA_URL) {
+        inflight++;
+        peak = Math.max(peak, inflight);
+        await new Promise<void>((resolve) => release.push(resolve));
+        inflight--;
+        return { ok: true, status: 200, text: async () => exaSseText("exa body") };
+      }
+      throw new Error(`unexpected url ${url}`);
+    }) as any);
+
+    const pi = makePi();
+    registerExaTools(pi as any);
+    const search = pi.tools.get("web_search");
+    const pending = Array.from({ length: 9 }, (_, i) => search.execute(String(i), { query: "q" }));
+
+    while (release.length < 9) {
+      const next = release.shift();
+      if (next) next();
+      await Promise.resolve();
+      await Promise.resolve();
+      if (!next && release.length === 0) break;
+    }
+    while (release.length) release.shift()!();
+
+    const results = await Promise.all(pending);
+    expect(results.every((r: any) => r.content[0].text === "exa body")).toBe(true);
+    expect(peak).toBe(3);
+  });
+});
+
+describe("unavailable diagnostics", () => {
+  it("names the failing provider and reason when a tier fails for a non-rate-limit reason", async () => {
+    routeFetch((url) => {
+      if (url === EXA_URL) return { body: exaSseText(EXA_LIMIT_TEXT) };
+      if (url === TAVILY_SEARCH) return { ok: false, status: 503, body: "upstream down" };
+      throw new Error(`unexpected url ${url}`);
+    });
+    const pi = makePi();
+    registerExaTools(pi as any);
+    const res = await pi.tools.get("web_search").execute("id", { query: "q" });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain("web tools temporarily unavailable");
+    expect(res.content[0].text).toContain("tavily: Tavily HTTP 503");
+  });
+
+  it("reports how long each locked-out tier has left instead of a bare string", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    routeFetch((url) => {
+      if (url === EXA_URL) return { body: exaSseText(EXA_LIMIT_TEXT) };
+      if (url === TAVILY_SEARCH) return { ok: false, status: 429, body: "limited" };
+      throw new Error(`unexpected url ${url}`);
+    });
+    const pi = makePi();
+    registerExaTools(pi as any);
+    const search = pi.tools.get("web_search");
+
+    expect((await search.execute("id", { query: "q1" })).content[0].text).toBe(
+      "web tools temporarily unavailable",
+    );
+
+    vi.setSystemTime(10_000);
+    const res = await search.execute("id", { query: "q2" });
+    expect(res.content[0].text).toContain("exa cooling down 20s");
+    expect(res.content[0].text).toContain("tavily cooling down 20s");
   });
 });

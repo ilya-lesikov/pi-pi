@@ -1,35 +1,129 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
+import { getLogger } from "./log.js";
 
 const EXA_MCP_URL = "https://mcp.exa.ai/mcp";
 const TAVILY_SEARCH_URL = "https://api.tavily.com/search";
 const TAVILY_EXTRACT_URL = "https://api.tavily.com/extract";
 const JINA_READER_URL = "https://r.jina.ai/";
 
+/** Ceiling for the per-provider lockout, reached only after repeated limits. */
 export const PROBE_COOLDOWN_MS = 10 * 60 * 1000;
+
+/** First lockout after a single rate limit; doubles per consecutive limit. */
+export const INITIAL_COOLDOWN_MS = 30 * 1000;
 
 const EXA_RATE_LIMIT_MARKER = "hit Exa's free MCP rate limit";
 
 type Provider = "exa" | "tavily" | "jina";
 
-let limitedAt: Partial<Record<Provider, number>> = {};
+interface ProviderState {
+  limitedAt?: number;
+  strikes: number;
+  probing: boolean;
+  inflight: number;
+  waiters: Array<() => void>;
+}
+
+let states: Partial<Record<Provider, ProviderState>> = {};
+
+function stateOf(provider: Provider): ProviderState {
+  let state = states[provider];
+  if (!state) {
+    state = { strikes: 0, probing: false, inflight: 0, waiters: [] };
+    states[provider] = state;
+  }
+  return state;
+}
 
 export function __resetWebToolStateForTest(): void {
-  limitedAt = {};
+  states = {};
 }
 
 export function isExaRateLimited(text: string): boolean {
   return text.includes(EXA_RATE_LIMIT_MARKER);
 }
 
-function markLimited(provider: Provider, now: number): void {
-  limitedAt[provider] = now;
+// The keyless endpoints reject well before these ceilings; pi-pi fans research
+// out to several in-process workers that share this module, so calls are queued
+// rather than allowed to collide and spend the whole tier on rate-limit errors.
+function concurrencyLimit(provider: Provider): number {
+  if (provider === "exa") return process.env.EXA_API_KEY ? 8 : 3;
+  if (provider === "tavily") return process.env.TAVILY_API_KEY ? 8 : 4;
+  return 4;
 }
 
-function shouldTry(provider: Provider, now: number): boolean {
-  const at = limitedAt[provider];
-  if (at == null) return true;
-  return now - at >= PROBE_COOLDOWN_MS;
+async function acquire(provider: Provider): Promise<void> {
+  const state = stateOf(provider);
+  if (state.inflight < concurrencyLimit(provider)) {
+    state.inflight++;
+    return;
+  }
+  await new Promise<void>((resolve) => state.waiters.push(resolve));
+}
+
+/** Hands the slot straight to the next waiter so in-flight never overshoots. */
+function release(provider: Provider): void {
+  const state = stateOf(provider);
+  const next = state.waiters.shift();
+  if (next) next();
+  else state.inflight--;
+}
+
+function cooldownMs(strikes: number): number {
+  if (strikes < 1) return 0;
+  return Math.min(INITIAL_COOLDOWN_MS * 2 ** (strikes - 1), PROBE_COOLDOWN_MS);
+}
+
+type Attempt = "skip" | "free" | "probe";
+
+/** Claims the single probe slot when a lockout expires, so concurrent callers
+ *  don't all re-trip the same limit and re-arm the cooldown for each other. */
+function claimAttempt(provider: Provider, now: number): Attempt {
+  const state = stateOf(provider);
+  if (state.limitedAt == null) return "free";
+  if (now - state.limitedAt < cooldownMs(state.strikes)) return "skip";
+  if (state.probing) return "skip";
+  state.probing = true;
+  return "probe";
+}
+
+function skipReason(provider: Provider, now: number): string {
+  const state = stateOf(provider);
+  if (state.probing) return `${provider} probe in flight`;
+  const left = Math.max(0, cooldownMs(state.strikes) - (now - (state.limitedAt ?? now)));
+  return `${provider} cooling down ${Math.ceil(left / 1000)}s`;
+}
+
+function noteSuccess(provider: Provider): void {
+  const state = stateOf(provider);
+  state.limitedAt = undefined;
+  state.strikes = 0;
+  state.probing = false;
+}
+
+function noteLimited(provider: Provider, now: number): void {
+  const state = stateOf(provider);
+  state.limitedAt = now;
+  state.strikes++;
+  state.probing = false;
+  getLogger().warn(
+    { s: "web", provider, strikes: state.strikes, cooldownMs: cooldownMs(state.strikes) },
+    "web provider rate limited",
+  );
+}
+
+/** A non-rate-limit failure never locks a healthy provider out; it only re-arms
+ *  the existing cooldown when it was the probe that failed. */
+function noteFailure(provider: Provider, attempt: Attempt, now: number, err: unknown): string {
+  const state = stateOf(provider);
+  if (attempt === "probe") {
+    state.probing = false;
+    state.limitedAt = now;
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  getLogger().warn({ s: "web", provider, err: message }, "web provider call failed");
+  return `${provider}: ${message}`;
 }
 
 function exaHeaders(): Record<string, string> {
@@ -186,6 +280,13 @@ export async function callJina(urls: string[]): Promise<string> {
 
 const UNAVAILABLE = "web tools temporarily unavailable";
 
+/** Every tier refused. Carries why, because a bare lockout string leaves the
+ *  caller unable to tell a rate limit from an outage. */
+function unavailable(causes: string[]): Error {
+  getLogger().warn({ s: "web", causes }, "web tools unavailable");
+  return new Error(causes.length ? `${UNAVAILABLE}: ${causes.join("; ")}` : UNAVAILABLE);
+}
+
 function ok(text: string) {
   return { content: [{ type: "text" as const, text }], details: {} };
 }
@@ -196,66 +297,102 @@ function fail(text: string) {
 
 async function runSearch(query: string, numResults: number): Promise<string> {
   const now = Date.now();
+  const causes: string[] = [];
 
-  if (shouldTry("exa", now)) {
+  const exa = claimAttempt("exa", now);
+  if (exa === "skip") causes.push(skipReason("exa", now));
+  else {
+    await acquire("exa");
     try {
       const result = await callExa("web_search_exa", { query, numResults });
-      if (!isExaRateLimited(result)) return result;
-      markLimited("exa", now);
+      if (!isExaRateLimited(result)) {
+        noteSuccess("exa");
+        return result;
+      }
+      noteLimited("exa", now);
     } catch (e) {
-      // Only a rate limit marks Exa limited (sticky 10-min lockout). Any other
-      // failure (network blip, 5xx, malformed SSE) just falls through to the
-      // next tier WITHOUT the sticky penalty.
-      if (e instanceof RateLimitError) markLimited("exa", now);
+      if (e instanceof RateLimitError) noteLimited("exa", now);
+      else causes.push(noteFailure("exa", exa, now, e));
+    } finally {
+      release("exa");
     }
   }
 
-  if (shouldTry("tavily", now)) {
+  const tavily = claimAttempt("tavily", now);
+  if (tavily === "skip") causes.push(skipReason("tavily", now));
+  else {
+    await acquire("tavily");
     try {
-      return await callTavilySearch(query, numResults);
+      const result = await callTavilySearch(query, numResults);
+      noteSuccess("tavily");
+      return result;
     } catch (e) {
-      // Rate limit -> sticky; any other Tavily error just falls through to the
-      // terminal unavailable result rather than aborting the chain.
-      if (e instanceof RateLimitError) markLimited("tavily", now);
+      if (e instanceof RateLimitError) noteLimited("tavily", now);
+      else causes.push(noteFailure("tavily", tavily, now, e));
+    } finally {
+      release("tavily");
     }
   }
 
-  throw new Error(UNAVAILABLE);
+  throw unavailable(causes);
 }
 
 async function runFetch(urls: string[], maxCharacters: number): Promise<string> {
   const now = Date.now();
+  const causes: string[] = [];
 
-  if (shouldTry("exa", now)) {
+  const exa = claimAttempt("exa", now);
+  if (exa === "skip") causes.push(skipReason("exa", now));
+  else {
+    await acquire("exa");
     try {
       const result = await callExa("web_fetch_exa", { urls, maxCharacters });
-      if (!isExaRateLimited(result)) return result;
-      markLimited("exa", now);
+      if (!isExaRateLimited(result)) {
+        noteSuccess("exa");
+        return result;
+      }
+      noteLimited("exa", now);
     } catch (e) {
-      // Only a rate limit marks Exa limited; other errors fall through.
-      if (e instanceof RateLimitError) markLimited("exa", now);
+      if (e instanceof RateLimitError) noteLimited("exa", now);
+      else causes.push(noteFailure("exa", exa, now, e));
+    } finally {
+      release("exa");
     }
   }
 
-  if (shouldTry("tavily", now)) {
+  const tavily = claimAttempt("tavily", now);
+  if (tavily === "skip") causes.push(skipReason("tavily", now));
+  else {
+    await acquire("tavily");
     try {
-      return await callTavilyExtract(urls);
+      const result = await callTavilyExtract(urls);
+      noteSuccess("tavily");
+      return result;
     } catch (e) {
-      // Rate limit -> sticky; any other Tavily error falls through to Jina
-      // rather than aborting the Exa->Tavily->Jina chain.
-      if (e instanceof RateLimitError) markLimited("tavily", now);
+      if (e instanceof RateLimitError) noteLimited("tavily", now);
+      else causes.push(noteFailure("tavily", tavily, now, e));
+    } finally {
+      release("tavily");
     }
   }
 
-  if (shouldTry("jina", now)) {
+  const jina = claimAttempt("jina", now);
+  if (jina === "skip") causes.push(skipReason("jina", now));
+  else {
+    await acquire("jina");
     try {
-      return await callJina(urls);
+      const result = await callJina(urls);
+      noteSuccess("jina");
+      return result;
     } catch (e) {
-      if (e instanceof RateLimitError) markLimited("jina", now);
+      if (e instanceof RateLimitError) noteLimited("jina", now);
+      else causes.push(noteFailure("jina", jina, now, e));
+    } finally {
+      release("jina");
     }
   }
 
-  throw new Error(UNAVAILABLE);
+  throw unavailable(causes);
 }
 
 export function registerExaTools(pi: ExtensionAPI): void {
@@ -275,7 +412,7 @@ export function registerExaTools(pi: ExtensionAPI): void {
       try {
         return ok(await runSearch(params.query, params.numResults ?? 5));
       } catch (e: any) {
-        if (e?.message === UNAVAILABLE) return fail(UNAVAILABLE);
+        if (e?.message?.startsWith(UNAVAILABLE)) return fail(e.message);
         return fail(`web_search error: ${e.message}`);
       }
     },
@@ -296,7 +433,7 @@ export function registerExaTools(pi: ExtensionAPI): void {
       try {
         return ok(await runFetch(params.urls, params.maxCharacters ?? 3000));
       } catch (e: any) {
-        if (e?.message === UNAVAILABLE) return fail(UNAVAILABLE);
+        if (e?.message?.startsWith(UNAVAILABLE)) return fail(e.message);
         return fail(`web_fetch error: ${e.message}`);
       }
     },
