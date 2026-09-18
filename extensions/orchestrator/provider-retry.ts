@@ -75,11 +75,14 @@ export function ensureProviderRetrySettings(path = settingsPath()): RetrySetting
  * the same bytes sent again usually land. Unrecognized, it kills the turn where
  * a 500 would have been retried.
  *
- * A user's own abort cannot arrive here: pi marks that `aborted`, and the
- * predicate this joins runs only on `error`.
+ * pi refuses a spent quota before it considers any status, and that refusal
+ * outranks this: a gateway that reports both is out of money, not out of
+ * connection. A user's own abort cannot arrive here either — pi marks that
+ * `aborted`, and the predicate this joins runs only on `error`.
  */
 export function isUnrecognizedTransportError(message?: string): boolean {
-  return typeof message === "string" && /\b499\b/.test(message);
+  if (typeof message !== "string") return false;
+  return /\b499\b/.test(message) && !/GoUsageLimitError|FreeUsageLimitError|usage limit|available balance|insufficient_quota|out of budget|quota exceeded|billing/i.test(message);
 }
 
 const PATCHED = Symbol.for("pi-pi:retry-predicate-patched");
