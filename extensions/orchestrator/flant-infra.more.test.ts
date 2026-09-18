@@ -7,6 +7,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const refreshAnthropicTokenMock = vi.fn();
 vi.mock("@earendil-works/pi-ai/oauth", () => ({
   refreshAnthropicToken: (...args: unknown[]) => refreshAnthropicTokenMock(...args),
+  // Declared absent rather than omitted: pi-ai >= 0.84 publishes this subpath
+  // empty, and a key left out of the mock throws on access instead.
+  refreshGitHubCopilotToken: undefined,
 }));
 
 const updateRegistryMock = vi.fn();

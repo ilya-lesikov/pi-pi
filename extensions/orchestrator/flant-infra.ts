@@ -2,14 +2,29 @@ import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileS
 import { homedir } from "node:os";
 import { join } from "node:path";
 import lockfile from "proper-lockfile";
-import { refreshAnthropicToken, refreshGitHubCopilotToken } from "@earendil-works/pi-ai/oauth";
-import { getModel } from "@earendil-works/pi-ai";
+import * as piAiOAuth from "@earendil-works/pi-ai/oauth";
+import { getModel } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 import { getDefaultConfig, type PiPiConfig, readScopedFlantSettings, GLOBAL_CONFIG_PATH, writeConfigValue } from "./config.js";
 import { listRegisteredSpecs, updateRegistryFromAvailableModels, setTierEnabled, isSubscriptionFallbackActive } from "./model-registry.js";
 import { compareModelVersion } from "./model-version.js";
 import { getLogger } from "./log.js";
 import { buildUserAgent, injectBillingHeader, CC_IDENTITY } from "./billing-spoof.js";
+
+/**
+ * The token refreshers pi-ai used to export.
+ *
+ * pi >= 0.84 ships this subpath as an empty module — the binary bundles it that
+ * way and the package publishes `export {}` — so both are absent wherever pi-pi
+ * actually runs and every call site falls through to pi's own registry. They
+ * are still read through here rather than deleted because an older pi-ai on the
+ * same peer range does export them, and that path rotates and persists the
+ * credential itself.
+ */
+const oauth = piAiOAuth as unknown as {
+  refreshAnthropicToken?: (refreshToken: string) => Promise<{ refresh: string; access: string; expires: number }>;
+  refreshGitHubCopilotToken?: (refreshToken: string, enterpriseUrl?: string) => Promise<{ refresh: string; access: string; expires: number; enterpriseUrl?: string }>;
+};
 
 export interface OpenRouterModelData {
   name: string;
@@ -226,7 +241,7 @@ export async function refreshCopilotOAuthToken(): Promise<string | null> {
   if (expires > Date.now() + REFRESH_MARGIN_MS) return copilot.access;
   if (typeof copilot.refresh !== "string" || !copilot.refresh) return null;
 
-  if (typeof refreshGitHubCopilotToken !== "function") {
+  if (typeof oauth.refreshGitHubCopilotToken !== "function") {
     try {
       const entry = await refreshViaModelRegistry<CopilotOAuthCreds>(authPath, "github-copilot");
       if (entry) return entry.access as string;
@@ -240,7 +255,7 @@ export async function refreshCopilotOAuthToken(): Promise<string | null> {
   const enterpriseUrl = typeof copilot.enterpriseUrl === "string" ? copilot.enterpriseUrl : undefined;
   let refreshed: { refresh: string; access: string; expires: number; enterpriseUrl?: string };
   try {
-    refreshed = await refreshGitHubCopilotToken(copilot.refresh, enterpriseUrl);
+    refreshed = await oauth.refreshGitHubCopilotToken!(copilot.refresh, enterpriseUrl);
   } catch (err: any) {
     log.debug({ s: "flant", err: err?.message }, "copilot oauth token refresh failed");
     return null;
@@ -301,7 +316,7 @@ export async function refreshClaudeOAuthToken(): Promise<string | null> {
     return null;
   }
 
-  if (typeof refreshAnthropicToken !== "function") {
+  if (typeof oauth.refreshAnthropicToken !== "function") {
     try {
       const entry = await refreshViaModelRegistry<AnthropicOAuthCreds>(authPath, "anthropic");
       if (entry) {
@@ -317,7 +332,7 @@ export async function refreshClaudeOAuthToken(): Promise<string | null> {
 
   let refreshed: { refresh: string; access: string; expires: number };
   try {
-    refreshed = await refreshAnthropicToken(anthropic.refresh);
+    refreshed = await oauth.refreshAnthropicToken!(anthropic.refresh);
   } catch (err: any) {
     log.debug({ s: "flant", err: err?.message }, "claude oauth token refresh failed");
     return null;
@@ -501,7 +516,7 @@ export function noteSubscriptionCredentialAccepted(): void {
 // and pi's registry cannot stand in here, since it refuses to refresh a
 // credential it still considers unexpired.
 async function requestClaudeTokenRefresh(refreshToken: string): Promise<{ refresh: string; access: string; expires: number }> {
-  if (typeof refreshAnthropicToken === "function") return refreshAnthropicToken(refreshToken);
+  if (typeof oauth.refreshAnthropicToken === "function") return oauth.refreshAnthropicToken(refreshToken);
   const res = await fetch(ANTHROPIC_TOKEN_URL, {
     method: "POST",
     headers: { "content-type": "application/json", accept: "application/json" },

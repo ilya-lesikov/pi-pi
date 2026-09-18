@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { adjudicateCheckIn, adjudicateContinuation, buildAdjudicationContext, parseAdjudication, parseCheckInAdjudication } from "./continuation-adjudicator.js";
 
 const completeSimpleMock = vi.fn();
-vi.mock("@earendil-works/pi-ai", () => ({
+vi.mock("@earendil-works/pi-ai/compat", () => ({
   completeSimple: (...args: unknown[]) => completeSimpleMock(...args),
 }));
 
