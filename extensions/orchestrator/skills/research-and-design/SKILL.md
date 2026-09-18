@@ -1,6 +1,6 @@
 ---
 name: research-and-design
-description: Load BEFORE open-ended research, design work, architecture decisions, or writing an implementation plan.
+description: Load BEFORE open-ended research, design work, architecture decisions, or writing an implementation plan — work that produces something, not a design question asked in conversation.
 ---
 
 ## Clarify and investigate
@@ -19,7 +19,7 @@ description: Load BEFORE open-ended research, design work, architecture decision
 - If the task spans independent subsystems, triage that up front and decompose it rather than treating it as one blob.
 - Do not dismiss work as too simple to need design. Unexamined assumptions in simple work cause wasted effort.
 - When giving a judgment, take a position and state what evidence would change it. Do not hedge without landing anywhere or offer empty validation.
-- Before presenting a consequential recommendation, get an independent opinion from an advisor whose model family differs from yours. Escalate to more advisors for hard or high-stakes calls.
+- Before presenting a consequential recommendation you are about to act on or hand over as a deliverable, get an independent opinion from an advisor whose model family differs from yours. Escalate to more advisors for hard or high-stakes calls. An opinion the user asked you for is answered directly.
 - Before finalizing concrete, costly-to-reverse, or opinion-heavy choices—exact wording, structure, naming, default values, or interface signatures—show the actual proposed text or values and get explicit approval. Do not silently invent and bury them.
 
 ## Write plans when requested

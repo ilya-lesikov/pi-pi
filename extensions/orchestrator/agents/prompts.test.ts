@@ -133,11 +133,25 @@ describe("pre-1.0 principles", () => {
   });
 
   it("bans interim prose for every agent, main and worker", () => {
-    expect(principlesBlock()).toContain("Do not write prose while working");
+    expect(principlesBlock()).toContain("Do not write prose while using tools");
     expect(principlesBlock()).toContain("one message, at the end");
     for (const [, f] of workerFactories()) {
-      expect(f.prompt).toContain("Do not write prose while working");
+      expect(f.prompt).toContain("Do not write prose while using tools");
     }
+  });
+
+  // The ban targets narration between tool calls. Read as a ban on writing at
+  // all, it turns a question that needs no tool into a research task and then
+  // a report — so the answer, and the refusal to reach for a tool instead of
+  // giving it, are named where the ban is.
+  it("leaves answering outside the prose ban", () => {
+    expect(principlesBlock()).toContain("never reach for a tool to avoid answering");
+    expect(principlesBlock()).toContain("answering is not narration");
+  });
+
+  it("attaches the evidence rule to the claim rather than the request", () => {
+    expect(principlesBlock()).toContain("Evidence attaches to the claim, not to the request");
+    expect(principlesBlock()).toContain("smallest check that settles");
   });
 
   it("exempts the write points the phase gate requires, so the rules do not conflict", () => {

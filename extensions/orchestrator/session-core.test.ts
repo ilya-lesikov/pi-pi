@@ -59,6 +59,22 @@ async function emitForResult(pi: any, name: string, event: any, ctx: any): Promi
   return undefined;
 }
 
+/** The main prompt as a session renders it, with context injection off. */
+function genericPrompt(toolNames: string[]): string {
+  const orchestrator = new Orchestrator(makePi());
+  orchestrator.cwd = "/tmp/project";
+  orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+  orchestrator.config.contextInjection = {
+    globalAgents: false,
+    globalClaude: false,
+    ancestorAgents: false,
+    ancestorClaude: false,
+    projectAgents: false,
+    projectClaude: false,
+  };
+  return renderGenericPrompt(orchestrator, { model: { provider: "test", id: "model" }, ui: { notify: vi.fn() } }, toolNames);
+}
+
 describe("session-first core", () => {
   it("renders one generic prompt without workflow state or coding-only policy", () => {
     const orchestrator = new Orchestrator(makePi());
@@ -152,6 +168,36 @@ describe("session-first core", () => {
     expect(prompt).toContain("Never answer your own question");
   });
 
+  // The phases described every request as work to be proposed and validated,
+  // so a question that needed no tool collected a research pass and an
+  // approval round on its way to an answer that was known at the start.
+  it("routes a question that depends on nothing in front of it straight to an answer", () => {
+    const prompt = genericPrompt(["read", "ask_user"]);
+    expect(prompt).toContain("A question is not a request");
+    expect(prompt).toContain("answer it from what you know and stop");
+    expect(prompt).toContain("No tools, no phases");
+  });
+
+  // Whether to look is decided per sentence, not per request: the cost of a
+  // guess lands on the name, version or path inside it.
+  it("attaches probes to the facts that need them, with a budget", () => {
+    const prompt = genericPrompt(["read", "ask_user"]);
+    expect(prompt).toContain("Evidence attaches to sentences, not to requests");
+    expect(prompt).toContain("one probe per fact you would otherwise be guessing");
+    expect(prompt).toContain("none at all to confirm what you already know");
+  });
+
+  // Whether to ask is a separate axis from whether to look, and it was the one
+  // with no upper bound: nothing named the cost of an approval round that the
+  // request had already settled.
+  it("owes a proposal to the size of the decision, not to the request", () => {
+    const prompt = genericPrompt(["read", "ask_user"]);
+    expect(prompt).toContain("A proposal is owed when");
+    expect(prompt).toContain("that report is the proposal");
+    expect(prompt).toContain("never the count");
+    expect(prompt).toContain("Blocking on a decision you could have taken");
+  });
+
   it("forbids interim prose so only the final message is written", () => {
     const orchestrator = new Orchestrator(makePi());
     orchestrator.cwd = "/tmp/project";
@@ -168,7 +214,7 @@ describe("session-first core", () => {
       model: { provider: "test", id: "model" },
       ui: { notify: vi.fn() },
     }, ["read"]);
-    expect(prompt).toContain("Do not write prose while working");
+    expect(prompt).toContain("Do not write prose while using tools");
     expect(prompt).toContain("one message, at the end");
   });
 
