@@ -19,6 +19,33 @@ export function isSubscriptionRouted(modelId?: string, provider?: string): boole
   return modelId.startsWith(SUB_MODEL_PREFIX) || modelId.startsWith(`${SUB_PROVIDER}/`);
 }
 
+const COPILOT_PROVIDER = "github-copilot";
+
+/**
+ * Whether a usage unit is paid for by a flat rate rather than by the token.
+ *
+ * Copilot bills a seat, so the per-token dollars its models quote are as
+ * fictitious as the subscription's and are excluded from cost totals the same
+ * way. It is kept apart from {@link isSubscriptionRouted} because that answer
+ * also drives the personal Claude credential and its rate-limit fallback, which
+ * a Copilot turn has nothing to do with.
+ */
+function isFlatRateBilled(modelId?: string, provider?: string): boolean {
+  if (isSubscriptionRouted(modelId, provider)) return true;
+  if (provider === COPILOT_PROVIDER) return true;
+  return typeof modelId === "string" && modelId.startsWith(`${COPILOT_PROVIDER}/`);
+}
+
+/**
+ * The row a turn is counted under, which keeps a flat-rate turn away from a
+ * paid turn of the same underlying model so the paid dollars stay visible.
+ */
+function usageKey(modelId: string, provider?: string): string {
+  if (provider === COPILOT_PROVIDER && !modelId.startsWith(`${COPILOT_PROVIDER}/`)) return `${COPILOT_PROVIDER}/${modelId}`;
+  if (isSubscriptionRouted(modelId, provider) && !modelId.startsWith(SUB_MODEL_PREFIX)) return `${SUB_MODEL_PREFIX}${modelId}`;
+  return modelId;
+}
+
 export interface ModelUsage {
   inputTokens: number;
   outputTokens: number;
@@ -132,7 +159,7 @@ export function createUsageTracker(): UsageTracker {
       const safeOutput = toFiniteNumber(output);
       const safeCacheRead = toFiniteNumber(cacheRead);
       const safeCacheWrite = toFiniteNumber(cacheWrite);
-      const subscription = isSubscriptionRouted(modelId, provider);
+      const subscription = isFlatRateBilled(modelId, provider);
       // Subscription-routed turns are flat-rate: keep the tokens but exclude the
       // fictitious per-token dollars so totals stay paid-only by construction.
       const safeCost = subscription ? 0 : toFiniteNumber(cost);
@@ -144,11 +171,10 @@ export function createUsageTracker(): UsageTracker {
       state.totalCost += safeCost;
       state.totalTurns += 1;
 
-      // Key subscription turns under the sub/ prefix even when detected only by
-      // provider (bare model id), so a paid and a subscription turn for the same
+      // Key flat-rate turns apart from paid ones even when detected only by
+      // provider (bare model id), so a paid and a flat-rate turn for the same
       // underlying model never share a row and the paid dollars stay visible.
-      const baseKey = modelId || "unknown-model";
-      const key = subscription && !baseKey.startsWith(SUB_MODEL_PREFIX) ? `${SUB_MODEL_PREFIX}${baseKey}` : baseKey;
+      const key = usageKey(modelId || "unknown-model", provider);
       const usage = state.models.get(key) ?? {
         inputTokens: 0,
         outputTokens: 0,
@@ -181,9 +207,9 @@ export function createUsageTracker(): UsageTracker {
       const safeTotal = toFiniteNumber(tokens.total);
       const safeCacheRead = toFiniteNumber(tokens.cacheRead);
       const safeCacheWrite = toFiniteNumber(tokens.cacheWrite);
-      // Subagents carry no provider field, so detect subscription routing from
-      // the registered model id prefix. Zero the dollars when subscription.
-      const subscription = isSubscriptionRouted(meta?.modelId);
+      // Subagents carry no provider field, so detect flat-rate billing from
+      // the registered model id prefix. Zero the dollars when flat-rate.
+      const subscription = isFlatRateBilled(meta?.modelId);
       const safeCost = subscription ? 0 : toFiniteNumber(tokens.cost ?? cost);
 
       const effectiveInput = safeInput === 0 && safeOutput === 0 ? safeTotal : safeInput;
@@ -233,9 +259,9 @@ export function createUsageTracker(): UsageTracker {
         state.subagentCost = 0;
         for (const sa of summary.subagents as Record<string, unknown>[]) {
           const modelId = typeof sa.modelId === "string" ? sa.modelId : "unknown";
-          // Pre-change summaries lack the flag; recover it from the sub/ prefix
-          // so legacy subscription rows are not restored as paid.
-          const subscription = sa.subscription === true || isSubscriptionRouted(modelId);
+          // Pre-change summaries lack the flag; recover it from the model id so
+          // legacy flat-rate rows are not restored as paid.
+          const subscription = sa.subscription === true || isFlatRateBilled(modelId);
           const entry: SubagentUsage = {
             description: typeof sa.description === "string" ? sa.description : "unknown",
             agentType: typeof sa.agentType === "string" ? sa.agentType : "unknown",
@@ -268,7 +294,7 @@ export function createUsageTracker(): UsageTracker {
             cacheSupported: (usage as any).cacheSupported === true,
             turns: toFiniteNumber(usage.turns),
             cost: toFiniteNumber(usage.cost),
-            subscription: (usage as any).subscription === true || isSubscriptionRouted(modelId),
+            subscription: (usage as any).subscription === true || isFlatRateBilled(modelId),
           });
         }
       }

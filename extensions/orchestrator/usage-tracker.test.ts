@@ -441,6 +441,27 @@ describe("usage-tracker", () => {
     expect(tracker.getMainCost()).toBeCloseTo(0.4);
   });
 
+  it("copilot turns count tokens but contribute zero cost, on their own row", () => {
+    const tracker = createUsageTracker();
+
+    tracker.recordTurn("claude-opus-4-6", "pp-flant-anthropic", 10, 5, 0, 0, 0.4, false);
+    tracker.recordTurn("claude-opus-4-6", "github-copilot", 100, 50, 10, 5, 1.23, true);
+
+    const usage = tracker.getPerModelUsage();
+    expect(usage["claude-opus-4-6"]).toMatchObject({ inputTokens: 10, subscription: false });
+    expect(usage["github-copilot/claude-opus-4-6"]).toMatchObject({ inputTokens: 100, outputTokens: 50, subscription: true });
+    expect(tracker.getMainCost()).toBeCloseTo(0.4);
+  });
+
+  it("copilot subagents count tokens but contribute zero cost", () => {
+    const tracker = createUsageTracker();
+
+    tracker.recordSubagentCompletion({ input: 100, output: 50 } as any, 2.5, { modelId: "github-copilot/claude-fable-5.1" });
+
+    expect(tracker.getSubagentTotals()).toMatchObject({ inputTokens: 100, outputTokens: 50, cost: 0 });
+    expect(tracker.getSubagentList()[0]?.subscription).toBe(true);
+  });
+
   it("subscription subagents count tokens but contribute zero cost", () => {
     const tracker = createUsageTracker();
 
