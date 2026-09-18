@@ -6,18 +6,24 @@ type AgentMessage = Record<string, any>;
 // while its UTF-8 length is roughly double.
 const BYTES_PER_TOKEN = 4;
 
-// What one image costs, in the bytes this estimate speaks in.
+// What one image costs, in the tokens a provider charges for it.
 //
-// A provider charges an image by its pixels, not by the length of the base64
+// A provider prices an image by its pixels, not by the length of the base64
 // that carries it: Anthropic bills roughly width x height / 750 tokens after
 // fitting the image inside 1568px, which puts a ceiling near this figure on any
-// single image, and the other providers land in the same range. The payload is
-// nothing like that — counted as characters, one 1080x1920 screenshot weighed
-// 442K tokens where it cost 1.6K — so an image is charged the ceiling flat.
-// Dimensions would be more exact, but they are worth neither the format
-// parsing nor the risk of under-counting: the error left is a rounding on one
-// message, where the character count was a factor of fifty on the prompt.
-const IMAGE_TOKENS = 1_600;
+// single image, and the frontier models of the other vendors land in the same
+// range. The payload is nothing like that — counted as characters, one
+// 1080x1920 screenshot weighed 442K tokens where it cost 1.6K — so an image is
+// charged this flat, and dimensions are not parsed for a correction that would
+// be a rounding on one message.
+//
+// It is a default rather than a constant because the figure is not universal:
+// a vendor that prices a small model per token at a fraction of a large one
+// scales its image tokens up to match, so an image can cost that model an order
+// of magnitude more. There is no formula behind those multipliers, only a
+// table that would rot, so a model whose images cost more says so in its
+// promptcap settings.
+export const DEFAULT_IMAGE_TOKENS = 1_600;
 
 // What a tool call costs on top of its name and arguments: the JSON block that
 // carries it, and the result block that answers it.
@@ -110,26 +116,26 @@ export function fixedBytes(systemPrompt: string | undefined, tools: unknown[] | 
   return size;
 }
 
-export function messagesBytes(messages: AgentMessage[]): number {
+export function messagesBytes(messages: AgentMessage[], imageTokens = DEFAULT_IMAGE_TOKENS): number {
   let size = 0;
-  for (const message of messages) size += messageBytes(message);
+  for (const message of messages) size += messageBytes(message, imageTokens);
   return size;
 }
 
-function messageBytes(message: AgentMessage): number {
+function messageBytes(message: AgentMessage, imageTokens: number): number {
   if (!message || typeof message !== "object") return 0;
   const role = (message as any).role;
   if (role === "toolResult") {
     // The call id is sent back to name the call being answered, so it is paid
     // for twice over a call's life.
     let size = byteLength((message as any).toolName ?? "") + byteLength((message as any).toolCallId ?? "");
-    for (const part of (message as any).content ?? []) size += partBytes(part);
+    for (const part of (message as any).content ?? []) size += partBytes(part, imageTokens);
     return size;
   }
   const content = (message as any).content;
   if (typeof content === "string") return byteLength(content);
   let size = 0;
-  for (const part of content ?? []) size += partBytes(part);
+  for (const part of content ?? []) size += partBytes(part, imageTokens);
   return size;
 }
 
@@ -171,7 +177,7 @@ export function toolCallBytes(part: any): number {
   return byteLength(part?.name ?? "") + byteLength(part?.id ?? "") + jsonBytes(part?.arguments) + TOOL_CALL_ENVELOPE_BYTES;
 }
 
-function partBytes(part: any): number {
+function partBytes(part: any, imageTokens: number): number {
   if (!part || typeof part !== "object") return 0;
   switch (part.type) {
     case "text":
@@ -181,7 +187,7 @@ function partBytes(part: any): number {
     case "toolCall":
       return toolCallBytes(part);
     case "image":
-      return IMAGE_TOKENS * BYTES_PER_TOKEN;
+      return imageTokens * BYTES_PER_TOKEN;
     default:
       return 0;
   }

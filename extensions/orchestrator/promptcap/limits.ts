@@ -1,4 +1,5 @@
 import type { Limits } from "./fold.js";
+import { DEFAULT_IMAGE_TOKENS } from "./estimate.js";
 
 // The ceiling for a model whose window nobody declared. It suits the smallest
 // window in common use once an output reservation and a margin are taken off
@@ -43,6 +44,13 @@ export interface PromptcapModelSettings {
   /** The ceiling applied when no window is known. */
   maxPromptTokens?: number;
   /**
+   * What one image is counted as. Absent means
+   * {@link DEFAULT_IMAGE_TOKENS}, which suits the frontier models; a small
+   * model priced at a fraction per token is charged an order of magnitude more
+   * for the same image and has to say so here.
+   */
+  imageTokens?: number;
+  /**
    * The model's total window. Zero or absent means unknown, which is the
    * honest default for a provider that does not report one.
    */
@@ -76,6 +84,7 @@ export function resolveSettings(settings: PromptcapSettings, modelKey: string | 
   const resolved: PromptcapModelSettings = {
     maxPromptTokens: settings.maxPromptTokens,
     contextWindow: settings.contextWindow,
+    imageTokens: settings.imageTokens,
   };
   if (!modelKey) return resolved;
   const bare = modelKey.includes("/") ? modelKey.slice(modelKey.lastIndexOf("/") + 1) : modelKey;
@@ -83,7 +92,14 @@ export function resolveSettings(settings: PromptcapSettings, modelKey: string | 
   if (!override) return resolved;
   if (override.maxPromptTokens && override.maxPromptTokens > 0) resolved.maxPromptTokens = override.maxPromptTokens;
   if (override.contextWindow && override.contextWindow > 0) resolved.contextWindow = override.contextWindow;
+  if (override.imageTokens && override.imageTokens > 0) resolved.imageTokens = override.imageTokens;
   return resolved;
+}
+
+/** What one image counts as for `modelKey`. */
+export function imageTokensFor(settings: PromptcapSettings, modelKey: string | undefined): number {
+  const resolved = resolveSettings(settings, modelKey).imageTokens;
+  return resolved && resolved > 0 ? resolved : DEFAULT_IMAGE_TOKENS;
 }
 
 /**

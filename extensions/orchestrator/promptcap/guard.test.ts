@@ -34,6 +34,22 @@ describe("PromptGuard", () => {
     expect(guard.lastTokens).toBeNull();
   });
 
+  it("sizes an image by the model's declared image cost", () => {
+    const withImage = (): AgentMessage[] => [
+      { role: "user", content: [{ type: "text", text: "go" }] },
+      { role: "assistant", content: [{ type: "toolCall", id: "t0", name: "read", arguments: { path: "/a.png" } }] },
+      { role: "toolResult", toolCallId: "t0", toolName: "read", content: [{ type: "image", data: "b".repeat(4_000), mimeType: "image/png" }], isError: false },
+      { role: "user", content: [{ type: "text", text: "next" }] },
+    ];
+    const cheap = new PromptGuard({ settings: () => settings() });
+    const dear = new PromptGuard({ settings: () => settings({ perModel: { "claude-opus-4-8": { imageTokens: 25_000 } } }) });
+
+    cheap.apply(withImage(), ctx(200_000), []);
+    dear.apply(withImage(), ctx(200_000), []);
+
+    expect(dear.lastTokens! - cheap.lastTokens!).toBe(25_000 - 1_600);
+  });
+
   it("folds a conversation that outgrew the declared ceiling", () => {
     const guard = new PromptGuard({ settings: () => settings({ maxPromptTokens: 5_000 }) });
     const messages = conversation(40, 8000);

@@ -1,4 +1,4 @@
-import { byteLength, messagesBytes, toolCallBytes, BYTES_PER_TOKEN } from "./estimate.js";
+import { byteLength, DEFAULT_IMAGE_TOKENS, messagesBytes, toolCallBytes, BYTES_PER_TOKEN } from "./estimate.js";
 
 export type AgentMessage = Record<string, any>;
 
@@ -176,9 +176,10 @@ export function fold(
   limits: Limits,
   state: FoldState,
   ratio = 1,
+  imageTokens = DEFAULT_IMAGE_TOKENS,
 ): FoldResult {
   const toTokens = (bytes: number) => tokensOf(bytes, ratio);
-  let bytes = fixedBytes + messagesBytes(messages);
+  let bytes = fixedBytes + messagesBytes(messages, imageTokens);
   const tokensBefore = toTokens(bytes);
 
   const calls = indexCalls(messages);
@@ -201,8 +202,8 @@ export function fold(
     // A dropped call is removed structurally in one pass once every tier is
     // settled, so here it only has to stop counting towards the prompt.
     bytes -= remembered >= Tier.Drop
-      ? dropSavings(messages, call) + stripReasoning(messages, call, protectedFrom)
-      : applyTier(messages, call, remembered, protectedFrom);
+      ? dropSavings(messages, call, imageTokens) + stripReasoning(messages, call, protectedFrom)
+      : applyTier(messages, call, remembered, protectedFrom, imageTokens);
     call.tier = remembered;
     followReasoning(call.callMessage);
   }
@@ -220,7 +221,7 @@ export function fold(
       for (const call of calls) {
         if (toTokens(bytes) <= target) break;
         if (call.tier >= to) continue;
-        bytes -= applyTier(messages, call, to, protectedFrom);
+        bytes -= applyTier(messages, call, to, protectedFrom, imageTokens);
         call.tier = to;
         state.promote(call.id, to);
         followReasoning(call.callMessage);
@@ -232,7 +233,7 @@ export function fold(
     for (const call of droppable) {
       if (toTokens(bytes - dropLineReserve(messages, newlyDropped)) <= target) break;
       if (call.tier >= Tier.Drop) continue;
-      bytes -= dropSavings(messages, call) + stripReasoning(messages, call, protectedFrom);
+      bytes -= dropSavings(messages, call, imageTokens) + stripReasoning(messages, call, protectedFrom);
       call.tier = Tier.Drop;
       state.promote(call.id, Tier.Drop);
       newlyDropped.push(call);
@@ -363,12 +364,12 @@ function droppableCalls(messages: AgentMessage[], calls: Call[], protectedFrom: 
 }
 
 /** What removing a call and the result answering it would take off the prompt. */
-function dropSavings(messages: AgentMessage[], call: Call): number {
+function dropSavings(messages: AgentMessage[], call: Call, imageTokens: number): number {
   let saved = 0;
   const part = callPart(messages, call);
   if (part) saved += toolCallBytes(part);
   const result = messages[call.resultMessage];
-  if (result) saved += messagesBytes([result]);
+  if (result) saved += messagesBytes([result], imageTokens);
   return saved;
 }
 
@@ -477,10 +478,10 @@ function dropLine(tally: Map<string, number>): string {
  * goes: the prose, the fixed cost, and a breadcrumb per call. Nothing can bring
  * a prompt below this, so it is what the budget has to be set around.
  */
-export function incompressibleTokens(messages: AgentMessage[], fixedBytes: number, ratio = 1): number {
+export function incompressibleTokens(messages: AgentMessage[], fixedBytes: number, ratio = 1, imageTokens = DEFAULT_IMAGE_TOKENS): number {
   const calls = indexCalls(messages);
-  const total = fixedBytes + messagesBytes(messages);
-  return tokensOf(total - foldableBytes(messages, calls, lastUserMessageIndex(messages)), ratio);
+  const total = fixedBytes + messagesBytes(messages, imageTokens);
+  return tokensOf(total - foldableBytes(messages, calls, lastUserMessageIndex(messages), imageTokens), ratio);
 }
 
 export function tokensOf(bytes: number, ratio = 1): number {
@@ -558,7 +559,7 @@ function lastUserMessageIndex(messages: AgentMessage[]): number {
  * what keeps the floor — and with it the ceiling standing above the floor —
  * from rising with every call a long session makes.
  */
-function foldableBytes(messages: AgentMessage[], calls: Call[], protectedFrom: number): number {
+function foldableBytes(messages: AgentMessage[], calls: Call[], protectedFrom: number, imageTokens: number): number {
   let savings = 0;
   // Parallel calls share one assistant message, and its reasoning goes with
   // whichever of them is promoted first, so counting it once per call would
@@ -574,7 +575,7 @@ function foldableBytes(messages: AgentMessage[], calls: Call[], protectedFrom: n
       savings += thinkingBytes(messages[call.callMessage]);
     }
     if (droppable.has(call.id)) {
-      savings += dropSavings(messages, call);
+      savings += dropSavings(messages, call, imageTokens);
       droppedHere.push(call);
       continue;
     }
@@ -585,7 +586,7 @@ function foldableBytes(messages: AgentMessage[], calls: Call[], protectedFrom: n
     if (!result) continue;
     const breadcrumb = byteLength(result.toolName ?? "") + byteLength(result.toolCallId ?? "")
       + byteLength(collapseResult(call, false, Tier.Breadcrumb)[0].text);
-    savings += Math.max(0, messagesBytes([result]) - breadcrumb);
+    savings += Math.max(0, messagesBytes([result], imageTokens) - breadcrumb);
   }
   // What full folding leaves behind includes the lines standing for what left.
   // A turn that made no call is folded with the traffic around it, so the
@@ -636,7 +637,7 @@ function thinkingBytes(message: AgentMessage | undefined): number {
 }
 
 /** Rewrites one call's parts to match a tier, returning the bytes it saved. */
-function applyTier(messages: AgentMessage[], call: Call, to: Tier, protectedFrom: number): number {
+function applyTier(messages: AgentMessage[], call: Call, to: Tier, protectedFrom: number, imageTokens: number): number {
   let saved = 0;
 
   const part = callPart(messages, call);
@@ -650,9 +651,9 @@ function applyTier(messages: AgentMessage[], call: Call, to: Tier, protectedFrom
 
   const result = messages[call.resultMessage];
   if (result) {
-    const before = messagesBytes([result]);
+    const before = messagesBytes([result], imageTokens);
     result.content = collapseResult(call, result.isError === true, to);
-    saved += before - messagesBytes([result]);
+    saved += before - messagesBytes([result], imageTokens);
   }
 
   return saved;

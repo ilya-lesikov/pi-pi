@@ -35,6 +35,10 @@ export interface PromptcapModelConfig {
    *  reports one for most models; declare it for a model whose provider
    *  does not. */
   contextWindow?: number;
+  /** What one image counts as, in tokens (default 1600). Raise it for a model
+   *  whose vendor prices images far above the frontier norm — typically a
+   *  small model whose per-token price is a fraction of a large one's. */
+  imageTokens?: number;
 }
 
 export interface PromptcapConfig extends PromptcapModelConfig {
@@ -245,6 +249,7 @@ function validatePromptcap(value: unknown): void {
   ensureNumberInRange(c.maxPromptTokens, "config.promptcap.maxPromptTokens", 1000, 100_000_000);
   ensureNumberInRange(c.contextWindow, "config.promptcap.contextWindow", 1000, 100_000_000);
   ensureNumberInRange(c.headroomTokens, "config.promptcap.headroomTokens", 1000, 100_000_000);
+  ensureNumberInRange(c.imageTokens, "config.promptcap.imageTokens", 1, 10_000_000);
   // Excludes both ends: at 0 a fold would aim at the floor and strip every
   // call it has, and at 1 it would aim at the ceiling it just crossed and fire
   // again on the next request.
@@ -260,6 +265,7 @@ function validatePromptcap(value: unknown): void {
       const o = requireObject(override, `config.promptcap.perModel.${modelId}`);
       ensureNumberInRange(o.maxPromptTokens, `config.promptcap.perModel.${modelId}.maxPromptTokens`, 1000, 100_000_000);
       ensureNumberInRange(o.contextWindow, `config.promptcap.perModel.${modelId}.contextWindow`, 1000, 100_000_000);
+      ensureNumberInRange(o.imageTokens, `config.promptcap.perModel.${modelId}.imageTokens`, 1, 10_000_000);
     }
   }
 }

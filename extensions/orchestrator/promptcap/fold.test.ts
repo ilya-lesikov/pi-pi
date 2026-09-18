@@ -391,6 +391,12 @@ describe("fold", () => {
     expect(messagesBytes(large)).toBeLessThan(20_000);
   });
 
+  it("counts an image at what the model it is bound for charges", () => {
+    const messages = [user("go"), { role: "assistant", content: [{ type: "image", data: "b".repeat(4_000), mimeType: "image/png" }] }];
+
+    expect(messagesBytes(messages, 25_000) - messagesBytes(messages, 1_600)).toBe((25_000 - 1_600) * 4);
+  });
+
   it("counts an image result's payload in the notice it leaves behind", () => {
     const messages = [
       user("go"),

@@ -41,6 +41,7 @@ import { enabledSkillLayers, listLayeredSkills } from "./skills-manifest.js";
 import { buildPoolRoster } from "./agents/registry.js";
 import { setLogLevel } from "./log.js";
 import { DEFAULT_KEEP_FRACTION, DEFAULT_HEADROOM_TOKENS, DEFAULT_MAX_PROMPT_TOKENS } from "./promptcap/limits.js";
+import { DEFAULT_IMAGE_TOKENS } from "./promptcap/estimate.js";
 import { finalizeTracer, getTracer, initTracer } from "./tracer.js";
 import type { Orchestrator } from "./orchestrator.js";
 
@@ -899,7 +900,7 @@ async function showSkillsSettings(orchestrator: Orchestrator, ctx: any): Promise
 async function showPromptcapSettings(orchestrator: Orchestrator, ctx: any): Promise<void> {
   const pickers: Array<{
     prefix: string;
-    key: "maxPromptTokens" | "contextWindow" | "headroomTokens" | "keepFraction";
+    key: "maxPromptTokens" | "contextWindow" | "headroomTokens" | "keepFraction" | "imageTokens";
     question: string;
     choices: Array<{ title: string; description: string }>;
     parse?: (title: string) => number;
@@ -937,6 +938,17 @@ async function showPromptcapSettings(orchestrator: Orchestrator, ctx: any): Prom
       ],
     },
     {
+      prefix: "Image cost:",
+      key: "imageTokens",
+      question: "What one image counts as (tokens)",
+      choices: [
+        { title: "1.6K", description: "Default — what a frontier model charges for an image" },
+        { title: "5K", description: "For a model whose vendor prices images above that" },
+        { title: "25K", description: "For a small model priced per token far below a large one" },
+      ],
+      parse: (title) => Number(title.replace("K", "")) * 1000,
+    },
+    {
       prefix: "History kept:",
       key: "keepFraction",
       question: "How much of the headroom a fold keeps as recent tool history",
@@ -964,6 +976,7 @@ async function showPromptcapSettings(orchestrator: Orchestrator, ctx: any): Prom
         opt(`Context window: ${c.contextWindow ? `${Math.round(c.contextWindow / 1000)}K tokens` : "ask the host"}`, "Declare the model's window, for a provider that does not report one"),
         opt(`Headroom: ${Math.round((c.headroomTokens ?? DEFAULT_HEADROOM_TOKENS) / 1000)}K tokens`, "Room kept above the prose that cannot be folded, before folding starts"),
         opt(`History kept: ${Math.round((c.keepFraction ?? DEFAULT_KEEP_FRACTION) * 100)}%`, "How much of that headroom a fold keeps as recent tool history; the rest is room to grow back into"),
+        opt(`Image cost: ${((c.imageTokens ?? DEFAULT_IMAGE_TOKENS) / 1000).toFixed(1)}K tokens`, "What one image is counted as; raise it for a model whose vendor charges more for the same picture"),
       );
       const guard = orchestrator.promptGuard;
       if (guard?.lastTokens != null && guard.lastCeiling != null) {

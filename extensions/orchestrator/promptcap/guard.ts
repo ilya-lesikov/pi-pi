@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { danglingSignatureBytes, Estimator, fixedBytes, messagesBytes } from "./estimate.js";
 import { fold, FoldState, incompressibleTokens, tokensOf, type AgentMessage } from "./fold.js";
-import { limitsFor, OVERFLOW_MARGIN, type PromptcapSettings } from "./limits.js";
+import { limitsFor, imageTokensFor, OVERFLOW_MARGIN, type PromptcapSettings } from "./limits.js";
 
 export interface GuardHost {
   settings(): PromptcapSettings;
@@ -44,7 +44,8 @@ export class PromptGuard {
     const ratio = this.estimator.ratioFor(modelKey) ?? 1;
 
     const window = ctx?.getContextUsage?.()?.contextWindow;
-    const floor = incompressibleTokens(messages, fixed, ratio);
+    const imageTokens = imageTokensFor(settings, modelKey);
+    const floor = incompressibleTokens(messages, fixed, ratio, imageTokens);
     const limits = limitsFor(settings, modelKey, floor, typeof window === "number" ? window : undefined);
 
     if (!settings.enabled) {
@@ -53,7 +54,7 @@ export class PromptGuard {
       return messages;
     }
 
-    const result = fold(messages, fixed, limits, this.folds, ratio);
+    const result = fold(messages, fixed, limits, this.folds, ratio, imageTokens);
     // Carried to calibration so one real turn can answer whether reasoning
     // blocks left with a signature and no text reach the provider: the adapters
     // disagree, and this is the difference the answer would show up as. Scaled
@@ -67,7 +68,7 @@ export class PromptGuard {
     this.predicted = {
       modelKey,
       tokens: result.tokens,
-      rawTokens: tokensOf(fixed + messagesBytes(messages), 1),
+      rawTokens: tokensOf(fixed + messagesBytes(messages, imageTokens), 1),
       danglingSignatures: dangling,
     };
     this.lastTokens = result.tokens;
