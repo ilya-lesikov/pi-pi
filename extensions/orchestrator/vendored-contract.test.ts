@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync, statSync } from "fs";
 import { join } from "path";
+import { AgentSession } from "@earendil-works/pi-coding-agent";
 
 // The orchestrator drives subagents through a vendored copy of pi-subagents
 // (3p/pi-subagents), which carries local patches on top of upstream. `git
@@ -159,5 +160,32 @@ describe("vendored pi-subagents contract — local patches", () => {
     for (const method of ["listAgents", "abortAll", "getRecord", "resume"]) {
       expect(handle.slice(0, handle.indexOf("\n    };")), `${method} is missing from the published manager handle`).toContain(`${method}:`);
     }
+  });
+});
+
+// pi decides whether a failed turn is retried in a private method holding a
+// literal regex. No setting reaches it, so pi-pi widens it on the prototype pi
+// calls it through — a coupling that breaks in silence: a renamed method leaves
+// the patch wrapping nothing, and a 499 kills the turn again.
+describe("vendored pi contract — the retry predicate", () => {
+  const predicate = (AgentSession as any)?.prototype?._isRetryableError;
+
+  it("is still a method on the prototype, where the patch reaches it", () => {
+    expect(typeof predicate).toBe("function");
+  });
+
+  it("still does not recognize the status pi-pi adds, so the patch is still needed", () => {
+    const error = { role: "assistant", stopReason: "error", errorMessage: "499 status code (no body)" };
+    expect(predicate.call({ model: { contextWindow: 200_000 } }, error)).toBe(false);
+  });
+
+  it("still recognizes the statuses pi-pi leaves to it", () => {
+    const retryable = (errorMessage: string) => predicate.call(
+      { model: { contextWindow: 200_000 } },
+      { role: "assistant", stopReason: "error", errorMessage },
+    );
+    expect(retryable("429 rate limit")).toBe(true);
+    expect(retryable("503 service unavailable")).toBe(true);
+    expect(retryable("terminated")).toBe(true);
   });
 });

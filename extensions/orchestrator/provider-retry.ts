@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
+import { AgentSession } from "@earendil-works/pi-coding-agent";
 import { writeConfigValue } from "./config.js";
 import { resolveAgentDir } from "./flant-infra.js";
 import { getLogger } from "./log.js";
@@ -62,4 +63,49 @@ export function ensureProviderRetrySettings(path = settingsPath()): RetrySetting
     getLogger().warn({ s: "retry", path, err: String(err) }, "could not raise pi's provider retry ceiling");
     return "unwritable";
   }
+}
+
+/**
+ * A status pi's retry predicate does not recognize.
+ *
+ * pi decides retryability by matching the provider's error text against a fixed
+ * list of statuses and transport faults, and 499 is in none of them. The status
+ * says the connection was closed before the upstream answered — Copilot's
+ * gateway returns it under load — so the request never reached the model and
+ * the same bytes sent again usually land. Unrecognized, it kills the turn where
+ * a 500 would have been retried.
+ *
+ * A user's own abort cannot arrive here: pi marks that `aborted`, and the
+ * predicate this joins runs only on `error`.
+ */
+export function isUnrecognizedTransportError(message?: string): boolean {
+  return typeof message === "string" && /\b499\b/.test(message);
+}
+
+const PATCHED = Symbol.for("pi-pi:retry-predicate-patched");
+
+export type RetryPredicateOutcome = "patched" | "already" | "absent";
+
+/**
+ * Widens pi's retry predicate to cover {@link isUnrecognizedTransportError}.
+ *
+ * The predicate is a private method holding a literal regex: no setting reaches
+ * it and no extension API replaces it, so the only way in is the prototype pi
+ * calls it through. The original decides first and this only ever adds, so a
+ * status pi learns to retry on its own keeps pi's answer.
+ */
+export function patchRetryPredicate(prototype: any = (AgentSession as any)?.prototype): RetryPredicateOutcome {
+  if (!prototype || typeof prototype._isRetryableError !== "function") {
+    getLogger().warn({ s: "retry" }, "pi's retry predicate is not where it was; 499 will not be retried");
+    return "absent";
+  }
+  if (prototype[PATCHED]) return "already";
+  const original = prototype._isRetryableError;
+  prototype._isRetryableError = function (message: any): boolean {
+    if (original.call(this, message)) return true;
+    return message?.stopReason === "error" && isUnrecognizedTransportError(message?.errorMessage);
+  };
+  prototype[PATCHED] = true;
+  getLogger().debug({ s: "retry" }, "widened pi's retry predicate to cover 499");
+  return "patched";
 }

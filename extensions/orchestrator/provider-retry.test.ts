@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { ensureProviderRetrySettings, readProviderRetry } from "./provider-retry.js";
+import { ensureProviderRetrySettings, isUnrecognizedTransportError, patchRetryPredicate, readProviderRetry } from "./provider-retry.js";
 
 describe("provider retry settings", () => {
   let dir: string;
@@ -43,5 +43,56 @@ describe("provider retry settings", () => {
 
   it("reports nothing to read as no settings rather than failing", () => {
     expect(readProviderRetry(join(dir, "absent.json"))).toEqual({});
+  });
+});
+
+// pi decides retryability from the provider's error text against a fixed list
+// of statuses. 499 is in none of them, so a turn that died to a closed
+// connection stayed dead where a 500 would have been retried eight times.
+describe("pi's retry predicate", () => {
+  const pi = (answer: boolean) => ({ _isRetryableError: () => answer });
+
+  it("retries a 499 pi would have given up on", () => {
+    const prototype: any = pi(false);
+    expect(patchRetryPredicate(prototype)).toBe("patched");
+
+    expect(prototype._isRetryableError({ stopReason: "error", errorMessage: "499 status code (no body)" })).toBe(true);
+  });
+
+  it("leaves pi's own answer alone, either way", () => {
+    const widened: any = pi(true);
+    const refused: any = pi(false);
+    patchRetryPredicate(widened);
+    patchRetryPredicate(refused);
+
+    expect(widened._isRetryableError({ stopReason: "error", errorMessage: "429 rate limit" })).toBe(true);
+    expect(refused._isRetryableError({ stopReason: "error", errorMessage: "400 bad request" })).toBe(false);
+  });
+
+  // The turn the user stopped is marked aborted, not error, and must not come
+  // back to life however the gateway described the closed connection.
+  it("does not revive an aborted turn", () => {
+    const prototype: any = pi(false);
+    patchRetryPredicate(prototype);
+
+    expect(prototype._isRetryableError({ stopReason: "aborted", errorMessage: "499 status code (no body)" })).toBe(false);
+  });
+
+  it("wraps pi's predicate once, however many sessions start", () => {
+    const prototype: any = pi(false);
+
+    expect(patchRetryPredicate(prototype)).toBe("patched");
+    expect(patchRetryPredicate(prototype)).toBe("already");
+  });
+
+  it("reports a predicate that is no longer there rather than throwing", () => {
+    expect(patchRetryPredicate({})).toBe("absent");
+  });
+
+  it("recognizes the status wherever the provider put it in the text", () => {
+    expect(isUnrecognizedTransportError("499 status code (no body)")).toBe(true);
+    expect(isUnrecognizedTransportError("Request failed with status 499")).toBe(true);
+    expect(isUnrecognizedTransportError("4990 tokens over the limit")).toBe(false);
+    expect(isUnrecognizedTransportError(undefined)).toBe(false);
   });
 });
