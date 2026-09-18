@@ -315,6 +315,14 @@ describe("fold", () => {
     expect(scaled.tokens).toBe(plain.tokens * 2);
   });
 
+  it("counts an image by what an image costs, not by the payload carrying it", () => {
+    const small = [user("go"), { role: "assistant", content: [{ type: "image", data: "b".repeat(4_000), mimeType: "image/png" }] }];
+    const large = [user("go"), { role: "assistant", content: [{ type: "image", data: "b".repeat(1_700_000), mimeType: "image/png" }] }];
+
+    expect(messagesBytes(large)).toBe(messagesBytes(small));
+    expect(messagesBytes(large)).toBeLessThan(20_000);
+  });
+
   it("counts an image result's payload in the notice it leaves behind", () => {
     const messages = [
       user("go"),

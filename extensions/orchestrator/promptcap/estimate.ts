@@ -6,6 +6,19 @@ type AgentMessage = Record<string, any>;
 // while its UTF-8 length is roughly double.
 const BYTES_PER_TOKEN = 4;
 
+// What one image costs, in the bytes this estimate speaks in.
+//
+// A provider charges an image by its pixels, not by the length of the base64
+// that carries it: Anthropic bills roughly width x height / 750 tokens after
+// fitting the image inside 1568px, which puts a ceiling near this figure on any
+// single image, and the other providers land in the same range. The payload is
+// nothing like that — counted as characters, one 1080x1920 screenshot weighed
+// 442K tokens where it cost 1.6K — so an image is charged the ceiling flat.
+// Dimensions would be more exact, but they are worth neither the format
+// parsing nor the risk of under-counting: the error left is a rounding on one
+// message, where the character count was a factor of fifty on the prompt.
+const IMAGE_TOKENS = 1_600;
+
 // What a tool call costs on top of its name and arguments: the JSON block that
 // carries it, and the result block that answers it.
 //
@@ -168,7 +181,7 @@ function partBytes(part: any): number {
     case "toolCall":
       return toolCallBytes(part);
     case "image":
-      return (part.data ?? "").length;
+      return IMAGE_TOKENS * BYTES_PER_TOKEN;
     default:
       return 0;
   }
