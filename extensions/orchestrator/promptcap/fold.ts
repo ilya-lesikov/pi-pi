@@ -183,6 +183,13 @@ export function fold(
 
   const calls = indexCalls(messages);
   const protectedFrom = lastUserMessageIndex(messages);
+  // How far the orphan reasoning below has been blanked. It follows the calls:
+  // a turn that made none is folded when the tool traffic around it is.
+  let reasoningFrom = 0;
+  const followReasoning = (through: number): void => {
+    bytes -= stripOrphanReasoning(messages, reasoningFrom, Math.min(through, protectedFrom));
+    reasoningFrom = Math.max(reasoningFrom, through);
+  };
 
   // Re-apply what earlier requests already decided before measuring against the
   // budget. The host hands over a fresh copy of the stored conversation every
@@ -197,6 +204,7 @@ export function fold(
       ? dropSavings(messages, call) + stripReasoning(messages, call, protectedFrom)
       : applyTier(messages, call, remembered, protectedFrom);
     call.tier = remembered;
+    followReasoning(call.callMessage);
   }
   // Remembered drops are charged their lines here; newly promoted ones add
   // theirs as they are chosen.
@@ -215,6 +223,7 @@ export function fold(
         bytes -= applyTier(messages, call, to, protectedFrom);
         call.tier = to;
         state.promote(call.id, to);
+        followReasoning(call.callMessage);
       }
     }
 
@@ -251,13 +260,49 @@ export function fold(
  *
  * The reasoning that produced a call is what the model needed to make it, not
  * something it re-reads twenty calls later — so it goes at the same moment,
- * except in the tail the provider requires intact. Emptying the text rather
- * than removing the block keeps every later index valid; the provider adapter
- * drops a thinking block whose text is blank.
+ * except in the tail the provider requires intact.
  */
 function stripReasoning(messages: AgentMessage[], call: Call, protectedFrom: number): number {
   if (call.callMessage >= protectedFrom) return 0;
-  const content = messages[call.callMessage]?.content;
+  return blankReasoning(messages[call.callMessage]);
+}
+
+/**
+ * Blanks the reasoning of the assistant turns in `[from, through)` that made no
+ * tool call, reporting the bytes it freed.
+ *
+ * Such a turn is unreachable through any call — a reply to the user, or a turn
+ * the provider cut off mid-thought — so without this its reasoning is the one
+ * thing in the prompt that nothing can ever remove. It weighs more than it
+ * looks: the signature is the whole of the model's thinking in encrypted form,
+ * and a gateway that replays it charges for every token of it, so one turn
+ * truncated at its output limit can cost tens of thousands of tokens on every
+ * request for the rest of the session.
+ *
+ * The range follows the calls rather than the clock, so a turn's reasoning goes
+ * when the tool traffic it sits among goes and not before: a conversation small
+ * enough never to fold keeps all of it.
+ */
+function stripOrphanReasoning(messages: AgentMessage[], from: number, through: number): number {
+  let saved = 0;
+  for (let m = from; m < through; m++) {
+    const message = messages[m];
+    if (message?.role !== "assistant" || !Array.isArray(message.content)) continue;
+    if (message.content.some((part: any) => part?.type === "toolCall")) continue;
+    saved += blankReasoning(message);
+  }
+  return saved;
+}
+
+/**
+ * Empties every reasoning block of one message, reporting the bytes it freed.
+ *
+ * Emptying the text rather than removing the block keeps every later index
+ * valid; the provider adapter drops a thinking block whose text is blank, and
+ * an assistant turn left with nothing else is dropped whole.
+ */
+function blankReasoning(message: AgentMessage | undefined): number {
+  const content = message?.content;
   if (!Array.isArray(content)) return 0;
   let saved = 0;
   for (const block of content) {
@@ -543,7 +588,28 @@ function foldableBytes(messages: AgentMessage[], calls: Call[], protectedFrom: n
     savings += Math.max(0, messagesBytes([result]) - breadcrumb);
   }
   // What full folding leaves behind includes the lines standing for what left.
+  // A turn that made no call is folded with the traffic around it, so the
+  // reasoning full folding reaches is what lies below the newest call.
+  savings += orphanReasoningBytes(messages, reasoningThrough(calls, protectedFrom));
   return Math.max(0, savings - dropLineReserve(messages, droppedHere));
+}
+
+/** How far into the conversation a full fold blanks reasoning of its own. */
+function reasoningThrough(calls: Call[], protectedFrom: number): number {
+  if (calls.length === 0) return 0;
+  return Math.min(calls[calls.length - 1].callMessage, protectedFrom);
+}
+
+/** What the reasoning of the callless assistant turns below `through` weighs. */
+function orphanReasoningBytes(messages: AgentMessage[], through: number): number {
+  let size = 0;
+  for (let m = 0; m < through; m++) {
+    const message = messages[m];
+    if (message?.role !== "assistant" || !Array.isArray(message.content)) continue;
+    if (message.content.some((part: any) => part?.type === "toolCall")) continue;
+    size += thinkingBytes(message);
+  }
+  return size;
 }
 
 /**

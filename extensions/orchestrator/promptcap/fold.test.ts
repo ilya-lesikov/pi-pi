@@ -22,6 +22,12 @@ const result = (id: string, name: string, text: string, isError = false): AgentM
 const user = (text: string): AgentMessage => ({ role: "user", content: [{ type: "text", text }] });
 const prose = (text: string): AgentMessage => ({ role: "assistant", content: [{ type: "text", text }] });
 
+/** A turn the provider cut off mid-thought: reasoning, and no call to reach it by. */
+const truncated = (thinking: string, signature: string): AgentMessage => ({
+  role: "assistant",
+  content: [{ type: "thinking", thinking, thinkingSignature: signature }],
+});
+
 /** A conversation of `n` answered calls, each carrying a `size`-byte result. */
 const conversation = (n: number, size: number): AgentMessage[] => {
   const messages: AgentMessage[] = [user("go")];
@@ -149,6 +155,68 @@ describe("fold", () => {
 
     expect(messages[1].content[0].thinking).toBe("");
     expect(messages[4].content[0].thinking).toBe("fresh reasoning");
+  });
+
+  it("drops the reasoning of a turn that made no call at all", () => {
+    const messages = [
+      user("first"),
+      call("t0", "read", { p: "/a" }),
+      result("t0", "read", "o".repeat(9000)),
+      truncated("cut off mid-thought", "s".repeat(9000)),
+      user("second"),
+      call("t1", "read", { p: "/b" }),
+      result("t1", "read", "o".repeat(9000)),
+      user("third"),
+    ];
+    fold(messages, 0, { ceiling: 10, lowWater: 5 }, new FoldState());
+
+    expect(messages[3].content[0]).toEqual({ type: "thinking", thinking: "", thinkingSignature: "" });
+  });
+
+  it("keeps a callless turn's reasoning while the conversation still fits", () => {
+    const messages = [
+      user("first"),
+      call("t0", "read", { p: "/a" }),
+      result("t0", "read", "o".repeat(9000)),
+      truncated("cut off mid-thought", "s".repeat(9000)),
+      user("second"),
+      call("t1", "read", { p: "/b" }),
+      result("t1", "read", "o".repeat(9000)),
+      user("third"),
+    ];
+    fold(messages, 0, { ceiling: 1_000_000, lowWater: 500_000 }, new FoldState());
+
+    expect(messages[3].content[0].thinking).toBe("cut off mid-thought");
+  });
+
+  it("leaves a callless turn's reasoning alone after the last user message", () => {
+    const messages = [
+      user("first"),
+      call("t0", "read", { p: "/a" }),
+      result("t0", "read", "o".repeat(9000)),
+      user("second"),
+      truncated("fresh reasoning", "s".repeat(9000)),
+      call("t1", "read", { p: "/b" }),
+      result("t1", "read", "o".repeat(9000)),
+    ];
+    fold(messages, 0, { ceiling: 10, lowWater: 5 }, new FoldState());
+
+    expect(messages[4].content[0].thinking).toBe("fresh reasoning");
+  });
+
+  it("counts a callless turn's reasoning as foldable in the floor", () => {
+    const withReasoning = [
+      user("go"),
+      call("t0", "read", { p: "/a" }),
+      result("t0", "read", "o".repeat(400)),
+      truncated("cut off mid-thought", "s".repeat(40_000)),
+      call("t1", "read", { p: "/b" }),
+      result("t1", "read", "o".repeat(400)),
+      user("next"),
+    ];
+    const without = withReasoning.filter((m) => m.content[0]?.type !== "thinking");
+
+    expect(incompressibleTokens(withReasoning, 0)).toBe(incompressibleTokens(without, 0));
   });
 
   it("keeps redacted thinking intact", () => {
