@@ -67,8 +67,9 @@ export function readImageSize(bytes: Uint8Array): { width: number; height: numbe
         offset++;
         continue;
       }
-      // Every start-of-frame marker but DHT (0xc4), DNL (0xc8) and DAC (0xcc)
-      // carries the frame's dimensions in the same place.
+      // Of the markers in this range, only DHT (0xc4), JPG (0xc8) and DAC
+      // (0xcc) are not start-of-frame; every other one carries the frame's
+      // dimensions in the same place.
       if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
         return { width: view.getUint16(offset + 7), height: view.getUint16(offset + 5) };
       }
@@ -116,9 +117,14 @@ async function shrinkBlock(resize: ResizeImage, block: ImageBlock, settings: Ima
   const target = size ? fittedSize(size.width, size.height, settings.maxEdge, settings.maxVisualTokens) : null;
   const overBytes = Buffer.byteLength(block.data, "utf-8") > settings.maxBytes;
   if (target && target.width === size!.width && target.height === size!.height && !overBytes) return null;
+  // A format whose header this does not read gets a square box small enough to
+  // hold the patch budget at any aspect ratio. That shrinks an elongated image
+  // further than the rule would, which beats sending one the model has to
+  // resample itself.
+  const blindEdge = Math.min(settings.maxEdge, PATCH * Math.floor(Math.sqrt(settings.maxVisualTokens)));
   const resized = await resize(bytes, block.mimeType, {
-    maxWidth: target?.width ?? settings.maxEdge,
-    maxHeight: target?.height ?? settings.maxEdge,
+    maxWidth: target?.width ?? blindEdge,
+    maxHeight: target?.height ?? blindEdge,
     maxBytes: settings.maxBytes,
     jpegQuality: settings.jpegQuality,
   });
