@@ -1118,6 +1118,18 @@ function modelSpec(modelId: string): string {
   return `pp-flant-openai/${modelId}`;
 }
 
+/**
+ * The gateway is LiteLLM in front of OpenRouter, and neither pins a session to
+ * one upstream by default: consecutive requests land on deployments holding
+ * unrelated prompt-cache state, so a long session re-buys the tail of its own
+ * prompt every turn. `x-session-id` is the header OpenRouter documents for
+ * sticky routing and the shape LiteLLM's own session-affinity check reads.
+ * Inert until the gateway forwards client headers, which costs nothing while
+ * it does not. Not applied to the `sub/` provider, whose compat pi's Claude
+ * catalog owns.
+ */
+const SESSION_AFFINITY_COMPAT = { sendSessionAffinityHeaders: true, sessionAffinityFormat: "openrouter" } as const;
+
 function buildProviderModelConfig(
   flantModelId: string,
   metadata: Record<string, OpenRouterModelData>,
@@ -1211,7 +1223,7 @@ export function registerFlantProviders(
     api: "openai-completions",
     baseUrl: "https://llm-api.flant.ru/v1",
     apiKey: gatewayKey,
-    models: openaiModels.map((m) => buildProviderModelConfig(m, metadata)),
+    models: openaiModels.map((m) => ({ ...buildProviderModelConfig(m, metadata), compat: { ...SESSION_AFFINITY_COMPAT } })),
   });
 
   const availableSpecs = openaiModels.map((id) => `pp-flant-openai/${id}`);

@@ -91,6 +91,24 @@ describe("flant-infra", () => {
     expect([...registered.keys()]).toEqual(["pp-flant-openai"]);
   });
 
+  it("asks the gateway to pin a session to one upstream", async () => {
+    const dir = makeTempDir();
+    const mod = await loadFlantInfraModule(dir);
+
+    const registered = new Map<string, any>();
+    const pi = {
+      registerProvider: vi.fn((name: string, config: unknown) => registered.set(name, config)),
+      unregisterProvider: vi.fn((name: string) => registered.delete(name)),
+    } as any;
+
+    mod.registerFlantProviders(pi, ["gpt-5"], {});
+
+    expect(registered.get("pp-flant-openai").models[0].compat).toMatchObject({
+      sendSessionAffinityHeaders: true,
+      sessionAffinityFormat: "openrouter",
+    });
+  });
+
   it("registers regular providers with the resolved gateway key", async () => {
     const dir = makeTempDir();
     const previousLlmKey = process.env.LLM_API_KEY;
