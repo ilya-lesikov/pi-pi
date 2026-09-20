@@ -74,6 +74,18 @@ export interface PromptcapSettings extends PromptcapModelSettings {
    */
   keepFraction?: number;
   /**
+   * Whether to ask Anthropic to hold the prompt cache for an hour instead of
+   * five minutes. Absent means yes.
+   *
+   * The five-minute default expires across any pause worth the name — reading
+   * a diff, a meeting, lunch — and the next turn re-buys the whole prompt at
+   * write price. One session on disk lost 23.5M tokens that way against 14.2M
+   * to every fold it did. An hour costs 2x base on the tokens actually written
+   * rather than 1.25x, which one read landing after five minutes already pays
+   * for, and nothing at all on a flat-rate subscription.
+   */
+  longCacheRetention?: boolean;
+  /**
    * Overrides keyed by the model spec a turn asks for, matched on either the
    * full `provider/id` or the bare id.
    */

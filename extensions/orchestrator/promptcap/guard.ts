@@ -38,6 +38,7 @@ export class PromptGuard {
 
   apply(messages: AgentMessage[], ctx: any, tools: unknown[]): AgentMessage[] {
     const settings = this.host.settings();
+    applyCacheRetention(settings);
     const modelKey = modelKeyOf(ctx);
     const systemPrompt = typeof ctx?.getSystemPrompt === "function" ? ctx.getSystemPrompt() : undefined;
     const fixed = fixedBytes(systemPrompt, tools);
@@ -171,6 +172,20 @@ export function registerPromptGuard(pi: ExtensionAPI, guard: PromptGuard): void 
     const charged = (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
     guard.calibrate(charged, modelKeyOf(ctx));
   });
+}
+
+/**
+ * Asks the Anthropic adapters for the hour-long prompt cache.
+ *
+ * The adapter reads this off the environment, so the reach is the process and
+ * every Anthropic-shaped provider in it. An operator who has already stated a
+ * preference keeps it — including the preference for five minutes, which is
+ * what unsetting this comes down to.
+ */
+function applyCacheRetention(settings: PromptcapSettings): void {
+  if (settings.longCacheRetention === false) return;
+  if (process.env.PI_CACHE_RETENTION) return;
+  process.env.PI_CACHE_RETENTION = "long";
 }
 
 function activeTools(pi: ExtensionAPI): unknown[] {

@@ -977,6 +977,7 @@ async function showPromptcapSettings(orchestrator: Orchestrator, ctx: any): Prom
         opt(`Headroom: ${Math.round((c.headroomTokens ?? DEFAULT_HEADROOM_TOKENS) / 1000)}K tokens`, "Room kept above the prose that cannot be folded, before folding starts"),
         opt(`History kept: ${Math.round((c.keepFraction ?? DEFAULT_KEEP_FRACTION) * 100)}%`, "How much of that headroom a fold keeps as recent tool history; the rest is room to grow back into"),
         opt(`Image cost: ${((c.imageTokens ?? DEFAULT_IMAGE_TOKENS) / 1000).toFixed(1)}K tokens`, "What one image is counted as; raise it for a model whose vendor charges more for the same picture"),
+        opt(`Hour-long cache: ${c.longCacheRetention === false ? "OFF" : "ON"}`, "Ask Anthropic to hold the prompt cache for an hour, so a pause longer than five minutes stops re-buying the prompt"),
       );
       const guard = orchestrator.promptGuard;
       if (guard?.lastTokens != null && guard.lastCeiling != null) {
@@ -988,6 +989,10 @@ async function showPromptcapSettings(orchestrator: Orchestrator, ctx: any): Prom
     if (!choice || choice === BACK) return;
     if (choice.startsWith("Fold old tool calls:")) {
       await showBooleanSetting(orchestrator, ctx, "Fold old tool calls", ["promptcap", "enabled"], "Replace old tool output and arguments in the prompt with a recallable notice", "Send the whole conversation");
+      continue;
+    }
+    if (choice.startsWith("Hour-long cache:")) {
+      await showBooleanSetting(orchestrator, ctx, "Hour-long cache", ["promptcap", "longCacheRetention"], "Hold the prompt cache for an hour, at 2x base on what is written", "Leave the provider's five-minute default");
       continue;
     }
     const picker = pickers.find((entry) => choice.startsWith(entry.prefix));

@@ -50,6 +50,26 @@ describe("PromptGuard", () => {
     expect(dear.lastTokens! - cheap.lastTokens!).toBe(25_000 - 1_600);
   });
 
+  it("asks for the hour-long cache unless the operator already chose", () => {
+    const original = process.env.PI_CACHE_RETENTION;
+    try {
+      delete process.env.PI_CACHE_RETENTION;
+      new PromptGuard({ settings: () => settings() }).apply(conversation(2, 100), ctx(200_000), []);
+      expect(process.env.PI_CACHE_RETENTION).toBe("long");
+
+      process.env.PI_CACHE_RETENTION = "short";
+      new PromptGuard({ settings: () => settings() }).apply(conversation(2, 100), ctx(200_000), []);
+      expect(process.env.PI_CACHE_RETENTION).toBe("short");
+
+      delete process.env.PI_CACHE_RETENTION;
+      new PromptGuard({ settings: () => settings({ longCacheRetention: false }) }).apply(conversation(2, 100), ctx(200_000), []);
+      expect(process.env.PI_CACHE_RETENTION).toBeUndefined();
+    } finally {
+      if (original === undefined) delete process.env.PI_CACHE_RETENTION;
+      else process.env.PI_CACHE_RETENTION = original;
+    }
+  });
+
   it("names the message a fold rewrote, so its re-bill can be traced", () => {
     const log = vi.fn();
     const guard = new PromptGuard({ settings: () => settings({ maxPromptTokens: 5_000 }), log });

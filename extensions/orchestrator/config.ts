@@ -52,6 +52,10 @@ export interface PromptcapConfig extends PromptcapModelConfig {
    *  between 0 and 1 (default 0.3). The rest is the room the prompt grows back
    *  into before the next fold. */
   keepFraction?: number;
+  /** Ask Anthropic to hold the prompt cache for an hour rather than five
+   *  minutes (default true). Off = the provider default, which expires across
+   *  any pause longer than a coffee and re-buys the prompt at write price. */
+  longCacheRetention?: boolean;
   /** Per-model overrides keyed by model id, bare or provider-prefixed. */
   perModel: Record<string, PromptcapModelConfig>;
 }
@@ -246,6 +250,7 @@ function ensureNumberInRange(value: unknown, path: string, min: number, max: num
 function validatePromptcap(value: unknown): void {
   const c = requireObject(value, "config.promptcap");
   ensureBool(c.enabled, "config.promptcap.enabled");
+  ensureBool(c.longCacheRetention, "config.promptcap.longCacheRetention");
   ensureNumberInRange(c.maxPromptTokens, "config.promptcap.maxPromptTokens", 1000, 100_000_000);
   ensureNumberInRange(c.contextWindow, "config.promptcap.contextWindow", 1000, 100_000_000);
   ensureNumberInRange(c.headroomTokens, "config.promptcap.headroomTokens", 1000, 100_000_000);
