@@ -124,6 +124,7 @@ describe("recall tools", () => {
     const out = await run("vcc_recall", { scope: "all", expand: [1] });
 
     expect(Buffer.byteLength(out)).toBeLessThan(13_000);
+    expect(out).toContain("characters not shown");
   });
 });
 

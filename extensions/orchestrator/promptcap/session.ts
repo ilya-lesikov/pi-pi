@@ -108,6 +108,18 @@ export function clip(text: string, max = 200): string {
   return text.slice(0, end);
 }
 
+/**
+ * Clips for an entry the caller asked to see whole, saying so where it cut.
+ *
+ * A summary is understood to be a summary; an expansion is not, and one that
+ * quietly stops mid-decision reads as the whole of what was said.
+ */
+function clipFull(text: string): string {
+  if (text.length <= FULL_ENTRY_CHARS) return text;
+  const shown = clip(text, FULL_ENTRY_CHARS);
+  return `${shown}\n…[${text.length - shown.length} characters not shown; the whole of a tool result is in recall_tool_output]`;
+}
+
 // How much of a heredoc, a patch or a search query stands for the call it was
 // passed to. The summary is an index entry, and one call's argument used to be
 // able to outweigh the twenty-five entries around it.
@@ -115,7 +127,7 @@ const ARG_SUMMARY_CHARS = 200;
 
 // What one entry may weigh when the caller asked to see it whole. An expanded
 // entry is a message with its reasoning attached, which on a long turn runs to
-// thousands of words; the rest is a recall_tool_output away.
+// thousands of words.
 const FULL_ENTRY_CHARS = 4000;
 
 export function textOf(content: Message["content"] | undefined): string {
@@ -152,15 +164,15 @@ function summarizeToolArgs(args: Record<string, unknown>): string {
 
 export function renderMessage(message: Message, index: number, full = false): RenderedEntry {
   if (message.role === "user") {
-    return { index, role: "user", summary: clip(textOf(message.content), full ? FULL_ENTRY_CHARS : 300) };
+    return { index, role: "user", summary: full ? clipFull(textOf(message.content)) : clip(textOf(message.content), 300) };
   }
   if (message.role === "toolResult") {
-    const text = clip(textOf(message.content), full ? FULL_ENTRY_CHARS : 200);
+    const text = full ? clipFull(textOf(message.content)) : clip(textOf(message.content), 200);
     return { index, role: "tool_result", summary: `${message.isError ? "ERROR " : ""}[${message.toolName}] ${text}` };
   }
   if ((message as any).role === "bashExecution") {
     const raw = `$ ${(message as any).command ?? ""}\n${(message as any).output ?? ""}`;
-    return { index, role: "bash", summary: clip(raw, full ? FULL_ENTRY_CHARS : 300) };
+    return { index, role: "bash", summary: full ? clipFull(raw) : clip(raw, 300) };
   }
 
   const content = Array.isArray(message.content) ? message.content : [];
@@ -168,9 +180,9 @@ export function renderMessage(message: Message, index: number, full = false): Re
   const tools = calls.map((part) => `${part.name}(${summarizeToolArgs(part.arguments ?? {})})`).join(", ");
   const files = calls.map((part) => extractPath(part.arguments ?? {})).filter((path): path is string => path !== null);
 
-  const text = clip(textOf(message.content), full ? FULL_ENTRY_CHARS : 300);
+  const text = full ? clipFull(textOf(message.content)) : clip(textOf(message.content), 300);
   const thinking = thinkingOf(message.content);
-  const shownThinking = thinking ? clip(thinking, full ? FULL_ENTRY_CHARS : 150) : "";
+  const shownThinking = thinking ? (full ? clipFull(thinking) : clip(thinking, 150)) : "";
   const body = shownThinking ? `[thinking] ${shownThinking}\n${text}` : text;
 
   return { index, role: "assistant", summary: tools ? `${tools}\n${body}` : body, ...(files.length > 0 && { files }) };

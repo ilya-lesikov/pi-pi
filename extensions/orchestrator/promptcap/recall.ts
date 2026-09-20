@@ -94,13 +94,13 @@ export function registerRecallTools(pi: ExtensionAPI, source?: SessionSource): v
     promptSnippet:
       "vcc_recall: Search history; source defaults to the owning root session. Use source:'current' for this session's history. " +
       "Default scope is the active branch; use scope:'all' for off-branch history. " +
-      "expand:[indices] returns full content for those entries, composable with query to expand matched results.",
+      "expand:[indices] returns those entries in full, bounded and marked where cut.",
     parameters: Type.Object({
       query: Type.Optional(
         Type.String({ description: "Search terms or regex pattern (e.g. 'hook|inject', 'fail.*build'). Multi-word = OR ranked by relevance." }),
       ),
       expand: Type.Optional(
-        Type.Array(Type.Number(), { description: "Entry indices to return full untruncated content for. Works alone (any index in scope) or alongside query (expands matching entries on the current page)." }),
+        Type.Array(Type.Number(), { description: "Entry indices to return in full, each bounded and marked where it was cut. Works alone (any index in scope) or alongside query (expands matching entries on the current page)." }),
       ),
       page: Type.Optional(Type.Number({ description: "Page number (1-based) for paginated search results. Default: 1." })),
       scope: Type.Optional(
