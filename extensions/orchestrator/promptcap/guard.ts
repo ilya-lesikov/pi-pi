@@ -74,10 +74,30 @@ export class PromptGuard {
     this.lastTokens = result.tokens;
     this.lastCeiling = limits.ceiling;
 
-    if (result.tokens < result.tokensBefore) {
+    if (result.rewroteFrom >= 0) {
+      // Logged whatever it saved, and naming the message it moved: everything
+      // after that message is re-billed, so a fold that freed little is a
+      // charge to account for rather than a quiet success.
       this.host.log?.(
-        { s: "promptcap", model: modelKey, before: result.tokensBefore, after: result.tokens, ceiling: limits.ceiling, folded: result.folded },
-        "folded old tool calls to fit the model's window",
+        {
+          s: "promptcap",
+          model: modelKey,
+          before: result.tokensBefore,
+          after: result.tokens,
+          ceiling: limits.ceiling,
+          lowWater: limits.lowWater,
+          floor,
+          folded: result.folded,
+          promoted: result.promoted,
+          rewroteFrom: result.rewroteFrom,
+          messages: messages.length,
+        },
+        "folded old tool calls, re-billing the prompt from the message it rewrote",
+      );
+    } else if (result.held) {
+      this.host.log?.(
+        { s: "promptcap", model: modelKey, tokens: result.tokens, ceiling: limits.ceiling, floor },
+        "over the ceiling, but folding would not free enough to pay for the cache miss",
       );
     }
 

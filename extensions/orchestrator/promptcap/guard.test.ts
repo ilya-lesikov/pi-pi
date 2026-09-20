@@ -50,6 +50,32 @@ describe("PromptGuard", () => {
     expect(dear.lastTokens! - cheap.lastTokens!).toBe(25_000 - 1_600);
   });
 
+  it("names the message a fold rewrote, so its re-bill can be traced", () => {
+    const log = vi.fn();
+    const guard = new PromptGuard({ settings: () => settings({ maxPromptTokens: 5_000 }), log });
+
+    guard.apply(conversation(40, 8000), ctx(), []);
+
+    const [event, message] = log.mock.calls.find(([e]) => (e as any).rewroteFrom !== undefined)!;
+    expect((event as any).rewroteFrom).toBe(1);
+    expect((event as any).promoted).toBeGreaterThan(0);
+    expect(message).toContain("rewrote");
+  });
+
+  it("reports a fold held back as not worth its cache miss", () => {
+    const log = vi.fn();
+    const guard = new PromptGuard({ settings: () => settings({ maxPromptTokens: 19_000 }), log });
+    const messages: AgentMessage[] = [
+      { role: "user", content: [{ type: "text", text: "p".repeat(80_000) }] },
+      ...conversation(10, 200).slice(1),
+    ];
+
+    guard.apply(messages, ctx(), []);
+
+    expect(log.mock.calls.some(([, m]) => String(m).includes("not free enough"))).toBe(true);
+    expect(log.mock.calls.some(([e]) => (e as any).rewroteFrom !== undefined)).toBe(false);
+  });
+
   it("folds a conversation that outgrew the declared ceiling", () => {
     const guard = new PromptGuard({ settings: () => settings({ maxPromptTokens: 5_000 }) });
     const messages = conversation(40, 8000);

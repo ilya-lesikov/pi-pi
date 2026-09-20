@@ -131,6 +131,18 @@ export interface FoldResult {
   tokensBefore: number;
   /** Calls standing at digest or below-verbatim after this pass. */
   folded: number;
+  /** Calls this pass moved a tier, which is what a rewrite is made of. */
+  promoted: number;
+  /**
+   * The oldest message this pass rewrote, or -1 when it rewrote none.
+   *
+   * Everything from here on is a cache miss, so this is what an unexplained
+   * re-bill is traced with: a pass that moved message 300 of 840 re-bought two
+   * thirds of the prompt, whatever it freed.
+   */
+  rewroteFrom: number;
+  /** Whether the prompt was over the ceiling and folding was held back anyway. */
+  held: boolean;
 }
 
 interface Call {
@@ -226,7 +238,19 @@ export function fold(
   // theirs as they are chosen.
   bytes += dropLineReserve(messages, calls.filter((call) => call.tier >= Tier.Drop));
 
-  if (toTokens(bytes) > limits.ceiling && worthFolding(messages, calls, bytes, limits, protectedFrom, ratio, imageTokens)) {
+  const over = toTokens(bytes) > limits.ceiling;
+  const worth = over && worthFolding(messages, calls, bytes, limits, protectedFrom, ratio, imageTokens);
+  // The oldest message this pass moves. Re-applying a remembered tier does not
+  // count: it reproduces what the last request already sent, so the prefix is
+  // where it was. Only a new promotion moves it.
+  let rewroteFrom = -1;
+  let promoted = 0;
+  const rewrote = (call: Call): void => {
+    promoted++;
+    if (rewroteFrom < 0 || call.callMessage < rewroteFrom) rewroteFrom = call.callMessage;
+  };
+
+  if (worth) {
     // The low-water mark already clears the floor by construction — it is a
     // share of the span between floor and ceiling — so an unreachable target
     // cannot be chased here.
@@ -239,6 +263,7 @@ export function fold(
         bytes -= applyTier(messages, call, to, protectedFrom, imageTokens);
         call.tier = to;
         state.promote(call.id, to);
+        rewrote(call);
         followReasoning(call.callMessage);
       }
     }
@@ -251,6 +276,7 @@ export function fold(
       bytes -= dropSavings(messages, call, imageTokens) + stripReasoning(messages, call, protectedFrom);
       call.tier = Tier.Drop;
       state.promote(call.id, Tier.Drop);
+      rewrote(call);
       newlyDropped.push(call);
     }
     bytes += dropLineReserve(messages, newlyDropped);
@@ -268,6 +294,9 @@ export function fold(
     tokens: toTokens(bytes),
     tokensBefore,
     folded: calls.filter((call) => call.tier !== Tier.Verbatim).length,
+    promoted,
+    rewroteFrom,
+    held: over && !worth,
   };
 }
 
