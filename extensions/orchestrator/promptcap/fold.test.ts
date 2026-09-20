@@ -75,7 +75,7 @@ describe("fold", () => {
     expect(messages[20].content[0].text).toBe("o".repeat(4000));
   });
 
-  it("caps a digested call's arguments per value, keeping every key", () => {
+  it("replaces an over-cap argument with a notice, keeping every key", () => {
     const messages = [user("go"), call("t0", "write", { path: "/a", body: "y".repeat(5000) }), result("t0", "write", "ok")];
     const state = new FoldState();
     fold(messages, 0, { ceiling: 1000, lowWater: 600 }, state);
@@ -84,8 +84,30 @@ describe("fold", () => {
     const args = messages[1].content[0].arguments;
     expect(Object.keys(args).sort()).toEqual(["body", "path"]);
     expect(args.path).toBe("/a");
-    expect(byteLength(args.body)).toBeLessThan(2100);
-    expect(args.body).toMatch(/\[args cut: 3000B; t0\]$/);
+    expect(args.body).toBe("[args omitted: 5000B; t0]");
+  });
+
+  it("keeps a payload argument whole up to the wider cap", () => {
+    const command = "cd /repo && " + "x".repeat(3000);
+    const messages = [user("go"), call("t0", "bash", { command }), result("t0", "bash", "o".repeat(9000))];
+    const state = new FoldState();
+    fold(messages, 0, { ceiling: 1200, lowWater: 1100 }, state);
+
+    expect(state.tierOf("t0")).toBe(Tier.Digest);
+    expect(messages[1].content[0].arguments.command).toBe(command);
+  });
+
+  it("never leaves a severed value behind", () => {
+    const messages = [
+      user("go"),
+      call("t0", "edit", { path: "/a", edits: [{ oldText: "o".repeat(4000), newText: "n".repeat(4000) }] }),
+      result("t0", "edit", "ok"),
+    ];
+    fold(messages, 0, { ceiling: 1000, lowWater: 600 }, new FoldState());
+
+    const args = messages[1].content[0].arguments;
+    expect(args.edits).toMatch(/^\[args omitted: \d+B; t0\]$/);
+    expect(JSON.stringify(args)).not.toContain("oooo");
   });
 
   it("caps a list argument by element count before bytes", () => {
@@ -93,8 +115,7 @@ describe("fold", () => {
       user("go"),
       call("t0", "grep", { files: ["a", "b", "c", "d", "e", "f", "g"] }),
       result("t0", "grep", "o".repeat(4000)),
-    ];
-    const state = new FoldState();
+    ];    const state = new FoldState();
     fold(messages, 0, { ceiling: 1000, lowWater: 900 }, state);
 
     expect(state.tierOf("t0")).toBe(Tier.Digest);

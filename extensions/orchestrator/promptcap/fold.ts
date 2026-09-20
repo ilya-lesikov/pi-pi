@@ -43,18 +43,16 @@ export enum Tier {
 // over the serialized blob because JSON key order is arbitrary: cutting the
 // blob drops whichever keys sort last, which can mean losing the path or the
 // object name while keeping a file body.
-const ARG_LEAF_BYTES = 400;
+const ARG_LEAF_BYTES = 1_000;
 
 // What an argument carrying literal payload is capped at instead. A command or
-// a file body is something the model reproduces rather than looks up, and a cut
-// one is worse than an absent one: it reads as content, so it gets retyped —
-// a severed heredoc, a path ending mid-segment, a marker written into a file.
-// The wider cap buys the room to keep such a value whole.
-const ARG_CONTENT_BYTES = 2_000;
+// a file body is something the model reproduces rather than looks up, so the
+// wider cap buys the room to keep such a value whole rather than replace it.
+const ARG_CONTENT_BYTES = 4_000;
 
 // Argument names whose value is literal payload rather than a reference to
 // something the model could look up again.
-const CONTENT_ARG_KEYS = new Set(["command", "content", "oldText", "newText", "patch", "body"]);
+const CONTENT_ARG_KEYS = new Set(["command", "content", "oldText", "newText", "patch", "body", "edits"]);
 
 // How many of the newest calls are never dropped, however tight the budget.
 // Recent tool traffic is what the model is still working from, so it is trimmed
@@ -731,17 +729,18 @@ function trimArgs(args: unknown, callId: string): Record<string, unknown> {
     const encoded = typeof value === "string" ? value : jsonText(value);
     const size = byteLength(encoded);
     const cap = CONTENT_ARG_KEYS.has(key) ? ARG_CONTENT_BYTES : ARG_LEAF_BYTES;
-    if (size <= cap) {
-      trimmed[key] = value;
-      continue;
-    }
-    // The notice names the call so the whole value can be asked for back, and
-    // is worded as a notice rather than as an ellipsis: what stood here was
-    // content, and a cut that still looks like content gets reproduced as if
-    // it were the whole of it.
-    trimmed[key] = `${cutBytes(encoded, cap)}[args cut: ${size - cap}B; ${callId}]`;
+    // A value too big to keep goes whole, and what replaces it is a notice and
+    // nothing else. Leaving the beginning behind was worse than leaving
+    // nothing: it still reads as content, so it gets retyped — a severed
+    // heredoc, a path ending mid-segment, the notice itself written into a
+    // source file by the write that copied it. The value is one recall away.
+    trimmed[key] = size <= cap ? value : argOmission(size, callId);
   }
   return trimmed;
+}
+
+export function argOmission(size: number, id: string): string {
+  return `[args omitted: ${size}B; ${id}]`;
 }
 
 function jsonText(value: unknown): string {
