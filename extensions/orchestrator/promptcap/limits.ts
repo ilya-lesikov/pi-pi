@@ -41,7 +41,15 @@ export const DEFAULT_KEEP_FRACTION = 0.3;
 export const OVERFLOW_MARGIN = 1.15;
 
 export interface PromptcapModelSettings {
-  /** The ceiling applied when no window is known. */
+  /**
+   * The ceiling applied when no window is known.
+   *
+   * It raises the ceiling and never lowers it: once the unfoldable prose plus
+   * the headroom exceeds this number, that sum is the ceiling instead. To fold
+   * a long session sooner, cut {@link PromptcapSettings.headroomTokens} or
+   * declare a smaller {@link contextWindow}, which bounds the ceiling from
+   * above.
+   */
   maxPromptTokens?: number;
   /**
    * What one image is counted as. Absent means
@@ -122,6 +130,10 @@ export function imageTokensFor(settings: PromptcapSettings, modelKey: string | u
  * working margin instead of folding harder and harder around it, and it is
  * capped by what the window can actually hold: a model that admits 200K tokens
  * must start folding below 200K, however much headroom was asked for.
+ *
+ * Because the ceiling climbs, `maxPromptTokens` is a lower bound on it rather
+ * than a cap: it decides where folding starts only while the floor is small
+ * enough that floor + headroom sits under it.
  */
 export function limitsFor(
   settings: PromptcapSettings,

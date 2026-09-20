@@ -29,7 +29,11 @@ export interface PoolEntry {
 }
 
 export interface PromptcapModelConfig {
-  /** Prompt ceiling in tokens, applied when no context window is known (default 150000). */
+  /** Prompt ceiling in tokens, applied when no context window is known
+   *  (default 150000). It raises the ceiling and never lowers it: once the
+   *  unfoldable prose plus headroomTokens exceeds it, that sum is the ceiling.
+   *  To fold a long session sooner, cut headroomTokens or declare a smaller
+   *  contextWindow. */
   maxPromptTokens?: number;
   /** The model's total context window. Omitted means "ask the host", which
    *  reports one for most models; declare it for a model whose provider

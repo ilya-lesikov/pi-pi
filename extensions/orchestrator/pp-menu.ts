@@ -910,7 +910,7 @@ async function showPromptcapSettings(orchestrator: Orchestrator, ctx: any): Prom
       key: "maxPromptTokens",
       question: "Prompt ceiling (tokens)",
       choices: [
-        { title: "100K", description: "Fold sooner, leaving less tool history in the prompt" },
+        { title: "100K", description: "Fold sooner, while the session's prose is still small" },
         { title: "150K", description: "Default" },
         { title: "250K", description: "Fold later, keeping more tool history" },
         { title: "400K", description: "Fold much later" },
@@ -972,7 +972,7 @@ async function showPromptcapSettings(orchestrator: Orchestrator, ctx: any): Prom
     ];
     if (c.enabled) {
       options.push(
-        opt(`Prompt ceiling: ${Math.round((c.maxPromptTokens ?? DEFAULT_MAX_PROMPT_TOKENS) / 1000)}K tokens`, "The size at which folding starts, when the model's window is unknown"),
+        opt(`Prompt ceiling: ${Math.round((c.maxPromptTokens ?? DEFAULT_MAX_PROMPT_TOKENS) / 1000)}K tokens`, "Where folding starts, unless the unfoldable prose plus headroom already sits above it"),
         opt(`Context window: ${c.contextWindow ? `${Math.round(c.contextWindow / 1000)}K tokens` : "ask the host"}`, "Declare the model's window, for a provider that does not report one"),
         opt(`Headroom: ${Math.round((c.headroomTokens ?? DEFAULT_HEADROOM_TOKENS) / 1000)}K tokens`, "Room kept above the prose that cannot be folded, before folding starts"),
         opt(`History kept: ${Math.round((c.keepFraction ?? DEFAULT_KEEP_FRACTION) * 100)}%`, "How much of that headroom a fold keeps as recent tool history; the rest is room to grow back into"),
