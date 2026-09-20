@@ -479,6 +479,60 @@ describe("fold", () => {
     expect(state.size).toBeGreaterThan(0);
   });
 
+  it("takes any saving once the window itself is at risk", () => {
+    const messages = [user("p".repeat(40_000)), ...plain(10, 200).slice(1)];
+    const state = new FoldState();
+
+    // Over the ceiling but under the usual margin above it; only the hard
+    // limit says this prompt has to give something up.
+    fold(messages, 0, { ceiling: 10_000, lowWater: 9_000, urgent: 10_500 }, state);
+
+    expect(state.size).toBeGreaterThan(0);
+  });
+
+  it("leaves a newly unprotected turn's reasoning alone when nothing else folds", () => {
+    const state = new FoldState();
+    const first: AgentMessage[] = [
+      user("go"),
+      truncated("a long unreachable thought ".repeat(200), "sig"),
+      call("t0", "read", { path: "/a" }),
+      result("t0", "read", "o".repeat(9000)),
+    ];
+    fold(first, 0, { ceiling: 1_000, lowWater: 500 }, state);
+    // Nothing may go while the turn that made it is the current one.
+    expect(first[1].content[0].thinking).not.toBe("");
+    expect(state.tierOf("t0")).toBeGreaterThan(Tier.Verbatim);
+
+    // A new user turn leaves that reasoning unprotected. Nothing new is
+    // foldable, so nothing may move: the bytes are not worth the cache miss.
+    const second: AgentMessage[] = [...first.slice(0, 4).map((m) => JSON.parse(JSON.stringify(m))), user("next")];
+    second[3].content[0].text = "o".repeat(9000);
+    const out = fold(second, 0, { ceiling: 1_000, lowWater: 500 }, state);
+
+    expect(second[1].content[0].thinking).not.toBe("");
+    expect(out.rewroteFrom).toBe(-1);
+  });
+
+  it("reports the oldest message it moved, reasoning included", () => {
+    const messages: AgentMessage[] = [
+      user("go"),
+      call("t0", "read", { path: "/a" }),
+      result("t0", "read", "o".repeat(9000)),
+      truncated("stray thought ".repeat(300), "sig"),
+      call("t1", "read", { path: "/b" }),
+      result("t1", "read", "o".repeat(9000)),
+      user("next"),
+    ];
+    const state = new FoldState();
+    state.promote("t0", Tier.Breadcrumb);
+
+    const out = fold(messages, 0, { ceiling: 1_000, lowWater: 500 }, state);
+
+    // t1 sits at message 4, but the orphan reasoning at 3 went with it.
+    expect(out.rewroteFrom).toBe(3);
+    expect(messages[3].content[0].thinking).toBe("");
+  });
+
   it("pins each distinct skill separately", () => {
     const messages = [
       user("go"),

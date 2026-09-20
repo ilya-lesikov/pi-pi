@@ -100,6 +100,11 @@ export interface Limits {
    * is what makes cache invalidation rare.
    */
   lowWater: number;
+  /**
+   * The size past which any saving is worth its cache miss, because the turn
+   * itself is at risk. Absent means a margin above the ceiling.
+   */
+  urgent?: number;
 }
 
 /**
@@ -171,6 +176,16 @@ interface Call {
  */
 export class FoldState {
   private tiers = new Map<string, Tier>();
+  /**
+   * How far orphan reasoning has been blanked, in message indices.
+   *
+   * Held here rather than recomputed because the range it belongs to is not a
+   * function of the conversation alone: it ends at the last user message, and
+   * that end moves forward with every user turn. Without the watermark a pass
+   * that promoted nothing would still strip whatever the newest user turn had
+   * left unprotected, and rewrite the prompt for it.
+   */
+  private reasoningThrough = 0;
 
   tierOf(callId: string): Tier {
     return this.tiers.get(callId) ?? Tier.Verbatim;
@@ -180,8 +195,17 @@ export class FoldState {
     if (to > this.tierOf(callId)) this.tiers.set(callId, to);
   }
 
+  get reasoningStrippedThrough(): number {
+    return this.reasoningThrough;
+  }
+
+  reachedReasoning(through: number): void {
+    if (through > this.reasoningThrough) this.reasoningThrough = through;
+  }
+
   clear(): void {
     this.tiers.clear();
+    this.reasoningThrough = 0;
   }
 
   get size(): number {
@@ -211,12 +235,29 @@ export function fold(
 
   const calls = indexCalls(messages);
   const protectedFrom = lastUserMessageIndex(messages);
+  // The oldest message this pass rewrites. Re-applying a remembered tier does
+  // not count: it reproduces what the last request already sent, so the prefix
+  // is where it was. Anything else that moves a byte does.
+  let rewroteFrom = -1;
+  let promoted = 0;
+  const moved = (index: number): void => {
+    if (rewroteFrom < 0 || index < rewroteFrom) rewroteFrom = index;
+  };
+
   // How far the orphan reasoning below has been blanked. It follows the calls:
   // a turn that made none is folded when the tool traffic around it is.
+  //
+  // The replay is clamped to how far an earlier pass reached, because the
+  // boundary it stops at is the last user message and that boundary moves: a
+  // new user turn leaves the previous turn's reasoning strippable, and
+  // stripping it would rewrite the prompt's tail for a handful of bytes
+  // nobody asked to spend a cache miss on.
   let reasoningFrom = 0;
-  const followReasoning = (through: number): void => {
-    bytes -= stripOrphanReasoning(messages, reasoningFrom, Math.min(through, protectedFrom));
-    reasoningFrom = Math.max(reasoningFrom, through);
+  const followReasoning = (through: number, replaying: boolean): void => {
+    const limit = replaying ? Math.min(through, state.reasoningStrippedThrough) : through;
+    bytes -= stripOrphanReasoning(messages, reasoningFrom, Math.min(limit, protectedFrom), replaying ? undefined : moved);
+    reasoningFrom = Math.max(reasoningFrom, Math.min(limit, protectedFrom));
+    if (!replaying) state.reachedReasoning(reasoningFrom);
   };
 
   // Re-apply what earlier requests already decided before measuring against the
@@ -232,7 +273,7 @@ export function fold(
       ? dropSavings(messages, call, imageTokens) + stripReasoning(messages, call, protectedFrom)
       : applyTier(messages, call, remembered, protectedFrom, imageTokens);
     call.tier = remembered;
-    followReasoning(call.callMessage);
+    followReasoning(call.callMessage, true);
   }
   // Remembered drops are charged their lines here; newly promoted ones add
   // theirs as they are chosen.
@@ -240,14 +281,9 @@ export function fold(
 
   const over = toTokens(bytes) > limits.ceiling;
   const worth = over && worthFolding(messages, calls, bytes, limits, protectedFrom, ratio, imageTokens);
-  // The oldest message this pass moves. Re-applying a remembered tier does not
-  // count: it reproduces what the last request already sent, so the prefix is
-  // where it was. Only a new promotion moves it.
-  let rewroteFrom = -1;
-  let promoted = 0;
   const rewrote = (call: Call): void => {
     promoted++;
-    if (rewroteFrom < 0 || call.callMessage < rewroteFrom) rewroteFrom = call.callMessage;
+    moved(call.callMessage);
   };
 
   if (worth) {
@@ -264,7 +300,7 @@ export function fold(
         call.tier = to;
         state.promote(call.id, to);
         rewrote(call);
-        followReasoning(call.callMessage);
+        followReasoning(call.callMessage, false);
       }
     }
 
@@ -325,7 +361,7 @@ function worthFolding(
   imageTokens: number,
 ): boolean {
   const tokens = tokensOf(bytes, ratio);
-  if (tokens > limits.ceiling * OVERFLOW_MARGIN) return true;
+  if (tokens > (limits.urgent ?? limits.ceiling * OVERFLOW_MARGIN)) return true;
   const reachable = tokensOf(bytes - foldableBytes(messages, calls, protectedFrom, imageTokens), ratio);
   return tokens - Math.max(limits.lowWater, reachable) >= tokens * MIN_FOLD_FRACTION;
 }
@@ -358,13 +394,15 @@ function stripReasoning(messages: AgentMessage[], call: Call, protectedFrom: num
  * when the tool traffic it sits among goes and not before: a conversation small
  * enough never to fold keeps all of it.
  */
-function stripOrphanReasoning(messages: AgentMessage[], from: number, through: number): number {
+function stripOrphanReasoning(messages: AgentMessage[], from: number, through: number, onBlank?: (index: number) => void): number {
   let saved = 0;
   for (let m = from; m < through; m++) {
     const message = messages[m];
     if (message?.role !== "assistant" || !Array.isArray(message.content)) continue;
     if (message.content.some((part: any) => part?.type === "toolCall")) continue;
-    saved += blankReasoning(message);
+    const blanked = blankReasoning(message);
+    if (blanked > 0) onBlank?.(m);
+    saved += blanked;
   }
   return saved;
 }

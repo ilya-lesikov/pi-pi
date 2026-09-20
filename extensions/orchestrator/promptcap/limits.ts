@@ -150,8 +150,9 @@ export function limitsFor(
   // known about the model — so it stays put, and a floor that outgrows it is
   // reported by the overflow warning rather than papered over by raising the
   // limit the operator set precisely because the window is unknown.
+  let hard = 0;
   if (window > 0) {
-    const hard = window - OUTPUT_RESERVE - Math.floor(window * WINDOW_MARGIN);
+    hard = window - OUTPUT_RESERVE - Math.floor(window * WINDOW_MARGIN);
     if (hard > 0) ceiling = Math.min(hard, Math.max(ceiling, floorTokens + headroom));
   }
 
@@ -167,5 +168,11 @@ export function limitsFor(
   const span = Math.max(0, ceiling - floorTokens);
   const lowWater = floorTokens + Math.floor(span * keep);
 
-  return { ceiling, lowWater };
+  // Where folding stops weighing its cache miss and takes any saving it can
+  // get. Some overshoot above the ceiling is expected and harmless, but never
+  // past what the window itself allows: beyond that the request is refused
+  // outright, and a fold that frees a little beats a turn that does not run.
+  const urgent = hard > 0 ? Math.min(Math.round(ceiling * OVERFLOW_MARGIN), hard) : Math.round(ceiling * OVERFLOW_MARGIN);
+
+  return { ceiling, lowWater, urgent };
 }
