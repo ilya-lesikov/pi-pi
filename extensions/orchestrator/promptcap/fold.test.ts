@@ -116,7 +116,7 @@ describe("fold", () => {
       call("t0", "grep", { files: ["a", "b", "c", "d", "e", "f", "g"] }),
       result("t0", "grep", "o".repeat(4000)),
     ];    const state = new FoldState();
-    fold(messages, 0, { ceiling: 1000, lowWater: 900 }, state);
+    fold(messages, 0, { ceiling: 1000, lowWater: 100 }, state);
 
     expect(state.tierOf("t0")).toBe(Tier.Digest);
     expect(messages[1].content[0].arguments.files).toEqual(["a", "b", "c", "d", "e", "[dropped 2 more; t0]"]);
@@ -124,10 +124,16 @@ describe("fold", () => {
 
   it("keeps both ends of a digested error", () => {
     const failure = "HEAD".padEnd(1200, "-") + "TAIL".padStart(600, "-");
-    const messages = [user("go"), call("t0", "bash", { cmd: "make" }), result("t0", "bash", failure, true)];
+    const messages = [
+      user("go"),
+      call("t0", "bash", { cmd: "make" }),
+      result("t0", "bash", failure, true),
+      call("t1", "read", { path: "/a" }),
+      result("t1", "read", "o".repeat(9000)),
+    ];
     const state = new FoldState();
 
-    fold(messages, 0, { ceiling: 450, lowWater: 430 }, state);
+    fold(messages, 0, { ceiling: 700, lowWater: 600 }, state);
 
     expect(state.tierOf("t0")).toBe(Tier.Digest);
     const digested = messages[2].content[0].text;
@@ -452,6 +458,27 @@ describe("fold", () => {
     expect(messages[6].content[0].text).toMatch(/^\[omitted: /);
   });
 
+  it("refuses a fold that would free too little to pay for its cache miss", () => {
+    const messages = [user("p".repeat(40_000)), ...plain(10, 200).slice(1)];
+    const before = JSON.parse(JSON.stringify(messages));
+    const state = new FoldState();
+
+    const out = fold(messages, 0, { ceiling: 10_000, lowWater: 8_000 }, state);
+
+    expect(messages).toEqual(before);
+    expect(out.folded).toBe(0);
+    expect(state.size).toBe(0);
+  });
+
+  it("folds anyway once the prompt is past the point of no return", () => {
+    const messages = [user("p".repeat(40_000)), ...plain(10, 200).slice(1)];
+    const state = new FoldState();
+
+    fold(messages, 0, { ceiling: 5_000, lowWater: 4_000 }, state);
+
+    expect(state.size).toBeGreaterThan(0);
+  });
+
   it("pins each distinct skill separately", () => {
     const messages = [
       user("go"),
@@ -466,8 +493,7 @@ describe("fold", () => {
     expect(messages[4].content[0].text).toBe("eng skill ".repeat(500));
   });
 
-  it("never folds an ask, however old", () => {
-    const question = { question: "which?", options: ["a".repeat(600), "b".repeat(600)] };
+  it("never folds an ask, however old", () => {    const question = { question: "which?", options: ["a".repeat(600), "b".repeat(600)] };
     const messages = [
       user("go"),
       call("a0", "ask_user", question),

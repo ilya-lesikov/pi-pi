@@ -1,4 +1,5 @@
 import { byteLength, DEFAULT_IMAGE_TOKENS, messagesBytes, toolCallBytes, BYTES_PER_TOKEN } from "./estimate.js";
+import { OVERFLOW_MARGIN } from "./limits.js";
 
 export type AgentMessage = Record<string, any>;
 
@@ -74,6 +75,10 @@ const DROP_NAMES_LISTED = 6;
 // a per-run cost charged once, where a run is what survives between two pieces
 // of prose.
 const DROP_LINE_RESERVE_BYTES = 64;
+
+// The share of the prompt a fold has to free to be worth the cache miss it
+// costs. See worthFolding.
+const MIN_FOLD_FRACTION = 0.2;
 
 // A list-valued argument is capped by element count before its bytes are, so
 // what reaches the model is still a list rather than a JSON document cut in
@@ -221,7 +226,7 @@ export function fold(
   // theirs as they are chosen.
   bytes += dropLineReserve(messages, calls.filter((call) => call.tier >= Tier.Drop));
 
-  if (toTokens(bytes) > limits.ceiling) {
+  if (toTokens(bytes) > limits.ceiling && worthFolding(messages, calls, bytes, limits, protectedFrom, ratio, imageTokens)) {
     // The low-water mark already clears the floor by construction — it is a
     // share of the span between floor and ceiling — so an unreachable target
     // cannot be chased here.
@@ -264,6 +269,36 @@ export function fold(
     tokensBefore,
     folded: calls.filter((call) => call.tier !== Tier.Verbatim).length,
   };
+}
+
+/**
+ * Whether a fold would buy more than the cache miss it costs.
+ *
+ * Folding rewrites the prompt where the oldest unfolded call sits, and a
+ * provider re-bills every token after the first one that moved — so a pass is
+ * charged the whole conversation whatever it frees. Sessions on disk show what
+ * that means in practice: passes that re-bought three hundred thousand tokens
+ * to free a few hundred, because the budget was a little over and a little was
+ * all that was left to give.
+ *
+ * So a pass has to free a real share of the prompt, measured against what is
+ * still foldable rather than against the target, which no amount of folding
+ * might reach. The exception is a prompt already past the point where the turn
+ * is in danger: there a small saving still beats not being sent.
+ */
+function worthFolding(
+  messages: AgentMessage[],
+  calls: Call[],
+  bytes: number,
+  limits: Limits,
+  protectedFrom: number,
+  ratio: number,
+  imageTokens: number,
+): boolean {
+  const tokens = tokensOf(bytes, ratio);
+  if (tokens > limits.ceiling * OVERFLOW_MARGIN) return true;
+  const reachable = tokensOf(bytes - foldableBytes(messages, calls, protectedFrom, imageTokens), ratio);
+  return tokens - Math.max(limits.lowWater, reachable) >= tokens * MIN_FOLD_FRACTION;
 }
 
 /**
