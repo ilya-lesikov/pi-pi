@@ -108,6 +108,16 @@ export function clip(text: string, max = 200): string {
   return text.slice(0, end);
 }
 
+// How much of a heredoc, a patch or a search query stands for the call it was
+// passed to. The summary is an index entry, and one call's argument used to be
+// able to outweigh the twenty-five entries around it.
+const ARG_SUMMARY_CHARS = 200;
+
+// What one entry may weigh when the caller asked to see it whole. An expanded
+// entry is a message with its reasoning attached, which on a long turn runs to
+// thousands of words; the rest is a recall_tool_output away.
+const FULL_ENTRY_CHARS = 4000;
+
 export function textOf(content: Message["content"] | undefined): string {
   if (!content) return "";
   if (typeof content === "string") return content;
@@ -134,23 +144,23 @@ function extractPath(args: Record<string, unknown>): string | null {
 
 function summarizeToolArgs(args: Record<string, unknown>): string {
   const path = extractPath(args);
-  if (path) return `path=${path}`;
-  if (typeof args.command === "string") return `command=${args.command}`;
-  if (typeof args.query === "string") return `query=${args.query}`;
+  if (path) return `path=${clip(path, ARG_SUMMARY_CHARS)}`;
+  if (typeof args.command === "string") return `command=${clip(args.command, ARG_SUMMARY_CHARS)}`;
+  if (typeof args.query === "string") return `query=${clip(args.query, ARG_SUMMARY_CHARS)}`;
   return Object.keys(args).join(", ");
 }
 
 export function renderMessage(message: Message, index: number, full = false): RenderedEntry {
   if (message.role === "user") {
-    return { index, role: "user", summary: full ? textOf(message.content) : clip(textOf(message.content), 300) };
+    return { index, role: "user", summary: clip(textOf(message.content), full ? FULL_ENTRY_CHARS : 300) };
   }
   if (message.role === "toolResult") {
-    const text = full ? textOf(message.content) : clip(textOf(message.content), 200);
+    const text = clip(textOf(message.content), full ? FULL_ENTRY_CHARS : 200);
     return { index, role: "tool_result", summary: `${message.isError ? "ERROR " : ""}[${message.toolName}] ${text}` };
   }
   if ((message as any).role === "bashExecution") {
     const raw = `$ ${(message as any).command ?? ""}\n${(message as any).output ?? ""}`;
-    return { index, role: "bash", summary: full ? raw : clip(raw, 300) };
+    return { index, role: "bash", summary: clip(raw, full ? FULL_ENTRY_CHARS : 300) };
   }
 
   const content = Array.isArray(message.content) ? message.content : [];
@@ -158,9 +168,9 @@ export function renderMessage(message: Message, index: number, full = false): Re
   const tools = calls.map((part) => `${part.name}(${summarizeToolArgs(part.arguments ?? {})})`).join(", ");
   const files = calls.map((part) => extractPath(part.arguments ?? {})).filter((path): path is string => path !== null);
 
-  const text = full ? textOf(message.content) : clip(textOf(message.content), 300);
+  const text = clip(textOf(message.content), full ? FULL_ENTRY_CHARS : 300);
   const thinking = thinkingOf(message.content);
-  const shownThinking = thinking ? (full ? thinking : clip(thinking, 150)) : "";
+  const shownThinking = thinking ? clip(thinking, full ? FULL_ENTRY_CHARS : 150) : "";
   const body = shownThinking ? `[thinking] ${shownThinking}\n${text}` : text;
 
   return { index, role: "assistant", summary: tools ? `${tools}\n${body}` : body, ...(files.length > 0 && { files }) };

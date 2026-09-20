@@ -24,6 +24,22 @@ const MAX_PAGES = 5;
 // made the room.
 const RECALL_LIMIT = 8000;
 
+// The same bound for a search or a browse, which had none: a page of hits
+// carries every entry of every segment it touched, and an expanded entry
+// carried a whole message with its reasoning, which together ran to tens of
+// thousands of tokens on a long session — more than the folding that prompted
+// the search had saved.
+const SEARCH_LIMIT = 12_000;
+
+/** Bounds a recall's own output, pointing at the way to ask for the rest. */
+function bounded(body: string, hint: string): string {
+  if (byteLength(body) <= SEARCH_LIMIT) return body;
+  const shown = cutBytes(body, SEARCH_LIMIT);
+  const lastBreak = shown.lastIndexOf("\n");
+  const kept = lastBreak > SEARCH_LIMIT / 2 ? shown.slice(0, lastBreak) : shown;
+  return `${kept}\n…[${byteLength(body) - byteLength(kept)} bytes not shown; ${hint}]`;
+}
+
 /**
  * Explains the omission notices once, in the system prompt, rather than in
  * every notice. A long session folds hundreds of calls, and the difference
@@ -113,12 +129,12 @@ export function registerRecallTools(pi: ExtensionAPI, source?: SessionSource): v
           return text(`Cannot expand indices outside ${allScope ? "session history" : "the active branch"}: ${invalid.join(", ")}`);
         }
         const expanded = [...expandSet].map((index) => byIndex.get(index)!);
-        return text(scopeLabel.trim() + "\n" + formatRecallOutput(expanded));
+        return text(bounded(scopeLabel.trim() + "\n" + formatRecallOutput(expanded), "expand fewer entries at a time"));
       }
 
       const { rendered, raw } = loadMessages(entries, false, lineage);
       if (!query) {
-        return text(scopeLabel.trim() + "\n" + formatRecallOutput(rendered.slice(-DEFAULT_RECENT)));
+        return text(bounded(scopeLabel.trim() + "\n" + formatRecallOutput(rendered.slice(-DEFAULT_RECENT)), "search with a query instead of browsing"));
       }
 
       const hits = searchEntries(rendered, raw, query);
@@ -163,7 +179,7 @@ export function registerRecallTools(pi: ExtensionAPI, source?: SessionSource): v
       }
 
       const body = formatRecallOutput(pageHits, query, header) + (footer.length ? "\n" + footer.join("\n") : "");
-      return text(body);
+      return text(bounded(body, "narrow the query, or expand one entry at a time"));
     },
   });
 

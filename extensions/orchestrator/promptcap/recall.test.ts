@@ -102,6 +102,29 @@ describe("recall tools", () => {
   it("refuses an expand index outside the scope", async () => {
     expect(await run("vcc_recall", { scope: "all", expand: [99] })).toContain("Cannot expand indices");
   });
+
+  it("bounds what a browse hands back", async () => {
+    writeFileSync(sessionFile, Array.from({ length: 40 }, (_, i) =>
+      [userLine(`u${i}`, `turn ${i} ` + "prose ".repeat(2000)),
+       callLine(`c${i}`, `toolu_${i}`, "bash", { command: "cd /repo && " + "x".repeat(9000) })].join("\n"),
+    ).join("\n") + "\n", "utf-8");
+
+    const out = await run("vcc_recall", { scope: "all" });
+
+    expect(Buffer.byteLength(out)).toBeLessThan(13_000);
+    expect(out).not.toContain("x".repeat(300));
+  });
+
+  it("bounds an expanded entry rather than handing back a whole message", async () => {
+    writeFileSync(sessionFile, [
+      userLine("m0", "start"),
+      line("m1", { role: "assistant", content: [{ type: "thinking", thinking: "t".repeat(30_000), thinkingSignature: "s" }, { type: "text", text: "a".repeat(30_000) }] }),
+    ].join("\n") + "\n", "utf-8");
+
+    const out = await run("vcc_recall", { scope: "all", expand: [1] });
+
+    expect(Buffer.byteLength(out)).toBeLessThan(13_000);
+  });
 });
 
 describe("slice", () => {
