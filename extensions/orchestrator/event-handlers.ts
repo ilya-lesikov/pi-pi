@@ -19,6 +19,7 @@ import { createCustomFooter, setFooterContext, setFooterTracker, setFooterOrches
 import { createUsageTracker, dumpUsageSummary, isSubscriptionRouted, loadUsageSummary, type UsageTracker } from "./usage-tracker.js";
 import { publishAcpState, resetAcpStateCache } from "./acp.js";
 import { runAfterEdit } from "./commands.js";
+import { registerImageShrink } from "./image-shrink.js";
 import { checkDuplicateExtensions } from "./duplicate-extension-guard.js";
 import { installConsoleGuard } from "./console-guard.js";
 import { demoteUnusableSubscription, handleMainAuthFailure, handleMainRateLimit, handleSubagentAuthFailure, handleSubagentRateLimit, isAuthError, isPolicyBlockError, isRateLimitError } from "./rate-limit-fallback.js";
@@ -469,6 +470,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   registerBillingHook(pi);
   registerLifecycle(orchestrator);
   registerPromptcap(orchestrator);
+  registerImageShrink(pi, () => orchestrator.config?.images);
 
   pi.on("session_start", async (_event, ctx) => {
     orchestrator.lastCtx = ctx;

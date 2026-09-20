@@ -11,6 +11,7 @@ import { getLogger } from "./log.js";
 import { registerBillingHook } from "./billing-spoof.js";
 import { suppressPierreThemeSpam } from "./suppress-pierre-theme-spam.js";
 import { registerRecallTools } from "./promptcap/recall.js";
+import { registerImageShrink } from "./image-shrink.js";
 
 const ORCHESTRATOR_KEY = Symbol.for("pi-pi:orchestrator-initialized");
 const ORCHESTRATOR_CWD_KEY = Symbol.for("pi-pi:orchestrator-cwd");
@@ -81,4 +82,5 @@ function registerSubagentTools(pi: ExtensionAPI): void {
   });
   registerLoadSkill(pi, cwd, () => config.skills, sessionSkills);
   registerSubagentPromptcap(pi, config);
+  registerImageShrink(pi, () => config.images);
 }

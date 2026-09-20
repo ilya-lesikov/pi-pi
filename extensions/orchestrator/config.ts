@@ -60,6 +60,24 @@ export interface PromptcapConfig extends PromptcapModelConfig {
   perModel: Record<string, PromptcapModelConfig>;
 }
 
+export interface ImagesConfig {
+  /** Shrink images as they enter history. Off = send what the tool produced,
+   *  which the provider then downscales on arrival anyway. */
+  enabled: boolean;
+  /** Longest edge an image may keep, in pixels (default 1568). */
+  maxEdge: number;
+  /** Visual-token budget, one token per 28x28 patch (default 1568). Together
+   *  with maxEdge these are Claude's own standard-tier limits, so an image
+   *  sent at the resulting size arrives unresampled. */
+  maxVisualTokens: number;
+  /** Quality of the JPEG candidate, 1-100 (default 90). Lower trades legible
+   *  small text for bytes; PNG still wins whenever it encodes smaller. */
+  jpegQuality: number;
+  /** Base64 size that forces a re-encode even when the dimensions already fit
+   *  (default 786432). A screenshot kept as PNG is several times its JPEG. */
+  maxBytes: number;
+}
+
 export interface AfterEditCommandConfig {
   run: string;
   globs?: string[];
@@ -92,6 +110,7 @@ export interface PiPiConfig {
     loadProject: boolean;
   };
   promptcap: PromptcapConfig;
+  images: ImagesConfig;
   // Durable Flant settings. These used to live in the regenerable
   // model-metadata cache file (cache/flant-models.json); they are user policy
   // and belong in scoped config. Only cachedFlantModels/cachedOpenRouterData/
@@ -168,6 +187,13 @@ const DEFAULT_CONFIG: PiPiConfig = {
   promptcap: {
     enabled: true,
     perModel: {},
+  },
+  images: {
+    enabled: true,
+    maxEdge: 1568,
+    maxVisualTokens: 1568,
+    jpegQuality: 90,
+    maxBytes: 768 * 1024,
   },
   flant: {
     enabled: false,
@@ -282,6 +308,15 @@ function ensureDuration(value: unknown, path: string): void {
   }
 }
 
+function validateImages(value: unknown): void {
+  const i = requireObject(value, "config.images");
+  ensureBool(i.enabled, "config.images.enabled");
+  ensureNumberInRange(i.maxEdge, "config.images.maxEdge", 28, 8000);
+  ensureNumberInRange(i.maxVisualTokens, "config.images.maxVisualTokens", 1, 100_000);
+  ensureNumberInRange(i.jpegQuality, "config.images.jpegQuality", 1, 100);
+  ensureNumberInRange(i.maxBytes, "config.images.maxBytes", 1024, 5 * 1024 * 1024);
+}
+
 function validateFlant(value: unknown): void {
   const f = requireObject(value, "config.flant");
   ensureBool(f.enabled, "config.flant.enabled");
@@ -383,6 +418,7 @@ export function validateConfig(config: Record<string, any>): void {
   }
 
   if (config.promptcap !== undefined) validatePromptcap(config.promptcap);
+  if (config.images !== undefined) validateImages(config.images);
   if (config.flant !== undefined) validateFlant(config.flant);
 
   if (config.commands !== undefined) {
