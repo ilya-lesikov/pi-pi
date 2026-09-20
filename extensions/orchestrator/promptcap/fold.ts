@@ -109,6 +109,18 @@ export interface Limits {
  */
 export const PINNED_TOOLS = new Set(["load_skill"]);
 
+/**
+ * Tools no call of which is ever folded, however old.
+ *
+ * What the user decided is not a lookup that can be repeated: the session
+ * cannot ask again, and an agent that has lost the answer proceeds on its own
+ * guess instead. The question folds with it — an answer naming an option means
+ * nothing without the options — so the pair is held whole. It is affordable
+ * because it is rare and small: a long session's asks weigh a few kilobytes
+ * between them, against the megabytes of tool output around them.
+ */
+export const NEVER_FOLDED_TOOLS = new Set(["ask_user"]);
+
 export interface FoldResult {
   /** Estimated prompt size after folding, in tokens. */
   tokens: number;
@@ -525,16 +537,19 @@ function indexCalls(messages: AgentMessage[]): Call[] {
   return dropPinned(messages, calls);
 }
 
-/** Drops the newest call of each pinned tool, by the object it addressed. */
+/** Drops the calls folding may not touch: every call of a never-folded tool,
+ * and the newest call of each pinned tool by the object it addressed. */
 function dropPinned(messages: AgentMessage[], calls: Call[]): Call[] {
+  const pinned = new Set<Call>();
   const newest = new Map<string, Call>();
   for (const call of calls) {
     const part = callPart(messages, call);
-    if (!part || !PINNED_TOOLS.has(part.name)) continue;
-    newest.set(`${part.name}:${jsonText(part.arguments)}`, call);
+    if (!part) continue;
+    if (NEVER_FOLDED_TOOLS.has(part.name)) pinned.add(call);
+    else if (PINNED_TOOLS.has(part.name)) newest.set(`${part.name}:${jsonText(part.arguments)}`, call);
   }
-  if (newest.size === 0) return calls;
-  const pinned = new Set([...newest.values()]);
+  for (const call of newest.values()) pinned.add(call);
+  if (pinned.size === 0) return calls;
   return calls.filter((call) => !pinned.has(call));
 }
 

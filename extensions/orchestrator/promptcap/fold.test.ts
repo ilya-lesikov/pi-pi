@@ -444,6 +444,26 @@ describe("fold", () => {
     expect(messages[2].content[0].text).toBe("repo skill ".repeat(500));
     expect(messages[4].content[0].text).toBe("eng skill ".repeat(500));
   });
+
+  it("never folds an ask, however old", () => {
+    const question = { question: "which?", options: ["a".repeat(600), "b".repeat(600)] };
+    const messages = [
+      user("go"),
+      call("a0", "ask_user", question),
+      result("a0", "ask_user", "User answered: " + "a".repeat(600)),
+      call("a1", "ask_user", { question: "and then?" }),
+      result("a1", "ask_user", "User answered: later"),
+      ...conversation(8, 9000).slice(1),
+    ];
+    const state = new FoldState();
+    fold(messages, 0, { ceiling: 10, lowWater: 5 }, state);
+
+    expect(messages[1].content[0].arguments).toEqual(question);
+    expect(messages[2].content[0].text).toBe("User answered: " + "a".repeat(600));
+    expect(messages[4].content[0].text).toBe("User answered: later");
+    expect(state.tierOf("a0")).toBe(Tier.Verbatim);
+    expect(messages.some((m) => m.role === "toolResult" && m.toolName === "read")).toBe(true);
+  });
 });
 
 describe("cutBytes", () => {
