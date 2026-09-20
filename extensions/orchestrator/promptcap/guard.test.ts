@@ -64,6 +64,16 @@ describe("PromptGuard", () => {
       delete process.env.PI_CACHE_RETENTION;
       new PromptGuard({ settings: () => settings({ longCacheRetention: false }) }).apply(conversation(2, 100), ctx(200_000), []);
       expect(process.env.PI_CACHE_RETENTION).toBeUndefined();
+
+      // Withdrawing the setting mid-session gives the provider default back.
+      delete process.env.PI_CACHE_RETENTION;
+      let wanted = true;
+      const guard = new PromptGuard({ settings: () => settings({ longCacheRetention: wanted }) });
+      guard.apply(conversation(2, 100), ctx(200_000), []);
+      expect(process.env.PI_CACHE_RETENTION).toBe("long");
+      wanted = false;
+      guard.apply(conversation(2, 100), ctx(200_000), []);
+      expect(process.env.PI_CACHE_RETENTION).toBeUndefined();
     } finally {
       if (original === undefined) delete process.env.PI_CACHE_RETENTION;
       else process.env.PI_CACHE_RETENTION = original;

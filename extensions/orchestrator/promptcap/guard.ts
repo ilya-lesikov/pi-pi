@@ -179,14 +179,23 @@ export function registerPromptGuard(pi: ExtensionAPI, guard: PromptGuard): void 
  *
  * The adapter reads this off the environment, so the reach is the process and
  * every Anthropic-shaped provider in it. An operator who has already stated a
- * preference keeps it — including the preference for five minutes, which is
- * what unsetting this comes down to.
+ * preference keeps it; one who withdraws this setting mid-session gets the
+ * provider's own default back, which is why what was set here is remembered
+ * rather than assumed.
  */
 function applyCacheRetention(settings: PromptcapSettings): void {
-  if (settings.longCacheRetention === false) return;
+  if (settings.longCacheRetention === false) {
+    if (appliedRetention && process.env.PI_CACHE_RETENTION === appliedRetention) delete process.env.PI_CACHE_RETENTION;
+    appliedRetention = null;
+    return;
+  }
   if (process.env.PI_CACHE_RETENTION) return;
   process.env.PI_CACHE_RETENTION = "long";
+  appliedRetention = "long";
 }
+
+/** What this process asked for, so withdrawing the setting can undo it. */
+let appliedRetention: string | null = null;
 
 function activeTools(pi: ExtensionAPI): unknown[] {
   if (typeof pi.getAllTools !== "function") return [];
