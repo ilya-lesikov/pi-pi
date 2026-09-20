@@ -183,7 +183,7 @@ interface CopilotOAuthCreds extends AnthropicOAuthCreds {
 // models this matters for.
 let modelRegistryRef: {
   getApiKeyForProvider?: (provider: string) => Promise<string | undefined>;
-  find?: (provider: string, modelId: string) => { compat?: unknown; thinkingLevelMap?: unknown } | undefined;
+  find?: (provider: string, modelId: string) => { compat?: unknown; thinkingLevelMap?: unknown; contextWindow?: number; maxTokens?: number } | undefined;
 } | null = null;
 
 export function setModelRegistry(registry: unknown): void {
@@ -1152,6 +1152,11 @@ function buildProviderModelConfig(
  * server-side `fallbacks` param naming a BARE claude id, which the gateway key
  * cannot access (it only sees `sub/*`) and which would fail the whole request.
  *
+ * The window and output cap come from here too. Without them a model the
+ * gateway's metadata does not cover falls back to a 200K window, and a 200K
+ * window puts the fold ceiling at 150K: every request over that folds as hard
+ * as it can, still does not fit, and rewrites the prompt's prefix for nothing.
+ *
  * `supportsMidConvoEffort` is inherited again. It rides the
  * `mid-conversation-output-config-2026-07-01` and
  * `thinking-binding-controls-2026-08-01` betas, which the gateway used to strip
@@ -1168,6 +1173,8 @@ function applyClaudeModelCapabilities(config: ProviderModelConfig, bareModelId: 
   const out: ProviderModelConfig = { ...config };
   if (Object.keys(compat).length > 0) out.compat = compat as ProviderModelConfig["compat"];
   if (catalog.thinkingLevelMap) out.thinkingLevelMap = catalog.thinkingLevelMap as ProviderModelConfig["thinkingLevelMap"];
+  if (typeof catalog.contextWindow === "number" && catalog.contextWindow > 0) out.contextWindow = catalog.contextWindow;
+  if (typeof catalog.maxTokens === "number" && catalog.maxTokens > 0) out.maxTokens = catalog.maxTokens;
   return out;
 }
 

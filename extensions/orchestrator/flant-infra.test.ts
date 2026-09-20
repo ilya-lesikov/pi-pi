@@ -240,6 +240,44 @@ describe("flant-infra", () => {
     }
   });
 
+  it("takes the window from pi's catalog when the gateway's metadata has none", async () => {
+    const dir = makeTempDir();
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "auth.json"),
+      JSON.stringify({ anthropic: { type: "oauth", access: "sk-ant-oat01-test-token", expires: Date.now() + 3_600_000 } }),
+      "utf-8",
+    );
+    const prevKey = process.env.LLM_API_KEY;
+    process.env.LLM_API_KEY = "sk-gateway-test";
+    try {
+      const mod = await loadFlantInfraModule(dir);
+      mod.setModelRegistry({
+        getApiKeyForProvider: async () => undefined,
+        find: (provider: string, modelId: string) =>
+          provider === "anthropic" && modelId === "claude-opus-5"
+            ? { contextWindow: 1_000_000, maxTokens: 128_000 }
+            : undefined,
+      });
+      const registered = new Map<string, any>();
+      const pi = {
+        registerProvider: vi.fn((name: string, config: any) => registered.set(name, config)),
+        unregisterProvider: vi.fn((name: string) => registered.delete(name)),
+      } as any;
+
+      mod.registerFlantProviders(pi, ["sub/claude-opus-5"], {}, { subscription: true });
+
+      expect(registered.get("pp-flant-anthropic-sub").models[0]).toMatchObject({
+        id: "sub/claude-opus-5",
+        contextWindow: 1_000_000,
+        maxTokens: 128_000,
+      });
+    } finally {
+      if (prevKey === undefined) delete process.env.LLM_API_KEY;
+      else process.env.LLM_API_KEY = prevKey;
+    }
+  });
+
   it("carries pi's claude capabilities onto the sub models, minus the unusable fallback list", async () => {
     const dir = makeTempDir();
     mkdirSync(dir, { recursive: true });
