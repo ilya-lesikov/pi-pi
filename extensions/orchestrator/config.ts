@@ -74,7 +74,7 @@ export interface ImagesConfig {
    *  with maxEdge these are Claude's own standard-tier limits, so an image
    *  sent at the resulting size arrives unresampled. */
   maxVisualTokens: number;
-  /** Quality of the JPEG candidate, 1-100 (default 90). Lower trades legible
+  /** Quality of the JPEG candidate, 1-100 (default 80). Lower trades legible
    *  small text for bytes; PNG still wins whenever it encodes smaller. */
   jpegQuality: number;
   /** Base64 size that forces a re-encode even when the dimensions already fit
@@ -196,7 +196,7 @@ const DEFAULT_CONFIG: PiPiConfig = {
     enabled: true,
     maxEdge: 1568,
     maxVisualTokens: 1568,
-    jpegQuality: 90,
+    jpegQuality: 80,
     maxBytes: 768 * 1024,
   },
   flant: {
