@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { ensureProviderRetrySettings, isUnrecognizedTransportError, patchRetryPredicate, readProviderRetry } from "./provider-retry.js";
+import { ensureProviderRetrySettings, isRequestTooLargeError, isUnrecognizedTransportError, patchRetryPredicate, readProviderRetry } from "./provider-retry.js";
+import { PromptGuard, registerPromptGuard } from "./promptcap/guard.js";
 
 describe("provider retry settings", () => {
   let dir: string;
@@ -94,5 +95,46 @@ describe("pi's retry predicate", () => {
     expect(isUnrecognizedTransportError("Request failed with status 499")).toBe(true);
     expect(isUnrecognizedTransportError("4990 tokens over the limit")).toBe(false);
     expect(isUnrecognizedTransportError(undefined)).toBe(false);
+  });
+
+  it("recognizes a request refused for its size however the gateway worded it", () => {
+    expect(isRequestTooLargeError("413 Request Entity Too Large")).toBe(true);
+    expect(isRequestTooLargeError("Request body too large")).toBe(true);
+    expect(isRequestTooLargeError('{"type":"request_too_large"}')).toBe(true);
+    expect(isRequestTooLargeError("payload too large")).toBe(true);
+    expect(isRequestTooLargeError("read 4130 bytes")).toBe(false);
+    expect(isRequestTooLargeError("413 but the available balance is spent")).toBe(false);
+    expect(isRequestTooLargeError(undefined)).toBe(false);
+  });
+
+  // A retry that resends what was just refused buys nothing, so this status is
+  // retryable only when the guard that built the prompt can make it smaller.
+  it("retries an oversized request only while there is an image left to drop", () => {
+    const handlers = new Map<string, Function>();
+    const sessionManager = {};
+    const guard = new PromptGuard({ settings: () => ({ enabled: true, perModel: {} }) });
+    registerPromptGuard({ on: (name: string, fn: Function) => handlers.set(name, fn) } as any, guard);
+    guard.apply(
+      [
+        { role: "user", content: [{ type: "text", text: "go" }] },
+        { role: "assistant", content: [{ type: "toolCall", id: "t0", name: "read", arguments: { path: "/a.png" } }] },
+        { role: "toolResult", toolCallId: "t0", toolName: "read", content: [{ type: "image", data: "i".repeat(9000), mimeType: "image/png" }], isError: false },
+      ],
+      { model: { provider: "anthropic", id: "m" }, getSystemPrompt: () => "s", sessionManager },
+      [],
+    );
+
+    const prototype: any = { _isRetryableError: () => false, sessionManager };
+    patchRetryPredicate(prototype);
+    const refusal = { stopReason: "error", errorMessage: "413 Request body too large" };
+
+    expect(prototype._isRetryableError(refusal)).toBe(true);
+  });
+
+  it("leaves an oversized request to fail when no guard folds for the session", () => {
+    const prototype: any = { _isRetryableError: () => false, sessionManager: {} };
+    patchRetryPredicate(prototype);
+
+    expect(prototype._isRetryableError({ stopReason: "error", errorMessage: "413 Request body too large" })).toBe(false);
   });
 });

@@ -10,6 +10,29 @@ export interface GuardHost {
 }
 
 /**
+ * The guard answering for a session, found by the session manager it folds for.
+ *
+ * Subagents run in the same process as the session that spawned them, each with
+ * its own guard, so a request refused for its size has to reach the one that
+ * built it and no other.
+ */
+const guards = new WeakMap<object, PromptGuard>();
+
+/**
+ * Tells the guard that built the last prompt for `session` that the provider
+ * refused it for its size, and reports whether anything will come of it.
+ *
+ * False means a retry would resend what was just rejected: either no guard
+ * folds for this session, or the last emergency already took every image the
+ * conversation had.
+ */
+export function noteOversizedRequest(session: any): boolean {
+  const manager = session?.sessionManager;
+  if (!manager) return false;
+  return guards.get(manager)?.noteOversizedRequest() ?? false;
+}
+
+/**
  * Holds each prompt inside the limits its model was given, and learns what its
  * estimate is worth from what the provider charges.
  *
@@ -25,6 +48,10 @@ export class PromptGuard {
   /** The size the last fold settled on, for the footer and the menu. */
   lastTokens: number | null = null;
   lastCeiling: number | null = null;
+  /** Set by a request the provider refused for its size, cleared by the fold it asks for. */
+  private imageEmergency = false;
+  /** Set once an emergency found no image left to take, so the next one promises nothing. */
+  private emergencyExhausted = false;
 
   constructor(private readonly host: GuardHost) {}
 
@@ -34,11 +61,20 @@ export class PromptGuard {
     this.predicted = null;
     this.lastTokens = null;
     this.lastCeiling = null;
+    this.imageEmergency = false;
+    this.emergencyExhausted = false;
+  }
+
+  noteOversizedRequest(): boolean {
+    if (this.emergencyExhausted) return false;
+    this.imageEmergency = true;
+    return true;
   }
 
   apply(messages: AgentMessage[], ctx: any, tools: unknown[]): AgentMessage[] {
     const settings = this.host.settings();
     applyCacheRetention(settings);
+    if (ctx?.sessionManager) guards.set(ctx.sessionManager, this);
     const modelKey = modelKeyOf(ctx);
     const systemPrompt = typeof ctx?.getSystemPrompt === "function" ? ctx.getSystemPrompt() : undefined;
     const fixed = fixedBytes(systemPrompt, tools);
@@ -49,6 +85,17 @@ export class PromptGuard {
     const floor = incompressibleTokens(messages, fixed, ratio, imageTokens);
     const limits = limitsFor(settings, modelKey, floor, typeof window === "number" ? window : undefined);
 
+    // A body the provider refused is not a budget to be trimmed to but one to
+    // be emptied: a ceiling of a single byte with nothing kept under it takes
+    // every image folding may touch, which is the largest thing this can do to
+    // a request between one attempt and the next.
+    const emergency = this.imageEmergency;
+    this.imageEmergency = false;
+    if (emergency) {
+      limits.imageCeiling = 1;
+      limits.imageLowWater = 0;
+    }
+
     if (!settings.enabled) {
       this.lastTokens = null;
       this.lastCeiling = null;
@@ -56,6 +103,23 @@ export class PromptGuard {
     }
 
     const result = fold(messages, fixed, limits, this.folds, ratio, imageTokens);
+    if (emergency) {
+      const freedNothing = result.imagesFolded === 0;
+      // Another attempt at this can only help while an image is still there to
+      // be taken, so a conversation already emptied of them stops promising a
+      // retry that would resend exactly what was refused.
+      this.emergencyExhausted = freedNothing || result.imageBytes === 0;
+      this.host.log?.(
+        { s: "promptcap", model: modelKey, imagesFolded: result.imagesFolded, imageBytes: result.imageBytes },
+        "the provider refused the request for its size; took the images off what it may",
+      );
+      if (freedNothing) {
+        this.host.notify?.(
+          "The provider refused this request as too large and there was no image left to drop. Start a new session, or raise the request size limit on the gateway.",
+          "error",
+        );
+      }
+    }
     // Carried to calibration so one real turn can answer whether reasoning
     // blocks left with a signature and no text reach the provider: the adapters
     // disagree, and this is the difference the answer would show up as. Scaled
@@ -90,6 +154,8 @@ export class PromptGuard {
           floor,
           folded: result.folded,
           promoted: result.promoted,
+          imagesFolded: result.imagesFolded,
+          imageBytes: result.imageBytes,
           rewroteFrom: result.rewroteFrom,
           messages: messages.length,
         },
@@ -121,6 +187,9 @@ export class PromptGuard {
   calibrate(charged: number, modelKey: string): void {
     const predicted = this.predicted;
     this.predicted = null;
+    // A turn the provider answered is a size it accepted, so whatever it
+    // refused before is no longer what this session is up against.
+    this.emergencyExhausted = false;
     if (!predicted || charged <= 0) return;
     // A turn answered by a model other than the one the prompt was sized for
     // teaches the wrong estimator: the fallback path switches providers between

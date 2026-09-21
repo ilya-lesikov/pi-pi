@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { PromptGuard, registerPromptGuard, modelKeyOf } from "./guard.js";
+import { PromptGuard, registerPromptGuard, modelKeyOf, noteOversizedRequest } from "./guard.js";
 import { DEFAULT_HEADROOM_TOKENS, type PromptcapSettings } from "./limits.js";
 import type { AgentMessage } from "./fold.js";
 
@@ -267,6 +267,68 @@ describe("registerPromptGuard", () => {
     handlers.get("turn_end")!({ message: { usage: { input: 1, cacheRead: predicted * 2 - 2, cacheWrite: 1, output: 5 } } }, ctx());
 
     expect(guard.ratioFor("anthropic/claude-opus-4-8")).toBeCloseTo(2, 3);
+  });
+});
+
+describe("a request refused for its size", () => {
+  const captures = (n: number, size: number): AgentMessage[] => {
+    const messages: AgentMessage[] = [{ role: "user", content: [{ type: "text", text: "go" }] }];
+    for (let i = 0; i < n; i++) {
+      messages.push({ role: "assistant", content: [{ type: "toolCall", id: `t${i}`, name: "read", arguments: { path: `/s${i}.png` } }] });
+      messages.push({ role: "toolResult", toolCallId: `t${i}`, toolName: "read", content: [{ type: "image", data: "i".repeat(size), mimeType: "image/png" }], isError: false });
+    }
+    return messages;
+  };
+  const imaged = (sessionManager: object) => ({ ...ctx(200_000), sessionManager });
+
+  it("takes every image off the next attempt, not just the oldest", () => {
+    const sessionManager = {};
+    const guard = new PromptGuard({ settings: () => settings() });
+    guard.apply(captures(2, 1000), imaged(sessionManager), []);
+
+    expect(noteOversizedRequest({ sessionManager })).toBe(true);
+
+    // Two captures are nowhere near the payload ceiling, so nothing but the
+    // refusal itself can be what empties them.
+    const retried = captures(2, 1000);
+    guard.apply(retried, imaged(sessionManager), []);
+    expect(retried[2].content[0]).toEqual({ type: "text", text: "[omitted: 1000B; t0]" });
+    expect(retried[4].content[0]).toEqual({ type: "text", text: "[omitted: 1000B; t1]" });
+  });
+
+  it("promises nothing once an attempt found no image left to take", () => {
+    const sessionManager = {};
+    const guard = new PromptGuard({ settings: () => settings() });
+    const messages = conversation(2, 4000);
+    guard.apply(messages, imaged(sessionManager), []);
+
+    expect(noteOversizedRequest({ sessionManager })).toBe(true);
+    guard.apply(conversation(2, 4000), imaged(sessionManager), []);
+    expect(noteOversizedRequest({ sessionManager })).toBe(false);
+  });
+
+  it("forgets the refusal once the provider answers a turn", () => {
+    const sessionManager = {};
+    const guard = new PromptGuard({ settings: () => settings() });
+    guard.apply(conversation(2, 4000), imaged(sessionManager), []);
+    noteOversizedRequest({ sessionManager });
+    guard.apply(conversation(2, 4000), imaged(sessionManager), []);
+    expect(noteOversizedRequest({ sessionManager })).toBe(false);
+
+    guard.calibrate(1000, "anthropic/claude-opus-4-8");
+
+    expect(noteOversizedRequest({ sessionManager })).toBe(true);
+  });
+
+  it("reaches the guard that built the prompt and no other", () => {
+    const mine = {};
+    const theirs = {};
+    const guard = new PromptGuard({ settings: () => settings() });
+    guard.apply(captures(2, 1000), imaged(mine), []);
+
+    expect(noteOversizedRequest({ sessionManager: theirs })).toBe(false);
+    expect(noteOversizedRequest({})).toBe(false);
+    expect(noteOversizedRequest({ sessionManager: mine })).toBe(true);
   });
 });
 

@@ -4,6 +4,7 @@ import { AgentSession } from "@earendil-works/pi-coding-agent";
 import { writeConfigValue } from "./config.js";
 import { resolveAgentDir } from "./flant-infra.js";
 import { getLogger } from "./log.js";
+import { noteOversizedRequest } from "./promptcap/guard.js";
 
 /**
  * How many times pi retries a provider call that failed before it gives up on
@@ -82,7 +83,28 @@ export function ensureProviderRetrySettings(path = settingsPath()): RetrySetting
  */
 export function isUnrecognizedTransportError(message?: string): boolean {
   if (typeof message !== "string") return false;
-  return /\b499\b/.test(message) && !/GoUsageLimitError|FreeUsageLimitError|usage limit|available balance|insufficient_quota|out of budget|quota exceeded|billing/i.test(message);
+  return /\b499\b/.test(message) && !isSpentQuota(message);
+}
+
+/**
+ * A request the provider refused for its size rather than its content.
+ *
+ * Unlike every other status worth retrying, this one says the same bytes will
+ * be refused again: it is retryable only because something between the attempts
+ * makes the prompt smaller. The promptcap guard is what does that, and it is
+ * also what decides whether a retry is worth scheduling at all.
+ */
+export function isRequestTooLargeError(message?: string): boolean {
+  if (typeof message !== "string") return false;
+  if (isSpentQuota(message)) return false;
+  return /\b413\b|request_too_large|(?:request|payload|entity|body)[\s_-]*(?:entity[\s_-]*)?too[\s_-]*large/i.test(message);
+}
+
+// A gateway that reports a spent quota alongside a status is out of money, not
+// out of room or out of connection, and nothing here can make the next attempt
+// land.
+function isSpentQuota(message: string): boolean {
+  return /GoUsageLimitError|FreeUsageLimitError|usage limit|available balance|insufficient_quota|out of budget|quota exceeded|billing/i.test(message);
 }
 
 const PATCHED = Symbol.for("pi-pi:retry-predicate-patched");
@@ -90,7 +112,8 @@ const PATCHED = Symbol.for("pi-pi:retry-predicate-patched");
 export type RetryPredicateOutcome = "patched" | "already" | "absent";
 
 /**
- * Widens pi's retry predicate to cover {@link isUnrecognizedTransportError}.
+ * Widens pi's retry predicate to cover {@link isUnrecognizedTransportError} and
+ * {@link isRequestTooLargeError}.
  *
  * The predicate is a private method holding a literal regex: no setting reaches
  * it and no extension API replaces it, so the only way in is the prototype pi
@@ -105,10 +128,18 @@ export function patchRetryPredicate(prototype: any = (AgentSession as any)?.prot
   if (prototype[PATCHED]) return "already";
   const original = prototype._isRetryableError;
   prototype._isRetryableError = function (message: any): boolean {
+    // Asked before the original, because this is the one case where saying yes
+    // commits to changing the request rather than repeating it: the guard is
+    // told here, and its answer is whether a retry can differ from what failed.
+    if (message?.stopReason === "error" && isRequestTooLargeError(message?.errorMessage)) {
+      const recoverable = noteOversizedRequest(this);
+      getLogger().debug({ s: "retry", recoverable }, "the provider refused a request for its size");
+      return recoverable;
+    }
     if (original.call(this, message)) return true;
     return message?.stopReason === "error" && isUnrecognizedTransportError(message?.errorMessage);
   };
   prototype[PATCHED] = true;
-  getLogger().debug({ s: "retry" }, "widened pi's retry predicate to cover 499");
+  getLogger().debug({ s: "retry" }, "widened pi's retry predicate to cover 499 and an oversized request");
   return "patched";
 }
