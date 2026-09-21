@@ -744,3 +744,122 @@ describe("limitsFor", () => {
     expect(ceiling).toBe(42_000);
   });
 });
+
+const screenshot = (id: string, size: number, text?: string): AgentMessage => ({
+  role: "toolResult",
+  toolCallId: id,
+  toolName: "read",
+  content: [
+    ...(text ? [{ type: "text", text }] : []),
+    { type: "image", data: "i".repeat(size), mimeType: "image/png" },
+  ],
+  isError: false,
+});
+
+/** A conversation of `n` answered calls, each returning one `size`-byte image. */
+const captures = (n: number, size: number): AgentMessage[] => {
+  const messages: AgentMessage[] = [user("go")];
+  for (let i = 0; i < n; i++) {
+    messages.push(call(`t${i}`, "read", { path: `/shot${i}.png` }));
+    messages.push(screenshot(`t${i}`, size));
+  }
+  return messages;
+};
+
+const roomy = { ceiling: 100_000_000, lowWater: 90_000_000 };
+
+describe("the image budget", () => {
+  it("leaves a payload under the ceiling alone", () => {
+    const messages = captures(3, 1000);
+    const before = JSON.parse(JSON.stringify(messages));
+    const out = fold(messages, 0, { ...roomy, imageCeiling: 10_000, imageLowWater: 5_000 }, new FoldState());
+
+    expect(out.imagesFolded).toBe(0);
+    expect(out.imageBytes).toBe(3000);
+    expect(messages).toEqual(before);
+  });
+
+  it("takes the oldest images off until the payload is under the low-water mark", () => {
+    const messages = captures(10, 1000);
+    const out = fold(messages, 0, { ...roomy, imageCeiling: 6_000, imageLowWater: 3_000 }, new FoldState());
+
+    expect(out.imagesFolded).toBe(7);
+    expect(out.imageBytes).toBe(3000);
+    expect(messages[2].content[0]).toEqual({ type: "text", text: "[omitted: 1000B; t0]" });
+    expect(messages[14].content[0]).toEqual({ type: "text", text: "[omitted: 1000B; t6]" });
+    // The three newest captures are what the model is still comparing against.
+    expect(messages[16].content[0].type).toBe("image");
+    expect(messages[20].content[0].type).toBe("image");
+  });
+
+  it("folds on the payload even when the prompt is nowhere near its token ceiling", () => {
+    const messages = captures(10, 500_000);
+    const out = fold(messages, 0, { ...roomy, imageCeiling: 3_500_000, imageLowWater: 1_750_000 }, new FoldState());
+
+    // Ten images weigh 5MB on the wire and 16K tokens in the estimate, so the
+    // token axis has no reason to act and the payload axis is the only thing
+    // standing between the session and the body limit.
+    expect(out.tokens).toBeLessThan(roomy.ceiling);
+    expect(out.folded).toBe(0);
+    expect(out.imageBytes).toBeLessThanOrEqual(1_750_000);
+  });
+
+  it("keeps the text that came with a folded image", () => {
+    const messages = [user("go"), call("t0", "read", { path: "/a.png" }), screenshot("t0", 9000, "1080x1920 capture")];
+    fold(messages, 0, { ...roomy, imageCeiling: 1000, imageLowWater: 0 }, new FoldState());
+
+    expect(messages[2].content).toEqual([
+      { type: "text", text: "1080x1920 capture" },
+      { type: "text", text: "[omitted: 9000B; t0]" },
+    ]);
+  });
+
+  it("counts an image a user attached but never takes it", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: [{ type: "text", text: "look" }, { type: "image", data: "u".repeat(4000), mimeType: "image/png" }] },
+      call("t0", "read", { path: "/a.png" }),
+      screenshot("t0", 1000),
+    ];
+    const out = fold(messages, 0, { ...roomy, imageCeiling: 2000, imageLowWater: 1500 }, new FoldState());
+
+    expect(out.imagesFolded).toBe(1);
+    expect(out.imageBytes).toBe(4000);
+    expect(messages[0].content[1].type).toBe("image");
+  });
+
+  it("keeps a stripped image stripped once the payload is back under the ceiling", () => {
+    const state = new FoldState();
+    const limits = { ...roomy, imageCeiling: 6_000, imageLowWater: 3_000 };
+    const messages = captures(10, 1000);
+    fold(messages, 0, limits, state);
+
+    // The host hands over a fresh copy of the stored conversation every
+    // request: without the memory, every image folded so far comes back.
+    const replayed = captures(10, 1000);
+    const out = fold(replayed, 0, limits, state);
+
+    expect(out.imagesFolded).toBe(0);
+    expect(out.imageBytes).toBe(3000);
+    expect(replayed[2].content[0]).toEqual({ type: "text", text: "[omitted: 1000B; t0]" });
+    // Nothing moved, so the pass costs no cache miss.
+    expect(out.rewroteFrom).toBe(-1);
+  });
+
+  it("names the result message it rewrote, not the call it answered", () => {
+    const messages = captures(4, 1000);
+    const out = fold(messages, 0, { ...roomy, imageCeiling: 2_000, imageLowWater: 1_000 }, new FoldState());
+
+    expect(out.rewroteFrom).toBe(2);
+  });
+
+  it("leaves a digested call alone, its images having gone with its output", () => {
+    const messages = captures(6, 1000);
+    const state = new FoldState();
+    state.promote("t0", Tier.Digest);
+    const out = fold(messages, 0, { ...roomy, imageCeiling: 3_000, imageLowWater: 2_000 }, state);
+
+    expect(messages[2].content[0].text).toBe("[omitted: 1000B; t0]");
+    expect(out.imagesFolded).toBe(3);
+    expect(out.imageBytes).toBe(2000);
+  });
+});

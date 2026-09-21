@@ -40,6 +40,24 @@ export const DEFAULT_KEEP_FRACTION = 0.3;
 // the provider would have accepted.
 export const OVERFLOW_MARGIN = 1.15;
 
+// The image payload a prompt may carry before the oldest of it is folded away,
+// and what a fold takes it back down to.
+//
+// These are wire bytes, and they exist because the token budget cannot see
+// them: a provider prices an image by its pixels, so a screenshot the estimate
+// counts at 1.6K tokens is around 350KB of base64 on every request that carries
+// it. A session navigating by screenshot would reach a 32MB body limit around
+// ninety captures deep while the token ceiling still read the conversation as
+// small, and the turn would be refused by the gateway rather than folded.
+//
+// The low-water mark is roughly three captures at the size the shrinker settles
+// on, which is the recent history a model comparing one screen against the last
+// actually reads; the ceiling is twice that, so a fold lands every few captures
+// instead of on every turn, and each one costs one cache miss rather than a
+// steady stream of them.
+export const DEFAULT_IMAGE_BYTES_CEILING = 3_500_000;
+export const DEFAULT_IMAGE_BYTES_LOW_WATER = 1_750_000;
+
 export interface PromptcapModelSettings {
   /**
    * The ceiling applied when no window is known.
@@ -93,6 +111,22 @@ export interface PromptcapSettings extends PromptcapModelSettings {
    * for, and nothing at all on a flat-rate subscription.
    */
   longCacheRetention?: boolean;
+  /**
+   * The image payload a prompt may carry before the oldest of it folds away,
+   * in the bytes that go on the wire. Absent means
+   * {@link DEFAULT_IMAGE_BYTES_CEILING}.
+   *
+   * Global rather than per-model because what it protects is the request body,
+   * and the limit on that belongs to the gateway a request passes through
+   * rather than to the model answering it.
+   */
+  imageBytesCeiling?: number;
+  /**
+   * What a pass over that ceiling folds the payload back down to. Absent means
+   * {@link DEFAULT_IMAGE_BYTES_LOW_WATER}; a value at or above the ceiling
+   * would fold on every turn, so it is held below it.
+   */
+  imageBytesLowWater?: number;
   /**
    * Overrides keyed by the model spec a turn asks for, matched on either the
    * full `provider/id` or the bare id.
@@ -186,5 +220,16 @@ export function limitsFor(
   // outright, and a fold that frees a little beats a turn that does not run.
   const urgent = hard > 0 ? Math.min(Math.round(ceiling * OVERFLOW_MARGIN), hard) : Math.round(ceiling * OVERFLOW_MARGIN);
 
-  return { ceiling, lowWater, urgent };
+  const imageCeiling = settings.imageBytesCeiling && settings.imageBytesCeiling > 0
+    ? settings.imageBytesCeiling
+    : DEFAULT_IMAGE_BYTES_CEILING;
+  const configuredLowWater = settings.imageBytesLowWater && settings.imageBytesLowWater > 0
+    ? settings.imageBytesLowWater
+    : DEFAULT_IMAGE_BYTES_LOW_WATER;
+  // A low-water mark the ceiling does not sit above leaves nothing to fold into
+  // and a fold on every turn, so it is held under whatever ceiling was asked
+  // for rather than taken at its word.
+  const imageLowWater = Math.min(configuredLowWater, Math.floor(imageCeiling / 2));
+
+  return { ceiling, lowWater, urgent, imageCeiling, imageLowWater };
 }

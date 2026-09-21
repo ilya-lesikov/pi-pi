@@ -1,5 +1,5 @@
 import { byteLength, DEFAULT_IMAGE_TOKENS, messagesBytes, toolCallBytes, BYTES_PER_TOKEN } from "./estimate.js";
-import { OVERFLOW_MARGIN } from "./limits.js";
+import { DEFAULT_IMAGE_BYTES_CEILING, DEFAULT_IMAGE_BYTES_LOW_WATER, OVERFLOW_MARGIN } from "./limits.js";
 
 export type AgentMessage = Record<string, any>;
 
@@ -105,6 +105,23 @@ export interface Limits {
    * itself is at risk. Absent means a margin above the ceiling.
    */
   urgent?: number;
+  /**
+   * The image payload a prompt may carry, in the bytes that go on the wire.
+   * Absent means {@link DEFAULT_IMAGE_BYTES_CEILING}.
+   *
+   * A second budget is needed because the first one cannot see this: an image
+   * is charged by its pixels, so the estimate counts a screenshot at what the
+   * provider bills for it — around a hundredth of the base64 that carries it.
+   * A session that navigates by screenshot therefore accumulates megabytes the
+   * token ceiling reads as kilobytes, re-uploads all of them every turn, and
+   * fails on the request body limit long before anything folds.
+   */
+  imageCeiling?: number;
+  /**
+   * The image payload a pass over {@link imageCeiling} folds back down to.
+   * Absent means {@link DEFAULT_IMAGE_BYTES_LOW_WATER}.
+   */
+  imageLowWater?: number;
 }
 
 /**
@@ -148,6 +165,10 @@ export interface FoldResult {
   rewroteFrom: number;
   /** Whether the prompt was over the ceiling and folding was held back anyway. */
   held: boolean;
+  /** Calls this pass took the images off, leaving the rest of their result. */
+  imagesFolded: number;
+  /** Image payload still in the prompt afterwards, in wire bytes. */
+  imageBytes: number;
 }
 
 interface Call {
@@ -186,9 +207,24 @@ export class FoldState {
    * left unprotected, and rewrite the prompt for it.
    */
   private reasoningThrough = 0;
+  /**
+   * Calls whose result has had its images taken off while the rest of it
+   * stayed. Remembered for the same reason a tier is: the host hands over a
+   * fresh copy of the conversation every request, so an image not stripped
+   * again would come back and move the prefix it sits in.
+   */
+  private imagesStripped = new Set<string>();
 
   tierOf(callId: string): Tier {
     return this.tiers.get(callId) ?? Tier.Verbatim;
+  }
+
+  strippedImages(callId: string): void {
+    this.imagesStripped.add(callId);
+  }
+
+  hasStrippedImages(callId: string): boolean {
+    return this.imagesStripped.has(callId);
   }
 
   promote(callId: string, to: Tier): void {
@@ -205,6 +241,7 @@ export class FoldState {
 
   clear(): void {
     this.tiers.clear();
+    this.imagesStripped.clear();
     this.reasoningThrough = 0;
   }
 
@@ -266,7 +303,10 @@ export function fold(
   // and move the prompt's prefix.
   for (const call of calls) {
     const remembered = state.tierOf(call.id);
-    if (remembered === Tier.Verbatim) continue;
+    if (remembered === Tier.Verbatim) {
+      if (state.hasStrippedImages(call.id)) bytes -= stripResultImages(messages, call, imageTokens);
+      continue;
+    }
     // A dropped call is removed structurally in one pass once every tier is
     // settled, so here it only has to stop counting towards the prompt.
     bytes -= remembered >= Tier.Drop
@@ -278,6 +318,31 @@ export function fold(
   // Remembered drops are charged their lines here; newly promoted ones add
   // theirs as they are chosen.
   bytes += dropLineReserve(messages, calls.filter((call) => call.tier >= Tier.Drop));
+
+  // The image budget is settled before the token one, and outside the question
+  // of whether folding pays for itself. That question is asked in tokens, and
+  // in tokens an image is worth almost nothing; what is at stake here is the
+  // size of the request body, which a provider rejects outright rather than
+  // bills for.
+  let imagesFolded = 0;
+  let imageBytes = imagePayloadBytes(messages);
+  const imageLowWater = limits.imageLowWater ?? DEFAULT_IMAGE_BYTES_LOW_WATER;
+  if (imageBytes > (limits.imageCeiling ?? DEFAULT_IMAGE_BYTES_CEILING)) {
+    for (const call of calls) {
+      if (imageBytes <= imageLowWater) break;
+      if (call.tier !== Tier.Verbatim) continue;
+      const carried = resultImageBytes(messages, call);
+      if (carried === 0) continue;
+      bytes -= stripResultImages(messages, call, imageTokens);
+      state.strippedImages(call.id);
+      imageBytes -= carried;
+      imagesFolded++;
+      // The call itself keeps every byte it had: only its result moved, and
+      // naming the call message instead would overstate how much of the prompt
+      // this re-bills.
+      moved(call.resultMessage);
+    }
+  }
 
   const over = toTokens(bytes) > limits.ceiling;
   const worth = over && worthFolding(messages, calls, bytes, limits, protectedFrom, ratio, imageTokens);
@@ -333,7 +398,56 @@ export function fold(
     promoted,
     rewroteFrom,
     held: over && !worth,
+    imagesFolded,
+    imageBytes: imagePayloadBytes(messages),
   };
+}
+
+/**
+ * The image payload of a whole conversation, in the base64 bytes that travel.
+ *
+ * Everything is counted, including images a user attached and those of the
+ * newest results, because what this is measured against is the size of the
+ * request — not the size of the part folding is allowed to touch.
+ */
+function imagePayloadBytes(messages: AgentMessage[]): number {
+  let bytes = 0;
+  for (const message of messages) {
+    if (!Array.isArray(message?.content)) continue;
+    for (const part of message.content) {
+      if (part?.type === "image") bytes += (part.data ?? "").length;
+    }
+  }
+  return bytes;
+}
+
+function resultImageBytes(messages: AgentMessage[], call: Call): number {
+  const content = messages[call.resultMessage]?.content;
+  if (!Array.isArray(content)) return 0;
+  let bytes = 0;
+  for (const part of content) {
+    if (part?.type === "image") bytes += (part.data ?? "").length;
+  }
+  return bytes;
+}
+
+/**
+ * Replaces the images of one result with the notice that stands for any folded
+ * output, keeping whatever text came with them, and reports the bytes it saved.
+ *
+ * The text stays because it is not what costs anything: a tool that returns a
+ * screenshot alongside a description loses the expensive half and keeps the
+ * half the model can still read. The image itself stays in the session store,
+ * so recall hands it back by the id the notice names.
+ */
+function stripResultImages(messages: AgentMessage[], call: Call, imageTokens: number): number {
+  const result = messages[call.resultMessage];
+  if (!Array.isArray(result?.content)) return 0;
+  const before = messagesBytes([result], imageTokens);
+  result.content = result.content.map((part: any) =>
+    part?.type === "image" ? { type: "text", text: omission((part.data ?? "").length, call.id) } : part,
+  );
+  return before - messagesBytes([result], imageTokens);
 }
 
 /**

@@ -60,6 +60,15 @@ export interface PromptcapConfig extends PromptcapModelConfig {
    *  minutes (default true). Off = the provider default, which expires across
    *  any pause longer than a coffee and re-buys the prompt at write price. */
   longCacheRetention?: boolean;
+  /** The image payload a prompt may carry before the oldest of it is folded
+   *  away, in the bytes that go on the wire (default 3500000). A provider
+   *  prices an image by its pixels, so the token budget reads a screenshot at
+   *  a hundredth of the base64 that carries it and never folds one. */
+  imageBytesCeiling?: number;
+  /** What a fold takes that payload back down to (default 1750000), roughly
+   *  the three most recent captures. Held below half the ceiling, so a fold
+   *  lands every few captures rather than on every turn. */
+  imageBytesLowWater?: number;
   /** Per-model overrides keyed by model id, bare or provider-prefixed. */
   perModel: Record<string, PromptcapModelConfig>;
 }
@@ -285,6 +294,8 @@ function validatePromptcap(value: unknown): void {
   ensureNumberInRange(c.contextWindow, "config.promptcap.contextWindow", 1000, 100_000_000);
   ensureNumberInRange(c.headroomTokens, "config.promptcap.headroomTokens", 1000, 100_000_000);
   ensureNumberInRange(c.imageTokens, "config.promptcap.imageTokens", 1, 10_000_000);
+  ensureNumberInRange(c.imageBytesCeiling, "config.promptcap.imageBytesCeiling", 1024, 64 * 1024 * 1024);
+  ensureNumberInRange(c.imageBytesLowWater, "config.promptcap.imageBytesLowWater", 0, 64 * 1024 * 1024);
   // Excludes both ends: at 0 a fold would aim at the floor and strip every
   // call it has, and at 1 it would aim at the ceiling it just crossed and fire
   // again on the next request.
