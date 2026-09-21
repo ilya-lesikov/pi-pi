@@ -93,11 +93,17 @@ export function isUnrecognizedTransportError(message?: string): boolean {
  * be refused again: it is retryable only because something between the attempts
  * makes the prompt smaller. The promptcap guard is what does that, and it is
  * also what decides whether a retry is worth scheduling at all.
+ *
+ * A bare number is not enough to go on. "failed after 413 ms" would arm an
+ * emergency that empties a conversation of its screenshots for a fault that had
+ * nothing to do with size, so the status counts only where a gateway puts a
+ * status, and otherwise the refusal has to say what it was about.
  */
 export function isRequestTooLargeError(message?: string): boolean {
   if (typeof message !== "string") return false;
   if (isSpentQuota(message)) return false;
-  return /\b413\b|request_too_large|(?:request|payload|entity|body)[\s_-]*(?:entity[\s_-]*)?too[\s_-]*large/i.test(message);
+  if (/request_too_large|(?:request|payload|entity|body|message)[\s_-]*(?:entity[\s_-]*)?too[\s_-]*large/i.test(message)) return true;
+  return /\b(?:status(?:\s*code)?|http)\b[^\d]{0,12}413\b|\b413\b[\s:\u2013\u2014-]*(?:request|payload|entity|content|body)/i.test(message);
 }
 
 // A gateway that reports a spent quota alongside a status is out of money, not
@@ -128,13 +134,13 @@ export function patchRetryPredicate(prototype: any = (AgentSession as any)?.prot
   if (prototype[PATCHED]) return "already";
   const original = prototype._isRetryableError;
   prototype._isRetryableError = function (message: any): boolean {
-    // Asked before the original, because this is the one case where saying yes
-    // commits to changing the request rather than repeating it: the guard is
-    // told here, and its answer is whether a retry can differ from what failed.
     if (message?.stopReason === "error" && isRequestTooLargeError(message?.errorMessage)) {
+      // Armed whoever ends up answering: the guard has to know the last prompt
+      // was refused for its size even on the reading where pi would have
+      // retried anyway, or the retry resends what was just rejected.
       const recoverable = noteOversizedRequest(this);
       getLogger().debug({ s: "retry", recoverable }, "the provider refused a request for its size");
-      return recoverable;
+      if (recoverable) return true;
     }
     if (original.call(this, message)) return true;
     return message?.stopReason === "error" && isUnrecognizedTransportError(message?.errorMessage);

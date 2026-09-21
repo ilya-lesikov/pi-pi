@@ -66,8 +66,9 @@ export interface PromptcapConfig extends PromptcapModelConfig {
    *  a hundredth of the base64 that carries it and never folds one. */
   imageBytesCeiling?: number;
   /** What a fold takes that payload back down to (default 1750000), roughly
-   *  the three most recent captures. Held below half the ceiling, so a fold
-   *  lands every few captures rather than on every turn. */
+   *  the three most recent captures; 0 takes every image it may. Held below
+   *  half the ceiling, so a fold lands every few captures rather than on
+   *  every turn. */
   imageBytesLowWater?: number;
   /** Per-model overrides keyed by model id, bare or provider-prefixed. */
   perModel: Record<string, PromptcapModelConfig>;

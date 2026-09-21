@@ -320,6 +320,30 @@ describe("a request refused for its size", () => {
     expect(noteOversizedRequest({ sessionManager })).toBe(true);
   });
 
+  // A turn ends on a refusal too, carrying no charge and carrying the very
+  // refusal that would be forgotten here.
+  it("does not forget the refusal when the failed turn itself ends", () => {
+    const handlers = new Map<string, Function>();
+    const sessionManager = {};
+    const guard = new PromptGuard({ settings: () => settings() });
+    registerPromptGuard({ on: (event: string, handler: Function) => handlers.set(event, handler), getAllTools: () => [], getActiveTools: () => [] } as any, guard);
+    guard.apply(conversation(2, 4000), imaged(sessionManager), []);
+    noteOversizedRequest({ sessionManager });
+    guard.apply(conversation(2, 4000), imaged(sessionManager), []);
+
+    handlers.get("turn_end")!({ message: { stopReason: "error", usage: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 } } }, ctx());
+
+    expect(noteOversizedRequest({ sessionManager })).toBe(false);
+  });
+
+  it("promises nothing while folding is switched off", () => {
+    const sessionManager = {};
+    const guard = new PromptGuard({ settings: () => settings({ enabled: false }) });
+    guard.apply(captures(2, 1000), imaged(sessionManager), []);
+
+    expect(noteOversizedRequest({ sessionManager })).toBe(false);
+  });
+
   it("reaches the guard that built the prompt and no other", () => {
     const mine = {};
     const theirs = {};

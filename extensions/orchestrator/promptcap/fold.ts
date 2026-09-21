@@ -326,6 +326,14 @@ export function fold(
   // bills for.
   let imagesFolded = 0;
   let imageBytes = imagePayloadBytes(messages);
+  // A call already dropped still stands in `messages`: it is removed in one
+  // pass at the end, once every tier is settled. Its images are therefore
+  // counted by the measure above and unreachable by the loop below, which
+  // together would strip surviving captures to make room for bytes that were
+  // never going to be sent.
+  for (const call of calls) {
+    if (call.tier >= Tier.Drop) imageBytes -= resultImageBytes(messages, call);
+  }
   const imageLowWater = limits.imageLowWater ?? DEFAULT_IMAGE_BYTES_LOW_WATER;
   if (imageBytes > (limits.imageCeiling ?? DEFAULT_IMAGE_BYTES_CEILING)) {
     for (const call of calls) {

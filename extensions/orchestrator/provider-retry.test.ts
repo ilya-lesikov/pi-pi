@@ -102,7 +102,12 @@ describe("pi's retry predicate", () => {
     expect(isRequestTooLargeError("Request body too large")).toBe(true);
     expect(isRequestTooLargeError('{"type":"request_too_large"}')).toBe(true);
     expect(isRequestTooLargeError("payload too large")).toBe(true);
+    expect(isRequestTooLargeError("Request failed with status 413")).toBe(true);
     expect(isRequestTooLargeError("read 4130 bytes")).toBe(false);
+    // A number is not a status: arming the recovery on one empties a
+    // conversation of its screenshots for a fault that was never about size.
+    expect(isRequestTooLargeError("503 upstream failed after 413 ms")).toBe(false);
+    expect(isRequestTooLargeError("400 Invalid messages.413.content")).toBe(false);
     expect(isRequestTooLargeError("413 but the available balance is spent")).toBe(false);
     expect(isRequestTooLargeError(undefined)).toBe(false);
   });
@@ -136,5 +141,12 @@ describe("pi's retry predicate", () => {
     patchRetryPredicate(prototype);
 
     expect(prototype._isRetryableError({ stopReason: "error", errorMessage: "413 Request body too large" })).toBe(false);
+  });
+
+  it("keeps pi's own answer for a refusal nothing can be done about", () => {
+    const prototype: any = { _isRetryableError: () => true, sessionManager: {} };
+    patchRetryPredicate(prototype);
+
+    expect(prototype._isRetryableError({ stopReason: "error", errorMessage: "413 Request body too large" })).toBe(true);
   });
 });

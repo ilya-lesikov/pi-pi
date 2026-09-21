@@ -66,7 +66,9 @@ export class PromptGuard {
   }
 
   noteOversizedRequest(): boolean {
-    if (this.emergencyExhausted) return false;
+    // A guard that is not folding cannot make the next attempt any smaller, and
+    // a retry it promised would resend exactly what was refused.
+    if (this.emergencyExhausted || !this.host.settings().enabled) return false;
     this.imageEmergency = true;
     return true;
   }
@@ -187,10 +189,13 @@ export class PromptGuard {
   calibrate(charged: number, modelKey: string): void {
     const predicted = this.predicted;
     this.predicted = null;
-    // A turn the provider answered is a size it accepted, so whatever it
-    // refused before is no longer what this session is up against.
-    this.emergencyExhausted = false;
     if (!predicted || charged <= 0) return;
+    // Something was billed for, so a prompt was accepted, and whatever the
+    // provider refused before is no longer what this session is up against.
+    // Read from the charge rather than from the turn ending, because a turn
+    // ends on a refusal too — carrying no charge, and carrying the very
+    // refusal this would be forgetting.
+    this.emergencyExhausted = false;
     // A turn answered by a model other than the one the prompt was sized for
     // teaches the wrong estimator: the fallback path switches providers between
     // the fold and the response.

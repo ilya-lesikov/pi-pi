@@ -123,8 +123,9 @@ export interface PromptcapSettings extends PromptcapModelSettings {
   imageBytesCeiling?: number;
   /**
    * What a pass over that ceiling folds the payload back down to. Absent means
-   * {@link DEFAULT_IMAGE_BYTES_LOW_WATER}; a value at or above the ceiling
-   * would fold on every turn, so it is held below it.
+   * {@link DEFAULT_IMAGE_BYTES_LOW_WATER}; zero takes every image folding may
+   * touch. A value at or above the ceiling would fold on every turn, so it is
+   * held below it.
    */
   imageBytesLowWater?: number;
   /**
@@ -223,7 +224,7 @@ export function limitsFor(
   const imageCeiling = settings.imageBytesCeiling && settings.imageBytesCeiling > 0
     ? settings.imageBytesCeiling
     : DEFAULT_IMAGE_BYTES_CEILING;
-  const configuredLowWater = settings.imageBytesLowWater && settings.imageBytesLowWater > 0
+  const configuredLowWater = typeof settings.imageBytesLowWater === "number" && settings.imageBytesLowWater >= 0
     ? settings.imageBytesLowWater
     : DEFAULT_IMAGE_BYTES_LOW_WATER;
   // A low-water mark the ceiling does not sit above leaves nothing to fold into

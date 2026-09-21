@@ -739,6 +739,17 @@ describe("limitsFor", () => {
     expect(declared.ceiling).toBe(DEFAULT_HEADROOM_TOKENS);
   });
 
+  it("honours a low-water mark of zero rather than reading it as absent", () => {
+    const { imageLowWater } = limitsFor(settings({ imageBytesLowWater: 0 }), "m", 0);
+    expect(imageLowWater).toBe(0);
+  });
+
+  it("holds the low-water mark under the ceiling it was given", () => {
+    const { imageCeiling, imageLowWater } = limitsFor(settings({ imageBytesCeiling: 100_000, imageBytesLowWater: 900_000 }), "m", 0);
+    expect(imageCeiling).toBe(100_000);
+    expect(imageLowWater).toBe(50_000);
+  });
+
   it("matches a per-model override on the bare id", () => {
     const { ceiling } = limitsFor(settings({ perModel: { "claude-opus-4-8": { maxPromptTokens: 42_000 } } }), "anthropic/claude-opus-4-8", 0);
     expect(ceiling).toBe(42_000);
@@ -845,11 +856,31 @@ describe("the image budget", () => {
     expect(out.rewroteFrom).toBe(-1);
   });
 
+  it("takes every image when nothing is kept under the mark", () => {
+    const messages = captures(4, 1000);
+    const out = fold(messages, 0, { ...roomy, imageCeiling: 1, imageLowWater: 0 }, new FoldState());
+
+    expect(out.imagesFolded).toBe(4);
+    expect(out.imageBytes).toBe(0);
+  });
+
   it("names the result message it rewrote, not the call it answered", () => {
     const messages = captures(4, 1000);
     const out = fold(messages, 0, { ...roomy, imageCeiling: 2_000, imageLowWater: 1_000 }, new FoldState());
 
     expect(out.rewroteFrom).toBe(2);
+  });
+
+  it("does not spend the budget on images of calls that are about to be removed", () => {
+    const state = new FoldState();
+    for (const id of ["t0", "t1", "t2", "t3"]) state.promote(id, Tier.Drop);
+    const messages = captures(6, 1000);
+    const out = fold(messages, 0, { ...roomy, imageCeiling: 3_000, imageLowWater: 2_000 }, state);
+
+    // Four of the six captures leave with the calls they answered, so the two
+    // that remain are already under the ceiling and neither is touched.
+    expect(out.imagesFolded).toBe(0);
+    expect(out.imageBytes).toBe(2000);
   });
 
   it("leaves a digested call alone, its images having gone with its output", () => {
