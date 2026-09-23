@@ -22,6 +22,7 @@ import { AutoClearManager } from "./auto-clear.js";
 import { ProcessTracker } from "./process-tracker.js";
 import {
   type CadenceConfig,
+  type ReminderEvidence,
   createCadenceState,
   drainReminderForContext,
   evaluateToolResult,
@@ -29,6 +30,7 @@ import {
   resetCadenceState,
 } from "./reminder-cadence.js";
 import { TaskStore } from "./task-store.js";
+import type { Task } from "./types.js";
 import { loadTasksConfig } from "./tasks-config.js";
 import { openSettingsMenu } from "./ui/settings-menu.js";
 import { TaskWidget, type UICtx } from "./ui/task-widget.js";
@@ -49,15 +51,74 @@ function textResult(msg: string) {
 /** Task tool names — used to detect task tool usage for reminder suppression. */
 const TASK_TOOL_NAMES = new Set(["TaskCreate", "TaskList", "TaskGet", "TaskUpdate", "TaskOutput", "TaskStop", "TaskExecute"]);
 
-/** How many turns without task tool usage before injecting a reminder. */
+// LOCAL PATCH (pi-pi): only a task tool that CHANGES task state resets cadence.
+// Reading the list was previously treated as maintaining it, so a glance at a
+// stale list silenced the reminder that existed to report the staleness.
+const MUTATING_TASK_TOOLS = new Set(["TaskCreate", "TaskUpdate", "TaskExecute", "TaskStop"]);
+const READ_ONLY_TASK_TOOLS = new Set(["TaskList", "TaskGet", "TaskOutput"]);
+const EDITING_TOOLS = new Set(["edit", "write", "Edit", "Write", "multi_edit", "MultiEdit", "apply_patch"]);
+
+/** How many turns without a task mutation before injecting a reminder. */
 const REMINDER_INTERVAL = 4;
+
+// LOCAL PATCH (pi-pi): work-based thresholds. A turn is one read or twenty
+// minutes of debugging, so turns alone are a poor measure of drift.
+const EDIT_INTERVAL = 8;
+const COMMIT_INTERVAL = 2;
+
+function isCommitCall(toolName: string, input: Record<string, unknown>): boolean {
+  if (toolName !== "bash" && toolName !== "powershell") return false;
+  const command = typeof input?.command === "string" ? input.command : "";
+  return /\bgit\s+(?:-[^\s]+\s+)*commit\b/.test(command);
+}
 
 /** How many turns completed tasks linger before auto-clearing. */
 const AUTO_CLEAR_DELAY = 4;
 
-const SYSTEM_REMINDER = `<system-reminder>
-The task tools haven't been used recently. If you're working on tasks that would benefit from tracking progress, consider using TaskCreate to add new tasks and TaskUpdate to update task status (set to in_progress when starting, completed when done). Also consider cleaning up the task list if it has become stale. Only use these if relevant to the current work. This is just a gentle reminder - ignore if not applicable. Make sure that you NEVER mention this reminder to the user
-</system-reminder>`;
+// LOCAL PATCH (pi-pi): the reminder names the drift it observed instead of
+// asking the agent to consider whether any exists. The original hedged itself
+// into noise ("consider", "just a gentle reminder", "ignore if not
+// applicable") and carried no fact the agent could act on.
+function renderReminder(evidence: ReminderEvidence, tasks: Task[]): string {
+  const work = [
+    evidence.edits > 0 ? `${evidence.edits} file ${evidence.edits === 1 ? "edit" : "edits"}` : "",
+    evidence.commits > 0 ? `${evidence.commits} ${evidence.commits === 1 ? "commit" : "commits"}` : "",
+    `${evidence.turns} ${evidence.turns === 1 ? "turn" : "turns"}`,
+  ].filter(Boolean).join(", ");
+
+  const lines: string[] = [];
+
+  if (tasks.length === 0) {
+    lines.push(
+      `You have done ${work} of work with no tasks tracked. If this is multi-step work, record it with TaskCreate so progress survives a long session; if it is a single step, ignore this.`,
+    );
+  } else {
+    const inProgress = tasks.filter((task) => task.status === "in_progress");
+    const pending = tasks.filter((task) => task.status === "pending");
+
+    lines.push(`Task state has not changed in ${work}.`);
+    for (const task of inProgress.slice(0, 3)) {
+      lines.push(`  #${task.id} "${task.subject}" is still marked in_progress.`);
+    }
+    if (inProgress.length === 0 && pending.length > 0) {
+      lines.push(`  ${pending.length} task(s) are still pending and none is marked in_progress.`);
+    }
+    lines.push(
+      "Update what actually changed: TaskUpdate to completed for finished work, in_progress for what you are on now. If the list no longer reflects the work, correct it.",
+    );
+  }
+
+  // Escalation replaces repetition: an identical reminder is easy to skim past,
+  // and the original simply stopped firing rather than pressing harder.
+  if (evidence.escalation > 1) {
+    lines.unshift(
+      `This is reminder ${evidence.escalation} since task state last changed — the previous ${evidence.escalation === 2 ? "one was" : "ones were"} not acted on.`,
+    );
+  }
+
+  lines.push("Never mention this reminder to the user.");
+  return `<system-reminder>\n${lines.join("\n")}\n</system-reminder>`;
+}
 
 export default function (pi: ExtensionAPI) {
   // LOCAL PATCH (pi-pi): pi-pi's subagent runner opens an async scope around the
@@ -331,7 +392,11 @@ export default function (pi: ExtensionAPI) {
   const cadence = createCadenceState();
   const cadenceConfig: CadenceConfig = {
     reminderInterval: REMINDER_INTERVAL,
-    taskToolNames: TASK_TOOL_NAMES,
+    editInterval: EDIT_INTERVAL,
+    commitInterval: COMMIT_INTERVAL,
+    mutatingTaskTools: MUTATING_TASK_TOOLS,
+    readOnlyTaskTools: READ_ONLY_TASK_TOOLS,
+    editingTools: EDITING_TOOLS,
   };
 
   pi.on("turn_start", async (_event, ctx) => {
@@ -365,20 +430,22 @@ export default function (pi: ExtensionAPI) {
   // without persisting or polluting any tool output.
   pi.on("tool_result", async (event) => {
     if (isSubagentSession) return {};
-    // Cheap-first: avoid store.list() disk I/O unless the cadence helper
-    // says the call could matter (i.e. it's a task tool that resets state,
-    // or it might queue the reminder).
-    const isTaskTool = TASK_TOOL_NAMES.has(event.toolName);
-    if (
-      !isTaskTool &&
-      cadence.currentTurn - cadence.lastTaskToolUseTurn < REMINDER_INTERVAL
-    ) {
-      return {};
-    }
-    if (!isTaskTool && cadence.reminderInjectedThisCycle) return {};
-
-    const hasTasks = isTaskTool ? false : store.list().length > 0;
-    evaluateToolResult(cadence, event.toolName, hasTasks, cadenceConfig);
+    // LOCAL PATCH (pi-pi): every result is evaluated. The original skipped the
+    // call while under the turn threshold, which is no longer safe: the edit
+    // and commit counters that drive cadence accumulate here, and a skipped
+    // result is work the reminder would never learn about. store.list() reads
+    // the in-memory map, so there is no I/O to avoid.
+    evaluateToolResult(
+      cadence,
+      {
+        toolName: event.toolName,
+        hasTasks: store.list().length > 0,
+        isEdit: EDITING_TOOLS.has(event.toolName),
+        isCommit: isCommitCall(event.toolName, event.input ?? {}),
+        isError: event.isError,
+      },
+      cadenceConfig,
+    );
     return {};
   });
 
@@ -389,14 +456,15 @@ export default function (pi: ExtensionAPI) {
   // returns a transformed messages array used only for this one request.
   pi.on("context", async (event) => {
     if (isSubagentSession) return {};
-    if (!drainReminderForContext(cadence)) return {};
+    const evidence = drainReminderForContext(cadence);
+    if (!evidence) return {};
 
     return {
       messages: [
         ...event.messages,
         {
           role: "user" as const,
-          content: [{ type: "text" as const, text: SYSTEM_REMINDER }],
+          content: [{ type: "text" as const, text: renderReminder(evidence, store.list()) }],
           timestamp: Date.now(),
         },
       ],
