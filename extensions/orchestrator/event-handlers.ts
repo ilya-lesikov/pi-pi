@@ -193,7 +193,11 @@ export function registerLoadSkill(
   pi.registerTool({
     name: "load_skill",
     label: "Load Skill",
-    description: `Load specialized guidance by name. Available: ${listLayeredSkills(cwd, layers()).map((skill) => `${skill.name} — ${skill.description}`).join("; ") || "none"}. Skill documents are stateless, reloadable, and searchable in session history.`,
+    // Names only. Every description is already in the <skills> block of the
+    // prompt, together with the rule that makes them triggers; repeating them
+    // here doubled the cost of the catalog for one audience, since load_skill
+    // is granted to the main agent alone.
+    description: `Load specialized guidance by name. Available: ${listLayeredSkills(cwd, layers()).map((skill) => skill.name).join(", ") || "none"}. Each name's WHEN-to-load description is in the <skills> catalog in your prompt. Skill documents are stateless, reloadable, and searchable in session history.`,
     parameters: Type.Object({ name: Type.String({ description: "Skill name from the available-skills catalog." }) }),
     async execute(_id, params) {
       try {

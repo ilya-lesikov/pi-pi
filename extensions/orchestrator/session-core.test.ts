@@ -7,6 +7,7 @@ import { Orchestrator } from "./orchestrator.js";
 import { buildAcpState } from "./acp.js";
 import { isSubscriptionFallbackActive, setSubscriptionFallbackActive, setTierEnabled, updateRegistryFromAvailableModels } from "./model-registry.js";
 import { classifyContinuation, isMainTurnStalled, registerEventHandlers, registerLoadSkill, registerSubagentPromptcap, renderGenericPrompt } from "./event-handlers.js";
+import { listLayeredSkills } from "./skills-manifest.js";
 import { createUsageTracker } from "./usage-tracker.js";
 import initExtension from "./index.js";
 
@@ -1020,6 +1021,20 @@ describe("session-first core", () => {
     const result = await registration.execute("id", { name: "software-engineering" });
     expect(result.isError).not.toBe(true);
     expect(result.content[0].text).toContain('<skill name="software-engineering" source="bundled">');
+  });
+
+  // The <skills> catalog already carries every description and the rule that
+  // makes them triggers, and load_skill is granted to the main agent alone, so
+  // a description repeated here is paid twice and read once.
+  it("lists skill names without repeating the catalog's descriptions", () => {
+    const pi = makePi();
+    registerLoadSkill(pi, "/tmp/project");
+    const registration = pi.registerTool.mock.calls.find((call: any[]) => call[0].name === "load_skill")[0];
+
+    for (const skill of listLayeredSkills("/tmp/project")) {
+      expect(registration.description).toContain(skill.name);
+      expect(registration.description).not.toContain(skill.description);
+    }
   });
 
   it("registers workers without context inheritance or worktree isolation", () => {
