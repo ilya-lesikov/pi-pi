@@ -28,6 +28,15 @@ function isCbmAvailable(): boolean {
   return getCbmBin() !== null;
 }
 
+/**
+ * Forget a negative lookup so a binary installed after this session started is
+ * found. Only a miss is cleared: a resolved path stays, since re-resolving it
+ * could hand a running daemon a different binary than the one it launched.
+ */
+export function forgetMissingCbmBin(): void {
+  if ((globalThis as any)[CBM_BIN_KEY] === null) (globalThis as any)[CBM_BIN_KEY] = undefined;
+}
+
 const CBM_DAEMON_KEY = Symbol.for("pi-pi:cbm-daemon");
 
 function getGlobalDaemon(): CbmDaemon | null {

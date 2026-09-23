@@ -4,7 +4,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { loadConfig, getDefaultConfig, normalizeConfigDurations } from "./config.js";
 import { getLogger, initSessionLogger, setLogLevel, flushLogs } from "./log.js";
 import { initTracer, finalizeTracer, getTracer } from "./tracer.js";
-import { registerCbmTools } from "./cbm.js";
+import { forgetMissingCbmBin, registerCbmTools } from "./cbm.js";
 import { registerExaTools } from "./exa.js";
 import { registerAstSearchTool } from "./ast-search.js";
 import { registerBillingHook } from "./billing-spoof.js";
@@ -21,6 +21,7 @@ import { publishAcpState, resetAcpStateCache } from "./acp.js";
 import { runAfterEdit } from "./commands.js";
 import { registerImageShrink } from "./image-shrink.js";
 import { checkDuplicateExtensions } from "./duplicate-extension-guard.js";
+import { ensureProvisionDirOnPath, ensureServerForFile, provisionEagerTools } from "./provision/session.js";
 import { installConsoleGuard } from "./console-guard.js";
 import { demoteUnusableSubscription, handleMainAuthFailure, handleMainRateLimit, handleSubagentAuthFailure, handleSubagentRateLimit, isAuthError, isPolicyBlockError, isRateLimitError } from "./rate-limit-fallback.js";
 import { adjudicateCheckIn, adjudicateContinuation } from "./continuation-adjudicator.js";
@@ -245,6 +246,40 @@ function registerTracing(pi: ExtensionAPI): void {
   });
 }
 
+/**
+ * Install a language server at the moment something first needs it.
+ *
+ * An `lsp` call is held until the install settles: letting it through early
+ * would answer "no capable server" for a language pi-pi is seconds away from
+ * being able to serve, and that answer is what teaches the model to stop
+ * asking. Reads only warm the cache in the background — by the time an `lsp`
+ * call follows, the server is usually already there.
+ */
+function registerLazyProvisioning(pi: ExtensionAPI): void {
+  const pathOf = (input: Record<string, unknown> | undefined): string | undefined => {
+    for (const key of ["filePath", "path", "file_path"]) {
+      const value = input?.[key];
+      if (typeof value === "string" && value.includes(".")) return value;
+    }
+    return undefined;
+  };
+
+  // Returns nothing on every path: a tool_call handler's result is the call's
+  // patched input, and answering with an empty object would shadow a patch
+  // another handler made.
+  pi.on("tool_call", async (event: any) => {
+    const filePath = pathOf(event?.input);
+    if (!filePath) return;
+    if (event.toolName === "lsp") {
+      await ensureServerForFile(filePath);
+      return;
+    }
+    if (event.toolName === "read" || event.toolName === "edit" || event.toolName === "write") {
+      void ensureServerForFile(filePath);
+    }
+  });
+}
+
 function registerLifecycle(orchestrator: Orchestrator): void {
   const pi = orchestrator.pi;
   // pi-subagents publishes its lifecycle on the shared event bus, not as host
@@ -430,6 +465,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   const pi = orchestrator.pi;
   registerTracing(pi);
   registerBillingHook(pi);
+  registerLazyProvisioning(pi);
   registerLifecycle(orchestrator);
   registerPromptcap(orchestrator);
   registerImageShrink(pi, () => orchestrator.config?.images);
@@ -438,6 +474,9 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     orchestrator.lastCtx = ctx;
     orchestrator.cwd = ctx.cwd;
     orchestrator.interactivePromptOpen = false;
+    // Before anything resolves a binary: a previous session's downloads are
+    // already on disk, and this is what makes them visible to `which`.
+    ensureProvisionDirOnPath();
     // A replaced conversation is not the one whose folds were recorded: its
     // calls would inherit tiers by id collision, or hold old ones folded.
     orchestrator.promptGuard?.reset();
@@ -505,6 +544,14 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     ctx.ui?.setFooter?.(createCustomFooter);
     orchestrator.applySubagentConcurrency();
     registerFeatureToolsAndAgents(orchestrator);
+    // Never awaited: a first run downloads tens of megabytes, and a session
+    // must not wait on a network to become usable. Tools whose registration
+    // gates on a binary are re-offered once one actually arrives.
+    void provisionEagerTools().then((installed) => {
+      if (installed.length === 0) return;
+      forgetMissingCbmBin();
+      registerFeatureToolsAndAgents(orchestrator);
+    });
     if (!await orchestrator.applyMainAgent(ctx)) {
       ctx.ui?.notify?.(`Main agent model "${orchestrator.config.agents.main.model}" is not available; keeping the current model.`, "warning");
     }
