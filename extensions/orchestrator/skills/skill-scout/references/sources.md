@@ -16,7 +16,9 @@ A hit looks like this, in full:
 {"id":"mattpocock/skills/code-review","skillId":"code-review","name":"code-review","installs":603655,"source":"mattpocock/skills"}
 ```
 
-No description, no body, no stars, no dates. **This is the whole record.** Any ranking built on this endpoint alone is a popularity ranking wearing a rubric, which is what the existing skill-finders are. Use it to enumerate candidates, never to judge them.
+No description, no body, no stars, no dates. **This is the whole record.** Any ranking built on this endpoint alone is a popularity ranking wearing a rubric. Use it to enumerate candidates, never to judge them.
+
+Stars and commit dates are real signals, but they come from the repository (see Maintenance signals below), not from this index.
 
 `https://skills.sh/api/skill/<id>` answers 401, so that route gives no detail either. Treat the body as something only the repository can supply.
 
@@ -88,6 +90,6 @@ The layout ports; the frontmatter does not all port. pi-pi's loader reads `name`
 - `disable-model-invocation: true` means "load only when asked". Upstream pi honours it; pi-pi does not, so such a skill becomes model-invocable here and will fire on its description alone. Check for it, and say so — a skill deliberately built to stay quiet behaves differently under pi-pi than its author intended.
 - Any other non-standard key is inert rather than honoured. Judge a candidate on what pi-pi will actually do with it, not on what its frontmatter asks for.
 
-A skill body that instructs the agent to read its own `references/` gets no automatic path to them. `load_skill` returns the document alone — not the directory it came from — so references have to be reachable by a path the body states or the agent can find.
+A skill body that instructs the agent to read its own `references/` can rely on the `dir` attribute of the `<skill>` tag `load_skill` returns: it holds the absolute directory the skill was loaded from. A skill written for another host may instead name bare relative paths, which resolve against the working directory and will not be found — when adapting one, anchor those paths on `dir`.
 
 `npx skills add <source>` is the ecosystem's own installer. It targets other agents' directories by default, so prefer copying the folder when installing for pi-pi, and read what it ships before running it either way.

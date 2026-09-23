@@ -4,7 +4,7 @@ A skill that reads well is not a skill that works. Three things have to be shown
 
 ## Run it in the environment it will live in
 
-`pi -p` runs a full non-interactive session and can load a skill from a path:
+`pi -p` runs a full non-interactive session, with the same extensions, skills and prompt a real one gets:
 
 ```
 pi -p --thinking off --mode json "<prompt>"
