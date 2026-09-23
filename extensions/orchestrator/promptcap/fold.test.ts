@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { fold, FoldState, Tier, incompressibleTokens, cutBytes, cutBytesFromEnd, type AgentMessage } from "./fold.js";
+import { fold, FoldState, Tier, callSubject, incompressibleTokens, cutBytes, cutBytesFromEnd, type AgentMessage } from "./fold.js";
 import { byteLength, Estimator, fixedBytes, messagesBytes } from "./estimate.js";
 import { limitsFor, DEFAULT_KEEP_FRACTION, DEFAULT_HEADROOM_TOKENS, DEFAULT_MAX_PROMPT_TOKENS, type PromptcapSettings } from "./limits.js";
 
@@ -71,7 +71,7 @@ describe("fold", () => {
 
     expect(out.tokens).toBeLessThanOrEqual(Math.floor(total * 0.4));
     // The newest call keeps its output; the oldest does not.
-    expect(messages[2].content[0].text).toMatch(/^\[omitted: 4000B; t0\]$/);
+    expect(messages[2].content[0].text).toMatch(/^\[omitted: 4000B; t0 \u2014 read: \/f0\]$/);
     expect(messages[20].content[0].text).toBe("o".repeat(4000));
   });
 
@@ -150,7 +150,9 @@ describe("fold", () => {
     fold(messages, 0, { ceiling: 10, lowWater: 5 }, state);
 
     expect(state.tierOf("t0")).toBe(Tier.Breadcrumb);
-    expect(messages[2].content[0].text).toBe("[omitted: 1800B; t0]");
+    // This call's argument key is not one that identifies a call, so the notice
+    // falls back to naming the tool alone.
+    expect(messages[2].content[0].text).toBe("[omitted: 1800B; t0 \u2014 bash]");
   });
 
   it("never touches user or assistant prose, even when it alone overflows", () => {
@@ -270,7 +272,7 @@ describe("fold", () => {
     const out = fold(roomy, 0, { ceiling: 10_000_000, lowWater: 5_000_000 }, state);
 
     expect(out.folded).toBe(10);
-    expect(roomy[2].content[0].text).toMatch(/^\[omitted: 4000B; t0\]$/);
+    expect(roomy[2].content[0].text).toMatch(/^\[omitted: 4000B; t0 \u2014 read: \/f0\]$/);
   });
 
   it("keeps the prefix byte-identical as the conversation grows", () => {
@@ -438,7 +440,7 @@ describe("fold", () => {
     ];
     fold(messages, 0, { ceiling: 10, lowWater: 5 }, new FoldState());
 
-    expect(messages[2].content[0].text).toBe(`[omitted: ${40_000 + 8}B; t0]`);
+    expect(messages[2].content[0].text).toBe(`[omitted: ${40_000 + 8}B; t0 \u2014 read: /a.png]`);
   });
 
   it("never folds the newest load of a skill", () => {
@@ -796,8 +798,8 @@ describe("the image budget", () => {
 
     expect(out.imagesFolded).toBe(7);
     expect(out.imageBytes).toBe(3000);
-    expect(messages[2].content[0]).toEqual({ type: "text", text: "[omitted: 1000B; t0]" });
-    expect(messages[14].content[0]).toEqual({ type: "text", text: "[omitted: 1000B; t6]" });
+    expect(messages[2].content[0]).toEqual({ type: "text", text: "[omitted: 1000B; t0 \u2014 read: /shot0.png]" });
+    expect(messages[14].content[0]).toEqual({ type: "text", text: "[omitted: 1000B; t6 \u2014 read: /shot6.png]" });
     // The three newest captures are what the model is still comparing against.
     expect(messages[16].content[0].type).toBe("image");
     expect(messages[20].content[0].type).toBe("image");
@@ -821,7 +823,7 @@ describe("the image budget", () => {
 
     expect(messages[2].content).toEqual([
       { type: "text", text: "1080x1920 capture" },
-      { type: "text", text: "[omitted: 9000B; t0]" },
+      { type: "text", text: "[omitted: 9000B; t0 \u2014 read: /a.png]" },
     ]);
   });
 
@@ -851,7 +853,7 @@ describe("the image budget", () => {
 
     expect(out.imagesFolded).toBe(0);
     expect(out.imageBytes).toBe(3000);
-    expect(replayed[2].content[0]).toEqual({ type: "text", text: "[omitted: 1000B; t0]" });
+    expect(replayed[2].content[0]).toEqual({ type: "text", text: "[omitted: 1000B; t0 \u2014 read: /shot0.png]" });
     // Nothing moved, so the pass costs no cache miss.
     expect(out.rewroteFrom).toBe(-1);
   });
@@ -889,8 +891,48 @@ describe("the image budget", () => {
     state.promote("t0", Tier.Digest);
     const out = fold(messages, 0, { ...roomy, imageCeiling: 3_000, imageLowWater: 2_000 }, state);
 
-    expect(messages[2].content[0].text).toBe("[omitted: 1000B; t0]");
+    expect(messages[2].content[0].text).toBe("[omitted: 1000B; t0 \u2014 read: /shot0.png]");
     expect(out.imagesFolded).toBe(3);
     expect(out.imageBytes).toBe(2000);
+  });
+});
+
+describe("the subject a notice carries", () => {
+  it("names the tool and the thing it addressed", () => {
+    expect(callSubject("bash", { command: "cargo test -p bot" })).toBe("bash: cargo test -p bot");
+    expect(callSubject("read", { path: "/src/rally.ts" })).toBe("read: /src/rally.ts");
+    expect(callSubject("grep", { pattern: "fn main" })).toBe("grep: fn main");
+  });
+
+  it("falls back to the bare tool name when no argument identifies the call", () => {
+    expect(callSubject("bash", {})).toBe("bash");
+    expect(callSubject("bash", { timeout: 30 })).toBe("bash");
+    expect(callSubject("bash", undefined)).toBe("bash");
+  });
+
+  it("is absent for a call whose name is gone", () => {
+    expect(callSubject(undefined, { command: "ls" })).toBeUndefined();
+  });
+
+  it("clips a long subject and flattens newlines, so a notice stays one line", () => {
+    const subject = callSubject("bash", { command: `echo ${"x".repeat(400)}` })!;
+    expect(subject.length).toBeLessThan(120);
+    expect(subject).toContain("\u2026");
+    expect(callSubject("bash", { command: "one\ntwo\tthree" })).toBe("bash: one two three");
+  });
+
+  it("does not describe an already-folded argument value", () => {
+    // The value here IS a notice; naming it would report the fold, not the call.
+    expect(callSubject("write", { path: "[args omitted: 9000B; t3]" })).toBe("write");
+  });
+
+  it("outlives the arguments it was taken from, which breadcrumb wipes entirely", () => {
+    const messages = [user("go"), call("t0", "bash", { command: "cargo build" }), result("t0", "bash", "o".repeat(4000))];
+    fold(messages, 0, { ceiling: 10, lowWater: 5 }, new FoldState());
+
+    // The call itself no longer says what it ran; the notice standing for its
+    // output is the only place that survives.
+    expect(messages[1].content[0].arguments).toEqual({});
+    expect(messages[2].content[0].text).toBe("[omitted: 4000B; t0 \u2014 bash: cargo build]");
   });
 });

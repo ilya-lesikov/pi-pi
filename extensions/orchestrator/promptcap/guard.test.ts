@@ -113,7 +113,7 @@ describe("PromptGuard", () => {
     guard.apply(messages, ctx(), []);
 
     expect(guard.lastTokens!).toBeLessThanOrEqual(5_000);
-    expect(messages[2].content[0].text).toMatch(/^\[omitted: 8000B; t0\]$/);
+    expect(messages[2].content[0].text).toMatch(/^\[omitted: 8000B; t0 \u2014 read: \/f0\]$/);
   });
 
   it("warns once the conversation cannot be made to fit", () => {
@@ -292,8 +292,8 @@ describe("a request refused for its size", () => {
     // refusal itself can be what empties them.
     const retried = captures(2, 1000);
     guard.apply(retried, imaged(sessionManager), []);
-    expect(retried[2].content[0]).toEqual({ type: "text", text: "[omitted: 1000B; t0]" });
-    expect(retried[4].content[0]).toEqual({ type: "text", text: "[omitted: 1000B; t1]" });
+    expect(retried[2].content[0]).toEqual({ type: "text", text: "[omitted: 1000B; t0 \u2014 read: /s0.png]" });
+    expect(retried[4].content[0]).toEqual({ type: "text", text: "[omitted: 1000B; t1 \u2014 read: /s1.png]" });
   });
 
   it("promises nothing once an attempt found no image left to take", () => {

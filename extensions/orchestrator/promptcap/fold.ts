@@ -452,8 +452,10 @@ function stripResultImages(messages: AgentMessage[], call: Call, imageTokens: nu
   const result = messages[call.resultMessage];
   if (!Array.isArray(result?.content)) return 0;
   const before = messagesBytes([result], imageTokens);
+  const callee = callPart(messages, call);
+  const subject = callSubject(callee?.name, callee?.arguments);
   result.content = result.content.map((part: any) =>
-    part?.type === "image" ? { type: "text", text: omission((part.data ?? "").length, call.id) } : part,
+    part?.type === "image" ? { type: "text", text: omission((part.data ?? "").length, call.id, subject) } : part,
   );
   return before - messagesBytes([result], imageTokens);
 }
@@ -822,7 +824,7 @@ function foldableBytes(messages: AgentMessage[], calls: Call[], protectedFrom: n
     const result = messages[call.resultMessage];
     if (!result) continue;
     const breadcrumb = byteLength(result.toolName ?? "") + byteLength(result.toolCallId ?? "")
-      + byteLength(collapseResult(call, false, Tier.Breadcrumb)[0].text);
+      + byteLength(collapseResult(call, false, Tier.Breadcrumb, callSubject(part?.name, part?.arguments))[0].text);
     savings += Math.max(0, messagesBytes([result], imageTokens) - breadcrumb);
   }
   // What full folding leaves behind includes the lines standing for what left.
@@ -878,6 +880,9 @@ function applyTier(messages: AgentMessage[], call: Call, to: Tier, protectedFrom
   let saved = 0;
 
   const part = callPart(messages, call);
+  // Captured before the arguments are trimmed or wiped: at Breadcrumb tier they
+  // are gone entirely, which is precisely when the notice is all that is left.
+  const subject = callSubject(part?.name, part?.arguments);
   if (part) {
     const before = jsonBytesOf(part.arguments);
     part.arguments = to >= Tier.Breadcrumb ? {} : trimArgs(part.arguments, call.id);
@@ -889,7 +894,7 @@ function applyTier(messages: AgentMessage[], call: Call, to: Tier, protectedFrom
   const result = messages[call.resultMessage];
   if (result) {
     const before = messagesBytes([result], imageTokens);
-    result.content = collapseResult(call, result.isError === true, to);
+    result.content = collapseResult(call, result.isError === true, to, subject);
     saved += before - messagesBytes([result], imageTokens);
   }
 
@@ -909,7 +914,7 @@ function callPart(messages: AgentMessage[], call: Call): any {
  * the system prompt explains once what the notice means, which is worth
  * thousands of tokens across a session that folds hundreds of calls.
  */
-function collapseResult(call: Call, isError: boolean, to: Tier): any[] {
+function collapseResult(call: Call, isError: boolean, to: Tier, subject?: string): any[] {
   let text = "";
   let bytes = 0;
   for (const part of call.resultContent) {
@@ -926,11 +931,42 @@ function collapseResult(call: Call, isError: boolean, to: Tier): any[] {
   // the model repeating a call that cannot work, so a digested one keeps both
   // ends of its text where a digested success keeps none.
   if (isError && to < Tier.Breadcrumb) return [{ type: "text", text: clampEnds(text, call.id) }];
-  return [{ type: "text", text: omission(bytes, call.id) }];
+  return [{ type: "text", text: omission(bytes, call.id, subject) }];
 }
 
-export function omission(size: number, id: string): string {
-  return id ? `[omitted: ${size}B; ${id}]` : `[omitted: ${size}B]`;
+export function omission(size: number, id: string, subject?: string): string {
+  const tail = subject ? ` \u2014 ${subject}` : "";
+  return id ? `[omitted: ${size}B; ${id}${tail}]` : `[omitted: ${size}B${tail}]`;
+}
+
+/**
+ * What a folded call was, in one line: the tool and the thing it addressed.
+ *
+ * A notice naming only a size and an id is an index with no keys. It says
+ * something was here, never what, so the only way to find out is to spend a
+ * recall on each candidate — and the cheaper move is always to redo the work,
+ * which is what the session traces show happening. The subject is what makes
+ * the id worth addressing: a few tokens that turn "4KB of something" into a
+ * command the model can recognise as the one it already ran.
+ */
+const SUBJECT_BYTES = 80;
+const SUBJECT_KEYS = ["command", "path", "filePath", "file_path", "pattern", "query", "url", "name", "subject"];
+
+export function callSubject(name: string | undefined, args: unknown): string | undefined {
+  if (!name) return undefined;
+  if (!args || typeof args !== "object" || Array.isArray(args)) return name;
+  const record = args as Record<string, unknown>;
+  for (const key of SUBJECT_KEYS) {
+    const value = record[key];
+    if (typeof value !== "string" || value.trim().length === 0) continue;
+    // Already-folded argument values stand in for content that is gone; naming
+    // one would describe the notice rather than the call it belongs to.
+    if (value.startsWith("[args omitted:")) break;
+    const flat = value.replace(/\s+/g, " ").trim();
+    const clipped = flat.length > SUBJECT_BYTES ? `${flat.slice(0, SUBJECT_BYTES)}\u2026` : flat;
+    return `${name}: ${clipped}`;
+  }
+  return name;
 }
 
 /** Keeps the beginning and the end of `text`, naming what was dropped between. */

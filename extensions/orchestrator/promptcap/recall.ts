@@ -48,9 +48,11 @@ function bounded(body: string, hint: string): string {
  */
 export const OMISSION_INSTRUCTION = [
   "<folded_history>",
-  "Older tool output in this conversation may appear as a notice of the form [omitted: <size>B; <call_id>],",
-  "and an older tool argument too large to carry may stand as an [args omitted: <size>B; <call_id>] notice in",
-  "its place. Older calls the conversation has finished with are removed outright, leaving one",
+  "Older tool output in this conversation may appear as a notice of the form",
+  "[omitted: <size>B; <call_id> \u2014 <tool>: <what it addressed>], and an older tool argument too large to carry",
+  "may stand as an [args omitted: <size>B; <call_id>] notice in its place. The trailing subject names the call",
+  "the notice stands for, so you can tell whether it is the one you want before spending a recall on it.",
+  "Older calls the conversation has finished with are removed outright, leaving one",
   "[dropped N earlier calls: name \u00d7count, \u2026] line in their place. The conversation outgrew the model's context",
   "window, so the prompt you see was folded on its way here. The session itself is complete.",
   "",

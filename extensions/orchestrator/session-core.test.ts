@@ -983,10 +983,10 @@ describe("session-first core", () => {
     }
     expect(handler).toBeTruthy();
 
-    expect(folded[2].content[0].text).toMatch(/^\[omitted: 8000B; t0\]$/);
+    expect(folded[2].content[0].text).toMatch(/^\[omitted: 8000B; t0 \u2014 read: \/f0\]$/);
     // A 5K ceiling leaves less room than one of these results occupies, so the
     // fold reaches the newest call too. The user's own prose is never folded.
-    expect(folded[80].content[0].text).toMatch(/^\[omitted: 8000B; t39\]$/);
+    expect(folded[80].content[0].text).toMatch(/^\[omitted: 8000B; t39 \u2014 read: \/f39\]$/);
     expect(folded[0].content[0].text).toBe("go");
     await emit(pi, "session_shutdown", {}, ctx);
   });
@@ -1009,7 +1009,7 @@ describe("session-first core", () => {
       const out = await fn({ messages }, ctx);
       if (out?.messages) folded = out.messages;
     }
-    expect(folded[2].content[0].text).toMatch(/^\[omitted: 4000B; w0\]$/);
+    expect(folded[2].content[0].text).toMatch(/^\[omitted: 4000B; w0 \u2014 read: \/f0\]$/);
   });
 
   it("makes layered skills loadable in worker processes", async () => {
