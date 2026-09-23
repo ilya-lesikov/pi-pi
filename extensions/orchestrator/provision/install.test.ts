@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { parseChecksum, provision, sha256, type ProvisionEffects } from "./install.js";
-import { assetFor, eagerTools, platformKey, toolsFor, toolsForExtension, TOOLS } from "./manifest.js";
+import { archiveFor, assetFor, eagerTools, platformKey, toolsFor, toolsForExtension, TOOLS } from "./manifest.js";
 
 const PAYLOAD = Buffer.from("binary contents");
 
@@ -271,5 +271,38 @@ describe("landing the binary", () => {
 
     expect(outcome.status).toBe("failed");
     expect(readdirSync(dir)).toEqual([]);
+  });
+});
+
+describe("per-platform packing", () => {
+  // rust-analyzer ships .gz everywhere except Windows, where it ships .zip.
+  // Taking the tool's default format would hand zip bytes to gunzip, so the
+  // Windows install fails at extraction — on the platform this all came from.
+  it("unpacks each platform's asset in the format that platform publishes", () => {
+    const tool = toolsFor("rust-analyzer").find((candidate) => candidate.source.kind === "github")!;
+    expect(assetFor(tool, "win32-x64", "2026-09-21")).toMatch(/\.zip$/);
+    expect(archiveFor(tool, "win32-x64")).toBe("zip");
+    expect(assetFor(tool, "linux-x64", "2026-09-21")).toMatch(/\.gz$/);
+    expect(archiveFor(tool, "linux-x64")).toBe("gz");
+  });
+
+  it("falls back to the tool's own format where no platform overrides it", () => {
+    const tool = toolsFor("rg").find((candidate) => candidate.source.kind === "github")!;
+    for (const key of ["linux-x64", "win32-x64", "darwin-arm64"]) {
+      expect(archiveFor(tool, key)).toBe(key.startsWith("win32") ? "zip" : "tar.gz");
+    }
+  });
+
+  it("every declared asset's suffix matches the archive kind chosen for it", () => {
+    for (const tool of TOOLS) {
+      if (tool.source.kind !== "github") continue;
+      for (const key of Object.keys(tool.source.asset.byPlatform)) {
+        const asset = assetFor(tool, key, "1.0.0")!;
+        const kind = archiveFor(tool, key);
+        const expected = kind === "tar.gz" ? ".tar.gz" : kind === "zip" ? ".zip" : kind === "gz" ? ".gz" : "";
+        // Named so a failure says which tool and platform disagree.
+        if (expected) expect(`${tool.binary}/${key} ends ${expected}`).toBe(`${tool.binary}/${key} ends ${asset.slice(asset.lastIndexOf(expected)) === expected ? expected : asset}`);
+      }
+    }
   });
 });

@@ -9,6 +9,8 @@
  * environment is untouched.
  */
 
+import { join } from "node:path";
+
 import { getLogger } from "../log.js";
 import { nodeProvisionEffects } from "./effects.js";
 import { provision, provisionDir, type ProvisionOutcome } from "./install.js";
@@ -39,9 +41,15 @@ export function provisionResults(): ProvisionOutcome[] {
 
 export function ensureProvisionDirOnPath(dir: string = provisionDir()): void {
   const separator = process.platform === "win32" ? ";" : ":";
-  const current = process.env.PATH ?? "";
-  if (current.split(separator).includes(dir)) return;
-  process.env.PATH = current ? `${dir}${separator}${current}` : dir;
+  // npm installs into a private prefix rather than beside the other binaries,
+  // so its .bin has to join PATH too or an installed language server stays
+  // invisible to every `which` that would find it.
+  const npmBin = join(dir, "node", "node_modules", ".bin");
+  for (const entry of [npmBin, dir]) {
+    const current = process.env.PATH ?? "";
+    if (current.split(separator).includes(entry)) continue;
+    process.env.PATH = current ? `${entry}${separator}${current}` : entry;
+  }
 }
 
 /**

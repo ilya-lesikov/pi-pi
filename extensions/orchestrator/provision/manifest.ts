@@ -26,6 +26,12 @@ export type ProvisionSource =
 export type PlatformKey = string;
 
 export interface AssetPattern {
+  /**
+   * Archive format per platform, where one platform is packed differently
+   * from the rest. rust-analyzer ships .gz everywhere but Windows, where it
+   * ships .zip, and feeding zip bytes to gunzip fails at extraction.
+   */
+  archiveByPlatform?: Record<PlatformKey, ArchiveKind>;
   /** Asset name per platform. Absent platform means "not published for it". */
   readonly byPlatform: Readonly<Record<PlatformKey, string>>;
 }
@@ -54,6 +60,12 @@ const RIPGREP_ASSETS: Record<PlatformKey, string> = {
   "win32-arm64": "ripgrep-{version}-aarch64-pc-windows-msvc.zip",
 };
 
+// Windows is the one platform these publishers pack as a zip.
+const WINDOWS_ZIP: Record<PlatformKey, ArchiveKind> = {
+  "win32-x64": "zip",
+  "win32-arm64": "zip",
+};
+
 const RUST_ANALYZER_ASSETS: Record<PlatformKey, string> = {
   "linux-x64": "rust-analyzer-x86_64-unknown-linux-gnu.gz",
   "linux-arm64": "rust-analyzer-aarch64-unknown-linux-gnu.gz",
@@ -71,7 +83,7 @@ export const TOOLS: readonly ProvisionableTool[] = [
     source: {
       kind: "github",
       repo: "BurntSushi/ripgrep",
-      asset: { byPlatform: RIPGREP_ASSETS },
+      asset: { byPlatform: RIPGREP_ASSETS, archiveByPlatform: WINDOWS_ZIP },
       checksumAsset: (asset) => `${asset}.sha256`,
       archive: "tar.gz",
     },
@@ -102,7 +114,7 @@ export const TOOLS: readonly ProvisionableTool[] = [
     source: {
       kind: "github",
       repo: "rust-lang/rust-analyzer",
-      asset: { byPlatform: RUST_ANALYZER_ASSETS },
+      asset: { byPlatform: RUST_ANALYZER_ASSETS, archiveByPlatform: WINDOWS_ZIP },
       archive: "gz",
     },
     // rust-analyzer publishes no digest beside its release assets.
@@ -170,4 +182,10 @@ export function assetFor(tool: ProvisionableTool, key: PlatformKey, version: str
   const template = tool.source.asset.byPlatform[key];
   if (!template) return null;
   return template.replace(/\{version\}/g, version);
+}
+
+/** How this platform's asset is packed, which need not match the others'. */
+export function archiveFor(tool: ProvisionableTool, key: PlatformKey): ArchiveKind {
+  if (tool.source.kind !== "github") return "raw";
+  return tool.source.asset.archiveByPlatform?.[key] ?? tool.source.archive;
 }

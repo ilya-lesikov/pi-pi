@@ -4,7 +4,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,7 +13,13 @@ import type { ProvisionEffects } from "./install.js";
 
 const FETCH_TIMEOUT_MS = 120_000;
 
-async function fetchWithTimeout(url: string): Promise<Response> {
+/**
+ * The timeout has to outlive the headers. A server that answers and then
+ * stalls mid-body would otherwise hang the download forever — and an `lsp`
+ * call awaiting a lazy install would hang with it — so cancellation stays
+ * armed until the body has been consumed.
+ */
+async function fetchWithin<T>(url: string, consume: (response: Response) => Promise<T>): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
@@ -24,7 +30,7 @@ async function fetchWithTimeout(url: string): Promise<Response> {
       redirect: "follow",
     });
     if (!response.ok) throw new Error(`GET ${url} → HTTP ${response.status}`);
-    return response;
+    return await consume(response);
   } finally {
     clearTimeout(timer);
   }
@@ -42,13 +48,11 @@ export const nodeProvisionEffects: ProvisionEffects = {
   },
 
   async fetchBytes(url) {
-    const response = await fetchWithTimeout(url);
-    return Buffer.from(await response.arrayBuffer());
+    return fetchWithin(url, async (response) => Buffer.from(await response.arrayBuffer()));
   },
 
   async fetchText(url) {
-    const response = await fetchWithTimeout(url);
-    return response.text();
+    return fetchWithin(url, (response) => response.text());
   },
 
   run(command, args, options) {
@@ -57,12 +61,18 @@ export const nodeProvisionEffects: ProvisionEffects = {
       timeout: options?.timeoutMs ?? 300_000,
       stdio: "pipe",
       encoding: "utf-8",
+      // npm and other node tooling ship as .cmd launchers on Windows, which
+      // CreateProcess cannot execute directly; only a shell can.
+      shell: process.platform === "win32",
     });
   },
 
   extract(archive, kind, binary, dir) {
     const staging = mkdtempSync(join(tmpdir(), "pi-pi-provision-"));
     const exe = process.platform === "win32" ? `${binary}.exe` : binary;
+    // Registered before anything can throw: the caller copies the binary out,
+    // and neither the archive nor the unpacked tree should outlive that.
+    stagingDirs.add(staging);
 
     if (kind === "gz") {
       const target = join(staging, exe);
@@ -79,7 +89,15 @@ export const nodeProvisionEffects: ProvisionEffects = {
       // PowerShell is always present on Windows; unzip is not always present
       // elsewhere, so tar (which reads zip since bsdtar) is the safer default.
       if (process.platform === "win32") {
-        execFileSync("powershell", ["-NoProfile", "-Command", `Expand-Archive -LiteralPath '${archivePath}' -DestinationPath '${staging}' -Force`], { stdio: "pipe", timeout: 120_000 });
+        // A single quote inside a PowerShell literal ends it. -LiteralPath
+        // stops wildcard expansion, not command parsing, so the quote has to
+        // be doubled before the path reaches the parser.
+        const quote = (path: string) => `'${path.replaceAll("'", "''")}'`;
+        execFileSync(
+          "powershell",
+          ["-NoProfile", "-NonInteractive", "-Command", `Expand-Archive -LiteralPath ${quote(archivePath)} -DestinationPath ${quote(staging)} -Force`],
+          { stdio: "pipe", timeout: 120_000 },
+        );
       } else {
         execFileSync("tar", ["-xf", archivePath, "-C", staging], { stdio: "pipe", timeout: 120_000 });
       }
@@ -91,7 +109,14 @@ export const nodeProvisionEffects: ProvisionEffects = {
     if (!found) throw new Error(`no ${exe} inside the downloaded archive`);
     return found;
   },
+
+  discardStaging() {
+    for (const dir of stagingDirs) rmSync(dir, { recursive: true, force: true });
+    stagingDirs.clear();
+  },
 };
+
+const stagingDirs = new Set<string>();
 
 /** Release archives nest the binary under a versioned directory. */
 function findBinary(root: string, name: string, depth = 0): string | null {

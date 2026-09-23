@@ -12,7 +12,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, renameSync, rmSync, wri
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import { assetFor, platformKey, type ProvisionableTool, type VerificationKind } from "./manifest.js";
+import { archiveFor, assetFor, platformKey, type ProvisionableTool, type VerificationKind } from "./manifest.js";
 
 export interface ProvisionEffects {
   /** Resolve a command on PATH, or null. */
@@ -25,6 +25,8 @@ export interface ProvisionEffects {
   run: (command: string, args: string[], options?: { cwd?: string; timeoutMs?: number }) => void;
   /** Unpack `archive` into `dir`, returning the path of the extracted binary. */
   extract: (archive: Buffer, kind: string, binary: string, dir: string) => string;
+  /** Delete whatever extraction staged, once the binary has been taken from it. */
+  discardStaging?: () => void;
 }
 
 export type ProvisionOutcome =
@@ -108,7 +110,13 @@ async function installFromGithub(
   }
 
   mkdirSync(dir, { recursive: true });
-  const extracted = effects.extract(bytes, tool.source.archive, tool.binary, dir);
+  let extracted: string;
+  try {
+    extracted = effects.extract(bytes, archiveFor(tool, platformKey()), tool.binary, dir);
+  } catch (error) {
+    effects.discardStaging?.();
+    throw error;
+  }
   const final = join(dir, process.platform === "win32" ? `${tool.binary}.exe` : tool.binary);
   if (extracted !== final) {
     // Staging is a temp dir and the destination is under the user's home, which
@@ -124,6 +132,8 @@ async function installFromGithub(
     } catch (error) {
       rmSync(staged, { force: true });
       throw error;
+    } finally {
+      effects.discardStaging?.();
     }
   } else if (process.platform !== "win32") {
     chmodSync(final, 0o755);
