@@ -1,5 +1,5 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -192,5 +192,84 @@ describe("the manifest", () => {
     // A standalone rust-analyzer beside a rustup toolchain can disagree with
     // the project's Rust version, so rustup is tried first.
     expect(toolsFor("rust-analyzer")[0].source.kind).toBe("toolchain");
+  });
+});
+
+describe("landing the binary", () => {
+  let dir: string;
+  let staging: string;
+
+  beforeEach(() => {
+    // Destination and staging must sit on DIFFERENT filesystems, which is the
+    // real arrangement: pi-pi installs under the user's home and extractors
+    // stage in the system temp dir. Putting both in tmpdir() is what let an
+    // EXDEV failure ship green.
+    dir = mkdtempSync(join(homedir(), ".pi-pi-provision-test-"));
+    staging = mkdtempSync(join(tmpdir(), "provision-stage-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(staging, { recursive: true, force: true });
+  });
+
+  // The extractor stages in a temp dir and the destination is under the user's
+  // home. Those are routinely separate filesystems — /tmp as tmpfs is the Linux
+  // default — and a bare rename across them fails with EXDEV, which no test
+  // extracting straight into the destination can catch.
+  it("installs from a staging directory on another filesystem", async () => {
+    const outcome = await provision(
+      effects({
+        fetchText: async () => release("1.0.0", ["rg-1.0.0-x86_64.tar.gz"]),
+        extract: (_archive, _kind, binary) => {
+          const path = join(staging, binary);
+          writeFileSync(path, PAYLOAD);
+          return path;
+        },
+      }),
+      [{
+        binary: "rg",
+        purpose: "test",
+        eager: true,
+        source: {
+          kind: "github",
+          repo: "o/r",
+          archive: "tar.gz",
+          asset: { byPlatform: { [platformKey()]: "rg-{version}-x86_64.tar.gz" } },
+        },
+        verification: "checksum",
+      }],
+      dir,
+    );
+
+    expect(outcome.status).toBe("installed");
+    expect(readFileSync(join(dir, "rg"))).toEqual(PAYLOAD);
+    // Nothing half-written may survive under the name the agent will run.
+    expect(readdirSync(dir)).toEqual(["rg"]);
+  });
+
+  it("leaves no partial file behind when landing fails", async () => {
+    const outcome = await provision(
+      effects({
+        fetchText: async () => release("1.0.0", ["rg-1.0.0-x86_64.tar.gz"]),
+        extract: () => join(staging, "never-written"),
+      }),
+      [{
+        binary: "rg",
+        purpose: "test",
+        eager: true,
+        source: {
+          kind: "github",
+          repo: "o/r",
+          archive: "tar.gz",
+          asset: { byPlatform: { [platformKey()]: "rg-{version}-x86_64.tar.gz" } },
+        },
+        verification: "checksum",
+      }],
+      dir,
+    );
+
+    expect(outcome.status).toBe("failed");
+    expect(readdirSync(dir)).toEqual([]);
   });
 });

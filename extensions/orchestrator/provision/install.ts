@@ -8,7 +8,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -110,8 +110,24 @@ async function installFromGithub(
   mkdirSync(dir, { recursive: true });
   const extracted = effects.extract(bytes, tool.source.archive, tool.binary, dir);
   const final = join(dir, process.platform === "win32" ? `${tool.binary}.exe` : tool.binary);
-  if (extracted !== final) renameSync(extracted, final);
-  if (process.platform !== "win32") chmodSync(final, 0o755);
+  if (extracted !== final) {
+    // Staging is a temp dir and the destination is under the user's home, which
+    // are routinely separate filesystems (/tmp as tmpfs is the Linux default).
+    // A rename across them fails with EXDEV, so land the file beside its final
+    // name first and rename within the one directory: the binary either appears
+    // complete or not at all, and a concurrent session never sees a partial one.
+    const staged = `${final}.incoming-${process.pid}`;
+    try {
+      copyFileSync(extracted, staged);
+      if (process.platform !== "win32") chmodSync(staged, 0o755);
+      renameSync(staged, final);
+    } catch (error) {
+      rmSync(staged, { force: true });
+      throw error;
+    }
+  } else if (process.platform !== "win32") {
+    chmodSync(final, 0o755);
+  }
 
   return { status: "installed", binary: tool.binary, path: final, verification, version };
 }
