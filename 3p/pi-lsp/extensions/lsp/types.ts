@@ -204,6 +204,11 @@ export interface ResolvedServerConfig {
   env: Record<string, string>;
   /** Initialization options. */
   initializationOptions: Record<string, unknown>;
+  /**
+   * LOCAL PATCH (pi-pi): absolute path the command resolved to on PATH, for
+   * the doctor to report. Optional so a hand-built config stays valid.
+   */
+  resolvedPath?: string;
 }
 
 // ── Operations ──────────────────────────────────────────────────────────────
