@@ -62,7 +62,6 @@ export default function (pi: ExtensionAPI) {
 
 function registerSubagentTools(pi: ExtensionAPI): void {
   const cwd = (globalThis as any)[ORCHESTRATOR_CWD_KEY] ?? process.cwd();
-  const sessionSkills = new Map<string, string>();
   let config;
   try {
     config = loadConfig(cwd);
@@ -80,7 +79,7 @@ function registerSubagentTools(pi: ExtensionAPI): void {
     getSessionFile: () => rootSession()?.getSessionFile(),
     getSessionManager: () => rootSession()?.getSessionManager?.(),
   });
-  registerLoadSkill(pi, cwd, () => config.skills, sessionSkills);
+  registerLoadSkill(pi, cwd, () => config.skills);
   registerSubagentPromptcap(pi, config);
   registerImageShrink(pi, () => config.images);
 }

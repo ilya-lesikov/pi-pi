@@ -187,7 +187,6 @@ export function registerLoadSkill(
   pi: ExtensionAPI,
   cwd: string,
   getEnabled?: () => Orchestrator["config"]["skills"] | undefined,
-  sessionSkills: Map<string, string> = loadedSkills,
 ): void {
   const layers = () => enabledSkillLayers(getEnabled?.());
   pi.registerTool({
@@ -198,8 +197,6 @@ export function registerLoadSkill(
     async execute(_id, params) {
       try {
         const skill = loadLayeredSkill(params.name, cwd, layers());
-        sessionSkills.delete(skill.name);
-        sessionSkills.set(skill.name, skill.document);
         return { content: [{ type: "text" as const, text: skill.document }], details: { name: skill.name, source: skill.layer, path: skill.filePath } };
       } catch (error: any) {
         return { content: [{ type: "text" as const, text: error?.message ?? String(error) }], details: undefined, isError: true };
@@ -369,41 +366,6 @@ function registerLifecycle(orchestrator: Orchestrator): void {
   });
 }
 
-// Most recent load of each skill, in load order. After a compaction the
-// summary alone would silently drop skill guidance the agent believes is
-// active, so (like Claude Code) the freshest skills are re-attached to the
-// summary within a token budget.
-const loadedSkills = new Map<string, string>();
-const SKILL_REATTACH_TOKENS_EACH = 5_000;
-const SKILL_REATTACH_TOKENS_TOTAL = 25_000;
-
-export function renderSkillReattachment(skills: Map<string, string>): string {
-  if (skills.size === 0) return "";
-  const parts: string[] = [];
-  let budget = SKILL_REATTACH_TOKENS_TOTAL;
-  for (const [name, document] of [...skills].reverse()) {
-    if (budget <= 0) break;
-    const cap = Math.min(SKILL_REATTACH_TOKENS_EACH, budget) * 4;
-    // load_skill stores the document already wrapped in its own <skill> tag, so
-    // wrapping again would nest it; truncation still has to re-close the tag.
-    const tagged = document.trimStart().startsWith("<skill ");
-    if (document.length <= cap) {
-      parts.push(tagged ? document : `<skill name="${name}">\n${document}\n</skill>`);
-      budget -= Math.ceil(document.length / 4);
-      continue;
-    }
-    const body = `${document.slice(0, cap)}\n[… truncated]`;
-    parts.push(tagged ? `${body}\n</skill>` : `<skill name="${name}">\n${body}\n</skill>`);
-    budget -= Math.ceil(body.length / 4);
-  }
-  return [
-    "",
-    "[Loaded Skills]",
-    "These skills were loaded before compaction and remain in effect:",
-    ...parts.reverse(),
-  ].join("\n");
-}
-
 type PromptcapState = Pick<Orchestrator, "pi" | "config" | "lastCtx" | "promptGuard">;
 
 /**
@@ -483,7 +445,6 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     orchestrator.modelSwitchInFlight = false;
     if (orchestrator.modelSwitchPollTimer) clearTimeout(orchestrator.modelSwitchPollTimer);
     orchestrator.modelSwitchPollTimer = null;
-    loadedSkills.clear();
     orchestrator.resetContinuation();
     orchestrator.lastContextMessages = [];
     resetRequestActivity(orchestrator);
