@@ -346,6 +346,18 @@ describe("affordance-aligned evidence gates", () => {
     expect(r.prompt).toMatch(/MUST NOT run tests|Do NOT run test suites/i);
     expect(r.prompt).toContain("OPEN QUESTIONS");
   });
+
+  // A diff-shaped review structurally cannot reach the case where correct code
+  // fixes the wrong thing: every line is sound and the work is still wasted.
+  // The premise has to be its own output slot, or it is never examined.
+  it("requires the reviewer to examine the premise, not only the change", () => {
+    const r = createReviewerAgent(gptEntry).prompt;
+    expect(r).toContain("PREMISE:");
+    expect(r).toMatch(/flawless against a false premise/i);
+    expect(r).toMatch(/verify the premise independently/i);
+    // Absent evidence must be reportable, not silently treated as support.
+    expect(r).toMatch(/absent, weak, or merely asserted/i);
+  });
 });
 
 describe("advisor anti-sycophancy", () => {
