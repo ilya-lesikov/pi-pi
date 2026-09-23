@@ -298,6 +298,24 @@ export class LspClient {
     return this.initialized;
   }
 
+  /**
+   * LOCAL PATCH (pi-pi): the tail of what the server wrote to stderr.
+   *
+   * A server that dies on spawn says why here and nowhere else — a rustup proxy
+   * answering "Unknown binary 'rust-analyzer' in official toolchain" reached the
+   * user as "Server process exited", with the actual reason captured and
+   * discarded. The doctor reports this so a broken install names itself.
+   */
+  recentStderr(lines = 5): string[] {
+    return this.stderrLog.slice(-lines).flatMap((chunk) =>
+      chunk.split('\n').map((line) => line.trim()).filter((line) => line.length > 0),
+    );
+  }
+
+  get alive(): boolean {
+    return this.connection.alive;
+  }
+
   /** Check if the server advertised a specific capability. */
   hasCapability(name: string): boolean {
     return this.serverCapabilities[name] !== undefined && this.serverCapabilities[name] !== false;

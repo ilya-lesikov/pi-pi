@@ -12,7 +12,7 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 
 import { LspClient } from './client';
-import { loadConfig, scaffoldGlobalConfig, serversForExtension, type LoadedConfig } from './config';
+import { inspectBuiltinServers, loadConfig, scaffoldGlobalConfig, serversForExtension, type LoadedConfig } from './config';
 import { registerLspTool, type ServerManagerService } from './tools';
 import type { ResolvedServerConfig } from './types';
 
@@ -251,6 +251,52 @@ export default function lspExtension(pi: ExtensionAPI) {
       config = await loadConfig(ctx.cwd);
       refreshStatus(ctx.ui, config);
       ctx.ui.notify('LSP servers stopped. Will reinitialize on next tool use.', 'info');
+    },
+
+    // LOCAL PATCH (pi-pi): structured state for /pp's doctor. The status
+    // command formats prose for a notification; a caller that wants to judge
+    // an install needs the parts, including the ones for a language whose
+    // server is missing entirely and so appears in no running config.
+    describe: async (cwd: string, probe = false) => {
+      rootPath = cwd;
+      const cfg = await loadConfig(cwd);
+      config = cfg;
+
+      const detected = new Set(cfg.servers.map((server) => server.name));
+      const servers = await Promise.all(cfg.servers.map(async (server) => {
+        const client = clients.get(server.name);
+        const base = {
+          name: server.name,
+          command: [server.command, ...server.args].join(' '),
+          resolvedPath: server.resolvedPath ?? null,
+          extensions: server.extensions,
+          running: client?.isInitialized === true,
+          stderr: client?.recentStderr() ?? [],
+        };
+        if (!probe || base.running) return { ...base, probe: base.running ? ('ok' as const) : ('skipped' as const) };
+
+        // The only check that separates a binary that resolves from one that
+        // runs: the rustup-shim case passes detection and dies on spawn.
+        const probed = getOrCreateClient(server);
+        try {
+          await probed.ensureInitialized();
+          return { ...base, probe: 'ok' as const, running: probed.isInitialized, stderr: probed.recentStderr() };
+        } catch (error: any) {
+          return { ...base, probe: 'failed' as const, error: error?.message ?? String(error), stderr: probed.recentStderr() };
+        }
+      }));
+
+      return {
+        rootPath,
+        servers,
+        // A language whose binary is absent vanishes from the detected set, so
+        // nothing downstream could report which one is missing or what it wanted.
+        missing: inspectBuiltinServers()
+          .filter((builtin) => !detected.has(builtin.name))
+          .map((builtin) => ({ name: builtin.name, command: builtin.command, extensions: builtin.extensions })),
+        errors: cfg.errors,
+        globalDisabled: cfg.globalDisabled,
+      };
     },
   };
 }
