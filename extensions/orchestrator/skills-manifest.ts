@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, extname, join, relative } from "node:path";
+import { basename, dirname, extname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 
@@ -123,6 +123,10 @@ export function loadLayeredSkill(name: string, cwd: string, layers: readonly Ski
   const skill = skills.find((candidate) => candidate.name === name);
   if (!skill) throw new Error(`Unknown skill "${name}". Available skills: ${skills.map((candidate) => candidate.name).join(", ") || "<none>"}`);
   const body = parseFrontmatter(readFileSync(skill.filePath, "utf8")).body.trim();
-  const document = `<skill name="${escapeAttribute(skill.name)}" source="${skill.layer}">\n${body}\n</skill>`;
+  // The skill's own directory travels with the document. A skill that keeps
+  // detail in references can only name them relatively, and the model never
+  // sees the tool's `details`, so without this those paths resolve against the
+  // working directory — where they are not.
+  const document = `<skill name="${escapeAttribute(skill.name)}" source="${skill.layer}" dir="${escapeAttribute(dirname(skill.filePath))}">\n${body}\n</skill>`;
   return { ...skill, document };
 }

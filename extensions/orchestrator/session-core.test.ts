@@ -1020,7 +1020,7 @@ describe("session-first core", () => {
     expect(registration.description).toContain("software-engineering");
     const result = await registration.execute("id", { name: "software-engineering" });
     expect(result.isError).not.toBe(true);
-    expect(result.content[0].text).toContain('<skill name="software-engineering" source="bundled">');
+    expect(result.content[0].text).toContain('<skill name="software-engineering" source="bundled" dir=');
   });
 
   // The <skills> catalog already carries every description and the rule that

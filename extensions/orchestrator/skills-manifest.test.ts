@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { bundledSkillsDir, enabledSkillLayers, listLayeredSkills, loadLayeredSkill, resolveLayeredSkill } from "./skills-manifest.js";
 
 function writeSkill(root: string, name: string, description: string, body = "body"): void {
@@ -46,7 +46,7 @@ describe("layered skills", () => {
     expect(bundled.every((skill) => skill.filePath.startsWith(bundledSkillsDir()))).toBe(true);
     expect(loadLayeredSkill("software-engineering", cwd).document).toContain("## Verification gate");
     expect(loadLayeredSkill("repository-work", cwd).document).toContain("conventional-commit type");
-    expect(loadLayeredSkill("skill-scout", cwd).document).toContain("Never recommend a skill whose body you have not fetched");
+    expect(loadLayeredSkill("skill-scout", cwd).document).toContain("Never recommend, adapt, or merge a skill whose body you have not fetched");
   });
 
   it("resolves project over global over bundled", () => {
@@ -75,9 +75,21 @@ describe("layered skills", () => {
     writeSkill(join(cwd, ".pi", "skills"), "alpha", "Alpha guidance", "Do alpha.");
     const first = loadLayeredSkill("alpha", cwd);
     const second = loadLayeredSkill("alpha", cwd);
-    expect(first.document).toBe('<skill name="alpha" source="project">\nDo alpha.\n</skill>');
+    expect(first.document).toBe(`<skill name="alpha" source="project" dir="${dirname(first.filePath)}">\nDo alpha.\n</skill>`);
     expect(second.document).toBe(first.document);
     expect(first.document).not.toContain("description:");
+  });
+
+  // A skill that keeps detail in references can only name them relatively, and
+  // the model never sees the tool's `details`, so the directory has to travel
+  // inside the document or those paths resolve against the wrong place.
+  it("carries the skill's own directory so its references are reachable", () => {
+    writeSkill(join(cwd, ".pi", "skills"), "alpha", "Alpha guidance", "Read references/deep.md.");
+    const loaded = loadLayeredSkill("alpha", cwd);
+
+    const dir = loaded.document.match(/ dir="([^"]+)"/)?.[1];
+    expect(dir).toBe(dirname(loaded.filePath));
+    expect(existsSync(join(dir!, ".."))).toBe(true);
   });
 
   it("reloads edited guidance", () => {

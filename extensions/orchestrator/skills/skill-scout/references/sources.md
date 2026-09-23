@@ -18,23 +18,26 @@ A hit looks like this, in full:
 
 No description, no body, no stars, no dates. **This is the whole record.** Any ranking built on this endpoint alone is a popularity ranking wearing a rubric, which is what the existing skill-finders are. Use it to enumerate candidates, never to judge them.
 
-`https://skills.sh/api/skill/<id>` answers 401. There is no public detail endpoint; the body has to come from the repository.
+`https://skills.sh/api/skill/<id>` answers 401, so that route gives no detail either. Treat the body as something only the repository can supply.
 
 ## Resolving an id to a file
 
 The id does not encode the path. `mattpocock/skills/code-review` lives at `skills/engineering/code-review/SKILL.md`. Walk the tree:
 
 ```
-gh api "repos/<owner>/<repo>/git/trees/main?recursive=1" --jq '.tree[].path | select(endswith("SKILL.md"))'
+branch=$(gh api "repos/<owner>/<repo>" --jq '.default_branch')
+gh api "repos/<owner>/<repo>/git/trees/$branch?recursive=1" --jq '.tree[].path | select(endswith("SKILL.md"))'
 ```
 
-Try `master` when `main` 404s. One call returns every skill in the repository, so a repo that publishes dozens costs a single request.
+Ask for the default branch rather than guessing `main` or `master` — a guess that misses returns a 404 that reads like "no such skill". One tree call returns every skill in the repository, so a repo publishing dozens costs a single request. Check `.truncated` on a very large repository.
 
-Then fetch the body:
+Then fetch the body, asking for it raw:
 
 ```
-gh api "repos/<owner>/<repo>/contents/<path>" --jq '.content' | base64 -d
+gh api "repos/<owner>/<repo>/contents/<path>" -H "Accept: application/vnd.github.raw"
 ```
+
+The raw header avoids the base64 round-trip, whose decoder differs between GNU and BSD.
 
 Use `gh`, not plain `curl`, against the GitHub API. Unauthenticated requests are rate-limited to 60/hour and will fail partway through a scouting run; `gh` is authenticated and allows 5000. Check with `gh api rate_limit --jq '.resources.core.remaining'`.
 
@@ -78,6 +81,13 @@ gh api "repos/<owner>/<repo>/commits?path=<path>&per_page=1" --jq '.[0].commit.c
 
 ## Installing
 
-pi-pi loads `<name>.md` and `<dir>/SKILL.md` from `~/.pi/skills` (global) and `<project>/.pi/skills` (project), so an ecosystem skill folder works unmodified — copy the directory in, keeping `SKILL.md` and any `scripts/` and `references/` beside it. Project shadows global shadows bundled, by skill name.
+pi-pi loads `<name>.md` and `<dir>/SKILL.md` from `~/.pi/skills` (global) and `<project>/.pi/skills` (project), so an ecosystem skill folder is copied in as-is — `SKILL.md` with any `scripts/` and `references/` beside it. Project shadows global shadows bundled, by skill name.
+
+The layout ports; the frontmatter does not all port. pi-pi's loader reads `name` and `description` and nothing else, so a key the author relied on is dropped in silence:
+
+- `disable-model-invocation: true` means "load only when asked". Upstream pi honours it; pi-pi does not, so such a skill becomes model-invocable here and will fire on its description alone. Check for it, and say so — a skill deliberately built to stay quiet behaves differently under pi-pi than its author intended.
+- Any other non-standard key is inert rather than honoured. Judge a candidate on what pi-pi will actually do with it, not on what its frontmatter asks for.
+
+A skill body that instructs the agent to read its own `references/` gets no automatic path to them. `load_skill` returns the document alone — not the directory it came from — so references have to be reachable by a path the body states or the agent can find.
 
 `npx skills add <source>` is the ecosystem's own installer. It targets other agents' directories by default, so prefer copying the folder when installing for pi-pi, and read what it ships before running it either way.
