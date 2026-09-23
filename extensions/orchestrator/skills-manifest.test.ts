@@ -32,16 +32,21 @@ describe("layered skills", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  // Every bundled skill's description sits in the system prompt of every
+  // session, so the catalog is deliberately short and this list is the gate:
+  // adding to it should be a decision, not a side effect of adding a file.
   it("ships a focused general-purpose catalog", () => {
     const bundled = listLayeredSkills(cwd).filter((skill) => skill.layer === "bundled");
     expect(bundled.map((skill) => skill.name)).toEqual([
       "repository-work",
       "research-and-design",
+      "skill-scout",
       "software-engineering",
     ]);
     expect(bundled.every((skill) => skill.filePath.startsWith(bundledSkillsDir()))).toBe(true);
     expect(loadLayeredSkill("software-engineering", cwd).document).toContain("## Verification gate");
     expect(loadLayeredSkill("repository-work", cwd).document).toContain("conventional-commit type");
+    expect(loadLayeredSkill("skill-scout", cwd).document).toContain("Never recommend a skill whose body you have not fetched");
   });
 
   it("resolves project over global over bundled", () => {
