@@ -13,9 +13,12 @@ describe("making installed binaries reachable", () => {
     process.env.PATH = originalPath;
   });
 
-  it("prepends the provision directory so it wins over a stale copy elsewhere", () => {
+  // A binary the user installed matches their toolchain and their project; a
+  // copy pi-pi downloaded once does not. The provisioned directory therefore
+  // goes last, and a host binary installed later takes over immediately.
+  it("appends the provision directory so a host binary always wins", () => {
     ensureProvisionDirOnPath("/opt/pi-bin");
-    expect(process.env.PATH).toBe("/opt/pi-bin:/opt/pi-bin/node/node_modules/.bin:/usr/bin:/bin");
+    expect(process.env.PATH).toBe("/usr/bin:/bin:/opt/pi-bin:/opt/pi-bin/node/node_modules/.bin");
   });
 
   // npm installs into a private prefix, not beside the downloaded binaries. An
@@ -35,7 +38,7 @@ describe("making installed binaries reachable", () => {
   it("leaves an already-present entry where the user put it", () => {
     process.env.PATH = "/usr/bin:/opt/pi-bin:/bin";
     ensureProvisionDirOnPath("/opt/pi-bin");
-    expect(process.env.PATH).toBe("/opt/pi-bin/node/node_modules/.bin:/usr/bin:/opt/pi-bin:/bin");
+    expect(process.env.PATH).toBe("/usr/bin:/opt/pi-bin:/bin:/opt/pi-bin/node/node_modules/.bin");
   });
 
   it("copes with an empty PATH instead of leaving a stray separator", () => {

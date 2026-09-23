@@ -306,3 +306,53 @@ describe("per-platform packing", () => {
     }
   });
 });
+
+describe("deferring to what the machine already has", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "provision-host-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // The user's binary matches their toolchain; a downloaded one need not. Any
+  // network call here is a bug, not an inefficiency: it can replace a working
+  // rustup component with a release that disagrees with the project's Rust.
+  it("touches no network when the binary is already on PATH", async () => {
+    const fetchBytes = vi.fn(async () => PAYLOAD);
+    const fetchText = vi.fn(async () => "");
+    const run = vi.fn();
+
+    const outcome = await provision(
+      effects({ which: () => "/usr/bin/rg", fetchBytes, fetchText, run }),
+      toolsFor("rg"),
+      dir,
+    );
+
+    expect(outcome).toEqual({ status: "present", binary: "rg", path: "/usr/bin/rg" });
+    expect(fetchBytes).not.toHaveBeenCalled();
+    expect(fetchText).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it("defers to a host binary for every tool it knows how to install", async () => {
+    for (const tool of TOOLS) {
+      const fetchText = vi.fn(async () => "");
+      const run = vi.fn();
+      const outcome = await provision(
+        effects({ which: () => `/usr/bin/${tool.binary}`, fetchText, run }),
+        [tool],
+        dir,
+      );
+
+      expect(outcome.status).toBe("present");
+      // npm and toolchain installs happen through run(), not a fetch.
+      expect(run).not.toHaveBeenCalled();
+      expect(fetchText).not.toHaveBeenCalled();
+    }
+  });
+});

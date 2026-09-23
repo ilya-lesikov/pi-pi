@@ -39,16 +39,27 @@ export function provisionResults(): ProvisionOutcome[] {
   return [...results().values()];
 }
 
+/**
+ * Put what pi-pi installed within reach of an ordinary PATH lookup, LAST.
+ *
+ * Appending is the point: a binary the user installed is the one that matches
+ * their toolchain and their project, and a copy pi-pi downloaded once must
+ * never shadow it. rust-analyzer is the clearest case — the rustup component
+ * tracks the project's Rust version, while a downloaded release does not — but
+ * the same holds for a distro ripgrep or a project's own language server.
+ * Provisioned copies are a fallback for a machine that has nothing, so a host
+ * binary installed after the download takes over the moment it appears.
+ */
 export function ensureProvisionDirOnPath(dir: string = provisionDir()): void {
   const separator = process.platform === "win32" ? ";" : ":";
   // npm installs into a private prefix rather than beside the other binaries,
   // so its .bin has to join PATH too or an installed language server stays
   // invisible to every `which` that would find it.
   const npmBin = join(dir, "node", "node_modules", ".bin");
-  for (const entry of [npmBin, dir]) {
+  for (const entry of [dir, npmBin]) {
     const current = process.env.PATH ?? "";
     if (current.split(separator).includes(entry)) continue;
-    process.env.PATH = current ? `${entry}${separator}${current}` : entry;
+    process.env.PATH = current ? `${current}${separator}${entry}` : entry;
   }
 }
 
