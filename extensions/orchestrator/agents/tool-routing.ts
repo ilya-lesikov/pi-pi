@@ -134,6 +134,7 @@ const TOOL_SEGMENTS: ToolSegment[] = [
     header: "Search for literal text:",
     items: [
       { tools: ["grep"], text: "- grep: ONLY for literal strings, config keys, error messages. Not for definitions or references." },
+      { tools: ["bash"], text: "- A search that has to go through bash instead — a pipeline, or a path outside the project — runs `rg`, never `grep -r`: it is provisioned, honours .gitignore, and is what the grep tool itself runs." },
     ],
   },
   {
