@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { fold, FoldState, Tier, callSubject, incompressibleTokens, cutBytes, cutBytesFromEnd, type AgentMessage } from "./fold.js";
+import { fold, FoldState, Tier, incompressibleTokens, cutBytes, cutBytesFromEnd, type AgentMessage } from "./fold.js";
 import { byteLength, Estimator, fixedBytes, messagesBytes } from "./estimate.js";
 import { limitsFor, DEFAULT_KEEP_FRACTION, DEFAULT_HEADROOM_TOKENS, DEFAULT_MAX_PROMPT_TOKENS, type PromptcapSettings } from "./limits.js";
 
@@ -64,65 +64,36 @@ describe("fold", () => {
     expect(out.folded).toBe(0);
   });
 
-  it("digests the oldest calls first and stops at the low-water mark", () => {
+  it("folds the oldest calls first and stops at the low-water mark", () => {
     const messages = conversation(10, 4000);
     const total = Math.floor(messagesBytes(messages) / 4);
     const out = fold(messages, 0, { ceiling: Math.floor(total * 0.6), lowWater: Math.floor(total * 0.4) }, new FoldState());
 
     expect(out.tokens).toBeLessThanOrEqual(Math.floor(total * 0.4));
     // The newest call keeps its output; the oldest does not.
-    expect(messages[2].content[0].text).toMatch(/^\[omitted: 4000B; t0 \u2014 read: \/f0\]$/);
+    expect(messages[2].content[0].text).toBe("[omitted: 4000B]");
     expect(messages[20].content[0].text).toBe("o".repeat(4000));
   });
 
-  it("replaces an over-cap argument with a notice, keeping every key", () => {
-    const messages = [user("go"), call("t0", "write", { path: "/a", body: "y".repeat(5000) }), result("t0", "write", "ok")];
-    const state = new FoldState();
-    fold(messages, 0, { ceiling: 1000, lowWater: 600 }, state);
-
-    expect(state.tierOf("t0")).toBe(Tier.Digest);
-    const args = messages[1].content[0].arguments;
-    expect(Object.keys(args).sort()).toEqual(["body", "path"]);
-    expect(args.path).toBe("/a");
-    expect(args.body).toBe("[args omitted: 5000B; t0]");
-  });
-
-  it("keeps a payload argument whole up to the wider cap", () => {
-    const command = "cd /repo && " + "x".repeat(3000);
-    const messages = [user("go"), call("t0", "bash", { command }), result("t0", "bash", "o".repeat(9000))];
-    const state = new FoldState();
-    fold(messages, 0, { ceiling: 1200, lowWater: 1100 }, state);
-
-    expect(state.tierOf("t0")).toBe(Tier.Digest);
-    expect(messages[1].content[0].arguments.command).toBe(command);
-  });
-
-  it("never leaves a severed value behind", () => {
+  it("leaves every argument exactly as it was, however big", () => {
+    const body = "y".repeat(50_000);
+    const edits = [{ oldText: "o".repeat(4000), newText: "n".repeat(4000) }];
     const messages = [
       user("go"),
-      call("t0", "edit", { path: "/a", edits: [{ oldText: "o".repeat(4000), newText: "n".repeat(4000) }] }),
-      result("t0", "edit", "ok"),
+      call("t0", "write", { path: "/a", body }),
+      result("t0", "write", "ok".repeat(9000)),
+      call("t1", "edit", { path: "/b", edits }),
+      result("t1", "edit", "ok".repeat(9000)),
     ];
-    fold(messages, 0, { ceiling: 1000, lowWater: 600 }, new FoldState());
+    const state = new FoldState();
+    fold(messages, 0, { ceiling: 10, lowWater: 5 }, state);
 
-    const args = messages[1].content[0].arguments;
-    expect(args.edits).toMatch(/^\[args omitted: \d+B; t0\]$/);
-    expect(JSON.stringify(args)).not.toContain("oooo");
+    expect(state.tierOf("t0")).toBe(Tier.Folded);
+    expect(messages[1].content[0].arguments).toEqual({ path: "/a", body });
+    expect(messages[3].content[0].arguments).toEqual({ path: "/b", edits });
   });
 
-  it("caps a list argument by element count before bytes", () => {
-    const messages = [
-      user("go"),
-      call("t0", "grep", { files: ["a", "b", "c", "d", "e", "f", "g"] }),
-      result("t0", "grep", "o".repeat(4000)),
-    ];    const state = new FoldState();
-    fold(messages, 0, { ceiling: 1000, lowWater: 100 }, state);
-
-    expect(state.tierOf("t0")).toBe(Tier.Digest);
-    expect(messages[1].content[0].arguments.files).toEqual(["a", "b", "c", "d", "e", "[dropped 2 more; t0]"]);
-  });
-
-  it("keeps both ends of a digested error", () => {
+  it("keeps both ends of a folded error", () => {
     const failure = "HEAD".padEnd(1200, "-") + "TAIL".padStart(600, "-");
     const messages = [
       user("go"),
@@ -135,24 +106,11 @@ describe("fold", () => {
 
     fold(messages, 0, { ceiling: 700, lowWater: 600 }, state);
 
-    expect(state.tierOf("t0")).toBe(Tier.Digest);
-    const digested = messages[2].content[0].text;
-    expect(digested.startsWith("HEAD")).toBe(true);
-    expect(digested.endsWith("TAIL")).toBe(true);
-    expect(digested).toContain("[omitted: 300B; t0]");
-  });
-
-  it("drops an error's text entirely at breadcrumb", () => {
-    const failure = "HEAD".padEnd(1200, "-") + "TAIL".padStart(600, "-");
-    const messages = [user("go"), call("t0", "bash", { cmd: "make" }), result("t0", "bash", failure, true)];
-    const state = new FoldState();
-
-    fold(messages, 0, { ceiling: 10, lowWater: 5 }, state);
-
-    expect(state.tierOf("t0")).toBe(Tier.Breadcrumb);
-    // This call's argument key is not one that identifies a call, so the notice
-    // falls back to naming the tool alone.
-    expect(messages[2].content[0].text).toBe("[omitted: 1800B; t0 \u2014 bash]");
+    expect(state.tierOf("t0")).toBe(Tier.Folded);
+    const folded = messages[2].content[0].text;
+    expect(folded.startsWith("HEAD")).toBe(true);
+    expect(folded.endsWith("TAIL")).toBe(true);
+    expect(folded).toContain("[omitted: 300B]");
   });
 
   it("never touches user or assistant prose, even when it alone overflows", () => {
@@ -272,7 +230,7 @@ describe("fold", () => {
     const out = fold(roomy, 0, { ceiling: 10_000_000, lowWater: 5_000_000 }, state);
 
     expect(out.folded).toBe(10);
-    expect(roomy[2].content[0].text).toMatch(/^\[omitted: 4000B; t0 \u2014 read: \/f0\]$/);
+    expect(roomy[2].content[0].text).toBe("[omitted: 4000B]");
   });
 
   it("keeps the prefix byte-identical as the conversation grows", () => {
@@ -313,8 +271,8 @@ describe("fold", () => {
     fold(messages, 0, { ceiling: 1, lowWater: 1 }, state);
 
     expect(state.tierOf("t49")).toBe(Tier.Drop);
-    expect(state.tierOf("t50")).toBe(Tier.Breadcrumb);
-    expect(state.tierOf("t199")).toBe(Tier.Breadcrumb);
+    expect(state.tierOf("t50")).toBe(Tier.Folded);
+    expect(state.tierOf("t199")).toBe(Tier.Folded);
   });
 
   it("leaves neither half of a dropped call behind", () => {
@@ -440,7 +398,7 @@ describe("fold", () => {
     ];
     fold(messages, 0, { ceiling: 10, lowWater: 5 }, new FoldState());
 
-    expect(messages[2].content[0].text).toBe(`[omitted: ${40_000 + 8}B; t0 \u2014 read: /a.png]`);
+    expect(messages[2].content[0].text).toBe(`[omitted: ${40_000 + 8}B]`);
   });
 
   it("never folds the newest load of a skill", () => {
@@ -526,7 +484,7 @@ describe("fold", () => {
       user("next"),
     ];
     const state = new FoldState();
-    state.promote("t0", Tier.Breadcrumb);
+    state.promote("t0", Tier.Folded);
 
     const out = fold(messages, 0, { ceiling: 1_000, lowWater: 500 }, state);
 
@@ -798,8 +756,8 @@ describe("the image budget", () => {
 
     expect(out.imagesFolded).toBe(7);
     expect(out.imageBytes).toBe(3000);
-    expect(messages[2].content[0]).toEqual({ type: "text", text: "[omitted: 1000B; t0 \u2014 read: /shot0.png]" });
-    expect(messages[14].content[0]).toEqual({ type: "text", text: "[omitted: 1000B; t6 \u2014 read: /shot6.png]" });
+    expect(messages[2].content[0]).toEqual({ type: "text", text: "[omitted: 1000B]" });
+    expect(messages[14].content[0]).toEqual({ type: "text", text: "[omitted: 1000B]" });
     // The three newest captures are what the model is still comparing against.
     expect(messages[16].content[0].type).toBe("image");
     expect(messages[20].content[0].type).toBe("image");
@@ -823,7 +781,7 @@ describe("the image budget", () => {
 
     expect(messages[2].content).toEqual([
       { type: "text", text: "1080x1920 capture" },
-      { type: "text", text: "[omitted: 9000B; t0 \u2014 read: /a.png]" },
+      { type: "text", text: "[omitted: 9000B]" },
     ]);
   });
 
@@ -853,7 +811,7 @@ describe("the image budget", () => {
 
     expect(out.imagesFolded).toBe(0);
     expect(out.imageBytes).toBe(3000);
-    expect(replayed[2].content[0]).toEqual({ type: "text", text: "[omitted: 1000B; t0 \u2014 read: /shot0.png]" });
+    expect(replayed[2].content[0]).toEqual({ type: "text", text: "[omitted: 1000B]" });
     // Nothing moved, so the pass costs no cache miss.
     expect(out.rewroteFrom).toBe(-1);
   });
@@ -885,54 +843,33 @@ describe("the image budget", () => {
     expect(out.imageBytes).toBe(2000);
   });
 
-  it("leaves a digested call alone, its images having gone with its output", () => {
+  it("leaves a folded call alone, its images having gone with its output", () => {
     const messages = captures(6, 1000);
     const state = new FoldState();
-    state.promote("t0", Tier.Digest);
+    state.promote("t0", Tier.Folded);
     const out = fold(messages, 0, { ...roomy, imageCeiling: 3_000, imageLowWater: 2_000 }, state);
 
-    expect(messages[2].content[0].text).toBe("[omitted: 1000B; t0 \u2014 read: /shot0.png]");
+    expect(messages[2].content[0].text).toBe("[omitted: 1000B]");
     expect(out.imagesFolded).toBe(3);
     expect(out.imageBytes).toBe(2000);
   });
 });
 
-describe("the subject a notice carries", () => {
-  it("names the tool and the thing it addressed", () => {
-    expect(callSubject("bash", { command: "cargo test -p bot" })).toBe("bash: cargo test -p bot");
-    expect(callSubject("read", { path: "/src/rally.ts" })).toBe("read: /src/rally.ts");
-    expect(callSubject("grep", { pattern: "fn main" })).toBe("grep: fn main");
+describe("what a folded call still says for itself", () => {
+  it("keeps the call whole, so the notice never has to describe it", () => {
+    const args = { command: "cargo build" };
+    const messages = [user("go"), call("t0", "bash", args), result("t0", "bash", "o".repeat(4000))];
+    fold(messages, 0, { ceiling: 10, lowWater: 5 }, new FoldState());
+
+    expect(messages[1].content[0].arguments).toEqual(args);
+    expect(messages[2].content[0].text).toBe("[omitted: 4000B]");
   });
 
-  it("falls back to the bare tool name when no argument identifies the call", () => {
-    expect(callSubject("bash", {})).toBe("bash");
-    expect(callSubject("bash", { timeout: 30 })).toBe("bash");
-    expect(callSubject("bash", undefined)).toBe("bash");
-  });
-
-  it("is absent for a call whose name is gone", () => {
-    expect(callSubject(undefined, { command: "ls" })).toBeUndefined();
-  });
-
-  it("clips a long subject and flattens newlines, so a notice stays one line", () => {
-    const subject = callSubject("bash", { command: `echo ${"x".repeat(400)}` })!;
-    expect(subject.length).toBeLessThan(120);
-    expect(subject).toContain("\u2026");
-    expect(callSubject("bash", { command: "one\ntwo\tthree" })).toBe("bash: one two three");
-  });
-
-  it("does not describe an already-folded argument value", () => {
-    // The value here IS a notice; naming it would report the fold, not the call.
-    expect(callSubject("write", { path: "[args omitted: 9000B; t3]" })).toBe("write");
-  });
-
-  it("outlives the arguments it was taken from, which breadcrumb wipes entirely", () => {
+  it("leaves the id the model needs to recall by on both blocks of the pair", () => {
     const messages = [user("go"), call("t0", "bash", { command: "cargo build" }), result("t0", "bash", "o".repeat(4000))];
     fold(messages, 0, { ceiling: 10, lowWater: 5 }, new FoldState());
 
-    // The call itself no longer says what it ran; the notice standing for its
-    // output is the only place that survives.
-    expect(messages[1].content[0].arguments).toEqual({});
-    expect(messages[2].content[0].text).toBe("[omitted: 4000B; t0 \u2014 bash: cargo build]");
+    expect(messages[1].content[0].id).toBe("t0");
+    expect(messages[2].toolCallId).toBe("t0");
   });
 });

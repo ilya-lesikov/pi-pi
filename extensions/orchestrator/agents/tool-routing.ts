@@ -78,8 +78,8 @@ const TOOL_SEGMENTS: ToolSegment[] = [
       {
         tools: ["recall_tool_output"],
         text:
-          "- recall_tool_output / recall_tool_args: read back a tool call the prompt folded away, by the call_id in its " +
-          "[omitted: <size>B; <call_id>] notice. Page a long output with offset and limit, or narrow it with pattern.",
+          "- recall_tool_output: read back a result the prompt folded away to an [omitted: <size>B] notice, by the id " +
+          "of the call it answered. Page a long output with offset and limit, or narrow it with pattern.",
       },
     ],
   },

@@ -29,9 +29,9 @@ Start Pi and talk to it normally. The initial Pi session owns all work; pi-pi do
 
 ## Memory
 
-The prompt is kept inside the model's window by folding old tool traffic out of the copy on its way to the provider: arguments are capped per value, results become a `[omitted: <size>B; <call_id> — <tool>: <what it addressed>]` notice, and what the user and the model said is never touched. The trailing subject names the call the notice stands for, so a folded result can be recognised without being recalled. Folding is oldest-first and never reversed, so the prompt's prefix stays stable between requests and the provider's cache survives.
+The prompt is kept inside the model's window by folding old tool traffic out of the copy on its way to the provider: a result becomes an `[omitted: <size>B]` notice, and the call that asked for it, along with everything the user and the model said, is never touched. Arguments are left exactly as they were written, so a folded call still states what it ran and on what; only the answer goes. Folding is oldest-first and never reversed, so the prompt's prefix stays stable between requests and the provider's cache survives. Calls old enough to be finished with are removed outright rather than left as husks.
 
-The session itself is never cut. `recall_tool_output` and `recall_tool_args` hand back a folded call by its id, and `vcc_recall` searches durable session history — messages, tool calls, and tool results. Native Pi session restoration remains authoritative; pi-pi does not duplicate conversation state in task files.
+The session itself is never cut. `recall_tool_output` hands back a folded result by the id of the call it answered — the one on the call and on the result block beside the notice — and `vcc_recall` searches durable session history: messages, tool calls, and tool results. Native Pi session restoration remains authoritative; pi-pi does not duplicate conversation state in task files.
 
 ## Tool provisioning
 

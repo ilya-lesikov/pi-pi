@@ -35,6 +35,8 @@ describe("recall tools", () => {
       userLine("m3", "gamma follow-up question"),
       callLine("m4", "toolu_img", "read", { path: "/shot.png" }),
       resultLine("m5", "toolu_img", "read", "1024x768", "AAAAIMAGEBYTES"),
+      callLine("m6", "call_piped|fc_item", "bash", { command: "ls" }),
+      resultLine("m7", "call_piped|fc_item", "bash", "piped output"),
     ].join("\n") + "\n", "utf-8");
 
     const registered: any[] = [];
@@ -48,8 +50,8 @@ describe("recall tools", () => {
   const run = (name: string, params: Record<string, unknown>) =>
     tools[name].execute("id", params, undefined, undefined, ctx()).then((res: any) => res.content[0].text as string);
 
-  it("registers the search tool and both call-id tools", () => {
-    expect(Object.keys(tools).sort()).toEqual(["recall_tool_args", "recall_tool_output", "vcc_recall"]);
+  it("registers the search tool and the call-id tool", () => {
+    expect(Object.keys(tools).sort()).toEqual(["recall_tool_output", "vcc_recall"]);
   });
 
   it("returns a folded call's full output by call id", async () => {
@@ -64,10 +66,16 @@ describe("recall tools", () => {
     expect(await run("recall_tool_output", { call_id: "toolu_1", offset: 1, limit: 2 })).toBe("line two\nline three");
   });
 
-  it("returns a call's full arguments, untruncated", async () => {
-    const out = await run("recall_tool_args", { call_id: "toolu_1" });
-    expect(out).toContain("/etc/hosts");
-    expect(out).toContain("y".repeat(4000));
+  // The Responses adapter stores the item id alongside the call id and sends
+  // only the call id, so the name the model can cite is the shorter one.
+  it("finds a call by the id the provider was sent, not the one stored beside it", async () => {
+    expect(await run("recall_tool_output", { call_id: "call_piped" })).toContain("piped output");
+  });
+
+  // Carried to Anthropic, the same id arrives with the punctuation its API
+  // rejects replaced, and that is the form the model reads back.
+  it("finds a call by an id an adapter rewrote to reach its provider", async () => {
+    expect(await run("recall_tool_output", { call_id: "call_piped_fc_item" })).toContain("piped output");
   });
 
   // Folding removes an image with the rest of the result, so a recall that

@@ -25,7 +25,6 @@ export const PI_PI_OWNED_TOOL_NAMES: readonly string[] = [
   "ask_user", // pi-ask-user
   "vcc_recall", // pi-pi's own recall tools
   "recall_tool_output",
-  "recall_tool_args",
 ];
 
 export const PI_PI_OWNED_COMMAND_NAMES: readonly string[] = [];

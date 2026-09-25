@@ -78,6 +78,26 @@ export interface RecalledCall {
   images?: Array<{ data: string; mimeType: string }>;
 }
 
+/**
+ * The id a model can cite is the one the provider was sent, and an adapter is
+ * free to send something other than what was stored: the OpenAI Responses one
+ * keeps the item id alongside the call id joined by a pipe and sends only the
+ * call id, and the Anthropic one rewrites an id that carries characters its API
+ * rejects, which is what a conversation carried across providers arrives with.
+ * Matching the stored form alone would make those results unrecallable by the
+ * only name the model ever saw.
+ */
+function sameCall(stored: unknown, callId: string): boolean {
+  if (typeof stored !== "string") return false;
+  if (stored === callId) return true;
+  const sent = stored.split("|")[0];
+  return sent === callId || onTheWire(sent) === callId || onTheWire(stored) === callId;
+}
+
+function onTheWire(id: string): string {
+  return id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
+}
+
 export function findToolCall(entries: any[], callId: string): RecalledCall | undefined {
   let found: RecalledCall | undefined;
   for (const entry of entries) {
@@ -85,11 +105,11 @@ export function findToolCall(entries: any[], callId: string): RecalledCall | und
     if (!message) continue;
     if (message.role === "assistant" && Array.isArray(message.content)) {
       for (const part of message.content) {
-        if (part?.type === "toolCall" && part.id === callId) found = { ...found, args: part.arguments ?? {} };
+        if (part?.type === "toolCall" && sameCall(part.id, callId)) found = { ...found, args: part.arguments ?? {} };
       }
       continue;
     }
-    if (message.role !== "toolResult" || message.toolCallId !== callId) continue;
+    if (message.role !== "toolResult" || !sameCall(message.toolCallId, callId)) continue;
     const parts = Array.isArray(message.content) ? message.content : [];
     const images = parts
       .filter((part: any) => part?.type === "image" && typeof part.data === "string")

@@ -48,11 +48,9 @@ function bounded(body: string, hint: string): string {
  */
 export const OMISSION_INSTRUCTION = [
   "<folded_history>",
-  "Older tool output in this conversation may appear as a notice of the form",
-  "[omitted: <size>B; <call_id> \u2014 <tool>: <what it addressed>], and an older tool argument too large to carry",
-  "may stand as an [args omitted: <size>B; <call_id>] notice in its place. The trailing subject names the call",
-  "the notice stands for, so you can tell whether it is the one you want before spending a recall on it.",
-  "Older calls the conversation has finished with are removed outright, leaving one",
+  "Older tool output in this conversation may appear as a notice of the form [omitted: <size>B]. The call that",
+  "asked for it is untouched directly above, so what was run, on what, with which arguments is all still there;",
+  "only the answer went. Older calls the conversation has finished with are removed outright, leaving one",
   "[dropped N earlier calls: name \u00d7count, \u2026] line in their place. The conversation outgrew the model's context",
   "window, so the prompt you see was folded on its way here. The session itself is complete.",
   "",
@@ -60,14 +58,10 @@ export const OMISSION_INSTRUCTION = [
   "and a great deal in the bytes that carry it, so the oldest ones leave once they add up, however much room",
   "the window still has. recall_tool_output hands back the image itself, not a description of it.",
   "",
-  "An omitted argument is a notice standing where a value was, not a value. Never pass one on \u2014 a command, a",
-  "path or a file body recalled this way has to come from recall_tool_args, or the notice itself is what runs",
-  "and what gets written.",
-  "",
-  "To read what was folded away, call recall_tool_output with that call_id \u2014 page a long one with offset and",
-  "limit, or narrow it with pattern. recall_tool_args does the same for a call's arguments. A dropped call",
-  "prints no call_id, so reach it with vcc_recall instead, which searches the session by text: the store keeps",
-  "every byte, whatever the prompt shows.",
+  "To read what was folded away, call recall_tool_output with the id of the call whose result it was \u2014 the one",
+  "on the tool-call block and on the result block answering it. Page a long one with offset and limit, or",
+  "narrow it with pattern. A dropped call has no block left to carry an id, so reach it with vcc_recall",
+  "instead, which searches the session by text: the store keeps every byte, whatever the prompt shows.",
   "",
   "A recalled result is what the tool returned at the time, not the state of the world now. When you need to",
   "know how things are now, call the tool again, narrowed so its answer is smaller than the one that had to",
@@ -194,11 +188,12 @@ export function registerRecallTools(pi: ExtensionAPI, source?: SessionSource): v
     label: "Recall output",
     description:
       "Read the full output of an earlier tool call whose output was replaced by an [omitted: …] notice. " +
-      "Takes the call_id from that notice. Use offset and limit to page through a long output, or pattern to " +
+      "Takes the id of that call, which is on the tool-call block and on the result block the notice replaced. " +
+      "Use offset and limit to page through a long output, or pattern to " +
       "return only the lines containing a string. Returns what the tool returned at the time, which is not " +
       "necessarily true now.",
     parameters: Type.Object({
-      call_id: Type.String({ description: "The call id printed in the [omitted: …] notice." }),
+      call_id: Type.String({ description: "The id of the call whose result was replaced by the notice." }),
       offset: Type.Optional(Type.Number({ description: "First line to return (0-based)." })),
       limit: Type.Optional(Type.Number({ description: "How many lines to return." })),
       pattern: Type.Optional(Type.String({ description: "Return only the lines containing this string." })),
@@ -224,32 +219,11 @@ export function registerRecallTools(pi: ExtensionAPI, source?: SessionSource): v
     },
   });
 
-  pi.registerTool({
-    name: "recall_tool_args",
-    label: "Recall arguments",
-    description:
-      "Read the full arguments of an earlier tool call whose arguments were replaced by an [args omitted: …] notice. " +
-      "Takes the call_id shown in the [omitted: …] notice of the same call.",
-    parameters: Type.Object({
-      call_id: Type.String({ description: "The call id printed in the [omitted: …] notice." }),
-      offset: Type.Optional(Type.Number({ description: "First line to return (0-based)." })),
-      limit: Type.Optional(Type.Number({ description: "How many lines to return." })),
-      source: Type.Optional(
-        Type.Union([Type.Literal("root"), Type.Literal("current")], { description: "Session to read: 'root' (default) or 'current'." }),
-      ),
-    }),
-    async execute(_toolCallId: string, params: any, _signal: any, _onUpdate: any, ctx: any) {
-      const found = lookup(ctx, source, params);
-      if (typeof found === "string") return text(found);
-      if (found.args === undefined) return text(`Call ${params.call_id} has no recorded arguments.`);
-      return text(slice(JSON.stringify(found.args, null, 2), params.offset, params.limit));
-    },
-  });
 }
 
 function lookup(ctx: any, source: SessionSource | undefined, params: any): RecalledCall | string {
   const callId = String(params.call_id ?? "").trim();
-  if (!callId) return "No call_id given; it is printed in the [omitted: …] notice.";
+  if (!callId) return "No call_id given; it is the id on the call whose result the notice replaced.";
   const useCurrent = params.source === "current";
   const { entries } = resolveEntries(ctx, source, useCurrent);
   if (!entries) return `No ${useCurrent ? "current" : "root"} session history available.`;

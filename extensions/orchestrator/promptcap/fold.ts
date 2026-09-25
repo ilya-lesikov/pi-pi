@@ -8,52 +8,32 @@ export enum Tier {
   /** The call and its result as they were. */
   Verbatim = 0,
   /**
-   * What the call was — its name, and enough of its arguments to name the
-   * object it addressed — with its result replaced by a notice.
-   */
-  Digest = 1,
-  /**
-   * Only that the call happened, by its name.
+   * The call exactly as it was made, with its result replaced by a notice.
    *
-   * The name stays on the call rather than the whole pair being replaced by one
-   * line summarizing many: removing a call means removing the result paired
-   * with it, and a provider rejects a tool result whose call it cannot see. The
-   * saving over a bare name is not worth trading a structural invariant for.
+   * Only the result folds. Arguments are what the model wrote, and a folded
+   * one is a string that still reads as content: it gets retyped — a severed
+   * heredoc, a path ending mid-segment, a notice written into a source file by
+   * the write that copied it. Keeping them whole also costs little, because a
+   * result outweighs the call that asked for it by orders of magnitude.
    */
-  Breadcrumb = 2,
+  Folded = 1,
   /**
    * Gone: the call and the result answering it are both removed, and a run of
    * them leaves one line naming what went.
    *
-   * This is the only tier that reclaims what a breadcrumb still costs. A
-   * breadcrumb keeps the call, and a call carries its id twice over its life —
-   * once on the call, once on the result that answers it — which is the larger
-   * part of what an old call weighs once its arguments and output are gone. In
-   * a session of thousands of calls that residue is most of the floor, and
-   * because the ceiling is set above the floor, a floor that cannot fall is a
-   * prompt that cannot stop growing.
+   * This is the only tier that reclaims what a folded call still costs. It
+   * keeps its arguments and its id, and an id is carried twice over a call's
+   * life — once on the call, once on the result that answers it. In a session
+   * of thousands of calls that residue is most of the floor, and because the
+   * ceiling is set above the floor, a floor that cannot fall is a prompt that
+   * cannot stop growing.
    *
    * Removing one half alone is what the provider rejects, so both go together;
    * a whole turn leaves at once and the alternation the provider expects is
    * preserved.
    */
-  Drop = 3,
+  Drop = 2,
 }
-
-// Caps one argument value in a digested call. The cap is per value rather than
-// over the serialized blob because JSON key order is arbitrary: cutting the
-// blob drops whichever keys sort last, which can mean losing the path or the
-// object name while keeping a file body.
-const ARG_LEAF_BYTES = 1_000;
-
-// What an argument carrying literal payload is capped at instead. A command or
-// a file body is something the model reproduces rather than looks up, so the
-// wider cap buys the room to keep such a value whole rather than replace it.
-const ARG_CONTENT_BYTES = 4_000;
-
-// Argument names whose value is literal payload rather than a reference to
-// something the model could look up again.
-const CONTENT_ARG_KEYS = new Set(["command", "content", "oldText", "newText", "patch", "body", "edits"]);
 
 // How many of the newest calls are never dropped, however tight the budget.
 // Recent tool traffic is what the model is still working from, so it is trimmed
@@ -80,12 +60,7 @@ const DROP_LINE_RESERVE_BYTES = 64;
 // costs. See worthFolding.
 const MIN_FOLD_FRACTION = 0.2;
 
-// A list-valued argument is capped by element count before its bytes are, so
-// what reaches the model is still a list rather than a JSON document cut in
-// half.
-const ARG_LIST_KEEP = 5;
-
-// Bound an error kept in a digested call. Both ends are kept because a long
+// Bound an error kept in a folded call. Both ends are kept because a long
 // failure states its conclusion in either place: a rejected write leads with
 // the reason, a test or lint run ends with it.
 const ERROR_HEAD_BYTES = 1000;
@@ -151,7 +126,7 @@ export interface FoldResult {
   tokens: number;
   /** Estimated prompt size before folding, in tokens. */
   tokensBefore: number;
-  /** Calls standing at digest or below-verbatim after this pass. */
+  /** Calls standing below verbatim after this pass. */
   folded: number;
   /** Calls this pass moved a tier, which is what a rewrite is made of. */
   promoted: number;
@@ -311,7 +286,7 @@ export function fold(
     // settled, so here it only has to stop counting towards the prompt.
     bytes -= remembered >= Tier.Drop
       ? dropSavings(messages, call, imageTokens) + stripReasoning(messages, call, protectedFrom)
-      : applyTier(messages, call, remembered, protectedFrom, imageTokens);
+      : applyTier(messages, call, protectedFrom, imageTokens);
     call.tier = remembered;
     followReasoning(call.callMessage, true);
   }
@@ -365,16 +340,14 @@ export function fold(
     // cannot be chased here.
     const target = limits.lowWater;
 
-    for (const to of [Tier.Digest, Tier.Breadcrumb]) {
-      for (const call of calls) {
-        if (toTokens(bytes) <= target) break;
-        if (call.tier >= to) continue;
-        bytes -= applyTier(messages, call, to, protectedFrom, imageTokens);
-        call.tier = to;
-        state.promote(call.id, to);
-        rewrote(call);
-        followReasoning(call.callMessage, false);
-      }
+    for (const call of calls) {
+      if (toTokens(bytes) <= target) break;
+      if (call.tier >= Tier.Folded) continue;
+      bytes -= applyTier(messages, call, protectedFrom, imageTokens);
+      call.tier = Tier.Folded;
+      state.promote(call.id, Tier.Folded);
+      rewrote(call);
+      followReasoning(call.callMessage, false);
     }
 
     const droppable = droppableCalls(messages, calls, protectedFrom);
@@ -446,16 +419,14 @@ function resultImageBytes(messages: AgentMessage[], call: Call): number {
  * The text stays because it is not what costs anything: a tool that returns a
  * screenshot alongside a description loses the expensive half and keeps the
  * half the model can still read. The image itself stays in the session store,
- * so recall hands it back by the id the notice names.
+ * so recall hands it back by the id the result block carries.
  */
 function stripResultImages(messages: AgentMessage[], call: Call, imageTokens: number): number {
   const result = messages[call.resultMessage];
   if (!Array.isArray(result?.content)) return 0;
   const before = messagesBytes([result], imageTokens);
-  const callee = callPart(messages, call);
-  const subject = callSubject(callee?.name, callee?.arguments);
   result.content = result.content.map((part: any) =>
-    part?.type === "image" ? { type: "text", text: omission((part.data ?? "").length, call.id, subject) } : part,
+    part?.type === "image" ? { type: "text", text: omission((part.data ?? "").length) } : part,
   );
   return before - messagesBytes([result], imageTokens);
 }
@@ -711,8 +682,9 @@ function dropLine(tally: Map<string, number>): string {
 
 /**
  * What the prompt would still cost with every tool call folded as far as it
- * goes: the prose, the fixed cost, and a breadcrumb per call. Nothing can bring
- * a prompt below this, so it is what the budget has to be set around.
+ * goes: the prose, the fixed cost, and what the calls too recent to drop are
+ * asking for. Nothing can bring a prompt below this, so it is what the budget
+ * has to be set around.
  */
 export function incompressibleTokens(messages: AgentMessage[], fixedBytes: number, ratio = 1, imageTokens = DEFAULT_IMAGE_TOKENS): number {
   const calls = indexCalls(messages);
@@ -794,9 +766,9 @@ function lastUserMessageIndex(messages: AgentMessage[]): number {
  * What full folding would still be able to remove from here.
  *
  * Drop is part of "full", so a call old enough to leave counts for everything it
- * weighs rather than for the breadcrumb it would otherwise be stuck at. This is
- * what keeps the floor — and with it the ceiling standing above the floor —
- * from rising with every call a long session makes.
+ * weighs rather than for the call and arguments it would otherwise be stuck at.
+ * This is what keeps the floor — and with it the ceiling standing above the
+ * floor — from rising with every call a long session makes.
  */
 function foldableBytes(messages: AgentMessage[], calls: Call[], protectedFrom: number, imageTokens: number): number {
   let savings = 0;
@@ -818,14 +790,15 @@ function foldableBytes(messages: AgentMessage[], calls: Call[], protectedFrom: n
       droppedHere.push(call);
       continue;
     }
-    if (call.tier >= Tier.Breadcrumb) continue;
-    const part = callPart(messages, call);
-    if (part) savings += jsonBytesOf(part.arguments) - jsonBytesOf({});
+    if (call.tier >= Tier.Folded) continue;
     const result = messages[call.resultMessage];
     if (!result) continue;
-    const breadcrumb = byteLength(result.toolName ?? "") + byteLength(result.toolCallId ?? "")
-      + byteLength(collapseResult(call, false, Tier.Breadcrumb, callSubject(part?.name, part?.arguments))[0].text);
-    savings += Math.max(0, messagesBytes([result], imageTokens) - breadcrumb);
+    // A failed call keeps both ends of its text once folded, and no tier below
+    // this one takes them away, so estimating it as a bare notice would promise
+    // room that folding cannot deliver.
+    const folded = byteLength(result.toolName ?? "") + byteLength(result.toolCallId ?? "")
+      + byteLength(collapseResult(call, result.isError === true)[0].text);
+    savings += Math.max(0, messagesBytes([result], imageTokens) - folded);
   }
   // What full folding leaves behind includes the lines standing for what left.
   // A turn that made no call is folded with the traffic around it, so the
@@ -875,26 +848,16 @@ function thinkingBytes(message: AgentMessage | undefined): number {
   return size;
 }
 
-/** Rewrites one call's parts to match a tier, returning the bytes it saved. */
-function applyTier(messages: AgentMessage[], call: Call, to: Tier, protectedFrom: number, imageTokens: number): number {
+/** Folds one call's result and its reasoning, returning the bytes it saved. */
+function applyTier(messages: AgentMessage[], call: Call, protectedFrom: number, imageTokens: number): number {
   let saved = 0;
-
-  const part = callPart(messages, call);
-  // Captured before the arguments are trimmed or wiped: at Breadcrumb tier they
-  // are gone entirely, which is precisely when the notice is all that is left.
-  const subject = callSubject(part?.name, part?.arguments);
-  if (part) {
-    const before = jsonBytesOf(part.arguments);
-    part.arguments = to >= Tier.Breadcrumb ? {} : trimArgs(part.arguments, call.id);
-    saved += before - jsonBytesOf(part.arguments);
-  }
 
   saved += stripReasoning(messages, call, protectedFrom);
 
   const result = messages[call.resultMessage];
   if (result) {
     const before = messagesBytes([result], imageTokens);
-    result.content = collapseResult(call, result.isError === true, to, subject);
+    result.content = collapseResult(call, result.isError === true);
     saved += before - messagesBytes([result], imageTokens);
   }
 
@@ -909,12 +872,15 @@ function callPart(messages: AgentMessage[], call: Call): any {
 }
 
 /**
- * Replaces a tool result with a notice naming its size and the call it belonged
- * to, so the model can ask for it back by id. The wording is not repeated here:
- * the system prompt explains once what the notice means, which is worth
- * thousands of tokens across a session that folds hundreds of calls.
+ * Replaces a tool result with a notice naming what it weighed.
+ *
+ * The notice names nothing else. What the call was is on the call above, which
+ * folding leaves whole, and the id to ask for the result back is on the result
+ * block itself, where the provider requires it. The wording is not repeated
+ * here either: the system prompt explains once what the notice means, which is
+ * worth thousands of tokens across a session that folds hundreds of calls.
  */
-function collapseResult(call: Call, isError: boolean, to: Tier, subject?: string): any[] {
+function collapseResult(call: Call, isError: boolean): any[] {
   let text = "";
   let bytes = 0;
   for (const part of call.resultContent) {
@@ -928,79 +894,23 @@ function collapseResult(call: Call, isError: boolean, to: Tier, subject?: string
     if (part?.type === "image") bytes += (part.data ?? "").length;
   }
   // A failure is worth more than a success of the same size: it is what stops
-  // the model repeating a call that cannot work, so a digested one keeps both
-  // ends of its text where a digested success keeps none.
-  if (isError && to < Tier.Breadcrumb) return [{ type: "text", text: clampEnds(text, call.id) }];
-  return [{ type: "text", text: omission(bytes, call.id, subject) }];
+  // the model repeating a call that cannot work, so a folded one keeps both
+  // ends of its text where a folded success keeps none.
+  if (isError) return [{ type: "text", text: clampEnds(text) }];
+  return [{ type: "text", text: omission(bytes) }];
 }
 
-export function omission(size: number, id: string, subject?: string): string {
-  const tail = subject ? ` \u2014 ${subject}` : "";
-  return id ? `[omitted: ${size}B; ${id}${tail}]` : `[omitted: ${size}B${tail}]`;
-}
-
-/**
- * What a folded call was, in one line: the tool and the thing it addressed.
- *
- * A notice naming only a size and an id is an index with no keys. It says
- * something was here, never what, so the only way to find out is to spend a
- * recall on each candidate — and the cheaper move is always to redo the work,
- * which is what the session traces show happening. The subject is what makes
- * the id worth addressing: a few tokens that turn "4KB of something" into a
- * command the model can recognise as the one it already ran.
- */
-const SUBJECT_BYTES = 80;
-const SUBJECT_KEYS = ["command", "path", "filePath", "file_path", "pattern", "query", "url", "name", "subject"];
-
-export function callSubject(name: string | undefined, args: unknown): string | undefined {
-  if (!name) return undefined;
-  if (!args || typeof args !== "object" || Array.isArray(args)) return name;
-  const record = args as Record<string, unknown>;
-  for (const key of SUBJECT_KEYS) {
-    const value = record[key];
-    if (typeof value !== "string" || value.trim().length === 0) continue;
-    // Already-folded argument values stand in for content that is gone; naming
-    // one would describe the notice rather than the call it belongs to.
-    if (value.startsWith("[args omitted:")) break;
-    const flat = value.replace(/\s+/g, " ").trim();
-    const clipped = flat.length > SUBJECT_BYTES ? `${flat.slice(0, SUBJECT_BYTES)}\u2026` : flat;
-    return `${name}: ${clipped}`;
-  }
-  return name;
+export function omission(size: number): string {
+  return `[omitted: ${size}B]`;
 }
 
 /** Keeps the beginning and the end of `text`, naming what was dropped between. */
-function clampEnds(text: string, id: string): string {
+function clampEnds(text: string): string {
   const size = byteLength(text);
   if (size <= ERROR_HEAD_BYTES + ERROR_TAIL_BYTES) return text;
   const head = cutBytes(text, ERROR_HEAD_BYTES);
   const tail = cutBytesFromEnd(text, ERROR_TAIL_BYTES);
-  return `${head}\n${omission(size - byteLength(head) - byteLength(tail), id)}\n${tail}`;
-}
-
-/** Caps each argument value, leaving every key in place. */
-function trimArgs(args: unknown, callId: string): Record<string, unknown> {
-  if (!args || typeof args !== "object" || Array.isArray(args)) return (args ?? {}) as Record<string, unknown>;
-  const trimmed: Record<string, unknown> = {};
-  for (const [key, raw] of Object.entries(args as Record<string, unknown>)) {
-    const value = Array.isArray(raw) && raw.length > ARG_LIST_KEEP
-      ? [...raw.slice(0, ARG_LIST_KEEP), `[dropped ${raw.length - ARG_LIST_KEEP} more; ${callId}]`]
-      : raw;
-    const encoded = typeof value === "string" ? value : jsonText(value);
-    const size = byteLength(encoded);
-    const cap = CONTENT_ARG_KEYS.has(key) ? ARG_CONTENT_BYTES : ARG_LEAF_BYTES;
-    // A value too big to keep goes whole, and what replaces it is a notice and
-    // nothing else. Leaving the beginning behind was worse than leaving
-    // nothing: it still reads as content, so it gets retyped — a severed
-    // heredoc, a path ending mid-segment, the notice itself written into a
-    // source file by the write that copied it. The value is one recall away.
-    trimmed[key] = size <= cap ? value : argOmission(size, callId);
-  }
-  return trimmed;
-}
-
-export function argOmission(size: number, id: string): string {
-  return `[args omitted: ${size}B; ${id}]`;
+  return `${head}\n${omission(size - byteLength(head) - byteLength(tail))}\n${tail}`;
 }
 
 function jsonText(value: unknown): string {
@@ -1010,15 +920,6 @@ function jsonText(value: unknown): string {
     return JSON.stringify(value) ?? String(value);
   } catch {
     return String(value);
-  }
-}
-
-function jsonBytesOf(value: unknown): number {
-  if (value === undefined) return 0;
-  try {
-    return byteLength(JSON.stringify(value) ?? "");
-  } catch {
-    return 0;
   }
 }
 

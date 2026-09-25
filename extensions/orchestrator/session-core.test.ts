@@ -98,7 +98,7 @@ describe("session-first core", () => {
     expect(prompt).toContain("vcc_recall: retrieve full detail");
     // The [omitted: …] notice means nothing without the sentence that explains it.
     expect(prompt).toContain("recall_tool_output");
-    expect(prompt).toContain("[omitted: <size>B; <call_id>]");
+    expect(prompt).toContain("[omitted: <size>B]");
     expect(prompt).toContain("load_skill");
     expect(prompt).toContain("When reporting finished work");
     expect(prompt).not.toContain("ACTIVE PHASE");
@@ -1062,10 +1062,10 @@ describe("session-first core", () => {
     }
     expect(handler).toBeTruthy();
 
-    expect(folded[2].content[0].text).toMatch(/^\[omitted: 8000B; t0 \u2014 read: \/f0\]$/);
+    expect(folded[2].content[0].text).toBe("[omitted: 8000B]");
     // A 5K ceiling leaves less room than one of these results occupies, so the
     // fold reaches the newest call too. The user's own prose is never folded.
-    expect(folded[80].content[0].text).toMatch(/^\[omitted: 8000B; t39 \u2014 read: \/f39\]$/);
+    expect(folded[80].content[0].text).toBe("[omitted: 8000B]");
     expect(folded[0].content[0].text).toBe("go");
     await emit(pi, "session_shutdown", {}, ctx);
   });
@@ -1088,7 +1088,7 @@ describe("session-first core", () => {
       const out = await fn({ messages }, ctx);
       if (out?.messages) folded = out.messages;
     }
-    expect(folded[2].content[0].text).toMatch(/^\[omitted: 4000B; w0 \u2014 read: \/f0\]$/);
+    expect(folded[2].content[0].text).toBe("[omitted: 4000B]");
   });
 
   it("makes layered skills loadable in worker processes", async () => {
