@@ -23,7 +23,7 @@ import { registerImageShrink } from "./image-shrink.js";
 import { checkDuplicateExtensions } from "./duplicate-extension-guard.js";
 import { ensureProvisionDirOnPath, ensureServerForFile, provisionEagerTools } from "./provision/session.js";
 import { installConsoleGuard } from "./console-guard.js";
-import { demoteUnusableSubscription, handleMainAuthFailure, handleMainRateLimit, handleSubagentAuthFailure, handleSubagentRateLimit, isAuthError, isPolicyBlockError, isRateLimitError } from "./rate-limit-fallback.js";
+import { demoteUnusableSubscription, handleMainAuthFailure, handleMainRateLimit, handleMainRefusal, handleSubagentAuthFailure, handleSubagentRateLimit, isAuthError, isModelRefusal, isPolicyBlockError, isRateLimitError } from "./rate-limit-fallback.js";
 import { adjudicateCheckIn, adjudicateContinuation } from "./continuation-adjudicator.js";
 import { retrySubagentOnNewRouting } from "./subagent-retry.js";
 import { ensureProviderRetrySettings, patchRetryPredicate } from "./provider-retry.js";
@@ -651,7 +651,12 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     // failed one has recovery of its own below, and an error may route the
     // session itself — switching first would undo that.
     const drainable = message?.stopReason === "toolUse" || message?.stopReason === "stop";
-    if (drainable) await drainPendingModelSwitch(orchestrator);
+    if (drainable) {
+      // A turn that answered is the only proof the refusal has let go, and it is
+      // what re-arms the cheap recovery for the next one.
+      orchestrator.refusalCount = 0;
+      await drainPendingModelSwitch(orchestrator);
+    }
     // A mid-loop turn is never a continuation candidate.
     if (message?.stopReason === "toolUse") return;
     // Between requests only: switching providers mid-run would resend the
@@ -663,6 +668,13 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     }
     if (message?.stopReason === "error" && isAuthError(message?.errorMessage)) {
       await handleMainAuthFailure(orchestrator, ctx, message?.model ?? ctx.model?.id, message?.provider ?? ctx.model?.provider);
+      return;
+    }
+    // Checked before the usage-policy block below, which its wording overlaps:
+    // a refusal is the vendor's classifier declining to answer, and unlike a
+    // policy block it is worth resending and worth routing around.
+    if (message?.stopReason === "error" && isModelRefusal(message?.rawStopReason, message?.errorMessage)) {
+      await handleMainRefusal(orchestrator, ctx);
       return;
     }
     // A refused payload is not a routing problem: switching models sends the

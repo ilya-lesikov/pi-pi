@@ -893,6 +893,84 @@ describe("session-first core", () => {
     await emit(pi, "session_shutdown", {}, ctx);
   });
 
+  // A refusal reaches the turn as stopReason "error" carrying a raw stop reason
+  // no error-text predicate matches, so before this branch existed the session
+  // stopped dead on one. It is probabilistic, so the first answer is to send the
+  // same request again rather than to pay for a cold cache on another provider.
+  it("resends a refused request once, then leaves the vendor", async () => {
+    setTierEnabled({ "copilot": false, "flant-sub": true, "flant-api": true });
+    updateRegistryFromAvailableModels([
+      "pp-flant-openai/gpt-5.6-sol",
+      "pp-flant-openai/gpt-5.6-sol-pro",
+      "pp-flant-anthropic-sub/sub/claude-opus-5",
+    ]);
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi);
+    orchestrator.cwd = "/tmp/project";
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    registerEventHandlers(orchestrator);
+    const notify = vi.fn();
+    const ctx = { isIdle: () => true, model: { provider: "pp-flant-anthropic-sub", id: "sub/claude-opus-5" }, ui: { notify } };
+    orchestrator.lastCtx = ctx as any;
+    orchestrator.switchModel = vi.fn(async () => true);
+    const refused = { message: { stopReason: "error", rawStopReason: "refusal", content: [] } };
+
+    await emit(pi, "turn_end", refused, ctx);
+    expect(orchestrator.switchModel).not.toHaveBeenCalled();
+    expect(pi.sendMessage).toHaveBeenCalledTimes(1);
+    expect(pi.sendMessage.mock.calls[0][0].content).toContain("do not start over");
+
+    await emit(pi, "turn_end", refused, ctx);
+    expect(orchestrator.switchModel).toHaveBeenCalledWith(ctx, "pp-flant-openai/gpt-5.6-sol-pro", expect.any(String));
+    expect(pi.sendMessage).toHaveBeenCalledTimes(2);
+
+    updateRegistryFromAvailableModels([]);
+    await emit(pi, "session_shutdown", {}, ctx);
+  });
+
+  // Nothing else reports that a refusal cleared, so without this a session that
+  // recovered would spend its next one on a provider switch it did not need.
+  it("forgets a refusal once a turn answers", async () => {
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi);
+    orchestrator.cwd = "/tmp/project";
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    registerEventHandlers(orchestrator);
+    const ctx = { isIdle: () => true, ui: { notify: vi.fn() } };
+    orchestrator.lastCtx = ctx as any;
+
+    await emit(pi, "turn_end", { message: { stopReason: "error", rawStopReason: "refusal", content: [] } }, ctx);
+    expect(orchestrator.refusalCount).toBe(1);
+    await emit(pi, "turn_end", { message: { stopReason: "toolUse", content: [] } }, ctx);
+    expect(orchestrator.refusalCount).toBe(0);
+    await emit(pi, "session_shutdown", {}, ctx);
+  });
+
+  // Stopping is right when there is nowhere to go, but stopping without saying
+  // so is the failure this whole branch exists to prevent.
+  it("stops and explains when a repeated refusal has nowhere to move", async () => {
+    updateRegistryFromAvailableModels(["pp-flant-anthropic-sub/sub/claude-opus-5"]);
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi);
+    orchestrator.cwd = "/tmp/project";
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    registerEventHandlers(orchestrator);
+    const notify = vi.fn();
+    const ctx = { isIdle: () => true, ui: { notify } };
+    orchestrator.lastCtx = ctx as any;
+    orchestrator.switchModel = vi.fn(async () => true);
+    const refused = { message: { stopReason: "error", rawStopReason: "refusal", content: [] } };
+
+    for (let i = 0; i < 4; i++) await emit(pi, "turn_end", refused, ctx);
+
+    expect(orchestrator.switchModel).not.toHaveBeenCalled();
+    expect(pi.sendMessage).toHaveBeenCalledTimes(1);
+    const last = notify.mock.calls[notify.mock.calls.length - 1];
+    expect(last[0]).toContain("Stopping");
+    expect(last[1]).toBe("error");
+    await emit(pi, "session_shutdown", {}, ctx);
+  });
+
   // The observed failure: the switch-back probe fired mid-request and switched
   // the model under a live tool loop, which resends the whole conversation on a
   // cold prompt cache from inside the chain.

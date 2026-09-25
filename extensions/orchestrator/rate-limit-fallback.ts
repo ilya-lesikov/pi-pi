@@ -1,7 +1,8 @@
 import type { Orchestrator } from "./orchestrator.js";
 import { loadFlantSettings, probeSubscriptionCleared, reviveSubscriptionCredential } from "./flant-infra.js";
-import { demoteTierForFamily, getModelInfo, isTierDemoted, resolveModel, restoreTierForFamily, setSubscriptionFallbackActive, tierOfSpec, type Family, type ProviderTierName } from "./model-registry.js";
+import { demoteTierForFamily, getModelInfo, isTierDemoted, refusalFallbackSpec, resolveModel, restoreTierForFamily, setSubscriptionFallbackActive, tierOfSpec, type Family, type ProviderTierName } from "./model-registry.js";
 import { isSubscriptionRouted } from "./usage-tracker.js";
+import { getLogger } from "./log.js";
 
 export function isRateLimitError(message?: string): boolean {
   return typeof message === "string" && /\b429\b|rate.?limit|too many requests|exceed your account|extra usage|draw from[\s\S]{0,40}plan limits/i.test(message);
@@ -27,6 +28,22 @@ export function isAuthError(message?: string): boolean {
 export function isPolicyBlockError(message?: string): boolean {
   return typeof message === "string"
     && /usage polic|violative|content[ _-]?(policy|filter)|responsible_?ai|flagged by|was blocked under/i.test(message);
+}
+
+/**
+ * The model declined to answer at all — Anthropic's reasoning-extraction
+ * safeguard, which arrives as a successful response carrying a refusal stop
+ * reason rather than as an error status.
+ *
+ * Unlike a usage-policy block this is worth retrying: it judges the whole
+ * conversation rather than the last message, and it fires probabilistically, so
+ * the same payload sent again often goes through. When it does not, only
+ * leaving the vendor clears it.
+ */
+export function isModelRefusal(rawStopReason?: string, message?: string): boolean {
+  if (rawStopReason === "refusal") return true;
+  return typeof message === "string"
+    && /reverse engineering or duplicating model outputs|reasoning_extraction/i.test(message);
 }
 
 function thinking(orchestrator: Orchestrator): string {
@@ -191,6 +208,51 @@ function armTierRestore(
   }, Math.max(1, minutes) * 60_000);
   timer.unref?.();
   orchestrator.tierRestoreTimers.set(key, timer);
+}
+
+const RESEND_REFUSED = "[PI-PI] The model returned a refusal instead of an answer and produced nothing. It judges the whole conversation, not your last step, and it fires unpredictably on the same content, so the request is worth making again as it was. Carry on exactly where you stopped: do not start over, do not repeat work already finished, and do not quote or reconstruct anything to explain the refusal.";
+
+const CONTINUE_AFTER_REROUTE = "[PI-PI] The refusal repeated, so this session moved to a different vendor's model, which is not subject to it. Everything above is your own work — continue from where you stopped without starting over.";
+
+/**
+ * A refusal ends the turn with nothing in it, so something has to drive the
+ * session on or the request is simply lost.
+ *
+ * The first one is resent unchanged: it is probabilistic and usually does not
+ * repeat. A second means the conversation itself carries whatever the
+ * classifier objects to, and no amount of resending clears that — the session
+ * leaves the vendor, and stays away, because the offending content stays in the
+ * prompt for as long as the session lives. That is why no switch-back is armed
+ * here, unlike the rate-limit moves above.
+ */
+export async function handleMainRefusal(orchestrator: Orchestrator, ctx: any): Promise<void> {
+  const attempt = ++orchestrator.refusalCount;
+  getLogger().warn({ s: "refusal", attempt }, "the model refused the request outright");
+  if (orchestrator.continuationHalted) return;
+  if (attempt === 1) {
+    ctx?.ui?.notify?.("The model refused that request outright. Sending it again — this refusal is probabilistic.", "warning");
+    orchestrator.queueContinuation(RESEND_REFUSED, true);
+    return;
+  }
+
+  const mainSpec = ctx?.model?.provider && ctx?.model?.id ? `${ctx.model.provider}/${ctx.model.id}` : "";
+  const next = refusalFallbackSpec();
+  if (!next || next === mainSpec) {
+    orchestrator.continuationHalted = true;
+    ctx?.ui?.notify?.("The model keeps refusing this conversation and there is nowhere left to move it. Stopping; start a new session, or remove the history it objects to — most often captured model reasoning in a tool result.", "error");
+    return;
+  }
+  let switched = false;
+  try {
+    switched = await orchestrator.switchModel(ctx, next, thinking(orchestrator));
+  } catch {}
+  if (!switched) {
+    orchestrator.continuationHalted = true;
+    ctx?.ui?.notify?.(`The model kept refusing this conversation and switching to ${next} failed. Stopping.`, "error");
+    return;
+  }
+  ctx?.ui?.notify?.(`Refused again; switched to ${next} for the rest of this session. The content it objected to stays in the conversation, so switching back would be refused too.`, "warning");
+  orchestrator.queueContinuation(CONTINUE_AFTER_REROUTE, true);
 }
 
 export async function handleMainRateLimit(orchestrator: Orchestrator, ctx: any, modelId?: string, provider?: string): Promise<void> {

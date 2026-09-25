@@ -596,6 +596,21 @@ export function listRegisteredSpecs(): string[] {
   return [...registeredSpecs];
 }
 
+/**
+ * Where a request the model refused for its content can be sent instead.
+ *
+ * The refusal comes from a vendor-wide classifier, so the escape has to leave
+ * the vendor: every Claude tier answers to the same one, and a move between
+ * them resends the same payload to the same judge. Sol Pro is the strongest
+ * non-Claude SKU pi-pi routes main-line work to; the base SKU stands in where
+ * the gateway serves no `-pro`.
+ */
+export function refusalFallbackSpec(): string | null {
+  const sol = [...registeredSpecs].filter((spec) => findFamily(spec)?.family === "gpt-sol");
+  const latest = pickLatest(sol.filter((spec) => spec.endsWith("-pro"))) ?? pickLatest(sol);
+  return latest ? resolveModel(latest) : null;
+}
+
 /** Every provider prefix a model spec can carry, for parsing one back apart. */
 export function listProviderPrefixes(): string[] {
   return [...new Set(MODEL_FAMILIES.flatMap((family) => family.providers))];

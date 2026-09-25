@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Orchestrator } from "./orchestrator.js";
 import { getDefaultConfig, normalizeConfigDurations } from "./config.js";
-import { armSwitchBackProbe, handleMainAuthFailure, handleMainRateLimit, handleSubagentAuthFailure, handleSubagentRateLimit, isAuthError, isPolicyBlockError, isRateLimitError } from "./rate-limit-fallback.js";
-import { clearAllTierDemotions, isSubscriptionFallbackActive, listTierDemotions, resolveModel, setSubscriptionFallbackActive, setTierEnabled, updateRegistryFromAvailableModels } from "./model-registry.js";
+import { armSwitchBackProbe, handleMainAuthFailure, handleMainRateLimit, handleSubagentAuthFailure, handleSubagentRateLimit, isAuthError, isModelRefusal, isPolicyBlockError, isRateLimitError } from "./rate-limit-fallback.js";
+import { clearAllTierDemotions, isSubscriptionFallbackActive, listTierDemotions, refusalFallbackSpec, resolveModel, setSubscriptionFallbackActive, setTierEnabled, updateRegistryFromAvailableModels } from "./model-registry.js";
 
 vi.mock("./flant-infra.js", async (original) => ({
   ...(await original<any>()),
@@ -45,6 +45,29 @@ describe("session-first rate-limit fallback", () => {
     expect(isRateLimitError("HTTP 429 too many requests")).toBe(true);
     expect(isRateLimitError("third-party apps draw from extra usage")).toBe(true);
     expect(isRateLimitError("invalid request")).toBe(false);
+  });
+
+  // The wording arrived verbatim from the provider; the raw stop reason is the
+  // reliable half, since a gateway is free to reword the explanation.
+  it("recognizes an outright refusal by stop reason or by wording", () => {
+    const tos = "This request was blocked as it seems to violate Anthropic's Terms of Service restrictions on reverse engineering or duplicating model outputs.";
+    expect(isModelRefusal("refusal", undefined)).toBe(true);
+    expect(isModelRefusal(undefined, tos)).toBe(true);
+    expect(isModelRefusal("end_turn", "HTTP 429 too many requests")).toBe(false);
+    expect(isModelRefusal(undefined, "blocked under Anthropic's Usage Policy")).toBe(false);
+  });
+
+  it("picks the latest Sol Pro to route a refusal onto, and degrades to the base SKU", () => {
+    updateRegistryFromAvailableModels([
+      "pp-flant-openai/gpt-5.5-sol-pro",
+      "pp-flant-openai/gpt-5.6-sol",
+      "pp-flant-openai/gpt-5.6-sol-pro",
+    ]);
+    expect(refusalFallbackSpec()).toBe("pp-flant-openai/gpt-5.6-sol-pro");
+    updateRegistryFromAvailableModels(["pp-flant-openai/gpt-5.6-sol"]);
+    expect(refusalFallbackSpec()).toBe("pp-flant-openai/gpt-5.6-sol");
+    updateRegistryFromAvailableModels(["pp-flant-anthropic-sub/sub/claude-opus-5"]);
+    expect(refusalFallbackSpec()).toBeNull();
   });
 
   it("waits without switching when Claude has no fallback tier", async () => {

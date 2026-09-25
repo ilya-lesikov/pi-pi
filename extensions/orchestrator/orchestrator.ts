@@ -43,6 +43,12 @@ export class Orchestrator {
   continuationCount = 0;
   objectiveContinuationCount = 0;
   continuationHalted = false;
+  /**
+   * Refusals since the last turn that produced anything. The count decides
+   * whether the request is resent as it was or the session leaves the vendor,
+   * so it survives a user turn: the content being refused does too.
+   */
+  refusalCount = 0;
   pendingContinuations = new Map<string, { invisible: boolean }>();
   /** Messages of the most recent LLM call, replayed by the continuation check. */
   lastContextMessages: any[] = [];
