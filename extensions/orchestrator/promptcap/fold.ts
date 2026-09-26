@@ -530,13 +530,12 @@ function blankReasoning(message: AgentMessage | undefined): number {
 /**
  * The oldest calls that can leave without stranding the turn they belong to.
  *
- * A turn goes whole or not at all. Dropping only some of an assistant message's
- * calls leaves the message standing while the results answering them go, and a
- * turn left standing with no results beside it ends up adjacent to another
- * assistant turn — the shape the provider rejects. So a call is droppable only
- * when every call in its message is droppable too and the message carries
- * nothing else: text the model would lose, or reasoning in the tail that has to
- * be replayed intact and so cannot be blanked.
+ * A turn's calls go together or not at all: dropping some of them leaves the
+ * message standing while the results answering them go, and the provider
+ * rejects a result whose call it cannot see. Prose is no obstacle — the turn
+ * keeps it and {@link applyDrops} folds what remains into the turn before it —
+ * but reasoning in the tail has to be replayed intact and so cannot be blanked,
+ * which pins the calls sharing that message.
  */
 function droppableCalls(messages: AgentMessage[], calls: Call[], protectedFrom: number): Call[] {
   const candidates = calls.slice(0, Math.max(0, calls.length - DROP_KEEP_RECENT));
@@ -558,7 +557,7 @@ function droppableCalls(messages: AgentMessage[], calls: Call[], protectedFrom: 
         callParts++;
       } else if (part?.type === "thinking") {
         if (index >= protectedFrom && (part.thinking || part.thinkingSignature)) carriesMore = true;
-      } else {
+      } else if (part?.type !== "text") {
         carriesMore = true;
       }
     }
@@ -651,8 +650,18 @@ function applyDrops(messages: AgentMessage[], dropped: Call[]): number {
     const speaks = survivors.some((part: any) => part?.type !== "thinking" || part.thinking || part.thinkingSignature);
     if (!speaks) continue;
     message.content = survivors;
-    if (message.role === "assistant") flushInto(message);
-    kept.push(message);
+    if (message.role !== "assistant") {
+      kept.push(message);
+      continue;
+    }
+    flushInto(message);
+    // A turn that kept its prose while its calls left has no results after it
+    // any more, so it would stand next to the turn that follows. It is folded
+    // into the turn before it instead, which puts the line naming what went
+    // exactly where the calls were.
+    const previous = kept[kept.length - 1];
+    if (previous?.role === "assistant" && Array.isArray(previous.content)) previous.content.push(...survivors);
+    else kept.push(message);
   }
 
   // A run reaching the end of the conversation has no later assistant turn to

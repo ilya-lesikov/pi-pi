@@ -323,10 +323,7 @@ describe("fold", () => {
     expect(parts.filter((p: any) => p?.type === "thinking" && p.thinking)).toEqual([]);
   });
 
-  it("keeps a turn whose call it drops but whose prose it cannot", () => {
-    // An assistant turn that both said something and called something: dropping
-    // the call alone would leave the turn standing with its result gone, next
-    // to the turn after it.
+  it("drops the call out of a turn that also said something, keeping what it said", () => {
     const messages: AgentMessage[] = [user("go")];
     for (let i = 0; i < 200; i++) {
       const content: any[] = [{ type: "toolCall", id: `t${i}`, name: "read", arguments: { path: `/f${i}` } }];
@@ -337,20 +334,41 @@ describe("fold", () => {
 
     fold(messages, 0, { ceiling: 100, lowWater: 50 }, new FoldState());
 
+    // The turn has no results after it once its call goes, so it is folded into
+    // the turn before it rather than left adjacent to the one after.
     const roles = messages.map((m: AgentMessage) => m.role);
     expect(roles.filter((role, i) => i > 0 && role === "assistant" && roles[i - 1] === "assistant")).toEqual([]);
 
-    // The prose survives, and so does the call that shared its turn.
     const parts = messages.flatMap((m: AgentMessage) => m.content ?? []);
     expect(parts.some((p: any) => p?.type === "text" && p.text === "note 0")).toBe(true);
-    expect(parts.some((p: any) => p?.type === "toolCall" && p.id === "t0")).toBe(true);
-    // Its neighbours, carrying nothing but calls, still went.
+    expect(parts.some((p: any) => p?.type === "toolCall" && p.id === "t0")).toBe(false);
     expect(parts.some((p: any) => p?.type === "toolCall" && p.id === "t1")).toBe(false);
 
     const answered = new Set(parts.filter((p: any) => p?.type === "toolCall").map((p: any) => p.id));
     for (const m of messages) {
       if (m.role === "toolResult") expect(answered.has(m.toolCallId)).toBe(true);
     }
+  });
+
+  it("stops prose between calls from pinning the arguments beside it", () => {
+    const narrated = (calls: number): AgentMessage[] => {
+      const messages: AgentMessage[] = [user("go")];
+      for (let i = 0; i < calls; i++) {
+        messages.push({
+          role: "assistant",
+          content: [
+            { type: "text", text: `checking ${i}` },
+            { type: "toolCall", id: `t${i}`, name: "bash", arguments: { command: `c`.repeat(1000) } },
+          ],
+        });
+        messages.push(result(`t${i}`, "bash", "o".repeat(500)));
+      }
+      return messages;
+    };
+
+    // The arguments of a narrated call used to sit in the floor for the life of
+    // the session, and the ceiling stands above the floor.
+    expect(incompressibleTokens(narrated(400), 0, 1)).toBeLessThan(incompressibleTokens(narrated(200), 0, 1) * 1.1);
   });
 
   it("stops the floor climbing with the number of calls made", () => {
