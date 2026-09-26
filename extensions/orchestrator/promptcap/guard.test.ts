@@ -125,6 +125,21 @@ describe("PromptGuard", () => {
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("no longer fits"), "warning");
   });
 
+  it("keeps recent tool results when the window cannot hold the floor", () => {
+    const notify = vi.fn();
+    const guard = new PromptGuard({ settings: () => settings(), notify });
+    // Prose alone puts the floor above what a 200K window admits.
+    const messages: AgentMessage[] = [
+      { role: "user", content: [{ type: "text", text: "p".repeat(800_000) }] },
+      ...conversation(40, 8_000).slice(1),
+    ];
+
+    guard.apply(messages, ctx(200_000), []);
+
+    expect(messages[messages.length - 1].content[0].text).toBe("o".repeat(8_000));
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("no longer fits"), "warning");
+  });
+
   it("does not warn when folding brought the prompt back under the ceiling", () => {
     const notify = vi.fn();
     const guard = new PromptGuard({ settings: () => settings({ maxPromptTokens: 5_000 }), notify });

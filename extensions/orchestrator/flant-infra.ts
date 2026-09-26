@@ -1086,7 +1086,7 @@ export async function fetchOpenRouterMetadata(modelIds: string[]): Promise<Recor
       : {};
     out[flantModelId] = {
       name: typeof model.name === "string" ? model.name : generateDisplayName(flantModelId),
-      context_length: toNumber(model.context_length, 200000),
+      context_length: toNumber(model.context_length, FALLBACK_CONTEXT_WINDOW),
       max_completion_tokens: toNumber(topProvider.max_completion_tokens, 32000),
       pricing: {
         prompt: toNumber(pricing.prompt, 0),
@@ -1130,6 +1130,29 @@ function modelSpec(modelId: string): string {
  */
 const SESSION_AFFINITY_COMPAT = { sendSessionAffinityHeaders: true, sessionAffinityFormat: "openrouter" } as const;
 
+/**
+ * The window assumed for a model whose metadata declares none.
+ *
+ * It is a guess, and an unlucky one to be wrong about downwards: a model whose
+ * real window is five times this gets a fold ceiling below the prompt's own
+ * incompressible floor, and folding then takes the tool results the turn is
+ * working from. So a model that ends up here says so once.
+ */
+const FALLBACK_CONTEXT_WINDOW = 200_000;
+
+const fallbackWindowLogged = new Set<string>();
+
+function noteFallbackWindow(modelId: string, declared: OpenRouterModelData | undefined, resolved: number): void {
+  if (resolved !== FALLBACK_CONTEXT_WINDOW) return;
+  if (toNumber(declared?.context_length, 0) === FALLBACK_CONTEXT_WINDOW) return;
+  if (fallbackWindowLogged.has(modelId)) return;
+  fallbackWindowLogged.add(modelId);
+  getLogger().warn(
+    { s: "flant", model: modelId, contextWindow: resolved },
+    "neither the gateway metadata nor the model catalog declares a context window; the prompt will be sized against the fallback",
+  );
+}
+
 function buildProviderModelConfig(
   flantModelId: string,
   metadata: Record<string, OpenRouterModelData>,
@@ -1147,7 +1170,7 @@ function buildProviderModelConfig(
       cacheRead: toNumber(modelMeta?.pricing.cacheRead, 0) * 1_000_000,
       cacheWrite: toNumber(modelMeta?.pricing.cacheWrite, 0) * 1_000_000,
     },
-    contextWindow: toNumber(modelMeta?.context_length, 200000),
+    contextWindow: toNumber(modelMeta?.context_length, FALLBACK_CONTEXT_WINDOW),
     maxTokens: toNumber(modelMeta?.max_completion_tokens, 32000),
   };
 }
@@ -1223,7 +1246,11 @@ export function registerFlantProviders(
     api: "openai-completions",
     baseUrl: "https://llm-api.flant.ru/v1",
     apiKey: gatewayKey,
-    models: openaiModels.map((m) => ({ ...buildProviderModelConfig(m, metadata), compat: { ...SESSION_AFFINITY_COMPAT } })),
+    models: openaiModels.map((m) => {
+      const config = buildProviderModelConfig(m, metadata);
+      noteFallbackWindow(m, metadata[m], config.contextWindow ?? 0);
+      return { ...config, compat: { ...SESSION_AFFINITY_COMPAT } };
+    }),
   });
 
   const availableSpecs = openaiModels.map((id) => `pp-flant-openai/${id}`);
@@ -1298,6 +1325,7 @@ function registerSubProvider(
     // metadata is looked up by the bare claude-* id.
     models: anthropicModels.map((m) => {
       const cfg = applyClaudeModelCapabilities(buildProviderModelConfig(m, metadata), m);
+      noteFallbackWindow(`${SUB_MODEL_PREFIX}${m}`, metadata[m], cfg.contextWindow ?? 0);
       return { ...cfg, id: `${SUB_MODEL_PREFIX}${m}` };
     }),
   });

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { fold, FoldState, Tier, incompressibleTokens, cutBytes, cutBytesFromEnd, type AgentMessage } from "./fold.js";
 import { byteLength, Estimator, fixedBytes, messagesBytes } from "./estimate.js";
-import { limitsFor, DEFAULT_KEEP_FRACTION, DEFAULT_HEADROOM_TOKENS, DEFAULT_MAX_PROMPT_TOKENS, type PromptcapSettings } from "./limits.js";
+import { limitsFor, DEFAULT_KEEP_FRACTION, DEFAULT_HEADROOM_TOKENS, DEFAULT_MAX_PROMPT_TOKENS, MIN_WORKING_HEADROOM_TOKENS, type PromptcapSettings } from "./limits.js";
 
 const call = (id: string, name: string, args: Record<string, unknown>, thinking?: string): AgentMessage => ({
   role: "assistant",
@@ -686,7 +686,7 @@ describe("limitsFor", () => {
   });
 
   it("never lets the ceiling reach the window", () => {
-    const { ceiling } = limitsFor(settings(), "m", 900_000, 200_000);
+    const { ceiling } = limitsFor(settings(), "m", 100_000, 200_000);
     expect(ceiling).toBe(200_000 - 40_000 - 10_000);
   });
 
@@ -698,10 +698,21 @@ describe("limitsFor", () => {
     }
   });
 
-  it("aims at the floor when the floor already sits above the ceiling", () => {
-    const { ceiling, lowWater } = limitsFor(settings(), "m", 900_000, 200_000);
-    expect(lowWater).toBe(900_000);
-    expect(lowWater).toBeGreaterThan(ceiling);
+  it("keeps a working margin above a floor the window cannot hold", () => {
+    // Aiming at the floor means folding the result of the call just made, so
+    // the ceiling clears it even though the window does not.
+    const { ceiling, lowWater, urgent } = limitsFor(settings(), "m", 900_000, 200_000);
+    expect(ceiling).toBe(900_000 + MIN_WORKING_HEADROOM_TOKENS);
+    expect(lowWater).toBe(900_000 + Math.floor(MIN_WORKING_HEADROOM_TOKENS * DEFAULT_KEEP_FRACTION));
+    // What the window can actually hold is still what the overflow is measured
+    // against, or the margin would hide the conversation that outgrew it.
+    expect(urgent).toBe(200_000 - 40_000 - 10_000);
+  });
+
+  it("obeys a ceiling the operator set, floor or no floor", () => {
+    const { ceiling, lowWater } = limitsFor(settings({ maxPromptTokens: 150_000 }), "m", 140_000);
+    expect(ceiling).toBe(150_000);
+    expect(lowWater).toBe(140_000 + Math.floor(10_000 * DEFAULT_KEEP_FRACTION));
   });
 
   it("honours a configured headroom and fold depth", () => {

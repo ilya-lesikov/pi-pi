@@ -34,6 +34,19 @@ export const DEFAULT_HEADROOM_TOKENS = 200_000;
 // tool traffic that survives verbatim.
 export const DEFAULT_KEEP_FRACTION = 0.3;
 
+// The room held above the incompressible floor when the ceiling cannot clear
+// it — because the window is smaller than what the conversation can no longer
+// fold away, or because the operator set a ceiling the floor has outgrown.
+//
+// Without it the low-water mark lands on the floor, and folding to the floor
+// means folding the result of the call the model has just made: it frees one
+// result and costs the model everything it is working from, which is how a
+// session ends up calling tools with no arguments. A request the provider may
+// refuse is recoverable and is reported as an overflow; a loop starved of its
+// own tool output is neither. The figure is what a handful of recent results —
+// a file read, a test run, a search — comes back at.
+export const MIN_WORKING_HEADROOM_TOKENS = 32_000;
+
 // How far past the ceiling a prompt may sit before the turn is refused rather
 // than sent. Some overshoot is expected — the estimate is an approximation, and
 // prose is never folded — so refusing at the ceiling itself would refuse turns
@@ -169,6 +182,12 @@ export function imageTokensFor(settings: PromptcapSettings, modelKey: string | u
  * Because the ceiling climbs, `maxPromptTokens` is a lower bound on it rather
  * than a cap: it decides where folding starts only while the floor is small
  * enough that floor + headroom sits under it.
+ *
+ * A window too small for the floor does not put the ceiling on the floor
+ * itself, which would leave folding aiming at a prompt with every tool result
+ * gone: {@link MIN_WORKING_HEADROOM_TOKENS} is kept above it, and what no
+ * longer fits is reported through `urgent`, read before the floor pushes the
+ * ceiling up.
  */
 export function limitsFor(
   settings: PromptcapSettings,
@@ -203,6 +222,20 @@ export function limitsFor(
     if (hard > 0) ceiling = Math.min(hard, Math.max(ceiling, floorTokens + headroom));
   }
 
+  // Where folding stops weighing its cache miss and takes any saving it can
+  // get, and past which the turn is reported as not fitting at all. Read off
+  // the ceiling before the floor is allowed to push it up, so a conversation
+  // that has outgrown its window still says so instead of being measured
+  // against a limit raised to accommodate it.
+  const urgent = hard > 0 ? Math.min(Math.round(ceiling * OVERFLOW_MARGIN), hard) : Math.round(ceiling * OVERFLOW_MARGIN);
+
+  // A window is a fact about the model, and a conversation whose floor has
+  // outgrown it will be refused whatever the ceiling says — so the ceiling
+  // keeps enough room above the floor for the model to still see what it is
+  // working from, and the overflow warning reports the rest. A ceiling the
+  // operator configured is an instruction rather than a fact, and is obeyed.
+  if (hard > 0) ceiling = Math.max(ceiling, floorTokens + MIN_WORKING_HEADROOM_TOKENS);
+
   // A fold lands this far above the floor, as a share of the span between floor
   // and ceiling. Expressed against the span rather than against either end, the
   // recent history it keeps and the room it leaves are both a fixed share of
@@ -214,12 +247,6 @@ export function limitsFor(
     : DEFAULT_KEEP_FRACTION;
   const span = Math.max(0, ceiling - floorTokens);
   const lowWater = floorTokens + Math.floor(span * keep);
-
-  // Where folding stops weighing its cache miss and takes any saving it can
-  // get. Some overshoot above the ceiling is expected and harmless, but never
-  // past what the window itself allows: beyond that the request is refused
-  // outright, and a fold that frees a little beats a turn that does not run.
-  const urgent = hard > 0 ? Math.min(Math.round(ceiling * OVERFLOW_MARGIN), hard) : Math.round(ceiling * OVERFLOW_MARGIN);
 
   const imageCeiling = settings.imageBytesCeiling && settings.imageBytesCeiling > 0
     ? settings.imageBytesCeiling

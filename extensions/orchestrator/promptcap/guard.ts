@@ -174,10 +174,16 @@ export class PromptGuard {
     // alone. Warning rather than refusing keeps the turn the provider might
     // still accept: the estimate is an approximation, and the alternative is a
     // dead session with no way out but a new one.
-    if (result.tokens > limits.ceiling * OVERFLOW_MARGIN) {
-      this.host.log?.({ s: "promptcap", model: modelKey, tokens: result.tokens, ceiling: limits.ceiling }, "the conversation does not fit even fully folded");
+    //
+    // Measured against `urgent` rather than the ceiling: a floor that has
+    // outgrown the window raises the ceiling above it to keep recent tool
+    // traffic, and a limit raised to accommodate the overflow cannot also be
+    // what detects it.
+    const overflow = limits.urgent ?? limits.ceiling * OVERFLOW_MARGIN;
+    if (result.tokens > overflow) {
+      this.host.log?.({ s: "promptcap", model: modelKey, tokens: result.tokens, ceiling: limits.ceiling, overflow }, "the conversation does not fit even fully folded");
       this.host.notify?.(
-        `This conversation no longer fits the model's window even with old tool calls folded away (~${Math.round(result.tokens / 1000)}K of ~${Math.round(limits.ceiling / 1000)}K). Start a new session, or switch to a model with a larger window.`,
+        `This conversation no longer fits the model's window even with old tool calls folded away (~${Math.round(result.tokens / 1000)}K of ~${Math.round(overflow / 1000)}K). Start a new session, or switch to a model with a larger window.`,
         "warning",
       );
     }
