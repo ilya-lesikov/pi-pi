@@ -99,6 +99,22 @@ export class Estimator {
   ratioFor(modelKey: string): number | undefined {
     return this.ratios.get(modelKey);
   }
+
+  /** What has been learned so far, by model key. */
+  snapshot(): Record<string, number> {
+    return Object.fromEntries(this.ratios);
+  }
+
+  /**
+   * Seeds ratios learned before this estimator existed, leaving alone any model
+   * a live turn has already spoken for: a reading from this conversation
+   * describes it better than one carried in from elsewhere.
+   */
+  restore(ratios: Record<string, number>): void {
+    for (const [key, ratio] of Object.entries(ratios)) {
+      if (typeof ratio === "number" && ratio > 0 && !this.ratios.has(key)) this.ratios.set(key, ratio);
+    }
+  }
 }
 
 /**

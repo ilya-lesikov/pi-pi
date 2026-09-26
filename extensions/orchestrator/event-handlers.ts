@@ -10,6 +10,7 @@ import { registerAstSearchTool } from "./ast-search.js";
 import { registerBillingHook } from "./billing-spoof.js";
 import { OMISSION_INSTRUCTION, registerRecallTools } from "./promptcap/recall.js";
 import { PromptGuard, registerPromptGuard } from "./promptcap/guard.js";
+import { fileRatioStore } from "./promptcap/ratios.js";
 import { collectContextFiles, renderContextInjection, summarizeContextInjectionSize } from "./context-injection.js";
 import { enabledSkillLayers, listLayeredSkills, loadLayeredSkill } from "./skills-manifest.js";
 import { identityBlock, principlesBlock, toolsBlock, delegationBlock } from "./agents/tool-routing.js";
@@ -431,6 +432,7 @@ function registerPromptcap(orchestrator: PromptcapState): void {
     settings: () => orchestrator.config.promptcap,
     notify: (message, level) => orchestrator.lastCtx?.ui?.notify?.(message, level),
     log: (event, message) => getLogger().debug(event, message),
+    ratios: fileRatioStore(),
   });
   orchestrator.promptGuard = guard;
   registerPromptGuard(orchestrator.pi, guard);

@@ -3,10 +3,18 @@ import { danglingSignatureBytes, Estimator, fixedBytes, messagesBytes } from "./
 import { fold, FoldState, incompressibleTokens, tokensOf, type AgentMessage } from "./fold.js";
 import { limitsFor, imageTokensFor, OVERFLOW_MARGIN, type PromptcapSettings } from "./limits.js";
 
+/** Where the learned ratios outlive the process. */
+export interface RatioStore {
+  load(): Record<string, number>;
+  save(ratios: Record<string, number>): void;
+}
+
 export interface GuardHost {
   settings(): PromptcapSettings;
   notify?(message: string, level: "info" | "warning" | "error"): void;
   log?(event: Record<string, unknown>, message: string): void;
+  /** Absent means what this guard learns is forgotten when the process ends. */
+  ratios?: RatioStore;
 }
 
 /**
@@ -53,9 +61,17 @@ export class PromptGuard {
   /** Set once an emergency found no image left to take, so the next one promises nothing. */
   private emergencyExhausted = false;
 
-  constructor(private readonly host: GuardHost) {}
+  constructor(private readonly host: GuardHost) {
+    this.estimator.restore(host.ratios?.load() ?? {});
+  }
 
-  /** Called when the conversation is replaced wholesale, not merely extended. */
+  /**
+   * Called when the conversation is replaced wholesale, not merely extended.
+   *
+   * What the estimator learned survives: it describes the model rather than the
+   * conversation, and a session that starts by sizing its first prompt from the
+   * raw estimate folds to the wrong place and stays there.
+   */
   reset(): void {
     this.folds.clear();
     this.predicted = null;
@@ -220,6 +236,7 @@ export class PromptGuard {
       );
     }
     this.estimator.observe(modelKey, predicted.rawTokens, charged);
+    this.host.ratios?.save(this.estimator.snapshot());
   }
 
   ratioFor(modelKey: string): number | undefined {
