@@ -252,6 +252,43 @@ export function readCodexOAuthToken(): string | null {
   return entry.access;
 }
 
+/**
+ * Whether a ChatGPT login exists at all, counting one whose access token has
+ * expired but still carries a refresh token. The tier must stay enabled in
+ * that state: disabling it routes the work elsewhere, so the request that
+ * would have refreshed the token never goes out and the login never recovers.
+ */
+export function hasCodexCredential(): boolean {
+  const entry = readOAuthEntry<AnthropicOAuthCreds>(join(resolveAgentDir(), "auth.json"), CODEX_PROVIDER);
+  if (!entry || typeof entry.access !== "string" || !entry.access) return false;
+  if (typeof entry.expires !== "number" || entry.expires > Date.now()) return true;
+  return typeof entry.refresh === "string" && !!entry.refresh;
+}
+
+/**
+ * Renew the ChatGPT credential through pi's own registry, which owns this
+ * provider's refresh grant and persists the result to auth.json. Returns the
+ * usable access token, or null when there is nothing to renew.
+ */
+export async function refreshCodexOAuthToken(): Promise<string | null> {
+  const authPath = join(resolveAgentDir(), "auth.json");
+  if (!existsSync(authPath)) return null;
+  const entry = readOAuthEntry<AnthropicOAuthCreds>(authPath, CODEX_PROVIDER);
+  if (!entry || typeof entry.access !== "string" || !entry.access) return null;
+
+  const expires = typeof entry.expires === "number" ? entry.expires : 0;
+  if (expires > Date.now() + 5 * 60_000) return entry.access;
+  if (typeof entry.refresh !== "string" || !entry.refresh) return null;
+
+  try {
+    const refreshed = await refreshViaModelRegistry<AnthropicOAuthCreds>(authPath, CODEX_PROVIDER);
+    if (refreshed) return refreshed.access as string;
+  } catch (err: any) {
+    getLogger().debug({ s: "flant", err: err?.message }, "codex oauth token refresh failed");
+  }
+  return null;
+}
+
 export async function refreshCopilotOAuthToken(): Promise<string | null> {
   const log = getLogger();
   const authPath = join(resolveAgentDir(), "auth.json");
@@ -1667,7 +1704,7 @@ export function isCopilotTierActive(settings?: FlantSettings): boolean {
 /** Whether the ChatGPT-subscription tier is enabled and logged in. */
 export function isCodexTierActive(settings?: FlantSettings): boolean {
   const s = settings ?? loadFlantSettings();
-  return s.codexEnabled && !!readCodexOAuthToken();
+  return s.codexEnabled && hasCodexCredential();
 }
 
 /**
@@ -1718,6 +1755,7 @@ export async function initFlantOnStartup(pi: ExtensionAPI, cwd?: string): Promis
   setPI(pi);
   const settings = loadFlantSettings(cwd);
   if (settings.copilotEnabled && !process.env.COPILOT_GITHUB_TOKEN) await refreshCopilotOAuthToken();
+  if (settings.codexEnabled) await refreshCodexOAuthToken();
   // Refresh before reading tiers: a stored subscription token that merely
   // expired still refreshes, but the tier check reads it as absent, and nothing
   // re-syncs afterwards — every Claude spec would resolve away from the

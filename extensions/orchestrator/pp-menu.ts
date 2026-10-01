@@ -20,7 +20,7 @@ import {
   getFlantGeneratedConfig,
   loadFlantSettings,
   readClaudeOAuthToken,
-  readCodexOAuthToken,
+  hasCodexCredential,
   readCopilotOAuthToken,
   readGatewayApiKey,
   syncProviderTiers,
@@ -1292,7 +1292,7 @@ async function showCopilotMenu(orchestrator: Orchestrator, ctx: any): Promise<vo
 async function showCodexMenu(orchestrator: Orchestrator, ctx: any): Promise<void> {
   for (;;) {
     const settings = loadFlantSettings(orchestrator.cwd);
-    const tokenPresent = !!readCodexOAuthToken();
+    const tokenPresent = hasCodexCredential();
     const enableLabel = `Enable ChatGPT subscription tier: ${settings.codexEnabled ? "ON" : "OFF"}`;
     const statusLine = settings.codexEnabled
       ? tokenPresent

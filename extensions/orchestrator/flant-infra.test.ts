@@ -835,6 +835,77 @@ describe("flant-infra", () => {
     expect(mod.isCopilotTierActive({ copilotEnabled: true } as any)).toBe(true);
   });
 
+  it("activates the ChatGPT tier from a live OAuth credential", async () => {
+    const dir = makeTempDir();
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "auth.json"),
+      JSON.stringify({ "openai-codex": { type: "oauth", access: "codex-access", refresh: "codex-refresh", expires: Date.now() + 3_600_000 } }),
+      "utf-8",
+    );
+    const mod = await loadFlantInfraModule(dir);
+
+    expect(mod.readCodexOAuthToken()).toBe("codex-access");
+    expect(mod.isCodexTierActive({ codexEnabled: true } as any)).toBe(true);
+  });
+
+  // Disabling the tier here would route the work elsewhere, so the request
+  // that renews the token would never be made and the login would never come
+  // back on its own.
+  it("keeps the ChatGPT tier active on an expired access token that still has a refresh token", async () => {
+    const dir = makeTempDir();
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "auth.json"),
+      JSON.stringify({ "openai-codex": { type: "oauth", access: "stale", refresh: "codex-refresh", expires: Date.now() - 1 } }),
+      "utf-8",
+    );
+    const mod = await loadFlantInfraModule(dir);
+
+    expect(mod.readCodexOAuthToken()).toBeNull();
+    expect(mod.isCodexTierActive({ codexEnabled: true } as any)).toBe(true);
+  });
+
+  it("deactivates the ChatGPT tier when the expired credential cannot be renewed", async () => {
+    const dir = makeTempDir();
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "auth.json"),
+      JSON.stringify({ "openai-codex": { type: "oauth", access: "stale", expires: Date.now() - 1 } }),
+      "utf-8",
+    );
+    const mod = await loadFlantInfraModule(dir);
+
+    expect(mod.isCodexTierActive({ codexEnabled: true } as any)).toBe(false);
+    await expect(mod.refreshCodexOAuthToken()).resolves.toBeNull();
+  });
+
+  it("renews an expired ChatGPT credential through pi's registry", async () => {
+    const dir = makeTempDir();
+    mkdirSync(dir, { recursive: true });
+    const authPath = join(dir, "auth.json");
+    writeFileSync(
+      authPath,
+      JSON.stringify({ "openai-codex": { type: "oauth", access: "stale", refresh: "codex-refresh", expires: Date.now() - 1 } }),
+      "utf-8",
+    );
+    const mod = await loadFlantInfraModule(dir);
+    mod.setModelRegistry({
+      getApiKeyForProvider: async (provider: string) => {
+        expect(provider).toBe("openai-codex");
+        writeFileSync(
+          authPath,
+          JSON.stringify({ "openai-codex": { type: "oauth", access: "fresh", refresh: "codex-refresh", expires: Date.now() + 3_600_000 } }),
+          "utf-8",
+        );
+        return "fresh";
+      },
+    });
+
+    await expect(mod.refreshCodexOAuthToken()).resolves.toBe("fresh");
+    expect(mod.readCodexOAuthToken()).toBe("fresh");
+  });
+
   it("keeps supporting COPILOT_GITHUB_TOKEN for the Copilot tier", async () => {
     const dir = makeTempDir();
     process.env.COPILOT_GITHUB_TOKEN = "github_pat_test";

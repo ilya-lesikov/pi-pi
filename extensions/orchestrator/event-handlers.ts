@@ -28,7 +28,7 @@ import { demoteUnusableSubscription, handleMainAuthFailure, handleMainRateLimit,
 import { adjudicateCheckIn, adjudicateContinuation } from "./continuation-adjudicator.js";
 import { retrySubagentOnNewRouting } from "./subagent-retry.js";
 import { ensureProviderRetrySettings, patchRetryPredicate } from "./provider-retry.js";
-import { loadFlantSettings, noteSubscriptionCredentialAccepted, refreshCopilotOAuthToken, refreshSubProvider, reviveSubscriptionCredential, setModelRegistry, syncProviderTiers } from "./flant-infra.js";
+import { loadFlantSettings, noteSubscriptionCredentialAccepted, refreshCodexOAuthToken, refreshCopilotOAuthToken, refreshSubProvider, reviveSubscriptionCredential, setModelRegistry, syncProviderTiers } from "./flant-infra.js";
 import type { Orchestrator } from "./orchestrator.js";
 
 const USAGE_TRACKER_KEY = Symbol.for("pi-pi:usage-tracker");
@@ -374,6 +374,7 @@ function registerLifecycle(orchestrator: Orchestrator): void {
     try {
       const flant = loadFlantSettings(orchestrator.cwd);
       if (flant.copilotEnabled && !process.env.COPILOT_GITHUB_TOKEN) await refreshCopilotOAuthToken();
+      if (flant.codexEnabled) await refreshCodexOAuthToken();
       // Unconditional: refreshSubProvider above may have revived a subscription
       // token that was expired when the tiers were last computed.
       syncProviderTiers(flant);
