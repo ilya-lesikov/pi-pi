@@ -47,6 +47,23 @@ describe("CbmDaemon survives a child that dies before any tool call", () => {
     expect(fatal.events).toEqual([]);
   });
 
+  // The joint test above fails if EITHER protection is missing, but it depends
+  // on a write landing after the exit. This one isolates the stream half with
+  // no timing in it: a pipe carrying no error listener is what turns EPIPE into
+  // a process-level throw.
+  it("attaches an error listener to every pipe it opens", () => {
+    (globalThis as any)[CBM_BIN_KEY] = EXITS_IMMEDIATELY;
+    const daemon = new CbmDaemon();
+    daemon.start();
+
+    const proc = (daemon as any).proc as { stdin: any; stdout: any; stderr: any };
+    expect(proc.stdin.listenerCount("error")).toBeGreaterThan(0);
+    expect(proc.stdout.listenerCount("error")).toBeGreaterThan(0);
+    expect(proc.stderr.listenerCount("error")).toBeGreaterThan(0);
+
+    daemon.stop();
+  });
+
   it("does not let an EPIPE write to the dead child escape as a fatal error", async () => {
     (globalThis as any)[CBM_BIN_KEY] = EXITS_IMMEDIATELY;
     const fatal = collectFatalEvents();

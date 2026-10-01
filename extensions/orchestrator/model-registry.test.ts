@@ -489,47 +489,71 @@ describe("model-registry", () => {
       expect(getModelInfo("openai-codex/gpt-5.6-sol")).toMatchObject({ family: "gpt-sol", tier: "smart" });
     });
 
+    // Every id below is deliberately distinct per provider within one family,
+    // so a destination can only come from that provider's own catalog — a
+    // prefix swap would produce an id the assertions would not accept.
+    const mixedGptCatalog = [
+      "openai-codex/gpt-5.7-sol",
+      "github-copilot/gpt-5.5-sol",
+      "pp-flant-openai/gpt-5.6-sol",
+    ];
+
     it("promotes a paid gpt spec onto the ChatGPT subscription, ahead of copilot", () => {
-      // codex-sub outranks copilot, so when both stock the family the
-      // subscription wins. Copilot keeps the families codex does not serve.
-      updateRegistryFromAvailableModels([
-        "openai-codex/gpt-5.6-sol",
-        "github-copilot/gpt-5.6-sol",
-        "pp-flant-openai/gpt-5.6-sol",
-      ]);
+      updateRegistryFromAvailableModels(mixedGptCatalog);
       setTierEnabled({ "codex-sub": true, "copilot": true });
-      expect(resolveModel("pp-flant-openai/gpt-5.6-sol")).toBe("openai-codex/gpt-5.6-sol");
+      expect(resolveModel("pp-flant-openai/gpt-5.6-sol")).toBe("openai-codex/gpt-5.7-sol");
     });
 
     it("leaves a paid gpt spec alone when the ChatGPT subscription has no model for the family", () => {
-      updateRegistryFromAvailableModels(["openai-codex/gpt-5.6-sol", "pp-flant-openai/gpt-6-astra"]);
+      updateRegistryFromAvailableModels(["openai-codex/gpt-5.7-sol", "pp-flant-openai/gpt-6-astra"]);
       setTierEnabled({ "codex-sub": true });
       expect(resolveModel("pp-flant-openai/gpt-6-astra")).toBe("pp-flant-openai/gpt-6-astra");
     });
 
+    it("keeps an exact codex pin and resolves a stale one onto the registered id", () => {
+      updateRegistryFromAvailableModels(mixedGptCatalog);
+      setTierEnabled({ "codex-sub": true });
+      expect(resolveModel("openai-codex/gpt-5.7-sol")).toBe("openai-codex/gpt-5.7-sol");
+      // A pin at a version the subscription no longer lists moves to the one it
+      // does, rather than being sent as an id the provider would reject.
+      expect(resolveModel("openai-codex/gpt-5.4-sol")).toBe("openai-codex/gpt-5.7-sol");
+    });
+
+    // The catalog alone would stop this today, since no Claude pattern admits
+    // the openai-codex provider. The guard is what holds if one ever does.
     it("never routes Claude onto the ChatGPT subscription", () => {
-      updateRegistryFromAvailableModels(["openai-codex/gpt-5.6-sol", "pp-flant-anthropic/claude-opus-4-8", "pp-flant-anthropic-sub/sub/claude-opus-4-8"]);
+      updateRegistryFromAvailableModels(["openai-codex/gpt-5.7-sol", "pp-flant-anthropic/claude-opus-4-8", "pp-flant-anthropic-sub/sub/claude-opus-4-8"]);
       setTierEnabled({ "codex-sub": true });
       expect(resolveModel("pp-flant-anthropic/claude-opus-4-8")).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
     });
 
-    it("demotes a codex-born spec to copilot, then to the paid gateway", () => {
-      updateRegistryFromAvailableModels([
-        "openai-codex/gpt-5.6-sol",
-        "github-copilot/gpt-5.6-sol",
-        "pp-flant-openai/gpt-5.6-sol",
-      ]);
-      setTierEnabled({ "codex-sub": false, "copilot": true });
-      expect(resolveModel("openai-codex/gpt-5.6-sol")).toBe("github-copilot/gpt-5.6-sol");
-      setTierEnabled({ "copilot": false });
-      expect(resolveModel("openai-codex/gpt-5.6-sol")).toBe("pp-flant-openai/gpt-5.6-sol");
+    // The downward walk must not prefix-swap onto the subscription the way it
+    // may between the two flant providers: codex ids are its own, so a family
+    // it does not list has to be skipped rather than fabricated.
+    it("skips the ChatGPT subscription on the way down rather than inventing an id for it", () => {
+      updateRegistryFromAvailableModels(["openai-codex/gpt-6-astra", "pp-flant-openai/gpt-5.6-sol"]);
+      setTierEnabled({ "codex-sub": true, "flant-sub": false, "copilot": false });
+      expect(resolveModel("pp-flant-anthropic-sub/sub/gpt-5.6-sol")).toBe("pp-flant-openai/gpt-5.6-sol");
     });
 
-    it("skips the ChatGPT subscription for a family it is demoted on", () => {
-      updateRegistryFromAvailableModels(["openai-codex/gpt-5.6-sol", "pp-flant-openai/gpt-5.6-sol"]);
-      setTierEnabled({ "codex-sub": true });
+    it("demotes a codex-born spec to copilot, then to the paid gateway", () => {
+      updateRegistryFromAvailableModels(mixedGptCatalog);
+      setTierEnabled({ "codex-sub": false, "copilot": true });
+      expect(resolveModel("openai-codex/gpt-5.7-sol")).toBe("github-copilot/gpt-5.5-sol");
+      setTierEnabled({ "copilot": false });
+      expect(resolveModel("openai-codex/gpt-5.7-sol")).toBe("pp-flant-openai/gpt-5.6-sol");
+    });
+
+    it("skips the ChatGPT subscription for a family it is demoted on, and returns to it on restore", () => {
+      updateRegistryFromAvailableModels(mixedGptCatalog);
+      setTierEnabled({ "codex-sub": true, "copilot": false });
+      expect(resolveModel("pp-flant-openai/gpt-5.6-sol")).toBe("openai-codex/gpt-5.7-sol");
+
       demoteTierForFamily("codex-sub", "gpt-sol");
       expect(resolveModel("pp-flant-openai/gpt-5.6-sol")).toBe("pp-flant-openai/gpt-5.6-sol");
+
+      restoreTierForFamily("codex-sub", "gpt-sol");
+      expect(resolveModel("pp-flant-openai/gpt-5.6-sol")).toBe("openai-codex/gpt-5.7-sol");
     });
 
     it("keeps a sub-born Claude spec on the subscription instead of promoting it to copilot", () => {
