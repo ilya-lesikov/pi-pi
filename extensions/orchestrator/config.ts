@@ -135,6 +135,7 @@ export interface PiPiConfig {
     switchBackIntervalMinutes: number;
     autoRateLimitFallback: boolean;
     copilotEnabled: boolean;
+    codexEnabled: boolean;
     autoUpdate: boolean;
     cacheTTLDays: number;
   };
@@ -218,6 +219,7 @@ const DEFAULT_CONFIG: PiPiConfig = {
     switchBackIntervalMinutes: 10,
     autoRateLimitFallback: true,
     copilotEnabled: true,
+    codexEnabled: true,
     autoUpdate: true,
     cacheTTLDays: 3,
   },
@@ -342,6 +344,7 @@ function validateFlant(value: unknown): void {
   ensureBool(f.subscription, "config.flant.subscription");
   ensureBool(f.autoRateLimitFallback, "config.flant.autoRateLimitFallback");
   ensureBool(f.copilotEnabled, "config.flant.copilotEnabled");
+  ensureBool(f.codexEnabled, "config.flant.codexEnabled");
   ensureBool(f.autoUpdate, "config.flant.autoUpdate");
   ensureNumberInRange(f.switchBackIntervalMinutes, "config.flant.switchBackIntervalMinutes", 1, 1440);
   ensureNumberInRange(f.cacheTTLDays, "config.flant.cacheTTLDays", 1, 365);

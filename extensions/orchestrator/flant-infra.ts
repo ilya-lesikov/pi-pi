@@ -79,6 +79,13 @@ export interface FlantSettings {
    * tiers and above the paid gateway. Default true; inert without a token.
    */
   copilotEnabled: boolean;
+  /**
+   * Enable the ChatGPT-subscription tier (pi's built-in `openai-codex`
+   * provider). GPT-only, and it outranks Copilot. Default true; inert until
+   * the user logs that provider in. The gateway serves no `sub/` GPT models,
+   * so this is the only subscription route for GPT.
+   */
+  codexEnabled: boolean;
 }
 
 const GEMINI_MAP: Record<string, string> = {
@@ -112,10 +119,14 @@ const DEFAULT_SETTINGS: FlantSettings = {
   switchBackIntervalMinutes: 10,
   autoRateLimitFallback: true,
   copilotEnabled: false,
+  codexEnabled: false,
 };
 
 /** Provider name for the personal-subscription Claude routing. */
 export const SUB_PROVIDER = "pp-flant-anthropic-sub";
+
+/** pi's built-in provider for a personal ChatGPT Plus/Pro subscription. */
+export const CODEX_PROVIDER = "openai-codex";
 
 const CLAUDE_REFRESH_MARGIN_MS = 5 * 60_000;
 const FORCED_REFRESH_COOLDOWN_MS = 60_000;
@@ -226,6 +237,19 @@ export function readCopilotOAuthToken(): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Read the OAuth access token pi persists for its built-in `openai-codex`
+ * provider, which bills a personal ChatGPT Plus/Pro subscription. pi owns the
+ * login and the refresh; this only establishes whether the tier has a
+ * credential to route onto.
+ */
+export function readCodexOAuthToken(): string | null {
+  const entry = readOAuthEntry<AnthropicOAuthCreds>(join(resolveAgentDir(), "auth.json"), CODEX_PROVIDER);
+  if (!entry || typeof entry.access !== "string" || !entry.access) return null;
+  if (typeof entry.expires === "number" && entry.expires <= Date.now()) return null;
+  return entry.access;
 }
 
 export async function refreshCopilotOAuthToken(): Promise<string | null> {
@@ -605,6 +629,7 @@ function normalizeSettings(raw: unknown): FlantSettings {
     switchBackIntervalMinutes,
     autoRateLimitFallback: value.autoRateLimitFallback === undefined ? true : !!value.autoRateLimitFallback,
     copilotEnabled: !!value.copilotEnabled,
+    codexEnabled: !!value.codexEnabled,
     subscription: !!value.subscription,
     lastUpdated: typeof value.lastUpdated === "string" ? value.lastUpdated : null,
     cachedFlantModels: Array.isArray(value.cachedFlantModels)
@@ -774,6 +799,7 @@ export function loadFlantSettings(cwd?: string): FlantSettings {
     switchBackIntervalMinutes: durable.switchBackIntervalMinutes,
     autoRateLimitFallback: durable.autoRateLimitFallback,
     copilotEnabled: durable.copilotEnabled,
+    codexEnabled: durable.codexEnabled,
     subscription: durable.subscription,
     lastUpdated: cache.lastUpdated,
     cachedFlantModels: cache.cachedFlantModels,
@@ -1638,6 +1664,12 @@ export function isCopilotTierActive(settings?: FlantSettings): boolean {
   return s.copilotEnabled && !!(process.env.COPILOT_GITHUB_TOKEN || readCopilotOAuthToken());
 }
 
+/** Whether the ChatGPT-subscription tier is enabled and logged in. */
+export function isCodexTierActive(settings?: FlantSettings): boolean {
+  const s = settings ?? loadFlantSettings();
+  return s.codexEnabled && !!readCodexOAuthToken();
+}
+
 /**
  * Push the current provider-tier enable flags from settings into the model
  * registry's resolver. flant-api is the always-on paid floor; flant-sub follows
@@ -1653,6 +1685,7 @@ export function syncProviderTiers(settings?: FlantSettings): void {
   // fallback is in effect.
   setTierEnabled({
     "copilot": isCopilotTierActive(s),
+    "codex-sub": isCodexTierActive(s),
     "flant-sub": isSubscriptionActive(s) && !isSubscriptionFallbackActive(),
     "flant-api": true,
   });

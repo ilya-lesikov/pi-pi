@@ -20,6 +20,7 @@ import {
   getFlantGeneratedConfig,
   loadFlantSettings,
   readClaudeOAuthToken,
+  readCodexOAuthToken,
   readCopilotOAuthToken,
   readGatewayApiKey,
   syncProviderTiers,
@@ -407,12 +408,13 @@ function normalizeProviderLabel(provider: string): string {
     "pp-flant-anthropic-sub": "Flant Claude (subscription)",
     "pp-flant-openai": "Flant OpenAI",
     "github-copilot": "GitHub Copilot",
+    "openai-codex": "ChatGPT (subscription)",
   };
   return labels[provider] ?? provider;
 }
 
 function providerOrder(provider: string): number {
-  const order = ["pp-flant-anthropic-sub", "pp-flant-anthropic", "pp-flant-openai", "github-copilot", "anthropic", "openai", "google", "deepseek", "x-ai", "qwen"];
+  const order = ["pp-flant-anthropic-sub", "openai-codex", "pp-flant-anthropic", "pp-flant-openai", "github-copilot", "anthropic", "openai", "google", "deepseek", "x-ai", "qwen"];
   const index = order.indexOf(provider);
   return index === -1 ? 99 : index;
 }
@@ -1287,6 +1289,41 @@ async function showCopilotMenu(orchestrator: Orchestrator, ctx: any): Promise<vo
   }
 }
 
+async function showCodexMenu(orchestrator: Orchestrator, ctx: any): Promise<void> {
+  for (;;) {
+    const settings = loadFlantSettings(orchestrator.cwd);
+    const tokenPresent = !!readCodexOAuthToken();
+    const enableLabel = `Enable ChatGPT subscription tier: ${settings.codexEnabled ? "ON" : "OFF"}`;
+    const statusLine = settings.codexEnabled
+      ? tokenPresent
+        ? "Active — GPT work routes to the subscription before Copilot and before the paid gateway."
+        : "Enabled but not logged in — run /login → OpenAI (ChatGPT Plus/Pro)."
+      : "Disabled — GPT work is billed per token on the paid gateway unless Copilot serves it.";
+    const choice = await selectOption(ctx, "ChatGPT subscription", [
+      opt(enableLabel, "Serve GPT models from a personal ChatGPT Plus/Pro subscription"),
+      opt("Current status", statusLine),
+      opt(BACK, "Return to the previous menu"),
+    ]);
+    if (!choice || choice === BACK) return;
+    if (choice === "Current status") {
+      ctx.ui?.notify?.(statusLine, "info");
+      continue;
+    }
+    const turningOn = !settings.codexEnabled;
+    if (turningOn && !tokenPresent) {
+      ctx.ui?.notify?.("Run /login → OpenAI (ChatGPT Plus/Pro) first.", "warning");
+      continue;
+    }
+    const scope = await setFlantConfigValue(orchestrator, ctx, "codexEnabled", turningOn);
+    if (!scope) continue;
+    const eff = loadFlantSettings(orchestrator.cwd);
+    syncProviderTiers(eff);
+    if (warnIfFlantEditMasked(ctx, "ChatGPT subscription", scope, turningOn, eff.codexEnabled)) continue;
+    reconcileAfterFlantChange(orchestrator, ctx);
+    ctx.ui?.notify?.(turningOn ? "ChatGPT subscription tier ON — GPT work routes there first." : "ChatGPT subscription tier OFF.", "info");
+  }
+}
+
 function parseCommaSeparated(input: string): string[] {
   return input.split(",").map((item) => item.trim()).filter(Boolean);
 }
@@ -1696,6 +1733,7 @@ export async function showPpMenu(orchestrator: Orchestrator, ctx: any): Promise<
       opt("Usage", "Session token usage and cost breakdown"),
       opt("Agents", "Main agent, worker models, pools, and concurrency"),
       opt("Flant", "Provider routing and Claude subscription"),
+      opt("ChatGPT subscription", "Serve GPT models from a personal ChatGPT Plus/Pro subscription"),
       opt("Copilot", "GitHub Copilot provider tier"),
       opt("Skills", "Bundled/global/project skill sources and catalog"),
       opt("Context", "AGENTS.md / CLAUDE.md injection (global/ancestor/project)"),
@@ -1714,6 +1752,7 @@ export async function showPpMenu(orchestrator: Orchestrator, ctx: any): Promise<
     else if (choice === "Usage") showUsage(ctx);
     else if (choice === "Agents") await showAgentsSettings(orchestrator, ctx);
     else if (choice === "Flant") await showFlantMenu(orchestrator, ctx);
+    else if (choice === "ChatGPT subscription") await showCodexMenu(orchestrator, ctx);
     else if (choice === "Copilot") await showCopilotMenu(orchestrator, ctx);
     else if (choice === "Skills") await showSkillsSettings(orchestrator, ctx);
     else if (choice === "Context") await showContextSettings(orchestrator, ctx);

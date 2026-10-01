@@ -4,7 +4,7 @@ import { homedir } from "os";
 import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
 import { GLOBAL_CONFIG_PATH, mergeConfigLayers, readRawConfig, type NormalizedPiPiConfig } from "./config.js";
-import { isCopilotTierActive, loadFlantSettings, readClaudeOAuthToken, readGatewayApiKey, resolveAgentDir } from "./flant-infra.js";
+import { isCodexTierActive, isCopilotTierActive, loadFlantSettings, readClaudeOAuthToken, readGatewayApiKey, resolveAgentDir } from "./flant-infra.js";
 import { getAllAliases, resolveModel } from "./model-registry.js";
 import { provisionDir } from "./provision/install.js";
 import { provisionResults } from "./provision/session.js";
@@ -302,6 +302,10 @@ export async function runDoctor(orchestrator: Orchestrator, ctx: any, options: D
     if (flant.copilotEnabled) {
       if (isCopilotTierActive(flant)) add("pass", "Copilot credentials present");
       else add("warning", "Copilot tier enabled but credentials are missing (run /login → GitHub Copilot or set COPILOT_GITHUB_TOKEN)");
+    }
+    if (flant.codexEnabled) {
+      if (isCodexTierActive(flant)) add("pass", "ChatGPT subscription credentials present");
+      else add("warning", "ChatGPT subscription tier enabled but not logged in (run /login → OpenAI (ChatGPT Plus/Pro))");
     }
     add(flant.lastUpdated ? "pass" : "warning", `Model list last updated: ${flant.lastUpdated ?? "never"}`);
 

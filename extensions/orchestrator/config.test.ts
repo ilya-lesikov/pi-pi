@@ -85,6 +85,7 @@ describe("validateConfig", () => {
       switchBackIntervalMinutes: 10,
       autoRateLimitFallback: true,
       copilotEnabled: true,
+      codexEnabled: true,
       autoUpdate: true,
       cacheTTLDays: 3,
     });

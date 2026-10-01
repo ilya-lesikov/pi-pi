@@ -11,7 +11,7 @@ export interface ModelInfo {
   displayName: string;
 }
 
-type ProviderPrefix = "anthropic" | "openai" | "google" | "deepseek" | "x-ai" | "qwen" | "pp-flant-anthropic" | "pp-flant-anthropic-sub" | "pp-flant-openai" | "github-copilot";
+type ProviderPrefix = "anthropic" | "openai" | "google" | "deepseek" | "x-ai" | "qwen" | "pp-flant-anthropic" | "pp-flant-anthropic-sub" | "pp-flant-openai" | "github-copilot" | "openai-codex";
 type KnownVendor = "anthropic" | "openai" | "google" | "deepseek" | "xai" | "qwen";
 type KnownFamily = "opus" | "fable" | "sonnet" | "haiku" | "gpt-astra" | "gpt-sol" | "gpt-terra" | "gpt-luna" | "gpt" | "gpt-mini" | "gemini-pro" | "gemini-flash" | "deepseek" | "grok" | "qwen";
 type KnownTier = "stupid" | "regular" | "smart" | "xsmart";
@@ -88,36 +88,36 @@ export const MODEL_FAMILIES: ModelFamilyDefinition[] = [
     family: "gpt-astra",
     tier: "xsmart",
     displayName: "GPT Astra",
-    patterns: [/^(openai|pp-flant-openai|github-copilot)\/gpt-[0-9.]+-astra(?:-pro)?$/],
+    patterns: [/^(openai|pp-flant-openai|github-copilot|openai-codex)\/gpt-[0-9.]+-astra(?:-pro)?$/],
     aliasTemplate: "gpt-astra-latest",
-    providers: ["openai", "pp-flant-openai", "github-copilot"],
+    providers: ["openai", "pp-flant-openai", "github-copilot", "openai-codex"],
   },
   {
     vendor: "openai",
     family: "gpt-sol",
     tier: "smart",
     displayName: "GPT Sol",
-    patterns: [/^(openai|pp-flant-openai|github-copilot)\/gpt-[0-9.]+-sol(?:-pro)?$/],
+    patterns: [/^(openai|pp-flant-openai|github-copilot|openai-codex)\/gpt-[0-9.]+-sol(?:-pro)?$/],
     aliasTemplate: "gpt-sol-latest",
-    providers: ["openai", "pp-flant-openai", "github-copilot"],
+    providers: ["openai", "pp-flant-openai", "github-copilot", "openai-codex"],
   },
   {
     vendor: "openai",
     family: "gpt-terra",
     tier: "regular",
     displayName: "GPT Terra",
-    patterns: [/^(openai|pp-flant-openai|github-copilot)\/gpt-[0-9.]+-terra(?:-pro)?$/],
+    patterns: [/^(openai|pp-flant-openai|github-copilot|openai-codex)\/gpt-[0-9.]+-terra(?:-pro)?$/],
     aliasTemplate: "gpt-terra-latest",
-    providers: ["openai", "pp-flant-openai", "github-copilot"],
+    providers: ["openai", "pp-flant-openai", "github-copilot", "openai-codex"],
   },
   {
     vendor: "openai",
     family: "gpt-luna",
     tier: "stupid",
     displayName: "GPT Luna",
-    patterns: [/^(openai|pp-flant-openai|github-copilot)\/gpt-[0-9.]+-luna(?:-pro)?$/],
+    patterns: [/^(openai|pp-flant-openai|github-copilot|openai-codex)\/gpt-[0-9.]+-luna(?:-pro)?$/],
     aliasTemplate: "gpt-luna-latest",
-    providers: ["openai", "pp-flant-openai", "github-copilot"],
+    providers: ["openai", "pp-flant-openai", "github-copilot", "openai-codex"],
   },
   {
     vendor: "openai",
@@ -127,9 +127,9 @@ export const MODEL_FAMILIES: ModelFamilyDefinition[] = [
     // Excludes -mini (handled below) AND the astra/sol/terra/luna tier suffixes
     // (handled above) so pre-5.6 gpt ids still resolve to this legacy family.
     // github-copilot included so a copilot gpt pin (e.g. gpt-4.1) classifies.
-    patterns: [/^(openai|pp-flant-openai|github-copilot)\/gpt-(?!mini-)(?!.*-mini(?:$|[-.]))(?!.*-(?:astra|sol|terra|luna)(?:-pro)?$)[a-z0-9.-]+$/],
+    patterns: [/^(openai|pp-flant-openai|github-copilot|openai-codex)\/gpt-(?!mini-)(?!.*-mini(?:$|[-.]))(?!.*-(?:astra|sol|terra|luna)(?:-pro)?$)[a-z0-9.-]+$/],
     aliasTemplate: "gpt-latest",
-    providers: ["openai", "pp-flant-openai", "github-copilot"],
+    providers: ["openai", "pp-flant-openai", "github-copilot", "openai-codex"],
   },
   {
     vendor: "openai",
@@ -137,11 +137,11 @@ export const MODEL_FAMILIES: ModelFamilyDefinition[] = [
     tier: "stupid",
     displayName: "GPT Mini",
     patterns: [
-      /^(openai|pp-flant-openai|github-copilot)\/gpt-mini-[a-z0-9.-]+$/,
-      /^(openai|pp-flant-openai|github-copilot)\/gpt-[a-z0-9.]+-mini(?:-[a-z0-9.-]+)?$/,
+      /^(openai|pp-flant-openai|github-copilot|openai-codex)\/gpt-mini-[a-z0-9.-]+$/,
+      /^(openai|pp-flant-openai|github-copilot|openai-codex)\/gpt-[a-z0-9.]+-mini(?:-[a-z0-9.-]+)?$/,
     ],
     aliasTemplate: "gpt-mini-latest",
-    providers: ["openai", "pp-flant-openai", "github-copilot"],
+    providers: ["openai", "pp-flant-openai", "github-copilot", "openai-codex"],
   },
   {
     vendor: "google",
@@ -275,8 +275,9 @@ import { SUB_MODEL_PREFIX, SUB_PROVIDER } from "./flant-infra.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Provider-tier resolution (item 3). Ordered, highest-precedence-first:
-//   copilot  → the built-in github-copilot provider (flat-rate, COPILOT_GITHUB_TOKEN)
 //   flant-sub → pp-flant-anthropic-sub (personal Claude subscription; CLAUDE-ONLY)
+//   codex-sub → openai-codex (personal ChatGPT subscription; GPT-ONLY)
+//   copilot  → the built-in github-copilot provider (flat-rate, COPILOT_GITHUB_TOKEN)
 //   flant-api → pp-flant-anthropic / pp-flant-openai (paid per token)
 // Each role's model spec is stored already pointing at its PREFERRED tier; the
 // resolver rewrites DOWN to the highest still-usable tier when the preferred one
@@ -284,12 +285,13 @@ import { SUB_MODEL_PREFIX, SUB_PROVIDER } from "./flant-infra.js";
 // choke point every resolution site funnels through (main switchModel, subagent
 // tool_call input.model, planner/reviewer specs, registerAgents), replacing the
 // old single sub→api boolean.
-export type ProviderTierName = "copilot" | "flant-sub" | "flant-api";
+export type ProviderTierName = "copilot" | "flant-sub" | "codex-sub" | "flant-api";
 
 // Fixed precedence order.
-export const PROVIDER_TIER_ORDER: readonly ProviderTierName[] = ["flant-sub", "copilot", "flant-api"] as const;
+export const PROVIDER_TIER_ORDER: readonly ProviderTierName[] = ["flant-sub", "codex-sub", "copilot", "flant-api"] as const;
 
 const COPILOT_PROVIDER = "github-copilot";
+const CODEX_PROVIDER = "openai-codex";
 
 // Which tiers are ENABLED (user settings). flant-api is effectively always on
 // (the paid floor); copilot/flant-sub are opt-in. Defaults keep pre-tier
@@ -297,6 +299,7 @@ const COPILOT_PROVIDER = "github-copilot";
 let tierEnabled: Record<ProviderTierName, boolean> = {
   "copilot": false,
   "flant-sub": true,
+  "codex-sub": false,
   "flant-api": true,
 };
 
@@ -323,9 +326,11 @@ function registeredSpecForTier(tier: ProviderTierName, family: Family): string |
   const prefixes: string[] =
     tier === "copilot"
       ? [`${COPILOT_PROVIDER}/`]
-      : tier === "flant-sub"
-        ? [`${SUB_PROVIDER}/`]
-        : ["pp-flant-anthropic/", "pp-flant-openai/"];
+      : tier === "codex-sub"
+        ? [`${CODEX_PROVIDER}/`]
+        : tier === "flant-sub"
+          ? [`${SUB_PROVIDER}/`]
+          : ["pp-flant-anthropic/", "pp-flant-openai/"];
   const candidates: string[] = [];
   for (const spec of registeredSpecs) {
     if (!prefixes.some((p) => spec.startsWith(p))) continue;
@@ -373,6 +378,8 @@ function isTierUsable(tier: ProviderTierName, family: Family): boolean {
   if (demotedTierFamily.has(`${tier}:${family}`)) return false;
   // flant-sub is Claude-only: it never serves gpt/gemini/etc families.
   if (tier === "flant-sub" && !isClaudeFamily(family)) return false;
+  // codex-sub is the mirror image: a ChatGPT subscription serves gpt only.
+  if (tier === "codex-sub" && !isGptFamily(family)) return false;
   // The paid gateway no longer serves Claude at all — Claude routes ONLY via
   // the subscription (or Copilot). Never resolve a Claude family onto flant-api.
   if (tier === "flant-api" && isClaudeFamily(family)) return false;
@@ -383,9 +390,14 @@ function isClaudeFamily(family: Family): boolean {
   return family === "opus" || family === "fable" || family === "sonnet" || family === "haiku";
 }
 
+function isGptFamily(family: Family): boolean {
+  return family === "gpt" || family === "gpt-mini" || family === "gpt-astra" || family === "gpt-sol" || family === "gpt-terra" || family === "gpt-luna";
+}
+
 // Identify which tier a resolved spec currently points at.
 export function tierOfSpec(spec: string): ProviderTierName | null {
   if (spec.startsWith(`${COPILOT_PROVIDER}/`)) return "copilot";
+  if (spec.startsWith(`${CODEX_PROVIDER}/`)) return "codex-sub";
   if (spec.startsWith(`${SUB_PROVIDER}/`) || spec.startsWith(SUB_MODEL_PREFIX)) return "flant-sub";
   if (spec.startsWith("pp-flant-anthropic/") || spec.startsWith("pp-flant-openai/")) return "flant-api";
   return null;
@@ -406,6 +418,8 @@ function specForTier(tier: ProviderTierName, family: Family, bareId: string): st
   switch (tier) {
     case "copilot":
       return `${COPILOT_PROVIDER}/${bareId}`;
+    case "codex-sub":
+      return `${CODEX_PROVIDER}/${bareId}`;
     case "flant-sub":
       return `${SUB_PROVIDER}/${SUB_MODEL_PREFIX}${bareId}`;
     case "flant-api":
@@ -460,6 +474,13 @@ function applyTierResolution(spec: string): string {
   // branch, not here — which is why the exclusion below costs the user nothing
   // they asked for: it declines to MOVE a family onto copilot, and never
   // overrides a spec that named copilot itself.
+  // The ChatGPT subscription outranks copilot, so it gets first refusal on a
+  // paid gpt spec. Same catalog-only rule: its ids are its own.
+  if (currentTier === "flant-api" && isTierUsable("codex-sub", family)) {
+    const codexSpec = registeredSpecForTier("codex-sub", family);
+    if (codexSpec) return codexSpec;
+  }
+
   if (currentTier === "flant-api" && isTierUsable("copilot", family)) {
     const copilotSpec = registeredSpecForTier("copilot", family);
     if (copilotSpec) return copilotSpec;
@@ -480,11 +501,11 @@ function applyTierResolution(spec: string): string {
   // If the current tier is still usable, keep the spec (catalog-safe): for
   // copilot resolve to the real registered id; for flant keep as-is.
   if (isTierUsable(currentTier, family)) {
-    if (currentTier === "copilot") {
+    if (currentTier === "copilot" || currentTier === "codex-sub") {
       // Keep an exact registered pin as-is; otherwise resolve to the real
-      // latest copilot id for the family (never a prefix-swapped flant id).
+      // latest id this provider serves (never a prefix-swapped flant id).
       if (registeredSpecs.has(spec)) return spec;
-      const real = registeredSpecForTier("copilot", family);
+      const real = registeredSpecForTier(currentTier, family);
       return real ?? spec;
     }
     return specForTier(currentTier, family, bareId);
@@ -495,8 +516,8 @@ function applyTierResolution(spec: string): string {
   for (let i = startIdx + 1; i < PROVIDER_TIER_ORDER.length; i++) {
     const tier = PROVIDER_TIER_ORDER[i];
     if (!isTierUsable(tier, family)) continue;
-    if (tier === "copilot") {
-      const real = registeredSpecForTier("copilot", family);
+    if (tier === "copilot" || tier === "codex-sub") {
+      const real = registeredSpecForTier(tier, family);
       if (real) return real;
       continue;
     }
