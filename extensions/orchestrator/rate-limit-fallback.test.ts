@@ -47,6 +47,13 @@ describe("session-first rate-limit fallback", () => {
     expect(isRateLimitError("invalid request")).toBe(false);
   });
 
+  // pi's openai-codex provider swallows the 429 and throws this sentence
+  // instead, so neither the status nor the word "rate" is left to match.
+  it("recognizes the ChatGPT subscription's own quota wording", () => {
+    expect(isRateLimitError("You have hit your ChatGPT usage limit (plus plan). Try again in ~43 min.")).toBe(true);
+    expect(isRateLimitError("usage_not_included")).toBe(true);
+  });
+
   // The wording arrived verbatim from the provider; the raw stop reason is the
   // reliable half, since a gateway is free to reword the explanation.
   it("recognizes an outright refusal by stop reason or by wording", () => {
@@ -189,6 +196,25 @@ describe("session-first rate-limit fallback", () => {
     await vi.advanceTimersByTimeAsync(10 * 60_000);
     expect(listTierDemotions()).toEqual([]);
     await vi.waitFor(() => expect(orchestrator.switchModel).toHaveBeenCalledWith(orchestrator.lastCtx, "github-copilot/gpt-6-astra", expect.any(String)));
+    vi.useRealTimers();
+  });
+
+  // End to end rather than by flag: the quota message has to survive the
+  // handler's own rate-limit gate before the resolver ever gets a say.
+  it("demotes the ChatGPT subscription on its quota message and falls to the paid gateway", async () => {
+    vi.useFakeTimers();
+    setTierEnabled({ "codex-sub": true });
+    updateRegistryFromAvailableModels(["openai-codex/gpt-5.7-sol", "pp-flant-openai/gpt-5.6-sol"]);
+    const orchestrator = makeOrchestrator(makePi());
+    orchestrator.switchModel = vi.fn(async () => true);
+    const ctx = { abort: vi.fn(), model: { provider: "openai-codex", id: "gpt-5.7-sol" }, ui: { notify: vi.fn() } };
+
+    expect(isRateLimitError("You have hit your ChatGPT usage limit (plus plan).")).toBe(true);
+    await handleMainRateLimit(orchestrator, ctx, "gpt-5.7-sol", "openai-codex");
+
+    expect(listTierDemotions()).toEqual(["codex-sub:gpt-sol"]);
+    expect(orchestrator.switchModel).toHaveBeenCalledWith(ctx, "pp-flant-openai/gpt-5.6-sol", expect.any(String));
+    expect(orchestrator.subFallbackActive).toBe(false);
     vi.useRealTimers();
   });
 

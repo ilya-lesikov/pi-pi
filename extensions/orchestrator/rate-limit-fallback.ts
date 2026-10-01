@@ -4,8 +4,12 @@ import { demoteTierForFamily, getModelInfo, isTierDemoted, refusalFallbackSpec, 
 import { isSubscriptionRouted } from "./usage-tracker.js";
 import { getLogger } from "./log.js";
 
+// `usage limit` and `usage_not_included` are the ChatGPT subscription's own
+// wording: pi's openai-codex provider replaces the HTTP status with a friendly
+// sentence, so neither the 429 nor the word "rate" survives to be matched.
 export function isRateLimitError(message?: string): boolean {
-  return typeof message === "string" && /\b429\b|rate.?limit|too many requests|exceed your account|extra usage|draw from[\s\S]{0,40}plan limits/i.test(message);
+  return typeof message === "string"
+    && /\b429\b|rate.?limit|too many requests|exceed your account|extra usage|usage[ _-]?limit|usage_not_included|draw from[\s\S]{0,40}plan limits/i.test(message);
 }
 
 /**
