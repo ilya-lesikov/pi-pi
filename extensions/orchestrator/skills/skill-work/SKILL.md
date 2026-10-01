@@ -1,5 +1,5 @@
 ---
-name: skill-scout
+name: skill-work
 description: Load BEFORE finding, evaluating, adopting, adapting, merging, or writing an agent skill — whether the goal is choosing one that exists, deriving one from existing sources, or authoring from scratch. Not for using a skill already installed.
 ---
 
