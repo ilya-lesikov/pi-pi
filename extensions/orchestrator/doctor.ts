@@ -288,6 +288,17 @@ export async function runDoctor(orchestrator: Orchestrator, ctx: any, options: D
   // would abort the run before the summary, exactly when the doctor is needed.
   await guard("Flant settings unreadable", async () => {
     const flant = loadFlantSettings(orchestrator.cwd);
+    // Copilot and the ChatGPT subscription are their own providers: they route
+    // whether or not the gateway is in use, so their credentials are checked
+    // before the gateway's own settings are allowed to end the section.
+    if (flant.copilotEnabled) {
+      if (isCopilotTierActive(flant)) add("pass", "Copilot credentials present");
+      else add("warning", "Copilot tier enabled but credentials are missing (run /login → GitHub Copilot or set COPILOT_GITHUB_TOKEN)");
+    }
+    if (flant.codexEnabled) {
+      if (isCodexTierActive(flant)) add("pass", "ChatGPT subscription credentials present");
+      else add("warning", "ChatGPT subscription tier enabled but not logged in (run /login → OpenAI (ChatGPT Plus/Pro))");
+    }
     if (!flant.enabled) {
       add("pass", "Flant disabled");
       return;
@@ -298,14 +309,6 @@ export async function runDoctor(orchestrator: Orchestrator, ctx: any, options: D
     if (flant.subscription) {
       if (readClaudeOAuthToken()) add("pass", "Claude OAuth token present for the personal subscription");
       else add("failure", "Subscription enabled but no Claude OAuth token (run /login → Anthropic)");
-    }
-    if (flant.copilotEnabled) {
-      if (isCopilotTierActive(flant)) add("pass", "Copilot credentials present");
-      else add("warning", "Copilot tier enabled but credentials are missing (run /login → GitHub Copilot or set COPILOT_GITHUB_TOKEN)");
-    }
-    if (flant.codexEnabled) {
-      if (isCodexTierActive(flant)) add("pass", "ChatGPT subscription credentials present");
-      else add("warning", "ChatGPT subscription tier enabled but not logged in (run /login → OpenAI (ChatGPT Plus/Pro))");
     }
     add(flant.lastUpdated ? "pass" : "warning", `Model list last updated: ${flant.lastUpdated ?? "never"}`);
 
