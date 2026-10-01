@@ -79,17 +79,17 @@ describe("delegationBlock", () => {
 });
 
 describe("toolsBlock only advertises granted tools", () => {
-  it("omits pp_register_repo and lsp/cbm guidance for a minimal agent", () => {
+  it("omits recall_tool_output and lsp/cbm guidance for a minimal agent", () => {
     const block = toolsBlock(parseToolNames("read, bash, grep, find, web_search, web_fetch"));
-    expect(block).not.toContain("pp_register_repo");
+    expect(block).not.toContain("recall_tool_output");
     expect(block).not.toContain("lsp goToDefinition");
     expect(block).not.toContain("cbm_search");
     expect(block).toContain("web_search");
   });
 
-  it("includes pp_register_repo and the lsp/grep guidance for the main tool set", () => {
-    const block = toolsBlock(["read", "bash", "edit", "write", "grep", "find", "ls", "lsp", "cbm_search", "pp_register_repo"]);
-    expect(block).toContain("pp_register_repo");
+  it("includes recall_tool_output and the lsp/grep guidance for the main tool set", () => {
+    const block = toolsBlock(["read", "bash", "edit", "write", "grep", "find", "ls", "lsp", "cbm_search", "recall_tool_output"]);
+    expect(block).toContain("recall_tool_output");
     expect(block).toContain("Prefer lsp goToDefinition over grep");
     expect(block).toContain("cbm_search");
   });
