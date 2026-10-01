@@ -81,10 +81,10 @@ describe("validateConfig", () => {
     const d = getDefaultConfig();
     expect(d.flant).toEqual({
       enabled: false,
-      subscription: false,
+      subscription: true,
       switchBackIntervalMinutes: 10,
       autoRateLimitFallback: true,
-      copilotEnabled: false,
+      copilotEnabled: true,
       autoUpdate: true,
       cacheTTLDays: 3,
     });

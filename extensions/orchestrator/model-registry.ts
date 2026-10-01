@@ -379,13 +379,6 @@ function isTierUsable(tier: ProviderTierName, family: Family): boolean {
   return true;
 }
 
-// Families that must never be routed ONTO copilot automatically: copilot's
-// catalog entry for them is a WEAKER SKU than the spec the config names (astra
-// ships without `-pro`), so the flat-rate promotion would quietly answer with a
-// different model. This bars the automatic move only — a spec that already NAMES
-// a registered copilot model is the user's own choice and still stands.
-const COPILOT_PROMOTION_EXCLUDED_FAMILIES = new Set<Family>(["gpt-astra"]);
-
 function isClaudeFamily(family: Family): boolean {
   return family === "opus" || family === "fable" || family === "sonnet" || family === "haiku";
 }
@@ -467,11 +460,7 @@ function applyTierResolution(spec: string): string {
   // branch, not here — which is why the exclusion below costs the user nothing
   // they asked for: it declines to MOVE a family onto copilot, and never
   // overrides a spec that named copilot itself.
-  if (
-    currentTier === "flant-api"
-    && isTierUsable("copilot", family)
-    && !COPILOT_PROMOTION_EXCLUDED_FAMILIES.has(family)
-  ) {
+  if (currentTier === "flant-api" && isTierUsable("copilot", family)) {
     const copilotSpec = registeredSpecForTier("copilot", family);
     if (copilotSpec) return copilotSpec;
   }

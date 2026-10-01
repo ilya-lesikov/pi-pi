@@ -530,10 +530,9 @@ describe("model-registry", () => {
       expect(resolveModel("pp-flant-openai/gpt-5.6-sol")).toBe("pp-flant-openai/gpt-5.6-sol");
     });
 
-    it("never PROMOTES astra onto copilot, even when copilot registers the family", () => {
-      // Copilot stocks only the base astra SKU, so promoting the pools' Astra Pro
-      // would trade the requested model for a cheaper weaker one. Contrast the
-      // sol family below, which copilot serves at parity and does get promoted.
+    it("promotes astra onto copilot like every other family", () => {
+      // Copilot stocks only the base astra SKU, so an Astra Pro spec lands on a
+      // weaker model. The tier order is absolute and that tradeoff is accepted.
       updateRegistryFromAvailableModels([
         "github-copilot/gpt-6-astra",
         "github-copilot/gpt-5.6-sol",
@@ -542,20 +541,18 @@ describe("model-registry", () => {
         "pp-flant-openai/gpt-5.6-sol",
       ]);
       setTierEnabled({ "copilot": true });
-      expect(resolveModel("pp-flant-openai/gpt-6-astra-pro")).toBe("pp-flant-openai/gpt-6-astra-pro");
-      expect(resolveModel("pp-flant-openai/gpt-6-astra")).toBe("pp-flant-openai/gpt-6-astra");
+      expect(resolveModel("pp-flant-openai/gpt-6-astra-pro")).toBe("github-copilot/gpt-6-astra");
+      expect(resolveModel("pp-flant-openai/gpt-6-astra")).toBe("github-copilot/gpt-6-astra");
       expect(resolveModel("pp-flant-openai/gpt-5.6-sol")).toBe("github-copilot/gpt-5.6-sol");
     });
 
-    it("still honors an explicit copilot astra pin — the exclusion bars promotion, not choice", () => {
+    it("honors an explicit copilot astra pin", () => {
       updateRegistryFromAvailableModels([
         "github-copilot/gpt-6-astra",
         "pp-flant-openai/gpt-6-astra",
         "pp-flant-openai/gpt-6-astra-pro",
       ]);
       setTierEnabled({ "copilot": true });
-      // Naming a registered copilot model is a deliberate provider choice and
-      // outranks the routing policy that would otherwise keep astra off copilot.
       expect(resolveModel("github-copilot/gpt-6-astra")).toBe("github-copilot/gpt-6-astra");
     });
 

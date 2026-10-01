@@ -211,10 +211,13 @@ const DEFAULT_CONFIG: PiPiConfig = {
   },
   flant: {
     enabled: false,
-    subscription: false,
+    // Both subscription tiers are on by default and cost nothing when their
+    // credentials are absent: each one's activation check requires the token
+    // before the tier is enabled in the resolver.
+    subscription: true,
     switchBackIntervalMinutes: 10,
     autoRateLimitFallback: true,
-    copilotEnabled: false,
+    copilotEnabled: true,
     autoUpdate: true,
     cacheTTLDays: 3,
   },

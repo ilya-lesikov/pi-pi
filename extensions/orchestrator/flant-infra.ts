@@ -75,8 +75,8 @@ export interface FlantSettings {
   autoRateLimitFallback: boolean;
   /**
    * Enable the Copilot provider tier (built-in `github-copilot` provider, keyed
-   * off COPILOT_GITHUB_TOKEN). When enabled it sits ABOVE both Flant tiers in
-   * precedence. Default false.
+   * off COPILOT_GITHUB_TOKEN). When enabled it sits BELOW the subscription
+   * tiers and above the paid gateway. Default true; inert without a token.
    */
   copilotEnabled: boolean;
 }
