@@ -73,6 +73,15 @@ export class CbmDaemon {
       if (text) getLogger().error({ s: "cbm", stderr: text }, "CBM daemon stderr");
     });
 
+    // A write racing the child's exit fails asynchronously (EPIPE), and a pipe
+    // with no error listener throws that out of the event loop, killing pi over
+    // an optional integration.
+    for (const stream of [this.proc.stdin, this.proc.stdout, this.proc.stderr]) {
+      stream?.on("error", (err: Error) => {
+        getLogger().error({ s: "cbm", err: err.message }, "CBM daemon stream error");
+      });
+    }
+
     this.proc.on("exit", () => this.cleanup());
     this.proc.on("error", (err) => {
       getLogger().error({ s: "cbm", err: err.message }, "CBM daemon error");
@@ -80,6 +89,12 @@ export class CbmDaemon {
     });
 
     this.initPromise = this.initialize();
+    // Nothing awaits this until the first cbm_* call, which may never come. The
+    // handler only observes the rejection; ensureReady() still sees it and the
+    // calling tool still reports it.
+    this.initPromise.catch((err: any) => {
+      getLogger().error({ s: "cbm", err: err?.message }, "CBM daemon init failed");
+    });
   }
 
   cleanup(): void {
