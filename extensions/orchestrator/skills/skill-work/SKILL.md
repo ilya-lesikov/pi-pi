@@ -14,6 +14,7 @@ Finding and building are one workflow — what you learn reading candidates is t
 - State the task the skill must serve, in the user's own words, before searching. A scout that searches for a category returns the category's most popular member.
 - Extract the constraints that disqualify a candidate: host agent, required tooling, network access, language lock-ins, licence.
 - Check what is already installed. A skill duplicating one in `~/.pi/skills`, the project's `.pi/skills`, or pi-pi's bundled set is a finding, not a candidate.
+- Settle how far the skill may couple to this host, and ask when the request does not already say. A portable skill assumes a generic agent and survives being handed to another one; a pi-pi-native skill may lean on the subagent pools, `cbm_*`, `lsp`, `vcc_recall` and parallel fan-out, which usually buys more than it costs and makes the result unusable anywhere else. The answer narrows the candidate pool as much as it shapes what you write, so it belongs here rather than at the drafting stage.
 - Decide what "good enough to adopt" means here, before looking. Without it every candidate looks partial.
 
 ## Search, then resolve
