@@ -347,6 +347,22 @@ describe("affordance-aligned evidence gates", () => {
     expect(r.prompt).toContain("OPEN QUESTIONS");
   });
 
+  // A caller fanning several reviewers across one change needs each to cover
+  // its own slice exhaustively and stay out of the others': overlapping reviews
+  // cost the fan-out its point, and a silently narrowed one leaves a hole the
+  // caller cannot see. Both halves have to be in the prompt.
+  it("honours an assigned scope and reports what it covered", () => {
+    const r = createReviewerAgent(gptEntry).prompt;
+    expect(r).toContain("SCOPE");
+    expect(r).toMatch(/review it exhaustively and review nothing else/i);
+    expect(r).toContain("OUT OF SCOPE");
+    // Re-deriving a briefed intent is how a merged review ends up judging a
+    // goal nobody pursued.
+    expect(r).toMatch(/do not re-derive/i);
+    // Findings travel without the review that carried them.
+    expect(r).toMatch(/self-contained/i);
+  });
+
   // A diff-shaped review structurally cannot reach the case where correct code
   // fixes the wrong thing: every line is sound and the work is still wasted.
   // The premise has to be its own output slot, or it is never examined.
