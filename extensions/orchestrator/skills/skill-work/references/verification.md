@@ -22,6 +22,26 @@ A project directory also keeps the candidate out of every other session while yo
 
 `--provider`/`--model` pin the run — pin them, because a nested `pi` can hit a billing limit the parent does not and the failure looks exactly like the skill not firing. `--no-session` keeps the run out of session history.
 
+## The silent disqualification
+
+Before blaming a description for not firing, prove the skill is in the catalog at all. `readMetadata` parses the frontmatter inside a `try` and returns `null` on any failure, so a malformed file is dropped from the catalog with no error, no warning and no entry — indistinguishable from a skill that was offered and declined.
+
+The description is an unquoted YAML scalar, and the punctuation of ordinary prose breaks it. A bare colon-space is the one that bites:
+
+```
+description: Load it also to publish: "post the review", "approve the MR".
+```
+
+`Nested mappings are not allowed in compact mappings at line 2` — the file still reads perfectly to a human, the skill is simply gone. Quote the whole value or use a dash instead of the colon. Em dashes, commas, quotation marks and parentheses are all safe unquoted; `: `, a leading `>` or `|`, and an unbalanced `[` or `{` are not.
+
+The cheapest check is to parse the file the way the loader does rather than to reason about the YAML:
+
+```
+node -e 'import("@earendil-works/pi-coding-agent").then(({parseFrontmatter})=>{const p=parseFrontmatter(require("fs").readFileSync(process.argv[1],"utf8"));console.log(p.frontmatter.name,"|",p.frontmatter.description.slice(0,60))})' <skill>/SKILL.md
+```
+
+Run it from a directory where that package resolves, and treat a throw as a broken skill, not a broken command.
+
 ## Did it fire?
 
 Parse the event stream for the `load_skill` call. Text output does not show tool calls, so a skill can fire invisibly and look like a failure:
