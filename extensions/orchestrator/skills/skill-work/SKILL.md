@@ -11,9 +11,9 @@ Finding and building are one workflow — what you learn reading candidates is t
 
 The host is pi-pi, and its loader decides what a skill can be:
 
-- Three layers — `<project>/.pi/skills`, `~/.pi/skills`, and the bundled set — resolved by name in that order, so a project skill silently shadows a global one of the same name. `PI_SKILLS_DIR` relocates the global layer, which is how a negative trigger test gets a clean catalog.
+- Three layers — `<project>/.pi/skills`, `~/.pi/skills`, and the bundled set — resolved by name in that order, so a project skill silently shadows a global one of the same name. `PI_SKILLS_DIR` moves the global layer elsewhere; project and bundled skills stay in the catalog, so it isolates a candidate under test without emptying the field it competes against.
 - Only `name` and `description` are read from the frontmatter. Every other key is dropped without a word, so a skill's own switches do not survive the trip.
-- `load_skill` belongs to the main agent alone. A subagent can never load what you write, so anything a delegated agent must follow has to be inlined into its prompt by the skill's reader — and a skill that assumes otherwise is broken here no matter how well it reads.
+- `load_skill` is registered in subagent sessions too, but no pool's tool allowlist includes it, so in practice no reviewer, advisor, librarian, explore or task agent can call it. Anything a delegated agent must follow is inlined into its prompt by whoever reads the skill — write for that, and do not assume a subagent will read a reference you point it at.
 - A skill may therefore address the main agent's full toolset: the subagent pools and their parallel fan-out, `cbm_*`, `lsp`, `vcc_recall`, `ask_user`. Use them in what you write when they make the skill better, and use them while writing it.
 
 ## Establish what is being solved
@@ -21,13 +21,13 @@ The host is pi-pi, and its loader decides what a skill can be:
 - State the task the skill must serve, in the user's own words, before searching. A scout that searches for a category returns the category's most popular member.
 - Extract the constraints that disqualify a candidate: host agent, required tooling, network access, language lock-ins, licence.
 - Check what is already installed. A skill duplicating one in `~/.pi/skills`, the project's `.pi/skills`, or pi-pi's bundled set is a finding, not a candidate.
-- Settle how far the skill may couple to this host. Default to pi-pi-native — the pools, the fan-out and the code-graph tools are the difference between a skill that restates good practice and one that changes what the agent actually does. Portability is a real cost and buys nothing unless the skill is meant to travel, so ask only when the request implies it might: a skill destined for a public repository, another agent, or a colleague on a different host. The answer narrows the candidate pool as much as it shapes what you write, so it belongs here rather than at the drafting stage.
+- Settle how far the skill may couple to this host. Default to pi-pi-native; ask only when the request implies the skill must travel — a public repository, another agent, a colleague on a different host. The answer narrows the candidate pool as much as it shapes what you write, so it belongs here rather than at the drafting stage.
 - Decide what "good enough to adopt" means here, before looking. Without it every candidate looks partial.
 
 ## Search, then resolve
 
 - Search several routes and pool the results; each index covers a different slice and ranks by its own signal. The routes are independent, so run them as parallel librarians in one message rather than walking them in turn — and have each return candidates with their evidence, never a recommendation.
-- Check the installed layers locally while the ecosystem routes run. What is already in `~/.pi/skills`, the project's `.pi/skills` and the bundled set decides whether any candidate is worth reading at all.
+- Check the installed layers locally while the ecosystem routes run.
 - Search for the capability, not the label. The strongest candidate is often filed under a term the user did not use.
 - An index entry is a pointer, not a location. Resolve each candidate to its real path by walking the repository tree — the id rarely encodes where the file lives.
 - Stop widening when the same names recur across routes. If every route returns something different, or nothing, say the search was inconclusive rather than recommending the best of a thin field.
@@ -35,7 +35,7 @@ The host is pi-pi, and its loader decides what a skill can be:
 ## Read before judging
 
 - Fetch the body. Measure it. Read it in full — this is the step the existing finders skip and the only one that separates a good skill from a popular one.
-- Candidates are independent of each other, so fan them out: one librarian per candidate, each briefed to fetch the whole folder and come back with quoted lines rather than a verdict. Grade them yourself afterwards. Delegating the reading is leverage; delegating the judgement is how a popularity ranking comes back wearing someone else's words.
+- Candidates are independent, so fan the first pass out: one librarian per candidate, each briefed to fetch the whole folder, report its inventory and line counts, and quote what bears on the rubric — never a verdict. That pass narrows the field; it does not satisfy the full read. Before you recommend, adapt or merge anything, read that candidate's own body and references yourself, in full. Delegating the reading is leverage; delegating the judgement is how a popularity ranking comes back wearing someone else's words.
 - Inventory the whole folder: `scripts/`, `references/`, templates, assets. A skill is everything it ships.
 - Read every file the body directs the agent to read, with the same suspicion as the body. A reference is loaded as instructions exactly like the body, so a clean `SKILL.md` with a poisoned reference passes a body-only review.
 - Grade against `references/rubric.md`. Check description-versus-body alignment on every candidate — a description promising more than the body delivers is the failure mode bulk generation produces most.
@@ -71,18 +71,17 @@ Writing the result:
 ## Verify before recommending
 
 - A skill is not done when it reads well. Test it with `references/verification.md`: does it fire when it should, stay quiet when it should not, and change the output for the better?
-- Test in the environment it will run in, with the other skills loaded — triggering is a competition against every other description. End the test prompt with `just state your plan, do not do the work`: the trigger is the measurement, and letting the run proceed costs minutes and tests nothing extra.
+- Test in the environment it will run in, with the other skills loaded — triggering is a competition against every other description. End a *trigger* prompt with `just state your plan, do not do the work`: the trigger is the measurement there, and letting the run proceed costs minutes and tests nothing extra. A behavioural comparison is the opposite case and must actually run the task.
 - Run behavioural comparisons on a disposable copy, never the user's working tree. You are executing instructions written by someone else.
-- A failed trigger means the description is wrong, not the model. Rewrite and retest rather than reasoning about whether the new wording is better.
+- A failed trigger usually means the description is wrong, not the model — but rule out the silent disqualification and an errored run first, both in `references/verification.md`. Then rewrite and retest rather than reasoning about whether the new wording is better.
 - Re-run the trigger matrix after every edit to the frontmatter, however cosmetic. A description is a YAML scalar and breaks on punctuation that reads as ordinary prose — `references/verification.md` has the trap and how it presents.
 
 ## Have it reviewed before you hand it over
 
-A skill you wrote is the one artifact you cannot judge: you read your own intent back into every ambiguous line, and the model reading it later will not.
-
-- **A reviewer pass is mandatory, not a finishing touch.** Before recommending or installing anything you wrote, adapted or compiled, send the whole folder — body and every reference — to the reviewer pool to be read cold. Prefer a family other than your own; a sibling model shares your blind spots.
-- Brief it properly, because it cannot load the skill it is reviewing and knows nothing about the task: what the skill is for, who loads it, what it must not duplicate, and that references are injected as instructions exactly like the body.
-- Ask advisors when a design choice is genuinely contested and you would have to unwind it later: one skill or two, body or reference, how far to couple to the host, whether to adapt a source or write fresh. Spawn all eligible advisors for a call that shapes the whole artifact, and weigh their disagreement rather than averaging it. Do not spend one on a question the rubric already answers.
+- **A reviewer pass is mandatory, not a finishing touch.** Before recommending or installing anything — adopted unchanged as much as written fresh, since an adopted skill is the one case where nobody has read it with this user's tools in mind — send the whole folder, body and every reference, to the reviewer pool to be read cold. Prefer a family other than your own; a sibling model shares your blind spots.
+- Brief it as if it knows nothing, because it does: what the skill is for, who loads it, what it must not duplicate, that references are injected as instructions exactly like the body, and the verification results, which it cannot produce for itself. Paste in what the rubric asks for rather than naming the rubric.
+- If no eligible reviewer is configured, say the skill is unreviewed and let the user decide. Do not substitute your own second reading and call it review.
+- Ask an advisor when a design choice is genuinely contested and you would have to unwind it later: one skill or two, body or reference, how far to couple to the host, whether to adapt a source or write fresh. One advisor for an ordinary contested call; all eligible ones only when the answer reshapes the whole artifact, and then weigh the disagreement rather than averaging it. Never spend one on a question `references/rubric.md` already settles.
 - Fix what they find, then re-run the trigger matrix. Review changes wording, and wording is the trigger.
 - Report what the review said, including findings you chose not to act on and why. A skill presented as reviewed, with the review's objections quietly dropped, is worse than one presented as unreviewed.
 

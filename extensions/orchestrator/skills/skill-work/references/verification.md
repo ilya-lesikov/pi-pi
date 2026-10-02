@@ -40,7 +40,7 @@ The cheapest check is to parse the file the way the loader does rather than to r
 node -e 'import("@earendil-works/pi-coding-agent").then(({parseFrontmatter})=>{const p=parseFrontmatter(require("fs").readFileSync(process.argv[1],"utf8"));console.log(p.frontmatter.name,"|",p.frontmatter.description.slice(0,60))})' <skill>/SKILL.md
 ```
 
-Run it from a directory where that package resolves, and treat a throw as a broken skill, not a broken command.
+Run it from a directory where `@earendil-works/pi-coding-agent` resolves. A YAML error names the line and the column and means the skill is gone from the catalog; a module-resolution or filesystem error means you ran it from the wrong place and says nothing about the file.
 
 ## Did it fire?
 
