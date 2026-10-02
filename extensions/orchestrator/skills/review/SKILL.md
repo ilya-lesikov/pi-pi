@@ -11,12 +11,13 @@ Infer it from the request — do not ask.
 
 - **Incoming** — a PR/MR URL, a remote branch, a patch file, a name other than yours. You are the approver; findings are addressed to an author and may be posted. See `references/incoming.md`.
 - **Outgoing** — uncommitted work, `HEAD` from this session, "before I push", "what did I miss". Findings are a worklist, not prose for a third party. See `references/outgoing.md`.
-- Tiebreaker: `git log -1 --format=%ae` against `git config user.email`.
+- Do not reach for `git log -1 --format=%ae` to settle it. The agent commits under the user's own identity, so the author email cannot separate work this session produced from work the user wrote by hand — and the second is incoming however the email reads.
+- What you genuinely know is whether *this session* produced the change. Apply `references/outgoing.md`'s section on your own blind spots only when it did; the rest of that file fits any change that is not going to a third party.
 - Ask only when authorship and audience disagree — your own diff that someone else must approve — because that alone changes what you emit.
 
 ## Pin what is under review
 
-- Establish the fixed point: the merge target for a PR/MR, `HEAD~1` for a just-made commit, the merge-base otherwise. Diff three-dot (`git diff base...HEAD`), so the comparison is against the merge-base rather than the branch tip.
+- Establish the fixed point: the merge target for a PR/MR, the ref the session started from when reviewing its own work, the merge-base otherwise. Diff three-dot (`git diff base...HEAD`), so the comparison is against the merge-base rather than the branch tip. `HEAD~1` is right only when exactly one commit is under review — a session that committed each unit separately, as it should, leaves several.
 - Prove the ref resolves and that something is actually under review before doing anything else. A bad ref must fail here, not inside three subagents.
 - `git status --short` before `git diff`, and state which of the four populations you are reviewing: committed, staged, unstaged, untracked. Work that lives entirely in the working tree is the normal outgoing case and an empty `base...HEAD` says nothing about it — a review that silently skips it is worse than no review.
 - For a non-git artifact, pin the version it supersedes. Where there is no before — a document written from scratch — review it against its stated requirements instead, and say that is what you did.
