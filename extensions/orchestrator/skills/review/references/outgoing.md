@@ -1,26 +1,20 @@
 # Reviewing your own work before it ships
 
-No audience, no diplomacy, no verdict line. The output is a worklist. The whole difficulty is that you already believe this change is correct.
+No audience, no diplomacy, no verdict line. The output is a worklist. The whole difficulty is that you already believe this change is correct — which is exactly why the findings come from reviewers and not from you.
 
-## Defeat the obvious failure mode
+## Why this direction is delegated hardest
 
-- You cannot review your own reasoning by rereading it. Re-deriving an argument reproduces it; the error survives the second pass intact. Attack the change from outside: run it, break it, or hand it to the reviewer pool cold.
-- `vcc_recall` what was actually asked, in the user's words, before looking at the diff. Mid-implementation drift is the most common outgoing finding and it is invisible from inside the diff.
-- Read the diff in the reverse order you wrote it. The last file written gets the least scrutiny and holds the most haste.
-- List what you decided silently — a default, an error path, a name, a dependency — and check each against the request. The ones that conflict with it are findings; the rest are assumptions to surface in your report, not defects to pad the list with.
-
-## Check the things tests do not
-
-- Every changed symbol: `lsp findReferences` and `incomingCalls`. A signature or behaviour change is only as safe as its callers, and the suite exercises the callers you remembered.
-- `cbm_changes` for the blast radius you did not intend. A file in the diff you cannot justify is either scope creep or a stray edit.
-- Diff hygiene: debug output, commented-out code, a `TODO` you left for yourself, a test skipped to get green, a fixture that is now unused.
-- What the suite proves. "Tests pass" is not evidence for a path no test covers — name the uncovered paths explicitly rather than letting green stand in for coverage.
-- Run the suite before delegating. The reviewer pool is read-only and cannot run anything; a reviewer handed unproven code reviews the code and not the behaviour.
-
-## Delegate the cold read
-
-- Brief the reviewer with the intent, the constraints, the accepted tradeoffs and the test output. It has no access to this skill, cannot run anything, and reconstructing intent from a diff means reviewing a goal it invented.
+- You cannot review your own reasoning by rereading it. Re-deriving an argument reproduces it; the error survives the second pass intact. The cold read is the only thing that breaks that, and the smaller the change looks the more certain you are and the less that certainty is worth.
+- Rate your confidence before the reviews come back, and treat a large gap between it and what they return as information about your judgement, not about the pool.
 - A reviewer finding you disagree with gets checked, not argued with. Verify against the code; if it is wrong, say what you checked and why it does not apply. If it is right, fix it and move on without ceremony.
+
+## What only you can put in the briefing
+
+- `vcc_recall` what was actually asked, in the user's words. Mid-implementation drift is the most common outgoing finding and it is invisible from inside the diff — and invisible to a reviewer that never saw the request.
+- Everything you decided silently: a default, an error path, a name, a dependency. Hand the list over rather than ruling on it. The ones that conflict with the request are findings, and it is not you who should decide which those are.
+- What the suite proves and what it does not. "Tests pass" is not evidence for a path no test covers — name the uncovered paths in the briefing rather than letting green stand in for coverage.
+- The blast radius you did not intend: `cbm_changes`, plus `lsp findReferences` and `incomingCalls` on changed symbols. A file in the diff you cannot justify is either scope creep or a stray edit, and either way the reviewers need to know you noticed.
+- Diff hygiene you can see from here — debug output, commented-out code, a `TODO` left for yourself, a test skipped to get green, a now-unused fixture. Listing these in the briefing stops several reviewers spending their pass on the same lint.
 
 ## Before the commit or the push
 

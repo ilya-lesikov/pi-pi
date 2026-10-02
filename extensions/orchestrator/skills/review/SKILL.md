@@ -3,7 +3,9 @@ name: review
 description: Load BEFORE reviewing finished work of any kind — a GitHub PR or GitLab MR, someone's branch, a patch, your own diff before you push or commit, a design doc, a config or migration, a dataset — including "review this", "посмотри что я наделал", "ревью", "is this ready to merge", "what did I miss". Load it BEFORE posting anything to a PR or MR — "post the review", "leave these comments on the PR", "approve the MR", "request changes" — because those calls publish irreversibly and this skill holds the draft-first procedure that makes them safe. Covers direction, intent, premise, severity, and posting findings back to the forge.
 ---
 
-Review is judging finished work against the intent it was meant to serve. The judgement is the same whoever wrote it; only the audience for the findings changes. This skill's `<skill>` tag carries a `dir` attribute; the references live inside it.
+**You do not write the findings. The reviewer pool does.** Your job is to scope the change, commission the right reviewers with the right briefing, and synthesize what comes back into one review. The pool is configured with the strongest models available for this and is purpose-built for it; a finding you produce yourself is one nobody checked.
+
+This holds even when the change looks trivial. "I can see it is fine" is the judgement a cold reader exists to test, and it is the one you are worst placed to make. This skill's `<skill>` tag carries a `dir` attribute; the references live inside it.
 
 ## Settle the direction before anything else
 
@@ -12,65 +14,59 @@ Infer it from the request — do not ask.
 - **Incoming** — a PR/MR URL, a remote branch, a patch file, a name other than yours. You are the approver; findings are addressed to an author and may be posted. See `references/incoming.md`.
 - **Outgoing** — uncommitted work, `HEAD` from this session, "before I push", "what did I miss". Findings are a worklist, not prose for a third party. See `references/outgoing.md`.
 - Do not reach for `git log -1 --format=%ae` to settle it. The agent commits under the user's own identity, so the author email cannot separate work this session produced from work the user wrote by hand — and the second is incoming however the email reads.
-- What you genuinely know is whether *this session* produced the change. Apply `references/outgoing.md`'s section on your own blind spots only when it did; the rest of that file fits any change that is not going to a third party.
 - Ask only when authorship and audience disagree — your own diff that someone else must approve — because that alone changes what you emit.
 
-## Pin what is under review
+## Pin what is under review, and prove it runs
 
-- Establish the fixed point: the merge target for a PR/MR, the ref the session started from when reviewing its own work, the merge-base otherwise. Diff three-dot (`git diff base...HEAD`), so the comparison is against the merge-base rather than the branch tip. `HEAD~1` is right only when exactly one commit is under review — a session that committed each unit separately, as it should, leaves several.
-- Prove the ref resolves and that something is actually under review before doing anything else. A bad ref must fail here, not inside three subagents.
-- `git status --short` before `git diff`, and state which of the four populations you are reviewing: committed, staged, unstaged, untracked. Work that lives entirely in the working tree is the normal outgoing case and an empty `base...HEAD` says nothing about it — a review that silently skips it is worse than no review.
+- Establish the fixed point: the merge target for a PR/MR, the ref the session started from when reviewing its own work, the merge-base otherwise. Diff three-dot (`git diff base...HEAD`). `HEAD~1` is right only when exactly one commit is under review — a session that committed each unit separately leaves several.
+- Prove the ref resolves and that something is actually under review before spawning anything. A bad ref must fail here, not inside four reviewers.
+- `git status --short` before `git diff`, and state which of the four populations you are reviewing: committed, staged, unstaged, untracked. Work that lives entirely in the working tree is the normal outgoing case and an empty `base...HEAD` says nothing about it.
 - For a non-git artifact, pin the version it supersedes. Where there is no before — a document written from scratch — review it against its stated requirements instead, and say that is what you did.
-- On an incoming change, treat the branch as untrusted material before running anything from it. See `references/incoming.md`; for a forge-hosted change, `references/forges.md` covers fetching it and the CLI traps on the way.
+- **Run the suite yourself.** Reviewers are read-only and cannot run anything, so an unproven change hands them code to read instead of behaviour to judge. Their findings are only as good as the test output you give them.
+- On an incoming change the branch is untrusted material and running it is itself a risk. `references/incoming.md` has what to read before you execute anything.
 
-## Establish intent, then the premise
+## Gather what only you can supply
 
-- Outgoing: the intent was settled earlier in this session — `vcc_recall` it rather than reconstructing it from the diff. The diff cannot tell you what it was supposed to do.
-- Incoming: the PR/MR description, the linked issue, the commit messages, in that order. If none of them states a goal, say so and review against what the change implies — never against a goal you guessed silently.
-- Then establish the **premise**: the diagnosis or reading of the system that makes this the right change at all. A change can be flawless against a false premise — correct code fixing the wrong thing, a workaround for a problem that is really upstream, a test built on the same wrong reading as the code.
-- Verify the premise independently of the change. Where the evidence for it is absent, weak, or merely asserted, that is itself a finding, and usually the most valuable one.
-- Before rejecting a premise, measure what the change does before and against after. A change whose stated rationale is wrong may still be a large improvement on the axis it actually moves — that is a finding against the commit message, not grounds to dismiss the change, and recommending its removal on the strength of the bad story is the expensive error.
+Reviewers start empty, cannot `load_skill`, and cannot run commands. Everything they need to judge the change has to come from you:
 
-## Read with the tools
+- **The intent.** Outgoing, `vcc_recall` it from this session rather than reconstructing it from the diff. Incoming, take it from the PR/MR description, the linked issue, and the commit messages, in that order. If nothing states a goal, say so in the briefing — a reviewer that invents one reviews a goal nobody pursued.
+- **The premise.** The diagnosis or reading of the system that makes this the right change at all. State it as the author stated it, and say what evidence you found for it; the reviewers test it, you do not pre-judge it.
+- **The constraints and the accepted tradeoffs**, including decisions already settled earlier that would otherwise look like defects.
+- **The test output**, verbatim, and what it does not cover.
+- **The blast radius.** `cbm_changes` for what the diff reaches; this is also what tells you whether the change is one domain or several.
 
-- `cbm_changes` for blast radius; `lsp diagnostics` on every changed file; `lsp findReferences` and `incomingCalls` on every modified symbol. A reviewer who only read the diff cannot speak about callers.
-- For a consistency finding, cite the precedent: `cbm_search` for how the repo already solves the closest problem, by behaviour rather than filename. "Not idiomatic" without a cited neighbour is a preference, not a finding.
-- You can run the suite; the reviewer pool cannot. Run it, and carry the result into the review. A failing test is evidence. An uncovered path is a gap to investigate — it becomes a finding when you can name what breaks on it, and otherwise it is stated as a limit of what the suite proves.
+## Choose the fan-out
 
-## Keep the two axes apart
+- **One reviewer, whole change** — ordinary work in a single subsystem. Pick a family other than your own; a sibling model shares your blind spots.
+- **The whole pool, whole change** — any of these present: authentication or authorisation, credentials or secrets, a schema change or data migration, a public API or wire contract, concurrency, deletion, anything touching money or user data. Also when the change cannot be exercised by tests at all, or alters behaviour on a path other code shares.
+- **Partitioned by domain** — the change is large *and* mixed, so one reviewer would spread thin across unrelated surfaces. Each domain gets its own reviewer; a domain carrying any flag above gets the whole pool on that domain.
+- Spawn everything in one message so it runs in parallel, and do not cap the count — a ten-reviewer fan-out on a risky change is cheaper than the incident.
+- Use `advisor` alongside, not instead, when the change rests on a contested design decision rather than a defect. `librarian` for an external standard or CVE the repo cannot settle.
 
-- **Intent failures**: missing requirements, scope that nobody asked for, something implemented but wrong.
-- **Craft failures**: correctness, edge and failure handling, concurrency, resource and performance behaviour, security exposure, consistency with surrounding conventions.
-- Report them separately and never rerank across them. Code that follows every convention while implementing the wrong thing passes one axis and fails the other; merging the lists hides exactly that.
+## Partition by risk surface, not by file layout
 
-## Severity, and what it costs to be wrong
+- Cut domains along what can go wrong — the auth path, the migration, the public interface, the build — not along directories. A directory split hands four reviewers the same concern four times.
+- **Every changed file lands in exactly one domain, and a catch-all domain takes the remainder.** Name the paths explicitly in each briefing. A file in no domain is a file nobody reviewed, and the gap is invisible once the reviews come back.
+- Give each reviewer its scope in the prompt and tell it to stay inside it. It will report anything alarming it notices elsewhere in one line, which is how overlap stays cheap.
+- Reconcile the returned `SCOPE` lines against your partition before you synthesize. A missing one means that slice is unreviewed, not clean.
 
-- Use the same vocabulary as pi-pi's reviewer pool — `CRITICAL`, `MAJOR`, `MINOR`, `OPEN QUESTIONS` — so an inline review and a delegated one read identically. For incoming, open with `VERDICT: APPROVE` or `VERDICT: NEEDS_CHANGES` on the first line.
-- Anchor every `CRITICAL` and `MAJOR` to `file:line` or a quoted excerpt. Never assert a problem in something you did not read.
-- A concern you cannot prove with what you ran goes to `OPEN QUESTIONS` with the evidence that would settle it. It does not get promoted to a finding because it feels right.
-- Calibrate by blast radius, not by how irritating it is. Schema changes, API contracts, auth paths, anything touching credentials or user data earn an extra pass; naming and layout do not block.
-- Say explicitly which defects the change introduces and which it merely inherits. A pre-existing problem in a touched line is worth raising and is not the author's debt to this commit, and filing it at the same severity inflates the list it is read against.
-- Rank by what would change the author's next action. A list where most items are `MAJOR` carries no ordering at all and gets skimmed exactly like an unordered one.
-- Report the findings, not the procedure. Which commands you ran, which subagents you spawned, and how you pinned the diff are yours — a reader wants what you found and where.
+## Brief each reviewer
 
-## Delegate what you cannot see yourself
+- Inline everything: the base ref, the intent, the premise, the constraints, the test output, the scope, and the criteria. A thin prompt produces a confident review of the wrong thing.
+- **The criteria.** Intent failures (missing requirements, unasked-for scope, implemented but wrong) and craft failures (correctness, edge and failure handling, concurrency, resource behaviour, security exposure, consistency with surrounding conventions) are reported separately and never reranked against each other.
+- Require `file:line` or a quoted excerpt on every `CRITICAL` and `MAJOR`; anything unprovable with read-only tools goes to `OPEN QUESTIONS` with what would settle it.
+- Require each finding to say whether the change introduces the defect or merely inherits it, and to be self-contained — you will be merging it with findings from reviewers that read something else.
+- For a non-code artifact, say what counts as a defect: for prose and designs, whether each claim is supported and each instruction executable as written; for config and IaC, what it does on apply, what it takes down while applying, how it rolls back; for data and migrations, reversibility, volume, and what a failure halfway through leaves behind.
 
-- The reviewer pool reads cold, which is the point for work you wrote or already formed a view on. Prefer a family other than your own; for a high-stakes change spawn the whole pool and weigh the disagreement rather than averaging it.
-- No pool's tool allowlist includes `load_skill`, and reviewers are read-only: inline the criteria into the prompt, and paste in test results they cannot produce themselves.
-- `advisor` for a genuine design judgement, `librarian` for an external standard or CVE, `explore` to map an area you do not know. Spawn them in one message so they run in parallel.
+## Synthesize
 
-## Non-code artifacts
-
-- Prose and designs: is each claim supported, is each instruction executable as written, would the examples actually run.
-- Config and IaC: what it does on apply, what it takes down while applying, how it rolls back.
-- Data and migrations: reversibility, volume, and what a failure halfway through leaves behind.
-
-## Size the review to the change
-
-- Scale the effort and the output to the diff. Twenty correct lines deserve three lines back; the ceremony belongs to the change, not to this document.
-- **Zero findings is a valid result and the right one more often than not.** Say it in a sentence and stop. A review padded to look thorough buries the one real finding in the next review the author skims.
-- Check the premise once. Report it when it fails or when nothing establishes it, and say nothing about it when it holds — relitigating whether a sound change should exist is the most expensive way to be useless.
-- Every section of this skill permits silence. None of them is a quota.
+- Merge by anchor. The same `file:line` from two reviewers is one finding, reported once, strengthened by the agreement rather than listed twice.
+- Drop anything unanchored. A reviewer's confidence is not evidence, and an assertion about code nobody quoted does not survive into your output.
+- **Where reviewers disagree, go read the code and decide.** Record the dissent and the reason you resolved it that way. Never average two verdicts into a third nobody argued for.
+- The verdict is yours, not the harshest reviewer's. For incoming, open with `VERDICT: APPROVE` or `VERDICT: NEEDS_CHANGES` on the first line; approve when only `MINOR` items remain.
+- Rank by what would change the author's next action. A list where most items are `MAJOR` carries no ordering and gets skimmed like an unordered one.
+- **Zero findings is a valid result.** Say it in a sentence with what was covered and stop. A review padded to look thorough buries the one real finding in the next review the author skims.
+- Report the findings, not the procedure. How many reviewers you spawned, how you partitioned, and what you pinned are yours — a reader wants what you found and where. The exception is coverage you could not get: say plainly what went unreviewed.
 
 ## Never publish without approval
 

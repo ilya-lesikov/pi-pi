@@ -1,13 +1,13 @@
 # Reviewing someone else's change
 
-You are the approver. The author is not in the room, cannot be assumed to share your context, and will read every word you write.
+You are the approver. The author is not in the room, cannot be assumed to share your context, and will read every word that reaches them — which is the synthesis you write, not the reviews you commissioned.
 
-## Reconstruct the intent without the author
+## Reconstruct the intent before you commission anyone
 
-- Read the description, the linked issue, and the commit messages before the diff. Reading the diff first anchors you to what the change *does*, and you will then rationalise it as what it *should* do.
-- Pull the discussion that already happened. A point raised and settled by another reviewer, or a constraint the author stated, turns a finding of yours into noise.
-- Read CI before reviewing. A red pipeline the author has not addressed changes the review from "is this correct" to "is this finished" — and a green pipeline tells you which of your concerns the suite already covers.
-- Where the stated intent and the diff disagree about scope, that gap is the first finding, ahead of anything inside the code.
+- Read the description, the linked issue, and the commit messages before the diff. Reading the diff first anchors you to what the change *does*, and you will then rationalise it as what it *should* do — and that rationalisation is what you would hand four reviewers as the goal.
+- Pull the discussion that already happened and put its conclusions in the briefing. A point raised and settled by another reviewer, or a constraint the author stated, turns a finding into noise — once per reviewer if they do not know about it.
+- Read CI before commissioning. A red pipeline the author has not addressed changes the review from "is this correct" to "is this finished", and a green one tells the reviewers which concerns the suite already covers.
+- Where the stated intent and the diff disagree about scope, that gap is yours to state in the briefing, not a finding to wait for.
 
 ## Treat the branch as untrusted until you have read it
 
@@ -25,7 +25,9 @@ A change from outside is code someone else wrote, arriving in a session that hol
 - Separate "this is wrong" from "this is not how we do it here". The first stands on its own; the second needs a cited precedent and is a `MINOR` unless the inconsistency itself causes a defect.
 - A change you believe rests on a false premise is not a pile of line-level findings. Say the premise is wrong, once, at the top, and stop enumerating consequences of it.
 
-## Write for the author
+## Write the synthesis for the author
+
+Reviewers write for you; you write for the author. Their phrasing is raw material, not a draft.
 
 - Lead each finding with what breaks, then where, then what would fix it. An author triaging twenty comments reads the first clause of each.
 - State the problem, not the fix, when more than one fix exists — prescribing the fix hides the constraint you actually care about and invites a mechanical change that misses it.
