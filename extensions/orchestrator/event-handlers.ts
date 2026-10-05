@@ -28,7 +28,7 @@ import { demoteUnusableSubscription, handleMainAuthFailure, handleMainRateLimit,
 import { adjudicateCheckIn, adjudicateContinuation } from "./continuation-adjudicator.js";
 import { retrySubagentOnNewRouting } from "./subagent-retry.js";
 import { ensureProviderRetrySettings, patchRetryPredicate } from "./provider-retry.js";
-import { loadFlantSettings, noteSubscriptionCredentialAccepted, refreshCodexOAuthToken, refreshCopilotOAuthToken, refreshSubProvider, reviveSubscriptionCredential, setModelRegistry, syncProviderTiers } from "./flant-infra.js";
+import { isCodexTierActive, isCopilotTierActive, isSubscriptionActive, loadFlantSettings, noteSubscriptionCredentialAccepted, refreshCodexOAuthToken, refreshCopilotOAuthToken, refreshSubProvider, reviveSubscriptionCredential, setModelRegistry, syncProviderTiers, type FlantSettings } from "./flant-infra.js";
 import type { Orchestrator } from "./orchestrator.js";
 
 const USAGE_TRACKER_KEY = Symbol.for("pi-pi:usage-tracker");
@@ -99,6 +99,21 @@ export function isMainTurnStalled(orchestrator: Orchestrator, now = Date.now()):
 
 function tracker(): UsageTracker | undefined {
   return (globalThis as any)[USAGE_TRACKER_KEY];
+}
+
+// The credential state the model catalog was last captured under.
+let lastTierCredentialSignature: string | null = null;
+
+function tierCredentialSignature(flant: FlantSettings): string {
+  return [isSubscriptionActive(flant), isCodexTierActive(flant), isCopilotTierActive(flant)].join("|");
+}
+
+function captureAvailableModels(ctx: any): void {
+  const available = ctx?.modelRegistry?.getAvailable?.();
+  // An empty list is a host refresh in flight, not a world without models:
+  // adopting it would strip every tier of its catalog.
+  if (!Array.isArray(available) || available.length === 0) return;
+  updateRegistryFromAvailableModels(available.flatMap((model: any) => model?.provider && model?.id ? [`${model.provider}/${model.id}`] : []));
 }
 
 function resetRequestActivity(orchestrator: Orchestrator): void {
@@ -378,6 +393,15 @@ function registerLifecycle(orchestrator: Orchestrator): void {
       // Unconditional: refreshSubProvider above may have revived a subscription
       // token that was expired when the tiers were last computed.
       syncProviderTiers(flant);
+      // A /login between turns gives a tier its credential only after the
+      // session-start catalog snapshot was taken. pi refreshes its own
+      // availability on login, but this copy would still hold no model for the
+      // provider, and tier resolution skips a tier whose catalog is empty.
+      const signature = tierCredentialSignature(flant);
+      if (signature !== lastTierCredentialSignature) {
+        lastTierCredentialSignature = signature;
+        captureAvailableModels(ctx);
+      }
       // A tier that just went up or down changes which model each worker
       // definition names; the guard inside makes this a no-op when it did not.
       orchestrator.registerAgents();
@@ -508,8 +532,8 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     // The ceiling is worth nothing to a status pi does not count as retryable.
     patchRetryPredicate();
     setModelRegistry((ctx as any).modelRegistry);
-    const available = (ctx as any).modelRegistry?.getAvailable?.();
-    if (Array.isArray(available)) updateRegistryFromAvailableModels(available.flatMap((model: any) => model?.provider && model?.id ? [`${model.provider}/${model.id}`] : []));
+    lastTierCredentialSignature = null;
+    captureAvailableModels(ctx);
     try {
       orchestrator.config = loadConfig(ctx.cwd);
       orchestrator.configError = null;
