@@ -305,6 +305,41 @@ describe("fold", () => {
     expect(adjacent).toEqual([]);
   });
 
+  it("never moves a live call into a turn the host discards", () => {
+    const messages = plain(200, 500);
+    // A turn the provider cut off mid-stream: its calls were emitted, no result
+    // ever came, and the host deletes the whole turn before the request is
+    // built. The retry stands immediately after it, as it does on disk.
+    messages.push({
+      role: "assistant",
+      stopReason: "error",
+      content: [
+        { type: "toolCall", id: "dead1", name: "bash", arguments: { command: "c" } },
+        { type: "toolCall", id: "dead2", name: "bash", arguments: { command: "c" } },
+      ],
+    });
+    messages.push(call("retry", "bash", { command: "c" }));
+    messages.push(result("retry", "bash", "o".repeat(500)));
+
+    fold(messages, 0, { ceiling: 100, lowWater: 50 }, new FoldState());
+
+    const host = messages.filter((m: AgentMessage) => m.stopReason !== "error" && m.stopReason !== "aborted");
+    const answered = new Set(
+      host.flatMap((m: AgentMessage) => m.content ?? []).filter((p: any) => p?.type === "toolCall").map((p: any) => p.id),
+    );
+    // What the host deletes takes everything in it, so a call left there is a
+    // result with nothing to answer it — which the provider rejects for the
+    // rest of the session, every request alike.
+    expect(answered.has("retry")).toBe(true);
+    for (const message of host) {
+      if (message.role === "toolResult") expect(answered.has(message.toolCallId)).toBe(true);
+    }
+    // Nor the other way: the discarded turn's own calls stay in it, rather than
+    // coming back to life in a turn that survives.
+    expect(answered.has("dead1")).toBe(false);
+    expect(answered.has("dead2")).toBe(false);
+  });
+
   it("takes the reasoning with a call dropped on an earlier request", () => {
     const state = new FoldState();
     const first = conversation(200, 500);

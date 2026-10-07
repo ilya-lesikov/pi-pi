@@ -605,6 +605,19 @@ function onlyResultsBetween(messages: AgentMessage[], from: number, to: number):
 }
 
 /**
+ * Whether the host deletes this turn on its way to the request.
+ *
+ * A turn the provider cut off or the user interrupted is removed before the
+ * conversation is converted, which is why its unanswered calls never reach
+ * anyone. Nothing may be moved into one: what lands there is deleted with it,
+ * and a call deleted while the result answering it stays is the one shape the
+ * provider refuses outright.
+ */
+function discardedByHost(message: AgentMessage | undefined): boolean {
+  return message?.role === "assistant" && (message.stopReason === "error" || message.stopReason === "aborted");
+}
+
+/**
  * Removes dropped calls and their results, leaving one line per run naming what
  * went, and reports what those lines cost.
  *
@@ -650,7 +663,7 @@ function applyDrops(messages: AgentMessage[], dropped: Call[]): number {
     const speaks = survivors.some((part: any) => part?.type !== "thinking" || part.thinking || part.thinkingSignature);
     if (!speaks) continue;
     message.content = survivors;
-    if (message.role !== "assistant") {
+    if (message.role !== "assistant" || discardedByHost(message)) {
       kept.push(message);
       continue;
     }
@@ -660,7 +673,7 @@ function applyDrops(messages: AgentMessage[], dropped: Call[]): number {
     // into the turn before it instead, which puts the line naming what went
     // exactly where the calls were.
     const previous = kept[kept.length - 1];
-    if (previous?.role === "assistant" && Array.isArray(previous.content)) previous.content.push(...survivors);
+    if (previous?.role === "assistant" && !discardedByHost(previous) && Array.isArray(previous.content)) previous.content.push(...survivors);
     else kept.push(message);
   }
 
@@ -668,7 +681,7 @@ function applyDrops(messages: AgentMessage[], dropped: Call[]): number {
   // land on, so it goes on the last one there is.
   if (tally.size > 0) {
     for (let m = kept.length - 1; m >= 0; m--) {
-      if (kept[m]?.role !== "assistant" || !Array.isArray(kept[m].content)) continue;
+      if (kept[m]?.role !== "assistant" || discardedByHost(kept[m]) || !Array.isArray(kept[m].content)) continue;
       flushInto(kept[m]);
       break;
     }
