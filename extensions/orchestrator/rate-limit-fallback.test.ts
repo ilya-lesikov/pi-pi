@@ -138,7 +138,7 @@ describe("pause-based rate-limit fallback", () => {
     const ctx = ctxOn("github-copilot/gpt-6-astra");
     const before = Date.now();
 
-    await handleMainRateLimit(orchestrator, ctx, "gpt-6-astra", "github-copilot", "429 Too Many Requests, retry-after: 120");
+    await handleMainRateLimit(orchestrator, ctx, "github-copilot/gpt-6-astra", "429 Too Many Requests, retry-after: 120");
     expect(getPause("copilot:gpt/astra")?.until).toBe(before + 120_000);
 
     await vi.advanceTimersByTimeAsync(119_000);
@@ -153,14 +153,16 @@ describe("pause-based rate-limit fallback", () => {
     const orchestrator = makeOrchestrator(pi);
     orchestrator.switchModel = vi.fn(async () => true);
     const ctx = ctxOn(SUB);
-    await handleMainRateLimit(orchestrator, ctx, SUB, "pp-flant-anthropic-sub");
+    await handleMainRateLimit(orchestrator, ctx, SUB);
     expect(ctx.abort).toHaveBeenCalled();
     // The account's pause has no timer: only the probe lifts it.
     expect(getPause("claude-sub")?.until).toBeNull();
     expect(orchestrator.subSwitchBackTimer).not.toBeNull();
     expect(orchestrator.subProbeSpec).toBe(SUB);
     expect(orchestrator.switchModel).not.toHaveBeenCalled();
-    expect(orchestrator.pausedMainRoutes.size).toBe(0);
+    // Nothing moved, but the stopped request is remembered so the probe that
+    // lifts the pause can resume it.
+    expect(orchestrator.pausedMainRoutes.get("claude-sub")).toMatchObject({ from: SUB, to: SUB, resume: true });
     expect(pi.sendUserMessage).not.toHaveBeenCalled();
     expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Waiting until"), "warning");
   });
@@ -172,10 +174,10 @@ describe("pause-based rate-limit fallback", () => {
     orchestrator.routedMainSpec = SUB;
     orchestrator.switchModel = vi.fn(async () => true);
     const ctx = ctxOn(SUB);
-    await handleMainRateLimit(orchestrator, ctx, SUB, "pp-flant-anthropic-sub");
+    await handleMainRateLimit(orchestrator, ctx, SUB);
     expect(pauseKeys()).toEqual(["claude-sub"]);
     expect(orchestrator.switchModel).toHaveBeenCalledWith(ctx, COPILOT_OPUS, expect.any(String));
-    expect(orchestrator.pausedMainRoutes.get("claude-sub")).toEqual({ from: SUB, to: COPILOT_OPUS });
+    expect(orchestrator.pausedMainRoutes.get("claude-sub")).toEqual({ from: SUB, to: COPILOT_OPUS, owned: true, resume: false });
     expect(orchestrator.routedMainSpec).toBe(COPILOT_OPUS);
     expect(pi.sendUserMessage).toHaveBeenCalled();
   });
@@ -190,7 +192,7 @@ describe("pause-based rate-limit fallback", () => {
       return false;
     });
     const ctx = ctxOn(SUB);
-    await handleMainRateLimit(orchestrator, ctx, SUB, "pp-flant-anthropic-sub");
+    await handleMainRateLimit(orchestrator, ctx, SUB);
     expect(isPaused("claude-sub")).toBe(true);
     expect(orchestrator.pausedMainRoutes.size).toBe(0);
     expect(orchestrator.routedMainSpec).toBe(SUB);
@@ -206,7 +208,7 @@ describe("pause-based rate-limit fallback", () => {
     const orchestrator = makeOrchestrator();
     orchestrator.switchModel = vi.fn(async () => true);
     const ctx = ctxOn(SUB);
-    await handleMainRateLimit(orchestrator, ctx, SUB, "pp-flant-anthropic-sub");
+    await handleMainRateLimit(orchestrator, ctx, SUB);
     expect(pauseKeys()).toEqual([]);
     expect(orchestrator.switchModel).not.toHaveBeenCalled();
     expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Automatic fallback is off"), "warning");
@@ -258,7 +260,7 @@ describe("pause-based rate-limit fallback", () => {
     orchestrator.switchModel = vi.fn(async () => true);
     const ctx = ctxOn(COPILOT_OPUS);
 
-    await handleMainRateLimit(orchestrator, ctx, "claude-opus-4.5", "github-copilot");
+    await handleMainRateLimit(orchestrator, ctx, "github-copilot/claude-opus-4.5");
     expect(pauseKeys()).toEqual(["copilot:claude/opus"]);
     expect(orchestrator.switchModel).toHaveBeenCalledWith(ctx, LLM_OPUS, expect.any(String));
     expect(orchestrator.routedMainSpec).toBe(LLM_OPUS);
@@ -283,7 +285,7 @@ describe("pause-based rate-limit fallback", () => {
     orchestrator.switchModel = vi.fn(async () => true);
     const ctx = ctxOn("github-copilot/gpt-6-astra");
 
-    await handleMainRateLimit(orchestrator, ctx, "gpt-6-astra", "github-copilot");
+    await handleMainRateLimit(orchestrator, ctx, "github-copilot/gpt-6-astra");
     expect(pauseKeys()).toEqual(["copilot:gpt/astra"]);
     expect(orchestrator.switchModel).toHaveBeenCalledWith(ctx, "pp-flant-openai/gpt-6-astra", expect.any(String));
     expect(orchestrator.routedMainSpec).toBeNull();
@@ -307,7 +309,7 @@ describe("pause-based rate-limit fallback", () => {
 
     expect(isRateLimitError(message)).toBe(true);
     const before = Date.now();
-    await handleMainRateLimit(orchestrator, ctx, "gpt-5.7-sol", "openai-codex", message);
+    await handleMainRateLimit(orchestrator, ctx, "openai-codex/gpt-5.7-sol", message);
 
     // The ChatGPT quota is the account's, so the whole provider steps aside.
     expect(pauseKeys()).toEqual(["codex"]);
@@ -322,7 +324,7 @@ describe("pause-based rate-limit fallback", () => {
     orchestrator.switchModel = vi.fn(async () => true);
     const ctx = ctxOn("github-copilot/gpt-6-astra");
 
-    await handleMainRateLimit(orchestrator, ctx, "gpt-6-astra", "github-copilot");
+    await handleMainRateLimit(orchestrator, ctx, "github-copilot/gpt-6-astra");
     vi.mocked(orchestrator.switchModel).mockClear();
     // The user picked something else in the meantime.
     orchestrator.lastCtx = idleCtxOn(SUB);
@@ -344,11 +346,35 @@ describe("pause-based rate-limit fallback", () => {
     orchestrator.switchModel = vi.fn(async () => true);
     const ctx = ctxOn(COPILOT_OPUS);
 
-    await handleMainRateLimit(orchestrator, ctx, "claude-opus-4.5", "github-copilot");
+    await handleMainRateLimit(orchestrator, ctx, "github-copilot/claude-opus-4.5");
     expect(pauseKeys()).toEqual(["copilot:claude/opus"]);
     expect(orchestrator.switchModel).not.toHaveBeenCalled();
-    expect(orchestrator.pausedMainRoutes.size).toBe(0);
+    expect(orchestrator.pausedMainRoutes.get("copilot:claude/opus")).toMatchObject({ resume: true });
     expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Waiting until"), "warning");
+  });
+
+  it("resumes a request that waited out a pause once the pause expires", async () => {
+    vi.useFakeTimers();
+    try {
+      setCatalog([COPILOT_OPUS]);
+      const pi = makePi();
+      const orchestrator = makeOrchestrator(pi);
+      const config = normalizeConfigDurations(getDefaultConfig());
+      config.agents.main.model = COPILOT_OPUS;
+      orchestrator.config = config;
+      orchestrator.routedMainSpec = COPILOT_OPUS;
+      orchestrator.switchModel = vi.fn(async () => true);
+      orchestrator.lastCtx = idleCtxOn(COPILOT_OPUS);
+      await handleMainRateLimit(orchestrator, orchestrator.lastCtx, COPILOT_OPUS, "retry-after: 60");
+      expect(orchestrator.pausedMainRoutes.size).toBe(1);
+      await vi.advanceTimersByTimeAsync(61_000);
+      expect(orchestrator.pausedMainRoutes.size).toBe(0);
+      expect(orchestrator.switchModel).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(pi.sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("The provider limit cleared"), expect.anything());
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("leaves the main model alone when the limit hit a worker on another provider", async () => {
@@ -380,7 +406,7 @@ describe("pause-based rate-limit fallback", () => {
     expect(isPaused("claude-sub")).toBe(false);
     expect(orchestrator.switchModel).toHaveBeenCalledWith(ctx, DIRECT, expect.any(String));
     expect(orchestrator.routedMainSpec).toBe(DIRECT);
-    expect(orchestrator.pausedMainRoutes.get("claude-sub@llm-api")).toEqual({ from: SUB, to: DIRECT });
+    expect(orchestrator.pausedMainRoutes.get("claude-sub@llm-api")).toEqual({ from: SUB, to: DIRECT, owned: true, resume: false });
     expect(pi.sendUserMessage).toHaveBeenCalled();
   });
 
@@ -406,7 +432,7 @@ describe("pause-based rate-limit fallback", () => {
     const orchestrator = makeOrchestrator();
     orchestrator.routedMainSpec = SUB;
     orchestrator.switchModel = vi.fn(async () => true);
-    await handleMainRateLimit(orchestrator, ctxOn(SUB), SUB, "pp-flant-anthropic-sub");
+    await handleMainRateLimit(orchestrator, ctxOn(SUB), SUB);
     expect(orchestrator.routedMainSpec).toBe(COPILOT_OPUS);
     vi.mocked(orchestrator.switchModel).mockClear();
 
@@ -426,7 +452,7 @@ describe("pause-based rate-limit fallback", () => {
     setCatalog([SUB, COPILOT_OPUS]);
     const orchestrator = makeOrchestrator();
     orchestrator.switchModel = vi.fn(async () => true);
-    await handleMainRateLimit(orchestrator, ctxOn(SUB), SUB, "pp-flant-anthropic-sub");
+    await handleMainRateLimit(orchestrator, ctxOn(SUB), SUB);
     vi.mocked(probeSubscriptionCleared).mockClear();
 
     await vi.advanceTimersByTimeAsync(10 * 60_000);
@@ -463,7 +489,7 @@ describe("pause-based rate-limit fallback", () => {
     const orchestrator = makeOrchestrator(pi);
     orchestrator.switchModel = vi.fn(async () => true);
     const ctx = ctxOn(SUB);
-    await handleMainAuthFailure(orchestrator, ctx, SUB, "pp-flant-anthropic-sub");
+    await handleMainAuthFailure(orchestrator, ctx, SUB);
     expect(pauseKeys()).toEqual([]);
     expect(orchestrator.switchModel).not.toHaveBeenCalled();
     expect(pi.sendUserMessage).toHaveBeenCalled();
@@ -480,7 +506,7 @@ describe("pause-based rate-limit fallback", () => {
     const orchestrator = makeOrchestrator(pi);
     orchestrator.switchModel = vi.fn(async () => true);
     const ctx = ctxOn(SUB);
-    await handleMainAuthFailure(orchestrator, ctx, SUB, "pp-flant-anthropic-sub");
+    await handleMainAuthFailure(orchestrator, ctx, SUB);
     expect(pauseKeys()).toEqual([]);
     expect(orchestrator.switchModel).not.toHaveBeenCalled();
     expect(pi.sendUserMessage).toHaveBeenCalled();
@@ -493,7 +519,7 @@ describe("pause-based rate-limit fallback", () => {
     orchestrator.routedMainSpec = SUB;
     orchestrator.switchModel = vi.fn(async () => true);
     const ctx = ctxOn(SUB);
-    await handleMainAuthFailure(orchestrator, ctx, SUB, "pp-flant-anthropic-sub");
+    await handleMainAuthFailure(orchestrator, ctx, SUB);
     expect(pauseKeys()).toEqual(["claude-sub"]);
     expect(orchestrator.switchModel).toHaveBeenCalledWith(ctx, COPILOT_OPUS, expect.any(String));
     expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("/login"), expect.any(String));
@@ -526,7 +552,7 @@ describe("pause-based rate-limit fallback", () => {
     const orchestrator = makeOrchestrator(pi);
     orchestrator.switchModel = vi.fn(async () => true);
     const ctx = ctxOn(SUB);
-    await handleMainAuthFailure(orchestrator, ctx, SUB, "pp-flant-anthropic-sub");
+    await handleMainAuthFailure(orchestrator, ctx, SUB);
     expect(pauseKeys()).toEqual([]);
     expect(orchestrator.switchModel).not.toHaveBeenCalled();
     expect(pi.sendUserMessage).not.toHaveBeenCalled();
@@ -548,7 +574,7 @@ describe("pause-based rate-limit fallback", () => {
     vi.mocked(reviveSubscriptionCredential).mockClear();
     const orchestrator = makeOrchestrator();
     orchestrator.switchModel = vi.fn(async () => true);
-    await handleMainAuthFailure(orchestrator, ctxOn("github-copilot/gpt-5.6-sol"), "gpt-5.6-sol", "github-copilot");
+    await handleMainAuthFailure(orchestrator, ctxOn("github-copilot/gpt-5.6-sol"), "github-copilot/gpt-5.6-sol");
     expect(reviveSubscriptionCredential).not.toHaveBeenCalled();
     expect(pauseKeys()).toEqual([]);
   });
@@ -562,7 +588,7 @@ describe("pause-based rate-limit fallback", () => {
     const orchestrator = makeOrchestrator();
     orchestrator.routedMainSpec = SUB;
     orchestrator.switchModel = vi.fn(async () => true);
-    await handleMainRateLimit(orchestrator, ctxOn(SUB), SUB, "pp-flant-anthropic-sub");
+    await handleMainRateLimit(orchestrator, ctxOn(SUB), SUB);
     vi.mocked(orchestrator.switchModel).mockClear();
 
     vi.mocked(probeSubscriptionCleared).mockResolvedValue("ok" as any);
@@ -596,7 +622,7 @@ describe("pause-based rate-limit fallback", () => {
     const orchestrator = makeOrchestrator();
     orchestrator.routedMainSpec = SUB;
     orchestrator.switchModel = vi.fn(async () => true);
-    await handleMainRateLimit(orchestrator, ctxOn(SUB), SUB, "pp-flant-anthropic-sub");
+    await handleMainRateLimit(orchestrator, ctxOn(SUB), SUB);
     orchestrator.switchModel = vi.fn(async () => false);
 
     vi.mocked(probeSubscriptionCleared).mockResolvedValue("ok" as any);

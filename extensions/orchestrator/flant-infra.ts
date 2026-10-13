@@ -143,7 +143,7 @@ interface CopilotOAuthCreds extends AnthropicOAuthCreds {
 // models this matters for.
 let modelRegistryRef: {
   getApiKeyForProvider?: (provider: string) => Promise<string | undefined>;
-  find?: (provider: string, modelId: string) => { compat?: unknown; thinkingLevelMap?: unknown; contextWindow?: number; maxTokens?: number } | undefined;
+  find?: (provider: string, modelId: string) => { compat?: unknown; thinkingLevelMap?: unknown; contextWindow?: number; maxTokens?: number; input?: string[]; reasoning?: boolean } | undefined;
   getAll?: () => Array<{ provider?: string; id?: string }>;
 } | null = null;
 
@@ -558,9 +558,9 @@ let piRef: ExtensionAPI | null = null;
  * of the subscription is registered.
  */
 interface SubProviderContext {
-  anthropicModels: string[];
+  /** Bare Claude ids each route serves; an empty list leaves that route unregistered. */
+  catalogs: { gateway: string[]; direct: string[] };
   metadata: Record<string, OpenRouterModelData>;
-  routes: { direct: boolean; gateway: boolean };
 }
 let subProviderContext: SubProviderContext | null = null;
 /** The OAuth access token the subscription providers were last registered with. */
@@ -646,6 +646,70 @@ function saveLlmApiCache(cache: LlmApiCache): void {
   } finally {
     release();
   }
+}
+
+const LEGACY_CACHE_POLICY_KEYS = [
+  "enabled",
+  "subscription",
+  "switchBackIntervalMinutes",
+  "autoRateLimitFallback",
+  "copilotEnabled",
+  "autoUpdate",
+  "cacheTTLDays",
+] as const;
+
+// Values a released version shipped as the default for each key. The combined
+// cache file was written with every setting, chosen or not, so a value matching
+// a historical default is read as "never chosen": migrating it would launder a
+// stale default into policy that outranks every later default change.
+const LEGACY_HISTORICAL_DEFAULTS: Record<string, unknown[]> = {
+  switchBackIntervalMinutes: [30, 10],
+  cacheTTLDays: [7],
+  enabled: [false],
+  subscription: [false],
+  copilotEnabled: [false],
+  autoUpdate: [true],
+  autoRateLimitFallback: [true],
+};
+
+function coerceLegacy(key: string, value: unknown): unknown {
+  if (key === "cacheTTLDays" || key === "switchBackIntervalMinutes") {
+    const n = Math.round(toNumber(value, key === "cacheTTLDays" ? 3 : 10));
+    return Math.max(1, n);
+  }
+  return !!value;
+}
+
+/**
+ * Policy an old build kept in the model cache file, before it moved into
+ * config: the keys the user actually chose, as a `flant` section the config
+ * migration then carries onto providers. Each key is returned only when the
+ * global config does not set it already. Stripping the keys from the cache is
+ * left to the caller, once the result is safely written.
+ */
+export function legacyCachePolicy(globalFlant: Record<string, unknown> = {}): Record<string, unknown> | null {
+  if (!existsSync(SETTINGS_PATH)) return null;
+  let raw: Record<string, unknown>;
+  try {
+    raw = JSON.parse(readFileSync(SETTINGS_PATH, "utf-8")) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  if (!LEGACY_CACHE_POLICY_KEYS.some((key) => Object.prototype.hasOwnProperty.call(raw, key))) return null;
+  const out: Record<string, unknown> = {};
+  for (const key of LEGACY_CACHE_POLICY_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(raw, key) || Object.prototype.hasOwnProperty.call(globalFlant, key)) continue;
+    const value = coerceLegacy(key, raw[key]);
+    if (LEGACY_HISTORICAL_DEFAULTS[key]?.includes(value)) continue;
+    out[key] = value;
+  }
+  return out;
+}
+
+/** Rewrite the cache file without the policy keys an old build kept there. */
+export function stripLegacyCachePolicy(): void {
+  if (legacyCachePolicy() === null) return;
+  saveLlmApiCache(loadLlmApiCache());
 }
 
 /** Effective provider settings: scoped config (cwd binds the project layer). */
@@ -744,18 +808,29 @@ export function subProbeModelId(modelId: string): string {
 }
 
 /**
- * Where a probe of the subscription goes: through the gateway when that route
- * is registered, otherwise straight to Anthropic. Both answer for the same
- * account, so either says whether its quota is back.
+ * Where a probe of the subscription goes: the first registered route in the
+ * configured order whose transport is not itself failing. Every route answers
+ * for the same account, so any of them says whether its quota is back.
  */
+let probeRouteSkip: (route: "direct" | "llm-api") => boolean = () => false;
+let probeRouteOrder: Array<"direct" | "llm-api"> = ["llm-api", "direct"];
+
+export function setProbeRoutePolicy(order: Array<"direct" | "llm-api">, skip: (route: "direct" | "llm-api") => boolean): void {
+  probeRouteOrder = order;
+  probeRouteSkip = skip;
+}
+
 function probeTarget(probeModel: string): { url: string; model: string; headers: Record<string, string> } | null {
   const gatewayKey = readGatewayApiKey();
-  const routes = subProviderContext?.routes;
-  if (gatewayKey && (!routes || routes.gateway)) {
-    return { url: "https://llm-api.flant.ru/v1/messages", model: probeModel, headers: { "x-litellm-api-key": `Bearer ${gatewayKey}` } };
-  }
-  if (!routes || routes.direct) {
-    return { url: "https://api.anthropic.com/v1/messages", model: probeModel.slice(SUB_MODEL_PREFIX.length), headers: {} };
+  const catalogs = subProviderContext?.catalogs;
+  for (const route of probeRouteOrder) {
+    if (probeRouteSkip(route)) continue;
+    if (route === "llm-api" && gatewayKey && (!catalogs || catalogs.gateway.length > 0)) {
+      return { url: "https://llm-api.flant.ru/v1/messages", model: probeModel, headers: { "x-litellm-api-key": `Bearer ${gatewayKey}` } };
+    }
+    if (route === "direct" && (!catalogs || catalogs.direct.length > 0)) {
+      return { url: "https://api.anthropic.com/v1/messages", model: probeModel.slice(SUB_MODEL_PREFIX.length), headers: {} };
+    }
   }
   return null;
 }
@@ -988,7 +1063,9 @@ function claudeSubRoutes(settings: RoutingSettings): { direct: boolean; gateway:
   if (!sub.enabled) return { direct: false, gateway: false };
   return {
     direct: sub.route.includes("direct"),
-    gateway: sub.route.includes("llm-api") && settings.providers["llm-api"].enabled && !!readGatewayApiKey(),
+    // The subscription's own transport through the gateway: turning off the
+    // paid LLM API provider says nothing about it.
+    gateway: sub.route.includes("llm-api") && !!readGatewayApiKey(),
   };
 }
 
@@ -1095,6 +1172,10 @@ function applyClaudeModelCapabilities(config: ProviderModelConfig, bareModelId: 
   if (catalog.thinkingLevelMap) out.thinkingLevelMap = catalog.thinkingLevelMap as ProviderModelConfig["thinkingLevelMap"];
   if (typeof catalog.contextWindow === "number" && catalog.contextWindow > 0) out.contextWindow = catalog.contextWindow;
   if (typeof catalog.maxTokens === "number" && catalog.maxTokens > 0) out.maxTokens = catalog.maxTokens;
+  // Without the gateway's metadata a model would be declared text-only, and pi
+  // replaces every image sent to a text-only model with a placeholder.
+  if (Array.isArray(catalog.input) && catalog.input.length > 0) out.input = catalog.input as ProviderModelConfig["input"];
+  if (typeof catalog.reasoning === "boolean") out.reasoning = catalog.reasoning;
   return out;
 }
 
@@ -1164,16 +1245,22 @@ export function registerClaudeSub(
   pinnedSpecs: string[] = [],
 ): void {
   const routes = isClaudeSubInUse(settings, pinnedSpecs) ? claudeSubRoutes(settings) : { direct: false, gateway: false };
-  if (!routes.direct && !routes.gateway) {
+  // Each route offers what it actually serves: the gateway its own `sub/`
+  // listing, Anthropic directly what pi's catalog knows. A gateway that lists
+  // no Claude has nothing to route there.
+  const catalogs = {
+    gateway: routes.gateway ? gatewayClaudeIds : [],
+    direct: routes.direct ? nativeClaudeIds() : [],
+  };
+  if (catalogs.gateway.length === 0 && catalogs.direct.length === 0) {
     subProviderContext = null;
     lastSubToken = null;
     pi.unregisterProvider(SUB_PROVIDER);
     pi.unregisterProvider(DIRECT_SUB_PROVIDER);
     return;
   }
-  const anthropicModels = gatewayClaudeIds.length > 0 ? gatewayClaudeIds : nativeClaudeIds();
-  subProviderContext = { anthropicModels, metadata, routes };
-  registerSubProvider(pi, anthropicModels, metadata, routes);
+  subProviderContext = { catalogs, metadata };
+  registerSubProvider(pi, catalogs, metadata);
 }
 
 function nativeClaudeIds(): string[] {
@@ -1202,9 +1289,8 @@ function nativeClaudeIds(): string[] {
  */
 function registerSubProvider(
   pi: ExtensionAPI,
-  anthropicModels: string[],
+  catalogs: { gateway: string[]; direct: string[] },
   metadata: Record<string, OpenRouterModelData>,
-  routes: { direct: boolean; gateway: boolean },
 ): void {
   const log = getLogger();
   const stored = readStoredClaudeOAuthToken();
@@ -1220,12 +1306,12 @@ function registerSubProvider(
   if (stored.expired) {
     log.debug({ s: "flant" }, "registering the subscription with an expired token; a refresh re-registers it before the first request");
   }
-  const claudeModels = (prefix: string) => anthropicModels.map((m) => {
+  const claudeModels = (ids: string[], prefix: string) => ids.map((m) => {
     const cfg = applyClaudeModelCapabilities(buildProviderModelConfig(m, metadata), m);
     noteFallbackWindow(`${prefix}${m}`, metadata[m], cfg.contextWindow ?? 0);
     return { ...cfg, id: `${prefix}${m}` };
   });
-  if (routes.gateway && gatewayKey) {
+  if (catalogs.gateway.length > 0 && gatewayKey) {
     pi.registerProvider(SUB_PROVIDER, {
       name: "Claude subscription (via LLM API)",
       api: "anthropic-messages",
@@ -1238,19 +1324,19 @@ function registerSubProvider(
       // mergeHeaders applies these AFTER the default, and plan billing expects
       // this form, at the version the billing header's cc_version carries.
       headers: { "x-litellm-api-key": `Bearer ${gatewayKey}`, "user-agent": buildUserAgent() },
-      models: claudeModels(SUB_MODEL_PREFIX),
+      models: claudeModels(catalogs.gateway, SUB_MODEL_PREFIX),
     });
   } else {
     pi.unregisterProvider(SUB_PROVIDER);
   }
-  if (routes.direct) {
+  if (catalogs.direct.length > 0) {
     pi.registerProvider(DIRECT_SUB_PROVIDER, {
       name: "Claude subscription (direct)",
       api: "anthropic-messages",
       baseUrl: "https://api.anthropic.com",
       apiKey: oauthToken,
       headers: { "user-agent": buildUserAgent() },
-      models: claudeModels(""),
+      models: claudeModels(catalogs.direct, ""),
     });
   } else {
     pi.unregisterProvider(DIRECT_SUB_PROVIDER);
@@ -1289,7 +1375,7 @@ export async function refreshSubProvider(pi?: ExtensionAPI): Promise<void> {
   }
   if (token === lastSubToken) return;
 
-  registerSubProvider(api, ctx.anthropicModels, ctx.metadata, ctx.routes);
+  registerSubProvider(api, ctx.catalogs, ctx.metadata);
   log.debug({ s: "flant" }, "re-registered the subscription with a refreshed oauth token");
 }
 
@@ -1314,7 +1400,7 @@ export async function recoverRejectedSubCredential(
   const ctx = subProviderContext;
   const api = pi ?? piRef;
   if (ctx && api && result.token !== lastSubToken) {
-    registerSubProvider(api, ctx.anthropicModels, ctx.metadata, ctx.routes);
+    registerSubProvider(api, ctx.catalogs, ctx.metadata);
     getLogger().info({ s: "flant" }, "rebound the subscription after a rejected credential");
   }
   return "rotated";
@@ -1381,8 +1467,10 @@ export async function updateFlantInfra(
   const cache = loadLlmApiCache();
 
   // Refresh the personal-subscription Claude OAuth token before (re)registering
-  // providers so the sub provider is built with a valid, non-expired token.
-  if (settings.providers["claude-sub"].enabled) await refreshClaudeOAuthToken();
+  // providers so the sub provider is built with a valid, non-expired token —
+  // but not for a subscription nothing routes onto, whose credential is left
+  // untouched.
+  if (isClaudeSubInUse(settings, options.pinnedSpecs ?? [])) await refreshClaudeOAuthToken();
 
   if (!gatewayWanted(settings)) {
     registerFlantProviders(pi, [], {}, { settings, pinnedSpecs: options.pinnedSpecs });
@@ -1480,7 +1568,7 @@ export async function initFlantOnStartup(pi: ExtensionAPI, cwd?: string, pinnedS
   const cache = loadLlmApiCache();
   if (!settings.providers["llm-api"].autoUpdate && cache.cachedFlantModels && cache.cachedOpenRouterData) {
     // autoUpdate=false means "do not REFRESH the cache", not "stay unregistered".
-    if (settings.providers["claude-sub"].enabled) await refreshClaudeOAuthToken();
+    if (isClaudeSubInUse(settings, pinnedSpecs)) await refreshClaudeOAuthToken();
     const usable = gatewayWanted(settings);
     registerFlantProviders(pi, usable ? cache.cachedFlantModels : [], usable ? cache.cachedOpenRouterData : {}, { settings, pinnedSpecs });
     return;

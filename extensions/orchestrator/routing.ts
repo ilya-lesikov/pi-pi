@@ -156,6 +156,23 @@ export function isSlotRef(ref: string): boolean {
   return parseRef(ref)?.kind === "slot";
 }
 
+interface RoleModels {
+  main: { model: string };
+  subagents: { simple: Record<string, { model: string }>; pools: Record<string, Array<{ model: string }>> };
+}
+
+/** Role models pinned to an exact provider/model, which routing never moves. */
+export function pinnedRoleSpecs(config: { agents?: RoleModels } | null | undefined): string[] {
+  const agents = config?.agents;
+  if (!agents) return [];
+  const refs = [
+    agents.main.model,
+    ...Object.values(agents.subagents.simple).map((agent) => agent.model),
+    ...Object.values(agents.subagents.pools).flatMap((pool) => pool.map((entry) => entry.model)),
+  ];
+  return refs.filter((ref) => !isSlotRef(ref));
+}
+
 export function refLabel(ref: string): string {
   const parsed = parseRef(ref);
   if (!parsed) return ref;
@@ -443,14 +460,26 @@ function resolveSlot(family: FamilyName, slot: SlotName, pro: boolean, steps: st
   return null;
 }
 
-function lastGoodUsable(spec: string): boolean {
+/**
+ * Whether a model a slot last resolved to is still one the slot's current
+ * policy would choose, were its provider not momentarily missing: the same
+ * override, the same pinned version, an enabled and unpaused provider.
+ */
+function lastGoodUsable(spec: string, family: FamilyName, slot: SlotName, pro: boolean): boolean {
   if (!catalog.has(spec)) return false;
+  const overrideSpec = overrideModelFor(family, slot);
+  if (overrideSpec) return spec === overrideSpec;
+  const parts = splitSpec(spec)!;
+  const owner = slotOfModelId(parts.id);
+  if (!owner || owner.family !== family || owner.slot !== slot || (owner.pro && !pro)) return false;
+  const pin = state.models[family]?.pins?.[slot];
+  if (pin && normalizeVersion(stripPro(pin)) !== normalizeVersion(stripPro(parts.id))) return false;
   const key = pauseKeyForSpec(spec);
   if (key && isPaused(key)) return false;
-  const provider = logicalProviderOf(splitSpec(spec)?.provider ?? "");
-  if (provider && !state.providers[provider]?.enabled) return false;
+  const provider = logicalProviderOf(parts.provider);
+  if (!provider || !state.providers[provider]?.enabled) return false;
   if (provider === "claude-sub") {
-    const route = routeOfConcrete(splitSpec(spec)!.provider);
+    const route = routeOfConcrete(parts.provider);
     if (!route || !state.providers["claude-sub"].route.includes(route) || isPaused(routePauseKey(route))) return false;
   }
   return true;
@@ -472,7 +501,7 @@ export function resolveRef(ref: string): Resolution {
     return { ref, ...found, steps };
   }
   const previous = lastGood.get(ref);
-  if (previous && lastGoodUsable(previous)) {
+  if (previous && lastGoodUsable(previous, parsed.family, parsed.slot, parsed.pro)) {
     steps.push(`↺ keeping the last working model ${previous}`);
     return { ref, spec: previous, via: "last-good", proFallback: false, steps };
   }

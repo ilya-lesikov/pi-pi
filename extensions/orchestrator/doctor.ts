@@ -6,7 +6,7 @@ import { fileURLToPath } from "url";
 import { GLOBAL_CONFIG_PATH, mergeConfigLayers, readRawConfig, type NormalizedPiPiConfig } from "./config.js";
 import { hasClaudeSubCredential, isClaudeSubInUse, isCodexActive, isCopilotActive, loadLlmApiCache, loadRoutingSettings, readGatewayApiKey, resolveAgentDir } from "./flant-infra.js";
 import { buildPoolRoster } from "./agents/registry.js";
-import { catalogProviders, describeRef, FAMILIES, FAMILY_LABEL, isSlotRef, overrideModelFor, resolveRef, slotsOf, splitSpec } from "./routing.js";
+import { catalogProviders, describeRef, FAMILIES, FAMILY_LABEL, isSlotRef, overrideModelFor, pinnedRoleSpecs, resolveRef, slotsOf, splitSpec } from "./routing.js";
 import { provisionDir } from "./provision/install.js";
 import { provisionResults } from "./provision/session.js";
 import { listLayeredSkills } from "./skills-manifest.js";
@@ -316,7 +316,7 @@ export async function runDoctor(orchestrator: Orchestrator, ctx: any, options: D
     const settings = loadRoutingSettings(orchestrator.cwd);
     add("pass", `Priority: ${settings.providers.order.join(" › ")}`);
     if (settings.providers["claude-sub"].enabled) {
-      if (!isClaudeSubInUse(settings, [])) add("pass", "Claude subscription unused: the Claude family is overridden");
+      if (!isClaudeSubInUse(settings, pinnedRoleSpecs(config))) add("pass", "Claude subscription unused: the Claude family is overridden");
       else if (hasClaudeSubCredential()) add("pass", `Claude subscription logged in (routes: ${settings.providers["claude-sub"].route.join(", then ")})`);
       else add("warning", "Claude subscription enabled but not logged in (run /login → Anthropic)");
       if (settings.providers["claude-sub"].route.length === 1 && settings.providers["claude-sub"].route[0] === "llm-api" && !readGatewayApiKey()) {

@@ -340,6 +340,23 @@ describe("probeSubscriptionCleared", () => {
     expect(JSON.parse(req.body).model).toBe("claude-haiku-4-5");
   });
 
+  // A gateway outage pauses only that transport; the account's recovery has to
+  // be checked over the route that still works.
+  it("probes over the next route in order when the first one is failing", async () => {
+    const dir = makeTempDir();
+    writeAuth(dir);
+    process.env.LLM_API_KEY = "gw";
+    const mod = await loadModule(dir);
+    mod.setProbeRoutePolicy(["llm-api", "direct"], (route) => route === "llm-api");
+    const fn = stubFetch(() => ({ ok: true, status: 200 }));
+    await mod.probeSubscriptionCleared("pp-flant-anthropic-sub/sub/claude-haiku-4-5");
+    expect(fn.mock.calls[0][0]).toBe("https://api.anthropic.com/v1/messages");
+    mod.setProbeRoutePolicy(["direct", "llm-api"], () => false);
+    await mod.probeSubscriptionCleared("pp-flant-anthropic-sub/sub/claude-haiku-4-5");
+    expect(fn.mock.calls[1][0]).toBe("https://api.anthropic.com/v1/messages");
+    mod.setProbeRoutePolicy(["llm-api", "direct"], () => false);
+  });
+
   it("skips the probe when only the gateway route is registered and the key is gone", async () => {
     const dir = makeTempDir();
     writeAuth(dir);

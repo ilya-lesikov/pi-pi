@@ -56,6 +56,13 @@ function migrateAgentRefs(agents: Record<string, any>): boolean {
 }
 
 /**
+ * The schema a layer is written in. A layer that carries it has already been
+ * migrated, or was written by this version, so a `provider/model` in it is a
+ * pin someone chose and must not be read as an old tier-routed spec.
+ */
+export const CONFIG_SCHEMA = 2;
+
+/**
  * Rewrite one config layer from the provider-tier schema (`flant.*`,
  * provider-bound model specs) onto providers/models and slot references.
  * Pure: returns a migrated copy and whether anything changed, so callers decide
@@ -63,17 +70,20 @@ function migrateAgentRefs(agents: Record<string, any>): boolean {
  */
 export function migrateConfigLayer(raw: Record<string, any>): { config: Record<string, any>; changed: boolean } {
   const config = structuredClone(raw);
+  if (typeof config.schema === "number" && config.schema >= CONFIG_SCHEMA) return { config, changed: false };
+  if (Object.keys(config).length === 0) return { config, changed: false };
   let changed = false;
   if (isObject(config.flant)) {
     const f = config.flant;
     if (typeof f.subscription === "boolean") setIfAbsent(config, ["providers", "claude-sub", "enabled"], f.subscription);
     if (typeof f.codexEnabled === "boolean") setIfAbsent(config, ["providers", "codex", "enabled"], f.codexEnabled);
     if (typeof f.copilotEnabled === "boolean") setIfAbsent(config, ["providers", "copilot", "enabled"], f.copilotEnabled);
-    if (f.enabled === false) {
-      // The old switch turned the gateway off entirely, the subscription's
-      // route through it included.
-      setIfAbsent(config, ["providers", "llm-api", "enabled"], false);
-      setIfAbsent(config, ["providers", "claude-sub", "route"], ["direct"]);
+    if (typeof f.enabled === "boolean") {
+      // The old switch turned the whole gateway on or off, the subscription's
+      // route through it included; an explicit true has to survive too, or a
+      // project that turned it back on loses that against a global false.
+      setIfAbsent(config, ["providers", "llm-api", "enabled"], f.enabled);
+      setIfAbsent(config, ["providers", "claude-sub", "route"], f.enabled ? ["llm-api", "direct"] : ["direct"]);
     }
     if (typeof f.autoUpdate === "boolean") setIfAbsent(config, ["providers", "llm-api", "autoUpdate"], f.autoUpdate);
     if (typeof f.cacheTTLDays === "number") setIfAbsent(config, ["providers", "llm-api", "cacheTTLDays"], f.cacheTTLDays);
@@ -83,5 +93,6 @@ export function migrateConfigLayer(raw: Record<string, any>): { config: Record<s
     changed = true;
   }
   if (isObject(config.agents) && migrateAgentRefs(config.agents)) changed = true;
-  return { config, changed };
+  config.schema = CONFIG_SCHEMA;
+  return { config, changed: true };
 }

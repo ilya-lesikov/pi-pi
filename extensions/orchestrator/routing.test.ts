@@ -214,6 +214,23 @@ describe("pauses", () => {
   });
 });
 
+describe("last working model", () => {
+  it("does not outlive a change of override or version pin", () => {
+    configure((c) => { c.providers.order = ["copilot", "claude-sub", "codex", "llm-api"]; });
+    expect(resolveSpec("claude/opus")).toBe("github-copilot/claude-opus-5");
+    configure((c) => {
+      c.providers.order = ["copilot", "claude-sub", "codex", "llm-api"];
+      c.models.claude.override = { provider: "kimi-coding", model: "kimi-k3" };
+    });
+    expect(resolveRef("claude/opus").spec).toBeNull();
+    configure((c) => {
+      c.providers.order = ["copilot", "claude-sub", "codex", "llm-api"];
+      c.models.claude.pins = { opus: "claude-opus-9" };
+    });
+    expect(resolveRef("claude/opus").spec).toBeNull();
+  });
+});
+
 describe("pool names", () => {
   it("names a pool member by slot, and maps an older version-bearing name back to it", () => {
     expect(poolToken("gpt/astra:pro")).toBe("gpt-astra-pro");

@@ -221,6 +221,19 @@ describe("migration from the provider-tier schema", () => {
     expect(migrateModelRef("pp-flant-openai/gemini-3.1-pro")).toBe("pp-flant-openai/gemini-3.1-pro");
   });
 
+  // Once a layer is on the new schema, a provider/model in it is a pin someone
+  // chose — reading it as an old tier-routed spec would move it onto a slot.
+  it("leaves a stamped layer's pins alone", () => {
+    const layer = { schema: 2, agents: { main: { model: "pp-flant-openai/gpt-6-astra-pro", thinking: "high" } } };
+    expect(migrateConfigLayer(layer)).toEqual({ config: layer, changed: false });
+  });
+
+  it("keeps an explicit gateway enable, so a project can still turn it back on", () => {
+    const merged = mergeConfigLayers({ flant: { enabled: false } }, { flant: { enabled: true } });
+    expect(merged.providers["llm-api"].enabled).toBe(true);
+    expect(merged.providers["claude-sub"].route).toEqual(["llm-api", "direct"]);
+  });
+
   it("moves flant.* onto providers.* without overriding what the layer already sets", () => {
     const { config, changed } = migrateConfigLayer({
       flant: { enabled: false, subscription: false, copilotEnabled: true, autoRateLimitFallback: false, switchBackIntervalMinutes: 20, cacheTTLDays: 7 },
@@ -245,7 +258,10 @@ describe("migration from the provider-tier schema", () => {
     const original = JSON.stringify({ flant: { enabled: true, copilotEnabled: true } });
     writeFileSync(path, original, "utf-8");
     expect(migrateConfigFile(path)).toBe(true);
-    expect(JSON.parse(readFileSync(path, "utf-8"))).toEqual({ providers: { copilot: { enabled: true } } });
+    expect(JSON.parse(readFileSync(path, "utf-8"))).toEqual({
+      providers: { copilot: { enabled: true }, "llm-api": { enabled: true }, "claude-sub": { route: ["llm-api", "direct"] } },
+      schema: 2,
+    });
     expect(readFileSync(`${path}.pre-routing.bak`, "utf-8")).toBe(original);
     writeFileSync(path, JSON.stringify({ flant: { codexEnabled: false } }), "utf-8");
     expect(migrateConfigFile(path)).toBe(true);
@@ -559,7 +575,7 @@ describe("config write helpers", () => {
     );
     removeConfigValue(filePath, ["agents", "subagents", "simple", "explore"]);
     const raw = JSON.parse(readFileSync(filePath, "utf-8"));
-    expect(raw).toEqual({});
+    expect(raw).toEqual({ schema: 2 });
     expect(existsSync(filePath)).toBe(true);
   });
 });

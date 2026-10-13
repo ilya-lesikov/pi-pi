@@ -38,6 +38,7 @@ import {
   listPauses,
   overrideModelFor,
   parseRef,
+  pinnedRoleSpecs,
   refLabel,
   resolveRef,
   slotsOf,
@@ -49,7 +50,7 @@ import {
 } from "./routing.js";
 import { compareModelVersion } from "./model-version.js";
 import { clearAllPauses } from "./rate-limit-fallback.js";
-import { captureAvailableModels, mainUnavailableMessage, pinnedRoleSpecs } from "./event-handlers.js";
+import { captureAvailableModels, mainUnavailableMessage } from "./event-handlers.js";
 import { enabledSkillLayers, listLayeredSkills } from "./skills-manifest.js";
 import { buildPoolRoster } from "./agents/registry.js";
 import { setLogLevel } from "./log.js";
@@ -1088,9 +1089,7 @@ async function moveProvider(orchestrator: Orchestrator, ctx: any, provider: Prov
   const to = from + delta;
   if (from < 0 || to < 0 || to >= order.length) return;
   [order[from], order[to]] = [order[to]!, order[from]!];
-  const scope = hasLayerOverride(orchestrator, "project", ["providers", "order"]) ? "project" : hasLayerOverride(orchestrator, "global", ["providers", "order"]) ? "global" : await pickScope(ctx, orchestrator);
-  if (!scope) return;
-  applyConfigChange(orchestrator, scope, ["providers", "order"], order);
+  await writeRoutingValue(orchestrator, ctx, ["providers", "order"], order);
 }
 
 async function showClaudeSubRoute(orchestrator: Orchestrator, ctx: any): Promise<void> {
@@ -1202,6 +1201,7 @@ async function showProvidersSettings(orchestrator: Orchestrator, ctx: any): Prom
       opt(`Retry paused providers after: ${config.fallback.retryAfterMinutes} min`, "First retry; doubles while the limit keeps refusing, or follows what the provider says"),
     );
     if (pauses.length > 0) options.push(opt(`Clear pauses (${pauses.length})`, pauses.map((p) => describePauseKey(p.key)).join(", ")));
+    options.push(...buildResetOptions(orchestrator, ["providers", "order"]).map((o) => typeof o === "string" ? o : { ...o, title: o.title.replace("setting", "priority order") }));
     options.push(opt("Explain routing", "Each model slot: which provider serves it now, and why the others were skipped"), opt(BACK, "Return to the previous menu"));
     const choice = await selectOption(ctx, "Providers · first that serves a model wins", options);
     if (!choice || choice === BACK) return;
@@ -1220,6 +1220,8 @@ async function showProvidersSettings(orchestrator: Orchestrator, ctx: any): Prom
       const cleared = clearAllPauses(orchestrator);
       await reconcileRouting(orchestrator, ctx, false);
       ctx.ui?.notify?.(`Cleared ${cleared.length} pause(s).`, "info");
+    } else if (choice === "Reset global priority order" || choice === "Reset project priority order") {
+      await maybeHandleResetChoice(orchestrator, ctx, choice.replace("priority order", "setting"), ["providers", "order"]);
     } else if (choice === "Explain routing") {
       ctx.ui?.notify?.(explainRouting(orchestrator), "info");
     }
@@ -1323,7 +1325,10 @@ async function showSlotPin(orchestrator: Orchestrator, ctx: any, family: FamilyN
   if (!choice || choice === BACK) return;
   if (choice === "Latest") {
     const scope = await pickScope(ctx, orchestrator);
-    if (scope) clearConfigOverride(orchestrator, scope, keyPath);
+    if (!scope) return;
+    // In the project layer a deletion would just inherit a global pin again.
+    if (scope === "project" && getLayerOverrideValue(orchestrator, "global", keyPath)) applyConfigChange(orchestrator, scope, keyPath, null);
+    else clearConfigOverride(orchestrator, scope, keyPath);
     return;
   }
   if (await maybeHandleResetChoice(orchestrator, ctx, choice, keyPath)) return;

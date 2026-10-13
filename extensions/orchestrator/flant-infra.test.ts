@@ -200,11 +200,18 @@ describe("flant-infra", () => {
     expect([...pi.registered.keys()].sort()).toEqual(["pp-claude-sub", "pp-flant-anthropic-sub", "pp-flant-openai"]);
   });
 
-  it("registers the direct route against Anthropic with bare ids and no gateway header", async () => {
+  // Each route offers what it serves: the gateway its `sub/` listing, the
+  // direct route pi's own Claude catalog, never one borrowed from the other.
+  it("registers the direct route against Anthropic with pi's own ids and no gateway header", async () => {
     const dir = makeTempDir();
     writeClaudeAuth(dir);
     process.env.LLM_API_KEY = "sk-gateway-test";
     const mod = await loadFlantInfraModule(dir);
+    mod.setModelRegistry({
+      getApiKeyForProvider: async () => undefined,
+      find: () => undefined,
+      getAll: () => [{ provider: "anthropic", id: "claude-haiku-4-5" }, { provider: "anthropic", id: "claude-opus-5" }],
+    });
     const pi = recordingPi();
 
     mod.registerFlantProviders(pi, ["sub/claude-opus-4-8", "claude-haiku-4-5", "gpt-5"], {}, { settings: directRouteOnly() });
@@ -216,7 +223,34 @@ describe("flant-infra", () => {
     expect(direct.apiKey).toBe("sk-ant-oat01-test-token");
     expect(Object.keys(direct.headers)).toEqual(["user-agent"]);
     expect(direct.headers["user-agent"]).toMatch(/^claude-cli\/[0-9.]+ \(external, /);
-    expect(direct.models.map((m: any) => m.id).sort()).toEqual(["claude-haiku-4-5", "claude-opus-4-8"]);
+    expect(direct.models.map((m: any) => m.id).sort()).toEqual(["claude-haiku-4-5", "claude-opus-5"]);
+  });
+
+  it("keeps images on a direct model when there is no gateway metadata to say so", async () => {
+    const dir = makeTempDir();
+    writeClaudeAuth(dir);
+    const mod = await loadFlantInfraModule(dir);
+    mod.setModelRegistry({
+      getApiKeyForProvider: async () => undefined,
+      find: (_p: string, id: string) => (id === "claude-opus-5" ? { input: ["text", "image"], reasoning: true, contextWindow: 1_000_000 } : undefined),
+      getAll: () => [{ provider: "anthropic", id: "claude-opus-5" }],
+    });
+    const pi = recordingPi();
+    mod.registerFlantProviders(pi, [], {}, { settings: directRouteOnly() });
+    expect(pi.registered.get("pp-claude-sub").models[0]).toMatchObject({ input: ["text", "image"], reasoning: true, contextWindow: 1_000_000 });
+  });
+
+  it("keeps the subscription's gateway route when the paid LLM API is turned off", async () => {
+    const dir = makeTempDir();
+    writeClaudeAuth(dir);
+    process.env.LLM_API_KEY = "sk-gateway-test";
+    const mod = await loadFlantInfraModule(dir);
+    const settings = directRouteOnly();
+    settings.providers["claude-sub"].route = ["llm-api"];
+    settings.providers["llm-api"].enabled = false;
+    const pi = recordingPi();
+    mod.registerFlantProviders(pi, ["sub/claude-opus-5", "gpt-5"], {}, { settings });
+    expect([...pi.registered.keys()]).toEqual(["pp-flant-anthropic-sub"]);
   });
 
   it("registers the direct route without any gateway key, from pi's own Claude catalog", async () => {
@@ -1089,5 +1123,47 @@ describe("flant-infra", () => {
     expect(settings.providers["claude-sub"].route).toEqual(["direct"]);
     expect(settings.providers.fallback.retryAfterMinutes).toBe(30);
     expect(mod.loadLlmApiCache().cachedFlantModels).toBeNull();
+  });
+});
+
+// An old build kept user policy in the model cache file; that choice has to
+// survive the move to providers config, or e.g. a disabled automatic fallback
+// silently turns back on.
+describe("policy left in the model cache by an old build", () => {
+  function writeLegacyCache(agentDir: string, cache: Record<string, unknown>) {
+    const dir = join(agentDir, "extensions", "pp", "cache");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "flant-models.json"), JSON.stringify({ cachedFlantModels: ["gpt-5"], ...cache }), "utf-8");
+  }
+
+  it("carries chosen values onto providers and strips them from the cache", async () => {
+    const dir = makeTempDir();
+    writeLegacyCache(dir, { autoRateLimitFallback: false, switchBackIntervalMinutes: 45, cacheTTLDays: 7, copilotEnabled: false });
+    const mod = await loadFlantInfraModule(dir);
+    const { migrateConfigFile } = await import("./config.js");
+    const configPath = join(dir, "extensions", "pp", "config.json");
+
+    expect(migrateConfigFile(configPath, mod.legacyCachePolicy)).toBe(true);
+    mod.stripLegacyCachePolicy();
+
+    const config = JSON.parse(readFileSync(configPath, "utf-8"));
+    // cacheTTLDays: 7 and copilotEnabled: false were old defaults, not choices.
+    expect(config.providers).toEqual({ fallback: { auto: false, retryAfterMinutes: 45 } });
+    const cache = JSON.parse(readFileSync(join(dir, "extensions", "pp", "cache", "flant-models.json"), "utf-8"));
+    expect(cache).not.toHaveProperty("autoRateLimitFallback");
+    expect(cache.cachedFlantModels).toEqual(["gpt-5"]);
+    expect(mod.legacyCachePolicy()).toBeNull();
+  });
+
+  it("does not override what the global config already says", async () => {
+    const dir = makeTempDir();
+    writeLegacyCache(dir, { autoRateLimitFallback: false });
+    const configPath = join(dir, "extensions", "pp", "config.json");
+    mkdirSync(join(dir, "extensions", "pp"), { recursive: true });
+    writeFileSync(configPath, JSON.stringify({ flant: { autoRateLimitFallback: true } }), "utf-8");
+    const mod = await loadFlantInfraModule(dir);
+    const { migrateConfigFile } = await import("./config.js");
+    migrateConfigFile(configPath, mod.legacyCachePolicy);
+    expect(JSON.parse(readFileSync(configPath, "utf-8")).providers.fallback.auto).toBe(true);
   });
 });

@@ -1,11 +1,12 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Orchestrator } from "./orchestrator.js";
 import { registerCommandHandlers } from "./command-handlers.js";
-import { pinnedRoleSpecs, registerEventHandlers, registerLoadSkill, registerSubagentPromptcap } from "./event-handlers.js";
+import { registerEventHandlers, registerLoadSkill, registerSubagentPromptcap } from "./event-handlers.js";
+import { pinnedRoleSpecs } from "./routing.js";
 import { registerCbmTools } from "./cbm.js";
 import { registerExaTools } from "./exa.js";
 import { registerAstSearchTool } from "./ast-search.js";
-import { initFlantSync } from "./flant-infra.js";
+import { initFlantSync, legacyCachePolicy, stripLegacyCachePolicy } from "./flant-infra.js";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { GLOBAL_CONFIG_PATH, getDefaultConfig, loadConfig, mergeConfigLayers, migrateConfigFile, normalizeConfigDurations, readRawConfig } from "./config.js";
@@ -32,7 +33,7 @@ export default function (pi: ExtensionAPI) {
     // ORCHESTRATOR_CWD_KEY) so project-scoped flant overrides bind; fall back to
     // global-only when no root cwd is known.
     const rootCwd = (globalThis as any)[ORCHESTRATOR_CWD_KEY];
-    initFlantSync(pi, rootCwd, childPinnedSpecs(rootCwd));
+    initFlantSync(pi, rootCwd, rolePinnedSpecs(rootCwd));
     // Child sessions never run registerEventHandlers, so without this the
     // root-only billing hook is absent and subagent subscription requests miss
     // the billing system[0] block — the reason switch-back "works" for the main
@@ -54,12 +55,15 @@ export default function (pi: ExtensionAPI) {
   // not abort the whole load, or pi-pi never registers its handlers and the
   // session has no /pp to fix it.
   try {
-    if (firstActivation) migrateConfigFile(GLOBAL_CONFIG_PATH);
+    if (firstActivation) {
+      migrateConfigFile(GLOBAL_CONFIG_PATH, legacyCachePolicy);
+      stripLegacyCachePolicy();
+    }
   } catch (error: any) {
     getLogger().error({ s: "config", err: error?.message }, "migrating the global config failed");
   }
   try {
-    initFlantSync(pi);
+    initFlantSync(pi, undefined, rolePinnedSpecs(process.cwd()));
   } catch (error: any) {
     getLogger().error({ s: "flant", err: error?.message }, "provider initialization from config failed");
   }
@@ -70,9 +74,9 @@ export default function (pi: ExtensionAPI) {
 }
 
 // The roles' raw pins, read without creating a project .pp directory: a pinned
-// subscription model keeps the subscription registered in a child session even
-// while the Claude family is overridden.
-function childPinnedSpecs(cwd: string | undefined): string[] {
+// subscription model keeps the subscription registered while the Claude family
+// is overridden, from the first registration on.
+function rolePinnedSpecs(cwd: string | undefined): string[] {
   try {
     const project = cwd ? join(cwd, ".pp", "config.json") : null;
     return pinnedRoleSpecs(mergeConfigLayers(readRawConfig(GLOBAL_CONFIG_PATH), project && existsSync(project) ? readRawConfig(project) : null));

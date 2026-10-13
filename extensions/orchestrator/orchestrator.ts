@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { NormalizedPiPiConfig, PoolEntry, PoolKey } from "./config.js";
-import { configureRouting, describeRef, describeSpec, resolveRef, resolveSpec, type ModelDescription } from "./routing.js";
+import { configureRouting, describeRef, describeSpec, isPaused, resolveRef, resolveSpec, routePauseKey, type ModelDescription } from "./routing.js";
+import { setProbeRoutePolicy } from "./flant-infra.js";
 import { createExploreAgent } from "./agents/explore.js";
 import { createLibrarianAgent } from "./agents/librarian.js";
 import { createTaskAgent } from "./agents/task.js";
@@ -26,7 +27,9 @@ export class Orchestrator {
 
   set config(next: NormalizedPiPiConfig) {
     this._config = next;
-    if (next?.providers && next?.models) configureRouting(next);
+    if (!next?.providers || !next?.models) return;
+    configureRouting(next);
+    setProbeRoutePolicy(next.providers["claude-sub"].route, (route) => isPaused(routePauseKey(route)));
   }
   configError: string | null = null;
   duplicateExtensionError = false;
@@ -84,8 +87,12 @@ export class Orchestrator {
   idlePollTimer: ReturnType<typeof setTimeout> | null = null;
   /** The subscription model the account-pause probe sends its check to. */
   subProbeSpec: string | null = null;
-  /** Main-session moves a pause made, keyed by the pause, so its expiry can undo exactly that. */
-  pausedMainRoutes = new Map<string, { from: string; to: string }>();
+  /**
+   * Main-session moves a pause made, keyed by the pause, so its expiry can undo
+   * exactly that: whether pi-pi owned the session's model, and whether the
+   * request was left waiting rather than moved.
+   */
+  pausedMainRoutes = new Map<string, { from: string; to: string; owned: boolean; resume: boolean }>();
   /**
    * The spec pi-pi last routed the root session onto. A live model still equal
    * to it is one pi-pi chose, so re-routing it is safe; anything else is the

@@ -460,6 +460,95 @@ describe("session-first core", () => {
     }
   });
 
+  // The gateway's subscription ids carry their own slash (`sub/claude-…`); read
+  // alone they look provider-qualified and the limit lands on nothing.
+  it("pauses the subscription on a rate limit reported with a gateway sub/ id", async () => {
+    const SUB = "pp-flant-anthropic-sub/sub/claude-opus-4-8";
+    const COPILOT = "github-copilot/claude-opus-4.5";
+    setCatalog([SUB, COPILOT]);
+    try {
+      const pi = makePi();
+      pi.setModel = vi.fn(async () => true);
+      pi.setThinkingLevel = vi.fn();
+      const orchestrator = new Orchestrator(pi);
+      orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+      registerEventHandlers(orchestrator);
+      const registry = { find: vi.fn((provider: string, id: string) => ({ provider, id })) };
+      const ctx: any = { model: { provider: "pp-flant-anthropic-sub", id: "sub/claude-opus-4-8" }, modelRegistry: registry, ui: { notify: vi.fn() }, isIdle: () => true, abort: vi.fn() };
+      orchestrator.lastCtx = ctx;
+      orchestrator.routedMainSpec = SUB;
+      await emit(pi, "turn_end", {
+        message: { stopReason: "error", errorMessage: "429 rate_limit_error", provider: "pp-flant-anthropic-sub", model: "sub/claude-opus-4-8", content: [] },
+      }, ctx);
+      expect(isPaused("claude-sub")).toBe(true);
+      expect(pi.setModel).toHaveBeenCalledWith({ provider: "github-copilot", id: "claude-opus-4.5" });
+      if (orchestrator.subSwitchBackTimer) clearTimeout(orchestrator.subSwitchBackTimer);
+    } finally {
+      resetRouting();
+    }
+  });
+
+  // Restoring before the failure is handled could put the session back on the
+  // very model that just failed, and the request would stop there.
+  it("handles a provider failure before re-routing to the configured model", async () => {
+    const SUB = "pp-flant-anthropic-sub/sub/claude-opus-4-8";
+    const COPILOT = "github-copilot/claude-opus-4.5";
+    setCatalog([SUB, COPILOT]);
+    try {
+      const pi = makePi();
+      pi.setModel = vi.fn(async () => true);
+      pi.setThinkingLevel = vi.fn();
+      const orchestrator = new Orchestrator(pi);
+      orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+      registerEventHandlers(orchestrator);
+      const restore = vi.spyOn(orchestrator, "restoreMainRouting");
+      const ctx: any = { model: { provider: "github-copilot", id: "claude-opus-4.5" }, modelRegistry: { find: (provider: string, id: string) => ({ provider, id }) }, ui: { notify: vi.fn() }, isIdle: () => true, abort: vi.fn() };
+      orchestrator.lastCtx = ctx;
+      orchestrator.routedMainSpec = COPILOT;
+      await emit(pi, "turn_end", {
+        message: { stopReason: "error", errorMessage: "429 Too Many Requests", provider: "github-copilot", model: "claude-opus-4.5", content: [] },
+      }, ctx);
+      expect(restore).not.toHaveBeenCalled();
+      expect(isPaused("copilot:claude/opus")).toBe(true);
+    } finally {
+      resetRouting();
+    }
+  });
+
+  // A model the user picked stays theirs through a pause and its expiry: the
+  // restore puts it back, and the next routing pass must leave it alone.
+  it("does not claim a hand-picked model once a pause's expiry put it back", async () => {
+    vi.useFakeTimers();
+    const SUB = "pp-flant-anthropic-sub/sub/claude-opus-4-8";
+    const COPILOT_GPT = "github-copilot/gpt-6-sol";
+    const CODEX_GPT = "openai-codex/gpt-6-sol";
+    setCatalog([SUB, COPILOT_GPT, CODEX_GPT]);
+    try {
+      const { handleMainRateLimit } = await import("./rate-limit-fallback.js");
+      const pi = makePi();
+      pi.setModel = vi.fn(async () => true);
+      pi.setThinkingLevel = vi.fn();
+      const orchestrator = new Orchestrator(pi);
+      orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+      orchestrator.routedMainSpec = SUB;
+      const ctx: any = { model: { provider: "openai-codex", id: "gpt-6-sol" }, modelRegistry: { find: (provider: string, id: string) => ({ provider, id }) }, ui: { notify: vi.fn() }, isIdle: () => true, abort: vi.fn() };
+      orchestrator.lastCtx = ctx;
+      await handleMainRateLimit(orchestrator, ctx, CODEX_GPT, "retry-after: 60");
+      expect(pi.setModel).toHaveBeenLastCalledWith({ provider: "github-copilot", id: "gpt-6-sol" });
+      ctx.model = { provider: "github-copilot", id: "gpt-6-sol" };
+      await vi.advanceTimersByTimeAsync(61_000);
+      expect(pi.setModel).toHaveBeenLastCalledWith({ provider: "openai-codex", id: "gpt-6-sol" });
+      ctx.model = { provider: "openai-codex", id: "gpt-6-sol" };
+      expect(orchestrator.routedMainSpec).toBe(SUB);
+      pi.setModel.mockClear();
+      await orchestrator.restoreMainRouting(ctx);
+      expect(pi.setModel).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+      resetRouting();
+    }
+  });
+
   it("publishes session activity rather than a phase plan", () => {
     const orchestrator = new Orchestrator(makePi());
     orchestrator.config = normalizeConfigDurations(getDefaultConfig());
@@ -879,7 +968,7 @@ describe("session-first core", () => {
     const expiry = vi.fn();
     orchestrator.pauseTimers.set("copilot:claude/opus", setTimeout(expiry, 60_000));
     orchestrator.subProbeSpec = "pp-flant-anthropic-sub/sub/claude-opus-4-8";
-    orchestrator.pausedMainRoutes.set("claude-sub", { from: "pp-flant-anthropic-sub/sub/claude-opus-4-8", to: "github-copilot/claude-opus-4.5" });
+    orchestrator.pausedMainRoutes.set("claude-sub", { from: "pp-flant-anthropic-sub/sub/claude-opus-4-8", to: "github-copilot/claude-opus-4.5", owned: true, resume: false });
     orchestrator.routedMainSpec = "github-copilot/claude-opus-4.5";
     registerEventHandlers(orchestrator);
     await emit(pi, "session_shutdown", {}, { sessionManager: {}, ui: {} });

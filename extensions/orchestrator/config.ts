@@ -4,7 +4,7 @@ import lockfile from "proper-lockfile";
 
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { isValidLogLevel, getLogger, type LogLevel } from "./log.js";
-import { migrateConfigLayer } from "./config-migration.js";
+import { CONFIG_SCHEMA, migrateConfigLayer } from "./config-migration.js";
 
 export type DurationValue = string | number;
 export type SimpleSubagentRole = "explore" | "librarian" | "task";
@@ -41,8 +41,8 @@ export interface FamilyOverride {
 
 export interface FamilyModelsConfig {
   override: FamilyOverride | null;
-  /** Lock a slot to one version instead of the latest a provider serves. */
-  pins: Partial<Record<SlotName, string>>;
+  /** Lock a slot to one version instead of the latest a provider serves; null cancels a lower layer's. */
+  pins: Partial<Record<SlotName, string | null>>;
 }
 
 export type ModelsConfig = Record<FamilyName, FamilyModelsConfig>;
@@ -398,13 +398,14 @@ function validateProviders(value: unknown): void {
   }
 }
 
-function validateSlotMap(value: unknown, family: FamilyName, path: string): void {
+function validateSlotMap(value: unknown, family: FamilyName, path: string, allowNull = false): void {
   if (value === undefined) return;
   const map = requireObject(value, path);
   for (const [slot, id] of Object.entries(map)) {
     if (!FAMILY_SLOTS[family].includes(slot as SlotName)) {
       throw new Error(`${path}.${slot} is not a ${family} slot (expected one of: ${FAMILY_SLOTS[family].join(", ")})`);
     }
+    if (allowNull && id === null) continue;
     ensureString(id, `${path}.${slot}`);
   }
 }
@@ -425,7 +426,8 @@ function validateModels(value: unknown): void {
       if (typeof o.model !== "string" || !o.model) throw new Error(`config.models.${family}.override.model must be a non-empty string`);
       validateSlotMap(o.slots, family, `config.models.${family}.override.slots`);
     }
-    validateSlotMap(f.pins, family, `config.models.${family}.pins`);
+    // `null` in a layer cancels a pin from the layer below: "latest" here.
+    validateSlotMap(f.pins, family, `config.models.${family}.pins`, true);
   }
 }
 
@@ -520,6 +522,9 @@ export function validateConfig(config: Record<string, any>): void {
 
   if (config.promptcap !== undefined) validatePromptcap(config.promptcap);
   if (config.images !== undefined) validateImages(config.images);
+  if (config.schema !== undefined && (typeof config.schema !== "number" || !Number.isInteger(config.schema))) {
+    throw new Error("config.schema must be an integer");
+  }
   if (config.providers !== undefined) validateProviders(config.providers);
   if (config.models !== undefined) validateModels(config.models);
 
@@ -777,17 +782,24 @@ export function readScopedRoutingSettings(cwd?: string, globalConfigPath = GLOBA
  * second run cannot replace the user's real original with a migrated copy), and
  * the rewrite goes through a temp file under the config lock.
  */
-export function migrateConfigFile(configPath: string): boolean {
-  if (!existsSync(configPath)) return false;
+export function migrateConfigFile(configPath: string, legacyPolicy?: (globalFlant: Record<string, unknown>) => Record<string, unknown> | null): boolean {
+  const legacyOnly = !existsSync(configPath);
+  if (legacyOnly) {
+    const policy = legacyPolicy?.({});
+    if (!policy || Object.keys(policy).length === 0) return false;
+    ensureConfigDir(configPath);
+    writeFileSync(configPath, "{}\n", "utf-8");
+  }
   const release = lockfile.lockSync(configPath, { stale: 10000 });
   try {
-    const raw = loadJsonFile(configPath);
-    if (!raw) return false;
+    const raw = loadJsonFile(configPath) ?? {};
+    const policy = legacyPolicy?.(isObject(raw.flant) ? raw.flant : {});
+    if (policy && Object.keys(policy).length > 0) raw.flant = { ...(isObject(raw.flant) ? raw.flant : {}), ...policy };
     const { config, changed } = migrateConfigLayer(raw);
     if (!changed) return false;
     validateConfig(config);
     const backup = `${configPath}.pre-routing.bak`;
-    if (!existsSync(backup)) copyFileSync(configPath, backup);
+    if (!existsSync(backup) && !legacyOnly) copyFileSync(configPath, backup);
     const temp = `${configPath}.${process.pid}.tmp`;
     try {
       writeFileSync(temp, JSON.stringify(config, null, 2) + "\n", "utf-8");
@@ -804,7 +816,8 @@ export function migrateConfigFile(configPath: string): boolean {
 }
 
 // A write carries the file onto the current schema with it, so an old project
-// config is rewritten the first time the user edits it rather than on load.
+// config is rewritten the first time the user edits it rather than on load, and
+// the stamp keeps every pin written from now on from being read as a legacy one.
 function readForWrite(configPath: string): Record<string, any> {
   const raw = readRawConfig(configPath);
   const { config, changed } = migrateConfigLayer(raw);
@@ -812,6 +825,7 @@ function readForWrite(configPath: string): Record<string, any> {
     const backup = `${configPath}.pre-routing.bak`;
     if (!existsSync(backup)) copyFileSync(configPath, backup);
   }
+  config.schema = CONFIG_SCHEMA;
   return config;
 }
 

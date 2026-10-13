@@ -1,6 +1,6 @@
 import type { Orchestrator } from "./orchestrator.js";
-import { loadRoutingSettings, probeSubscriptionCleared, reviveSubscriptionCredential } from "./flant-infra.js";
-import { clearPauses, describePauseKey, getPause, isPaused, nextPauseMs, pause, pauseKeyForSpec, refusalFallbackSpec, resolveSpec, routeOfConcrete, routePauseKey, splitSpec, unpause, slotRefOfSpec, type Pause } from "./routing.js";
+import { isClaudeSubInUse, loadRoutingSettings, probeSubscriptionCleared, reviveSubscriptionCredential } from "./flant-infra.js";
+import { LLM_API_PROVIDER, clearPauses, describePauseKey, pinnedRoleSpecs, getPause, isPaused, nextPauseMs, pause, pauseKeyForSpec, refusalFallbackSpec, resolveSpec, routeOfConcrete, routePauseKey, splitSpec, unpause, slotRefOfSpec, type Pause } from "./routing.js";
 import { isSubscriptionRouted } from "./usage-tracker.js";
 import { getLogger } from "./log.js";
 
@@ -128,35 +128,45 @@ async function pauseAndReroute(
   const recovery = cause === "auth" && key.startsWith("claude-sub") ? " Run /login → Anthropic to restore it." : "";
 
   const live = liveSpec(ctx);
-  const mainAffected = origin === "main" || (!!live && pauseKeyForSpec(live) !== null && isPausedFor(live));
+  const mainAffected = origin === "main" || (!!live && isPausedFor(live));
   if (!mainAffected) {
     ctx?.ui?.notify?.(`${trigger} on a worker; paused until ${formatUntil(entry)}.${recovery}`, "warning");
     return;
   }
-  const current = live || spec;
-  // A session pi-pi routed follows its configured model; one the user picked by
-  // hand stays theirs, moved only within the same slot.
-  const owned = orchestrator.routedMainSpec === current;
-  const ref = owned ? orchestrator.config.agents.main.model : slotRefOfSpec(current);
-  const next = ref ? resolveSpec(ref) : null;
-  if (!next || next === current) {
-    ctx?.ui?.notify?.(`${trigger}; nothing else serves ${current}. Waiting until ${formatUntil(entry)}.${recovery}`, "warning");
-    return;
-  }
-  try {
-    if (!await orchestrator.switchModel(ctx, next, thinking(orchestrator))) {
-      ctx?.ui?.notify?.(`${trigger}, but ${next} is unavailable; waiting until ${formatUntil(entry)}.${recovery}`, "error");
+  // Decided when the switch runs, not now: a worker's failure lands mid-request,
+  // and by the time the session is between turns another switch may have
+  // moved it, or the user may have picked a model of their own.
+  await orchestrator.runModelSwitchBetweenTurns(async () => {
+    // The handler's own context when it carries the session's model; a parked
+    // switch runs later, against whatever context is current then.
+    const switchCtx = ctx?.model ? ctx : orchestrator.lastCtx ?? ctx;
+    const current = liveSpec(switchCtx) || spec;
+    if (!isPausedFor(current)) return;
+    // A session pi-pi routed follows its configured model; one the user picked
+    // by hand stays theirs, moved only within the same slot.
+    const owned = orchestrator.routedMainSpec === current;
+    const ref = owned ? orchestrator.config.agents.main.model : slotRefOfSpec(current);
+    const next = ref ? resolveSpec(ref) : null;
+    if (!next || next === current) {
+      switchCtx?.ui?.notify?.(`${trigger}; nothing else serves ${current}. Waiting until ${formatUntil(entry)}; the request resumes then.${recovery}`, "warning");
+      if (resumeRequest) orchestrator.pausedMainRoutes.set(key, { from: current, to: current, owned, resume: true });
       return;
     }
-  } catch {
-    ctx?.ui?.notify?.(`${trigger}, but switching to ${next} failed; waiting until ${formatUntil(entry)}.${recovery}`, "error");
-    return;
-  }
-  if (owned) orchestrator.routedMainSpec = next;
-  orchestrator.pausedMainRoutes.set(key, { from: current, to: next });
-  const paid = splitSpec(next)?.provider === "pp-flant-openai" ? " (paid)" : "";
-  ctx?.ui?.notify?.(`${trigger}; switched to ${next}${paid} until ${formatUntil(entry)}.${recovery}`, "warning");
-  if (resumeRequest) orchestrator.queueContinuation("[PI-PI] Provider routing changed after a provider failure. Continue the current request.");
+    try {
+      if (!await orchestrator.switchModel(switchCtx, next, thinking(orchestrator))) {
+        switchCtx?.ui?.notify?.(`${trigger}, but ${next} is unavailable; waiting until ${formatUntil(entry)}.${recovery}`, "error");
+        return;
+      }
+    } catch {
+      switchCtx?.ui?.notify?.(`${trigger}, but switching to ${next} failed; waiting until ${formatUntil(entry)}.${recovery}`, "error");
+      return;
+    }
+    if (owned) orchestrator.routedMainSpec = next;
+    orchestrator.pausedMainRoutes.set(key, { from: current, to: next, owned, resume: false });
+    const paid = splitSpec(next)?.provider === LLM_API_PROVIDER ? " (paid)" : "";
+    switchCtx?.ui?.notify?.(`${trigger}; switched to ${next}${paid} until ${formatUntil(entry)}.${recovery}`, "warning");
+    if (resumeRequest) orchestrator.queueContinuation("[PI-PI] Provider routing changed after a provider failure. Continue the current request.");
+  });
 }
 
 /** Whether `spec` is unusable under the current pauses. */
@@ -191,10 +201,18 @@ function armPauseExpiry(orchestrator: Orchestrator, entry: Pause): void {
   orchestrator.pauseTimers.set(entry.key, timer);
 }
 
+/**
+ * Undo the move a pause made, once the pause is lifted — decided when the
+ * switch runs: the session must still be where the pause put it (anything else
+ * is the user's own pick, or another move), and the model it goes back to must
+ * be usable now, not merely when the expiry fired. A session pi-pi routed goes
+ * back to whatever its configured model resolves to; one the user picked goes
+ * back to that pick, and stays theirs.
+ */
 async function restoreMovedMain(orchestrator: Orchestrator, key: string, why: string): Promise<boolean> {
   const moved = orchestrator.pausedMainRoutes.get(key);
-  orchestrator.pausedMainRoutes.delete(key);
   if (!moved) return true;
+  orchestrator.pausedMainRoutes.delete(key);
   let restored = false;
   await orchestrator.runModelSwitchBetweenTurns(async () => {
     const ctx = orchestrator.lastCtx as any;
@@ -202,11 +220,20 @@ async function restoreMovedMain(orchestrator: Orchestrator, key: string, why: st
       restored = true;
       return;
     }
-    const ref = orchestrator.config.agents.main.model;
-    const target = orchestrator.routedMainSpec === moved.to ? resolveSpec(ref) ?? moved.from : moved.from;
+    if (moved.resume) {
+      restored = true;
+      ctx?.ui?.notify?.(`${why}; resuming.`, "info");
+      orchestrator.queueContinuation("[PI-PI] The provider limit cleared. Continue the current request.");
+      return;
+    }
+    const target = moved.owned ? resolveSpec(orchestrator.config.agents.main.model) : moved.from;
+    if (!target || target === moved.to || isPausedFor(target)) {
+      restored = true;
+      return;
+    }
     try {
-      if (target !== moved.to && await orchestrator.switchModel(ctx, target, thinking(orchestrator))) {
-        orchestrator.routedMainSpec = target;
+      if (await orchestrator.switchModel(ctx, target, thinking(orchestrator))) {
+        if (moved.owned) orchestrator.routedMainSpec = target;
         ctx?.ui?.notify?.(`${why}; switched back to ${target}.`, "info");
       }
       restored = true;
@@ -264,8 +291,7 @@ export async function handleMainRefusal(orchestrator: Orchestrator, ctx: any): P
  * Where a rate limit on `spec` lands: the Claude subscription and ChatGPT
  * accounts as a whole, every other provider per model line.
  */
-export async function handleMainRateLimit(orchestrator: Orchestrator, ctx: any, modelId?: string, provider?: string, message?: string): Promise<void> {
-  const spec = modelId?.includes("/") ? modelId : provider && modelId ? `${provider}/${modelId}` : modelId ?? "";
+export async function handleMainRateLimit(orchestrator: Orchestrator, ctx: any, spec: string, message?: string): Promise<void> {
   try { ctx.abort?.(); } catch {}
   const key = pauseKeyForSpec(spec);
   if (!key) return;
@@ -328,9 +354,8 @@ async function recoverOrDemote(orchestrator: Orchestrator, ctx: any, spec: strin
   }
 }
 
-export async function handleMainAuthFailure(orchestrator: Orchestrator, ctx: any, modelId?: string, provider?: string): Promise<void> {
-  const spec = modelId?.includes("/") ? modelId : provider && modelId ? `${provider}/${modelId}` : modelId ?? "";
-  if (!isSubscriptionRouted(spec, provider)) return;
+export async function handleMainAuthFailure(orchestrator: Orchestrator, ctx: any, spec: string): Promise<void> {
+  if (!isSubscriptionRouted(spec)) return;
   try { ctx.abort?.(); } catch {}
   await recoverOrDemote(orchestrator, ctx, spec, "main");
 }
@@ -363,6 +388,12 @@ export function armSwitchBackProbe(orchestrator: Orchestrator, probeSpec: string
     orchestrator.subSwitchBackTimer = null;
     const spec = orchestrator.subProbeSpec;
     if (!isPaused("claude-sub") || !spec) return;
+    // Nothing routes onto the subscription any more — an override took the
+    // Claude family elsewhere — so its credential is left alone.
+    if (!isClaudeSubInUse(loadRoutingSettings(orchestrator.cwd), pinnedRoleSpecs(orchestrator.config))) {
+      orchestrator.subProbeSpec = null;
+      return;
+    }
     const outcome = await probeSubscriptionCleared(spec);
     // Shutdown or a manual clear may have lifted the pause while the probe was in flight.
     if (!isPaused("claude-sub")) return;
