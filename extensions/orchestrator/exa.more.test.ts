@@ -88,7 +88,22 @@ describe("registerExaTools", () => {
     expect(res.content[0].text).toBe("results!");
     expect(res.isError).toBeUndefined();
     const args = JSON.parse(fn.mock.calls[0][1].body).params.arguments;
-    expect(args).toEqual({ query: "cats", numResults: 5 });
+    expect(args).toEqual({ query: "cats", numResults: 5, objective: "cats" });
+  });
+
+  it("web_search forwards an explicit objective and ignores a blank one", async () => {
+    const fn = mockFetchText(JSON.stringify({ result: { content: [{ text: "results!" }] } }));
+    const pi = makePi();
+    registerExaTools(pi as any);
+    await pi.tools.get("web_search").execute("id", { query: "cats", objective: "rank breed guides first" });
+    expect(JSON.parse(fn.mock.calls[0][1].body).params.arguments.objective).toBe("rank breed guides first");
+
+    __resetWebToolStateForTest();
+    const fn2 = mockFetchText(JSON.stringify({ result: { content: [{ text: "results!" }] } }));
+    const pi2 = makePi();
+    registerExaTools(pi2 as any);
+    await pi2.tools.get("web_search").execute("id", { query: "cats", objective: "   " });
+    expect(JSON.parse(fn2.mock.calls[0][1].body).params.arguments.objective).toBe("cats");
   });
 
   it("web_search falls through to Tavily when Exa throws", async () => {

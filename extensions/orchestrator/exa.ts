@@ -295,7 +295,7 @@ function fail(text: string) {
   return { content: [{ type: "text" as const, text }], isError: true as const, details: {} };
 }
 
-async function runSearch(query: string, numResults: number): Promise<string> {
+async function runSearch(query: string, numResults: number, objective: string): Promise<string> {
   const now = Date.now();
   const causes: string[] = [];
 
@@ -304,7 +304,11 @@ async function runSearch(query: string, numResults: number): Promise<string> {
   else {
     await acquire("exa");
     try {
-      const result = await callExa("web_search_exa", { query, numResults });
+      // `objective` is REQUIRED by the Exa MCP schema and is what its ranking
+      // keys on; the endpoint still accepts a call without it, but an omitted
+      // one silently ranks worse. Callers that supply nothing fall back to the
+      // query, which is what the tool meant before the schema grew the field.
+      const result = await callExa("web_search_exa", { query, numResults, objective });
       if (!isExaRateLimited(result)) {
         noteSuccess("exa");
         return result;
@@ -407,10 +411,17 @@ export function registerExaTools(pi: ExtensionAPI): void {
     parameters: Type.Object({
       query: Type.String({ description: "Natural language search query" }),
       numResults: Type.Optional(Type.Number({ description: "Number of results (default: 5, max: 100)" })),
+      objective: Type.Optional(
+        Type.String({
+          description:
+            "Goal for this search: which pages should rank first, which to exclude, and the specific facts to pull from them. Defaults to the query.",
+        }),
+      ),
     }),
     async execute(_toolCallId, params: any) {
       try {
-        return ok(await runSearch(params.query, params.numResults ?? 5));
+        const objective = typeof params.objective === "string" && params.objective.trim() ? params.objective : params.query;
+        return ok(await runSearch(params.query, params.numResults ?? 5, objective));
       } catch (e: any) {
         if (e?.message?.startsWith(UNAVAILABLE)) return fail(e.message);
         return fail(`web_search error: ${e.message}`);
