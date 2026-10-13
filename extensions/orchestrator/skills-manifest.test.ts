@@ -38,6 +38,7 @@ describe("layered skills", () => {
   it("ships a focused general-purpose catalog", () => {
     const bundled = listLayeredSkills(cwd).filter((skill) => skill.layer === "bundled");
     expect(bundled.map((skill) => skill.name)).toEqual([
+      "feature-work",
       "repository-work",
       "research-and-design",
       "review",
@@ -49,6 +50,7 @@ describe("layered skills", () => {
     expect(loadLayeredSkill("repository-work", cwd).document).toContain("conventional-commit type");
     expect(loadLayeredSkill("skill-work", cwd).document).toContain("Never recommend, adapt, or merge a skill whose body you have not fetched");
     expect(loadLayeredSkill("review", cwd).document).toContain("Zero findings is a valid result");
+    expect(loadLayeredSkill("feature-work", cwd).document).toContain("Most features are problems someone has already solved");
   });
 
   it("resolves project over global over bundled", () => {

@@ -20,7 +20,7 @@ description: Load BEFORE modifying source code or diagnosing a non-trivial softw
 - Find relevant functions and their context before modifying them.
 - Use definitions, references, hover information, implementations, and incoming or outgoing calls to understand types, callers, implementors, and call chains.
 - Find structural patterns such as existing error-handling conventions.
-- Before adding a type, function, or user-facing value, find how the codebase already solves the closest problem by behavior, not filename. Mirror its shape, naming, error handling, and conventions. Reading one neighboring file is not enough.
+- When the change adds functionality, `feature-work` holds the workflow: the in-repo analogue, real-world references, design, and review.
 - Before modifying a function, inspect all callers.
 
 ## Verification gate
