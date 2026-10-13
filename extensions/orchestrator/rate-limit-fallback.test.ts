@@ -401,6 +401,31 @@ describe("pause-based rate-limit fallback", () => {
     }
   });
 
+  it("carries the current request's wait over a stale one left on the same pause", async () => {
+    vi.useFakeTimers();
+    try {
+      setCatalog([SUB]);
+      const pi = makePi();
+      const orchestrator = makeOrchestrator(pi);
+      const config = normalizeConfigDurations(getDefaultConfig());
+      config.agents.main.model = SUB;
+      orchestrator.config = config;
+      orchestrator.routedMainSpec = SUB;
+      orchestrator.switchModel = vi.fn(async () => true);
+      orchestrator.lastCtx = idleCtxOn(SUB);
+      await handleMainRateLimit(orchestrator, orchestrator.lastCtx, SUB);
+      const stale = orchestrator.pausedMainRoutes.get("claude-sub")!;
+      orchestrator.resetContinuation();
+      await handleSubscriptionRouteOutage(orchestrator, orchestrator.lastCtx, SUB, "main");
+      expect(orchestrator.pausedMainRoutes.get("claude-sub@llm-api")).toMatchObject({ resume: true, generation: orchestrator.continuationGeneration });
+      await vi.advanceTimersByTimeAsync(11 * 60_000);
+      expect(orchestrator.pausedMainRoutes.get("claude-sub")).toMatchObject({ resume: true, generation: orchestrator.continuationGeneration });
+      expect(orchestrator.pausedMainRoutes.get("claude-sub")).not.toBe(stale);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("lifts the subscription's pause when an override leaves nothing routed onto it", async () => {
     vi.useFakeTimers();
     try {

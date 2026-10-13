@@ -234,7 +234,9 @@ async function restoreMovedMain(orchestrator: Orchestrator, key: string, why: st
       }
       const holder = routeHolding(moved.to);
       if (holder) {
-        if (!orchestrator.pausedMainRoutes.has(holder)) orchestrator.pausedMainRoutes.set(holder, moved);
+        // The current request's record wins over one a past request left there.
+        const existing = orchestrator.pausedMainRoutes.get(holder);
+        if (!existing || existing.generation !== orchestrator.continuationGeneration) orchestrator.pausedMainRoutes.set(holder, moved);
         restored = true;
         return;
       }
