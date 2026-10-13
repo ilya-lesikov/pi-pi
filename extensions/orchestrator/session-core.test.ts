@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { getDefaultConfig, normalizeConfigDurations } from "./config.js";
 import { Orchestrator } from "./orchestrator.js";
 import { buildAcpState } from "./acp.js";
-import { isSubscriptionFallbackActive, setSubscriptionFallbackActive, setTierEnabled, updateRegistryFromAvailableModels } from "./model-registry.js";
+import { clearPauses, forgetLastGood, isPaused, listPauses, pause, setCatalog, unpause } from "./routing.js";
 import { classifyContinuation, isMainTurnStalled, registerEventHandlers, registerLoadSkill, registerSubagentPromptcap, renderGenericPrompt } from "./event-handlers.js";
 import { listLayeredSkills } from "./skills-manifest.js";
 import { createUsageTracker } from "./usage-tracker.js";
@@ -74,6 +74,13 @@ function genericPrompt(toolNames: string[]): string {
     projectClaude: false,
   };
   return renderGenericPrompt(orchestrator, { model: { provider: "test", id: "model" }, ui: { notify: vi.fn() } }, toolNames);
+}
+
+/** Leave the process-global routing state as a fresh process has it. */
+function resetRouting(): void {
+  setCatalog([]);
+  clearPauses();
+  forgetLastGood();
 }
 
 describe("session-first core", () => {
@@ -220,25 +227,69 @@ describe("session-first core", () => {
   });
 
   it("honors a pool name the roster has since renamed, and blocks one nothing serves", async () => {
-    const pi = makePi();
-    const orchestrator = new Orchestrator(pi);
-    orchestrator.cwd = "/tmp/project";
-    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
-    orchestrator.config.agents.subagents.pools.reviewers = [
-      { enabled: true, model: "pp-flant-anthropic-sub/sub/claude-fable-5-1", thinking: "high" },
-    ];
-    registerEventHandlers(orchestrator);
-    const ctx = { cwd: orchestrator.cwd, model: { provider: "test", id: "model" }, ui: { notify: vi.fn() }, sessionManager: {} };
+    setCatalog(["pp-flant-anthropic-sub/sub/claude-fable-5-1"]);
+    try {
+      const pi = makePi();
+      const orchestrator = new Orchestrator(pi);
+      orchestrator.cwd = "/tmp/project";
+      orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+      orchestrator.config.agents.subagents.pools.reviewers = [
+        { enabled: true, model: "claude/fable", thinking: "high" },
+      ];
+      orchestrator.registerAgents(true);
+      registerEventHandlers(orchestrator);
+      const ctx = { cwd: orchestrator.cwd, model: { provider: "test", id: "model" }, ui: { notify: vi.fn() }, sessionManager: {} };
 
-    const stale = { toolName: "Agent", input: { subagent_type: "reviewer_github-copilot-claude-fable-5.1_high", model: "openai/gpt-luna-latest" } };
-    expect(await emitForResult(pi, "tool_call", stale, ctx)).toBeUndefined();
-    expect(stale.input.subagent_type).toBe("reviewer_claude-fable-5-1_high");
-    // The registered definition decides the model, so the tool call's own
-    // argument is left alone rather than overwritten with a re-resolved spec.
-    expect(stale.input.model).toBe("openai/gpt-luna-latest");
+      // An older build named pool members by provider and version; the slot
+      // under that name is what the live roster is keyed by now.
+      const stale = { toolName: "Agent", input: { subagent_type: "reviewer_github-copilot-claude-fable-5.1_high", model: "openai/gpt-luna-latest" } };
+      expect(await emitForResult(pi, "tool_call", stale, ctx)).toBeUndefined();
+      expect(stale.input.subagent_type).toBe("reviewer_claude-fable_high");
+      // The registered definition decides the model, so the tool call's own
+      // argument is left alone rather than overwritten with a re-resolved spec.
+      expect(stale.input.model).toBe("openai/gpt-luna-latest");
 
-    const unknown = { toolName: "Agent", input: { subagent_type: "reviewer_gemini-3-pro_high" } };
-    expect((await emitForResult(pi, "tool_call", unknown, ctx))?.block).toBe(true);
+      const unknown = { toolName: "Agent", input: { subagent_type: "reviewer_gemini-3-pro_high" } };
+      expect((await emitForResult(pi, "tool_call", unknown, ctx))?.block).toBe(true);
+    } finally {
+      resetRouting();
+    }
+  });
+
+  // The subagent host runs a definition whose model it cannot find on the
+  // parent's model, silently: a second opinion meant to come from another
+  // vendor would just be this session again.
+  it("blocks a registered pool agent whose model left the catalog, explaining the routing", async () => {
+    setCatalog(["openai-codex/gpt-6-astra-pro", "pp-flant-anthropic-sub/sub/claude-fable-5-1"]);
+    try {
+      const pi = makePi();
+      const orchestrator = new Orchestrator(pi);
+      orchestrator.cwd = "/tmp/project";
+      orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+      orchestrator.registerAgents(true);
+      registerEventHandlers(orchestrator);
+      const ctx = { cwd: orchestrator.cwd, model: { provider: "test", id: "model" }, ui: { notify: vi.fn() }, sessionManager: {} };
+
+      const served = { toolName: "Agent", input: { subagent_type: "advisor_claude-fable_high" } };
+      expect(await emitForResult(pi, "tool_call", served, ctx)).toBeUndefined();
+
+      // The Claude credential goes away; the definition still names the model
+      // it was registered with.
+      setCatalog(["openai-codex/gpt-6-astra-pro"]);
+      const orphaned = { toolName: "Agent", input: { subagent_type: "advisor_claude-fable_high" } };
+      const result = await emitForResult(pi, "tool_call", orphaned, ctx);
+      expect(result?.block).toBe(true);
+      expect(result.reason).toContain("advisor_claude-fable_high has no model to run on right now (claude/fable)");
+      expect(result.reason).toContain("✗ Claude subscription: no credentials");
+      expect(result.reason).toContain("✗ ChatGPT subscription: no model for Claude Fable");
+      expect(result.reason).toContain("/pp › Settings › Providers");
+
+      // The other-vendor member is untouched.
+      const other = { toolName: "Agent", input: { subagent_type: "advisor_gpt-astra-pro_high" } };
+      expect(await emitForResult(pi, "tool_call", other, ctx)).toBeUndefined();
+    } finally {
+      resetRouting();
+    }
   });
 
   it("keeps root hooks live after a subagent session has loaded the extension in-process", async () => {
@@ -295,108 +346,118 @@ describe("session-first core", () => {
     orchestrator.config.agents.main = { model: "test/main-model", thinking: "low" };
     const model = { provider: "test", id: "main-model" };
     const ctx: any = { modelRegistry: { find: vi.fn((p: string, id: string) => (p === "test" && id === "main-model" ? model : undefined)) } };
-    expect(await orchestrator.applyMainAgent(ctx)).toBe(true);
-    expect(pi.setModel).toHaveBeenCalledWith(model);
-    expect(pi.setThinkingLevel).toHaveBeenCalledWith("low");
+    setCatalog(["test/main-model"]);
+    try {
+      expect(await orchestrator.applyMainAgent(ctx)).toBe(true);
+      expect(pi.setModel).toHaveBeenCalledWith(model);
+      expect(pi.setThinkingLevel).toHaveBeenCalledWith("low");
+      expect(orchestrator.routedMainSpec).toBe("test/main-model");
 
-    orchestrator.config.agents.main = { model: "test/missing", thinking: "high" };
-    expect(await orchestrator.applyMainAgent(ctx)).toBe(false);
-    expect(pi.setModel).toHaveBeenCalledTimes(1);
+      orchestrator.config.agents.main = { model: "test/missing", thinking: "high" };
+      expect(await orchestrator.applyMainAgent(ctx)).toBe(false);
+      expect(pi.setModel).toHaveBeenCalledTimes(1);
+    } finally {
+      resetRouting();
+    }
   });
 
-  // A session that STARTS while the preferred tier is unusable resolves main
-  // onto the lower one, and nothing else ever moves it back: the rate-limit
-  // switch-back is the only restore path and it never ran for this session.
-  it("restores the main model once its preferred tier is usable again", async () => {
+  // A session that STARTS while its preferred provider is unusable resolves
+  // main onto the next one, and nothing else ever moves it back: the pause's
+  // own expiry only restores a session that pause moved.
+  it("restores the main model once its preferred provider is usable again", async () => {
     const specs = ["pp-flant-anthropic-sub/sub/claude-opus-4-8", "github-copilot/claude-opus-4.5"];
-    updateRegistryFromAvailableModels(specs);
-    setTierEnabled({ "copilot": true, "flant-sub": false, "flant-api": true });
-    const pi = makePi();
-    pi.setModel = vi.fn(async () => true);
-    pi.setThinkingLevel = vi.fn();
-    const orchestrator = new Orchestrator(pi);
-    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
-    orchestrator.config.agents.main = { model: "pp-flant-anthropic-sub/sub/claude-opus-4-8", thinking: "high" };
-    const registry = {
-      find: vi.fn((provider: string, id: string) => (specs.includes(`${provider}/${id}`) ? { provider, id } : undefined)),
-    };
+    setCatalog(specs);
+    pause("claude-sub", 60_000, "test");
+    try {
+      const pi = makePi();
+      pi.setModel = vi.fn(async () => true);
+      pi.setThinkingLevel = vi.fn();
+      const orchestrator = new Orchestrator(pi);
+      orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+      expect(orchestrator.config.agents.main.model).toBe("claude/opus");
+      const registry = {
+        find: vi.fn((provider: string, id: string) => (specs.includes(`${provider}/${id}`) ? { provider, id } : undefined)),
+      };
 
-    const ctx: any = { modelRegistry: registry, ui: { notify: vi.fn() } };
-    expect(await orchestrator.applyMainAgent(ctx)).toBe(true);
-    expect(orchestrator.routedMainSpec).toBe("github-copilot/claude-opus-4.5");
+      const ctx: any = { modelRegistry: registry, ui: { notify: vi.fn() } };
+      expect(await orchestrator.applyMainAgent(ctx)).toBe(true);
+      expect(orchestrator.routedMainSpec).toBe("github-copilot/claude-opus-4.5");
 
-    ctx.model = { provider: "github-copilot", id: "claude-opus-4.5" };
-    await orchestrator.restoreMainRouting(ctx);
-    expect(pi.setModel).toHaveBeenCalledTimes(1);
+      ctx.model = { provider: "github-copilot", id: "claude-opus-4.5" };
+      await orchestrator.restoreMainRouting(ctx);
+      expect(pi.setModel).toHaveBeenCalledTimes(1);
 
-    setTierEnabled({ "flant-sub": true });
-    await orchestrator.restoreMainRouting(ctx);
-    expect(pi.setModel).toHaveBeenLastCalledWith({ provider: "pp-flant-anthropic-sub", id: "sub/claude-opus-4-8" });
-
-    setTierEnabled({ "copilot": false, "flant-sub": true, "flant-api": true });
-    updateRegistryFromAvailableModels([]);
+      unpause("claude-sub");
+      await orchestrator.restoreMainRouting(ctx);
+      expect(pi.setModel).toHaveBeenLastCalledWith({ provider: "pp-flant-anthropic-sub", id: "sub/claude-opus-4-8" });
+      expect(orchestrator.routedMainSpec).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
+    } finally {
+      resetRouting();
+    }
   });
 
-  it("leaves a model the user picked alone, and holds off while a fallback is live", async () => {
+  it("leaves a model the user picked alone, and holds off while the preferred provider is paused", async () => {
     const specs = ["pp-flant-anthropic-sub/sub/claude-opus-4-8", "github-copilot/claude-opus-4.5"];
-    updateRegistryFromAvailableModels(specs);
-    setTierEnabled({ "copilot": true, "flant-sub": false, "flant-api": true });
-    const pi = makePi();
-    pi.setModel = vi.fn(async () => true);
-    pi.setThinkingLevel = vi.fn();
-    const orchestrator = new Orchestrator(pi);
-    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
-    orchestrator.config.agents.main = { model: "pp-flant-anthropic-sub/sub/claude-opus-4-8", thinking: "high" };
-    const ctx: any = {
-      modelRegistry: { find: vi.fn((provider: string, id: string) => (specs.includes(`${provider}/${id}`) ? { provider, id } : undefined)) },
-      ui: { notify: vi.fn() },
-    };
-    await orchestrator.applyMainAgent(ctx);
-    pi.setModel.mockClear();
-    setTierEnabled({ "flant-sub": true });
+    setCatalog(specs);
+    pause("claude-sub", 60_000, "test");
+    try {
+      const pi = makePi();
+      pi.setModel = vi.fn(async () => true);
+      pi.setThinkingLevel = vi.fn();
+      const orchestrator = new Orchestrator(pi);
+      orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+      const ctx: any = {
+        modelRegistry: { find: vi.fn((provider: string, id: string) => (specs.includes(`${provider}/${id}`) ? { provider, id } : undefined)) },
+        ui: { notify: vi.fn() },
+      };
+      await orchestrator.applyMainAgent(ctx);
+      expect(orchestrator.routedMainSpec).toBe("github-copilot/claude-opus-4.5");
+      pi.setModel.mockClear();
 
-    ctx.model = { provider: "github-copilot", id: "gpt-5.6-sol" };
-    await orchestrator.restoreMainRouting(ctx);
-    expect(pi.setModel).not.toHaveBeenCalled();
+      // Still paused: the resolver keeps skipping the subscription.
+      ctx.model = { provider: "github-copilot", id: "claude-opus-4.5" };
+      await orchestrator.restoreMainRouting(ctx);
+      expect(pi.setModel).not.toHaveBeenCalled();
 
-    ctx.model = { provider: "github-copilot", id: "claude-opus-4.5" };
-    orchestrator.subFallbackActive = true;
-    await orchestrator.restoreMainRouting(ctx);
-    expect(pi.setModel).not.toHaveBeenCalled();
-
-    setTierEnabled({ "copilot": false, "flant-sub": true, "flant-api": true });
-    updateRegistryFromAvailableModels([]);
+      // Usable again, but the live model is the user's own /model pick.
+      unpause("claude-sub");
+      ctx.model = { provider: "github-copilot", id: "gpt-5.6-sol" };
+      await orchestrator.restoreMainRouting(ctx);
+      expect(pi.setModel).not.toHaveBeenCalled();
+      expect(orchestrator.routedMainSpec).toBe("github-copilot/claude-opus-4.5");
+    } finally {
+      resetRouting();
+    }
   });
 
-  // The rate-limit switch-back restores whatever model was live when the limit
-  // hit — possibly one the user picked by hand. Recording that as pi-pi's own
-  // routing choice would let the next turn overwrite it with the config main.
+  // A pause's expiry restores whatever model was live when the limit hit —
+  // possibly one the user picked by hand. Recording that as pi-pi's own routing
+  // choice would let the next turn overwrite it with the config main.
   it("does not claim a model the rate-limit switch-back restored", async () => {
     const specs = ["pp-flant-anthropic-sub/sub/claude-opus-4-8", "github-copilot/claude-opus-4.5"];
-    updateRegistryFromAvailableModels(specs);
-    setTierEnabled({ "copilot": true, "flant-sub": true, "flant-api": true });
-    const pi = makePi();
-    pi.setModel = vi.fn(async () => true);
-    pi.setThinkingLevel = vi.fn();
-    const orchestrator = new Orchestrator(pi);
-    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
-    orchestrator.config.agents.main = { model: "pp-flant-anthropic-sub/sub/claude-opus-4-8", thinking: "high" };
-    const ctx: any = {
-      modelRegistry: { find: vi.fn((provider: string, id: string) => (specs.includes(`${provider}/${id}`) ? { provider, id } : undefined)) },
-      ui: { notify: vi.fn() },
-    };
+    setCatalog(specs);
+    try {
+      const pi = makePi();
+      pi.setModel = vi.fn(async () => true);
+      pi.setThinkingLevel = vi.fn();
+      const orchestrator = new Orchestrator(pi);
+      orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+      const ctx: any = {
+        modelRegistry: { find: vi.fn((provider: string, id: string) => (specs.includes(`${provider}/${id}`) ? { provider, id } : undefined)) },
+        ui: { notify: vi.fn() },
+      };
 
-    // The switch-back path: switchModel with the spec that was live before.
-    await orchestrator.switchModel(ctx, "github-copilot/claude-opus-4.5", "high");
-    expect(orchestrator.routedMainSpec).toBeNull();
+      // The switch-back path: switchModel with the spec that was live before.
+      await orchestrator.switchModel(ctx, "github-copilot/claude-opus-4.5", "high");
+      expect(orchestrator.routedMainSpec).toBeNull();
 
-    ctx.model = { provider: "github-copilot", id: "claude-opus-4.5" };
-    pi.setModel.mockClear();
-    await orchestrator.restoreMainRouting(ctx);
-    expect(pi.setModel).not.toHaveBeenCalled();
-
-    setTierEnabled({ "copilot": false, "flant-sub": true, "flant-api": true });
-    updateRegistryFromAvailableModels([]);
+      ctx.model = { provider: "github-copilot", id: "claude-opus-4.5" };
+      pi.setModel.mockClear();
+      await orchestrator.restoreMainRouting(ctx);
+      expect(pi.setModel).not.toHaveBeenCalled();
+    } finally {
+      resetRouting();
+    }
   });
 
   it("publishes session activity rather than a phase plan", () => {
@@ -809,18 +870,25 @@ describe("session-first core", () => {
     vi.useRealTimers();
   });
 
-  it("resets process-global provider fallback during shutdown", async () => {
+  it("resets process-global provider pauses during shutdown", async () => {
     const pi = makePi();
     const orchestrator = new Orchestrator(pi);
     orchestrator.config = normalizeConfigDurations(getDefaultConfig());
-    orchestrator.subFallbackActive = true;
-    orchestrator.subFallbackModelId = "sub/model";
-    setSubscriptionFallbackActive(true);
+    pause("claude-sub", null, "test");
+    pause("copilot:claude/opus", 60_000, "test");
+    const expiry = vi.fn();
+    orchestrator.pauseTimers.set("copilot:claude/opus", setTimeout(expiry, 60_000));
+    orchestrator.subProbeSpec = "pp-flant-anthropic-sub/sub/claude-opus-4-8";
+    orchestrator.pausedMainRoutes.set("claude-sub", { from: "pp-flant-anthropic-sub/sub/claude-opus-4-8", to: "github-copilot/claude-opus-4.5" });
+    orchestrator.routedMainSpec = "github-copilot/claude-opus-4.5";
     registerEventHandlers(orchestrator);
     await emit(pi, "session_shutdown", {}, { sessionManager: {}, ui: {} });
-    expect(orchestrator.subFallbackActive).toBe(false);
-    expect(orchestrator.subFallbackModelId).toBeNull();
-    expect(isSubscriptionFallbackActive()).toBe(false);
+    expect(listPauses()).toEqual([]);
+    expect(isPaused("claude-sub")).toBe(false);
+    expect(orchestrator.pauseTimers.size).toBe(0);
+    expect(orchestrator.subProbeSpec).toBeNull();
+    expect(orchestrator.pausedMainRoutes.size).toBe(0);
+    expect(orchestrator.routedMainSpec).toBeNull();
   });
 
   it("does not nudge a pure prose answer", async () => {
@@ -898,8 +966,7 @@ describe("session-first core", () => {
   // stopped dead on one. It is probabilistic, so the first answer is to send the
   // same request again rather than to pay for a cold cache on another provider.
   it("resends a refused request once, then leaves the vendor", async () => {
-    setTierEnabled({ "copilot": false, "flant-sub": true, "flant-api": true });
-    updateRegistryFromAvailableModels([
+    setCatalog([
       "pp-flant-openai/gpt-5.6-sol",
       "pp-flant-openai/gpt-5.6-sol-pro",
       "pp-flant-anthropic-sub/sub/claude-opus-5",
@@ -924,7 +991,7 @@ describe("session-first core", () => {
     expect(orchestrator.switchModel).toHaveBeenCalledWith(ctx, "pp-flant-openai/gpt-5.6-sol-pro", expect.any(String));
     expect(pi.sendMessage).toHaveBeenCalledTimes(2);
 
-    updateRegistryFromAvailableModels([]);
+    resetRouting();
     await emit(pi, "session_shutdown", {}, ctx);
   });
 
@@ -949,7 +1016,8 @@ describe("session-first core", () => {
   // Stopping is right when there is nowhere to go, but stopping without saying
   // so is the failure this whole branch exists to prevent.
   it("stops and explains when a repeated refusal has nowhere to move", async () => {
-    updateRegistryFromAvailableModels(["pp-flant-anthropic-sub/sub/claude-opus-5"]);
+    // Only Claude is served: GPT Sol Pro, the cross-vendor escape, resolves to nothing.
+    setCatalog(["pp-flant-anthropic-sub/sub/claude-opus-5"]);
     const pi = makePi();
     const orchestrator = new Orchestrator(pi);
     orchestrator.cwd = "/tmp/project";
@@ -969,6 +1037,7 @@ describe("session-first core", () => {
     expect(last[0]).toContain("Stopping");
     expect(last[1]).toBe("error");
     await emit(pi, "session_shutdown", {}, ctx);
+    resetRouting();
   });
 
   // The observed failure: the switch-back probe fired mid-request and switched

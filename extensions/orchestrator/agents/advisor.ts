@@ -1,22 +1,22 @@
 import type { PoolEntry } from "../config.js";
-import { getModelInfo, resolveModel } from "../model-registry.js";
+import { agentModel } from "./registry.js";
 import { toolsBlock, parseToolNames, identityBlock, ALL_CBM_TOOLS, WEB_TOOLS, principlesBlock } from "./tool-routing.js";
 
 export function createAdvisorAgent(entry: PoolEntry) {
-  const model = resolveModel(entry.model);
+  const { model, description } = agentModel(entry.model);
   const tools = `read, bash, grep, find, ls, lsp, ast_search, vcc_recall, recall_tool_output, ${ALL_CBM_TOOLS}, ${WEB_TOOLS}`;
-  const info = getModelInfo(model);
   return {
     frontmatter: {
       description: "Deep-reasoning advisor that investigates ONE hard judgment call — a design or approach tradeoff, a risky decision, 'is this right', 'why is this broken' — and returns a reasoned, evidence-backed recommendation; best for genuine judgment, not for locating things (use explore), fetching outside knowledge (use librarian), or carrying out the work (pi-pi)",
       tools,
       model,
+      ref: entry.model,
       thinking: entry.thinking,
       max_turns: entry.maxTurns,
       prompt_mode: "replace",
     },
     prompt: [
-      identityBlock({ displayName: info.displayName, family: info.family, tier: info.tier, thinking: entry.thinking }),
+      identityBlock(description, entry.thinking),
       "",
       "<constraints>",
       "You are a deep-reasoning ADVISOR. You investigate one hard question — a decision, a tradeoff between approaches, a \"why is this broken\", or a correctness/soundness judgment — and return a reasoned recommendation backed by evidence.",

@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "util";
 import { join } from "path";
 import { askUser, isCancel } from "../../3p/pi-ask-user/index.js";
+import { migrateConfigLayer } from "./config-migration.js";
 import {
   GLOBAL_CONFIG_PATH,
   MAX_CONCURRENT_SUBAGENTS_CEILING,
@@ -16,28 +17,39 @@ import {
   type PoolKey,
 } from "./config.js";
 import {
-  clearFlantGeneratedConfig,
-  getFlantGeneratedConfig,
-  loadFlantSettings,
-  readClaudeOAuthToken,
+  hasClaudeSubCredential,
   hasCodexCredential,
+  isClaudeSubInUse,
+  loadLlmApiCache,
   readCopilotOAuthToken,
   readGatewayApiKey,
-  syncProviderTiers,
-  unregisterFlantProviders,
   updateFlantInfra,
-  SUB_MODEL_PREFIX,
-  type FlantSettings,
 } from "./flant-infra.js";
 import {
-  clearAllTierDemotions,
-  getAllAliases,
-  getModelFamilies,
-  listTierDemotions,
-  resolveModel,
-  updateRegistryFromAvailableModels,
-} from "./model-registry.js";
+  FAMILIES,
+  FAMILY_LABEL,
+  PROVIDER_LABEL,
+  catalogModelsOf,
+  catalogProviders,
+  concreteProviderLabel,
+  describePauseKey,
+  formatSlotRef,
+  isSlotRef,
+  listPauses,
+  overrideModelFor,
+  parseRef,
+  refLabel,
+  resolveRef,
+  slotsOf,
+  splitSpec,
+  type ClaudeSubRoute,
+  type FamilyName,
+  type ProviderName,
+  type SlotName,
+} from "./routing.js";
 import { compareModelVersion } from "./model-version.js";
+import { clearAllPauses } from "./rate-limit-fallback.js";
+import { captureAvailableModels, mainUnavailableMessage, pinnedRoleSpecs } from "./event-handlers.js";
 import { enabledSkillLayers, listLayeredSkills } from "./skills-manifest.js";
 import { buildPoolRoster } from "./agents/registry.js";
 import { setLogLevel } from "./log.js";
@@ -56,10 +68,9 @@ const CLOSE = "Close";
 interface ConfigSourceInfo {
   activeValue: any;
   defaultValue: any;
-  flantValue: any | undefined;
   globalValue: any | undefined;
   projectValue: any | undefined;
-  source: "default" | "flant" | "global" | "project";
+  source: "default" | "global" | "project";
 }
 
 const SIMPLE_ROLES: Array<{ role: SimpleRole; label: string; description: string }> = [
@@ -172,14 +183,18 @@ function isEmptyOverride(value: unknown): boolean {
   return value !== null && typeof value === "object" && !Array.isArray(value) && Object.keys(value as object).length === 0;
 }
 
+function readLayer(orchestrator: Orchestrator, scope: Scope): Record<string, any> {
+  return migrateConfigLayer(readRawConfig(getScopeConfigPath(orchestrator, scope))).config;
+}
+
 function hasLayerOverride(orchestrator: Orchestrator, scope: Scope, keyPath: string[]): boolean {
-  const raw = readRawConfig(getScopeConfigPath(orchestrator, scope));
+  const raw = readLayer(orchestrator, scope);
   if (!hasNestedKey(raw, keyPath)) return false;
   return !isEmptyOverride(getNestedValue(raw, keyPath));
 }
 
 function getLayerOverrideValue(orchestrator: Orchestrator, scope: Scope, keyPath: string[]): any {
-  return getNestedValue(readRawConfig(getScopeConfigPath(orchestrator, scope)), keyPath);
+  return getNestedValue(readLayer(orchestrator, scope), keyPath);
 }
 
 function getOwnedScopes(orchestrator: Orchestrator, keyPath: string[]): Scope[] {
@@ -190,20 +205,16 @@ function getOwnedScopes(orchestrator: Orchestrator, keyPath: string[]): Scope[] 
 }
 
 export function getConfigSourceInfo(orchestrator: Orchestrator, keyPath: string[]): ConfigSourceInfo {
-  const globalConfig = readRawConfig(GLOBAL_CONFIG_PATH);
-  const projectConfig = readRawConfig(getProjectConfigPath(orchestrator.cwd));
-  const flantConfig = getFlantGeneratedConfig() as Record<string, any> | null;
+  const globalConfig = migrateConfigLayer(readRawConfig(GLOBAL_CONFIG_PATH)).config;
+  const projectConfig = migrateConfigLayer(readRawConfig(getProjectConfigPath(orchestrator.cwd))).config;
   const source = hasNestedKey(projectConfig, keyPath)
     ? "project"
     : hasNestedKey(globalConfig, keyPath)
     ? "global"
-    : flantConfig && hasNestedKey(flantConfig, keyPath)
-    ? "flant"
     : "default";
   return {
     activeValue: getNestedValue(orchestrator.config as Record<string, any>, keyPath),
     defaultValue: getNestedValue(getDefaultConfig() as Record<string, any>, keyPath),
-    flantValue: flantConfig ? getNestedValue(flantConfig, keyPath) : undefined,
     globalValue: hasNestedKey(globalConfig, keyPath) ? getNestedValue(globalConfig, keyPath) : undefined,
     projectValue: hasNestedKey(projectConfig, keyPath) ? getNestedValue(projectConfig, keyPath) : undefined,
     source,
@@ -214,7 +225,6 @@ export function formatSourceTags(currentValue: any, info: ConfigSourceInfo): str
   const tags: string[] = [];
   if (isDeepStrictEqual(currentValue, info.activeValue)) tags.push("active");
   if (isDeepStrictEqual(currentValue, info.defaultValue)) tags.push("default");
-  if (info.flantValue !== undefined && isDeepStrictEqual(currentValue, info.flantValue)) tags.push("flant");
   if (info.globalValue !== undefined && isDeepStrictEqual(currentValue, info.globalValue)) tags.push("global");
   if (info.projectValue !== undefined && isDeepStrictEqual(currentValue, info.projectValue)) tags.push("project");
   return tagsString(tags);
@@ -233,8 +243,8 @@ export function buildResetOptions(orchestrator: Orchestrator, keyPath: string[])
 
 function tryApplyConfigChange(orchestrator: Orchestrator, scope: Scope, keyPath: string[], value: any): { ok: boolean; error?: string } {
   try {
-    const nextGlobal = structuredClone(readRawConfig(GLOBAL_CONFIG_PATH));
-    const nextProject = structuredClone(readRawConfig(getProjectConfigPath(orchestrator.cwd)));
+    const nextGlobal = readLayer(orchestrator, "global");
+    const nextProject = readLayer(orchestrator, "project");
     setNestedValue(scope === "global" ? nextGlobal : nextProject, keyPath, value);
     mergeConfigLayers(nextGlobal, nextProject);
     writeConfigValue(getScopeConfigPath(orchestrator, scope), keyPath, value);
@@ -247,8 +257,8 @@ function tryApplyConfigChange(orchestrator: Orchestrator, scope: Scope, keyPath:
 
 function tryClearConfigOverride(orchestrator: Orchestrator, scope: Scope, keyPath: string[]): { ok: boolean; error?: string } {
   try {
-    const nextGlobal = structuredClone(readRawConfig(GLOBAL_CONFIG_PATH));
-    const nextProject = structuredClone(readRawConfig(getProjectConfigPath(orchestrator.cwd)));
+    const nextGlobal = readLayer(orchestrator, "global");
+    const nextProject = readLayer(orchestrator, "project");
     deleteNestedValue(scope === "global" ? nextGlobal : nextProject, keyPath);
     mergeConfigLayers(nextGlobal, nextProject);
     removeConfigValue(getScopeConfigPath(orchestrator, scope), keyPath);
@@ -261,12 +271,16 @@ function tryClearConfigOverride(orchestrator: Orchestrator, scope: Scope, keyPat
 
 function refreshRuntimeAfterConfigChange(orchestrator: Orchestrator, keyPath: string[]): void {
   const key = keyPath.join(".");
+  if (keyPath[0] === "providers" || keyPath[0] === "models") {
+    void reconcileRouting(orchestrator, orchestrator.lastCtx, keyPath[0] === "providers" || keyPath[1] === "claude");
+    return;
+  }
   if (keyPath[0] === "agents") {
     orchestrator.registerAgents(true);
     if (keyPath[1] === "maxConcurrentSubagents") orchestrator.applySubagentConcurrency();
     if (keyPath[1] === "main" && orchestrator.lastCtx) {
       void orchestrator.applyMainAgent(orchestrator.lastCtx).then((ok) => {
-        if (!ok) orchestrator.lastCtx?.ui?.notify?.(`Main agent model "${orchestrator.config.agents.main.model}" is not available; keeping the current model.`, "warning");
+        if (!ok) orchestrator.lastCtx?.ui?.notify?.(mainUnavailableMessage(orchestrator), "warning");
       });
     }
     return;
@@ -279,23 +293,22 @@ function refreshRuntimeAfterConfigChange(orchestrator: Orchestrator, keyPath: st
   }
 }
 
-// Flant provider (re)registration rewrites the generated config layer AFTER the
-// menu already reloaded orchestrator.config, so worker definitions and the main
-// model must be reconciled against the new merged config explicitly.
-function reconcileAfterFlantChange(orchestrator: Orchestrator, ctx: any): void {
-  try {
-    orchestrator.config = loadConfig(orchestrator.cwd);
-  } catch (err: any) {
-    ctx.ui?.notify?.(`Config reload failed: ${err?.message ?? String(err)}`, "error");
-    return;
+/**
+ * Carry a routing change through: re-register the providers it touches, take
+ * a fresh catalog, rebuild worker definitions, and re-route the main session
+ * between turns. A session on a model the user picked by hand is left alone.
+ */
+async function reconcileRouting(orchestrator: Orchestrator, ctx: any, reregister: boolean): Promise<void> {
+  if (reregister) {
+    const result = await updateFlantInfra(orchestrator.pi, { cwd: orchestrator.cwd, pinnedSpecs: pinnedRoleSpecs(orchestrator.config) });
+    if (!result.ok && readGatewayApiKey()) ctx?.ui?.notify?.(`LLM API update failed: ${result.error ?? "unknown error"}`, "warning");
   }
-  const available = ctx?.modelRegistry?.getAvailable?.();
-  if (Array.isArray(available)) {
-    updateRegistryFromAvailableModels(available.flatMap((m: any) => (m?.provider && m?.id ? [`${m.provider}/${m.id}`] : [])));
-  }
+  captureAvailableModels(ctx);
   orchestrator.registerAgents(true);
-  void orchestrator.applyMainAgent(ctx).then((ok) => {
-    if (!ok) ctx?.ui?.notify?.(`Main agent model "${orchestrator.config.agents.main.model}" is not available; keeping the current model.`, "warning");
+  if (!ctx) return;
+  await orchestrator.runModelSwitchBetweenTurns(async () => {
+    if (orchestrator.routedMainSpec) await orchestrator.restoreMainRouting(ctx);
+    else if (!await orchestrator.applyMainAgent(ctx)) ctx.ui?.notify?.(mainUnavailableMessage(orchestrator), "warning");
   });
 }
 
@@ -304,10 +317,6 @@ function applyConfigChange(orchestrator: Orchestrator, scope: Scope, keyPath: st
   if (!result.ok) {
     orchestrator.lastCtx?.ui?.notify?.(`Config update rejected: ${result.error}`, "error");
     return;
-  }
-  const available = orchestrator.lastCtx?.modelRegistry?.getAvailable?.();
-  if (Array.isArray(available)) {
-    updateRegistryFromAvailableModels(available.flatMap((m: any) => (m?.provider && m?.id ? [`${m.provider}/${m.id}`] : [])));
   }
   refreshRuntimeAfterConfigChange(orchestrator, keyPath);
 }
@@ -326,8 +335,8 @@ function clearConfigOverride(orchestrator: Orchestrator, scope: Scope, keyPath: 
 function applyScopeChoice(orchestrator: Orchestrator, keyPath: string[], value: any, scope: Scope | null): void {
   if (!scope) return;
   try {
-    const globalConfig = structuredClone(readRawConfig(GLOBAL_CONFIG_PATH));
-    const projectConfig = structuredClone(readRawConfig(getProjectConfigPath(orchestrator.cwd)));
+    const globalConfig = readLayer(orchestrator, "global");
+    const projectConfig = readLayer(orchestrator, "project");
     const mergedWithoutScope = scope === "global"
       ? (() => {
         deleteNestedValue(globalConfig, keyPath);
@@ -396,29 +405,6 @@ function makeUniqueTitle(base: string, used: Set<string>): string {
   }
 }
 
-function normalizeProviderLabel(provider: string): string {
-  const labels: Record<string, string> = {
-    anthropic: "Anthropic",
-    openai: "OpenAI",
-    google: "Google",
-    deepseek: "DeepSeek",
-    "x-ai": "xAI",
-    qwen: "Qwen",
-    "pp-flant-anthropic": "Flant Anthropic",
-    "pp-flant-anthropic-sub": "Flant Claude (subscription)",
-    "pp-flant-openai": "Flant OpenAI",
-    "github-copilot": "GitHub Copilot",
-    "openai-codex": "ChatGPT (subscription)",
-  };
-  return labels[provider] ?? provider;
-}
-
-function providerOrder(provider: string): number {
-  const order = ["pp-flant-anthropic-sub", "openai-codex", "pp-flant-anthropic", "pp-flant-openai", "github-copilot", "anthropic", "openai", "google", "deepseek", "x-ai", "qwen"];
-  const index = order.indexOf(provider);
-  return index === -1 ? 99 : index;
-}
-
 function listAvailableModels(ctx: any): Array<{ provider: string; id: string; spec: string }> {
   const available = ctx?.modelRegistry?.getAvailable?.();
   if (!Array.isArray(available)) return [];
@@ -429,78 +415,103 @@ function listAvailableModels(ctx: any): Array<{ provider: string; id: string; sp
     const id = typeof model?.id === "string" ? model.id.trim() : "";
     if (!provider || !id) continue;
     const spec = `${provider}/${id}`;
-    const key = spec.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
+    if (seen.has(spec.toLowerCase())) continue;
+    seen.add(spec.toLowerCase());
     models.push({ provider, id, spec });
   }
-  models.sort((a, b) => {
-    const byOrder = providerOrder(a.provider) - providerOrder(b.provider);
-    if (byOrder !== 0) return byOrder;
-    const byProvider = a.provider.localeCompare(b.provider);
-    if (byProvider !== 0) return byProvider;
-    return compareModelVersion(b.id, a.id);
+  return models.sort((a, b) => a.provider.localeCompare(b.provider) || compareModelVersion(b.id, a.id));
+}
+
+/** "→ claude-opus-5-5 via Claude subscription (direct)", or why nothing serves it. */
+function routeSummary(ref: string): string {
+  const resolution = resolveRef(ref);
+  if (!resolution.spec) return "⚠ nothing serves it — open Explain routing";
+  const parts = splitSpec(resolution.spec)!;
+  const pinned = parseRef(ref)?.kind === "pin" ? " [pinned]" : "";
+  const pro = resolution.proFallback ? " (no pro here; base)" : "";
+  const kept = resolution.via === "last-good" ? " (last working)" : "";
+  return `→ ${parts.id} via ${concreteProviderLabel(parts.provider)}${pro}${kept}${pinned}`;
+}
+
+function modelCapabilities(ctx: any, spec: string): string {
+  const parts = splitSpec(spec);
+  const model = parts ? ctx?.modelRegistry?.find?.(parts.provider, parts.id) : null;
+  if (!model) return "";
+  const window = typeof model.contextWindow === "number" ? `${formatTokenCount(model.contextWindow)} context` : "";
+  const images = model.input?.includes?.("image") ? "images" : "no images";
+  const thinking = model.reasoning ? "thinking" : "no thinking";
+  return [window, images, thinking].filter(Boolean).join(" · ");
+}
+
+async function pickProviderModel(ctx: any, title: string): Promise<string | null> {
+  const models = listAvailableModels(ctx);
+  const providers = [...new Set(models.map((m) => m.provider))];
+  const providerTitles = new Map<string, string>();
+  const options: OptionInput[] = providers.map((provider) => {
+    const count = models.filter((m) => m.provider === provider).length;
+    const label = concreteProviderLabel(provider);
+    const t = label === provider ? provider : `${label} (${provider})`;
+    providerTitles.set(t, provider);
+    return opt(t, `${count} models`);
   });
-  return models;
+  options.push(opt(BACK, "Return to the previous menu"));
+  for (;;) {
+    const choice = await selectOption(ctx, title, options);
+    if (!choice || choice === BACK) return null;
+    const provider = providerTitles.get(choice);
+    if (!provider) continue;
+    const byTitle = new Map<string, string>();
+    const modelOptions: OptionInput[] = models.filter((m) => m.provider === provider).map((m) => {
+      byTitle.set(m.id, m.spec);
+      return opt(m.id, modelCapabilities(ctx, m.spec) || m.spec);
+    });
+    modelOptions.push(opt(BACK, "Return to the previous menu"));
+    const picked = await selectOption(ctx, `${title} › ${concreteProviderLabel(provider)}`, modelOptions);
+    if (!picked || picked === BACK) continue;
+    const spec = byTitle.get(picked);
+    if (spec) return spec;
+  }
 }
 
 async function pickModel(ctx: any, currentModel?: string): Promise<string | null> {
-  const aliasMap = getAllAliases();
-  const families = getModelFamilies();
-  const availableModels = listAvailableModels(ctx);
-  const availableSpecs = new Set(availableModels.map((m) => m.spec));
-  const currentResolved = currentModel ? resolveModel(currentModel) : null;
-  const visibleAliases = new Set(
-    Object.entries(aliasMap)
-      .filter(([, resolved]) => availableSpecs.has(resolved))
-      .map(([alias]) => alias),
-  );
   const options: OptionInput[] = [];
-  const selectionToModel = new Map<string, string>();
-  const usedTitles = new Set<string>();
-
-  if (currentModel && !visibleAliases.has(currentModel)) {
-    const tags = ["active"];
-    if (!(currentResolved && availableSpecs.has(currentResolved))) tags.push("unavailable");
-    const title = makeUniqueTitle(withTags(currentModel, tagsString(tags)), usedTitles);
-    options.push(opt(title, "Current model"));
-    selectionToModel.set(title, currentModel);
-  }
-
-  const aliasEntries: Array<{ provider: string; displayName: string; alias: string }> = [];
-  for (const family of families) {
-    for (const alias of family.aliases) {
-      if (!visibleAliases.has(alias)) continue;
-      aliasEntries.push({ provider: alias.split("/")[0] ?? "", displayName: family.displayName, alias });
+  const byTitle = new Map<string, string>();
+  const used = new Set<string>();
+  const add = (ref: string) => {
+    const tag = ref === currentModel ? " [active]" : "";
+    const title = makeUniqueTitle(`${refLabel(ref)}${tag}`, used);
+    byTitle.set(title, ref);
+    options.push(opt(title, routeSummary(ref)));
+  };
+  for (const family of FAMILIES) {
+    for (const def of slotsOf(family).slice().reverse()) {
+      add(formatSlotRef(family, def.slot));
+      if (family === "gpt" && !orchestratorOverride(family)) add(formatSlotRef(family, def.slot, true));
     }
   }
-  aliasEntries.sort((a, b) => {
-    const byOrder = providerOrder(a.provider) - providerOrder(b.provider);
-    if (byOrder !== 0) return byOrder;
-    const byProvider = a.provider.localeCompare(b.provider);
-    if (byProvider !== 0) return byProvider;
-    return a.displayName.localeCompare(b.displayName);
-  });
-  for (const entry of aliasEntries) {
-    const tags = entry.alias === currentModel ? tagsString(["active"]) : "";
-    const title = makeUniqueTitle(withTags(`${normalizeProviderLabel(entry.provider)} — ${entry.displayName} (latest)`, tags), usedTitles);
-    options.push(opt(title, entry.alias));
-    selectionToModel.set(title, entry.alias);
+  if (currentModel && !isSlotRef(currentModel)) {
+    const title = makeUniqueTitle(`${currentModel} [active] [pinned]`, used);
+    byTitle.set(title, currentModel);
+    options.unshift(opt(title, routeSummary(currentModel)));
   }
-  for (const model of availableModels) {
-    if (currentModel && model.spec === currentModel) continue;
-    const title = makeUniqueTitle(`${normalizeProviderLabel(model.provider)} — ${model.id}`, usedTitles);
-    options.push(opt(title, model.spec));
-    selectionToModel.set(title, model.spec);
-  }
+  const PIN = "Pin a specific provider/model…";
+  options.push(opt(PIN, "Bypass routing: always this exact model, no fallback"));
   options.push(opt(BACK, "Return to the previous menu"));
-
   for (;;) {
     const choice = await selectOption(ctx, "Model", options);
     if (!choice || choice === BACK) return null;
-    const selected = selectionToModel.get(choice);
+    if (choice === PIN) {
+      const spec = await pickProviderModel(ctx, "Pin model");
+      if (spec) return spec;
+      continue;
+    }
+    const selected = byTitle.get(choice);
     if (selected) return selected;
   }
+}
+
+function orchestratorOverride(family: FamilyName): boolean {
+  return !!OrchestratorRef.current?.config?.models?.[family]?.override;
 }
 
 function thinkingLabel(value: string): string {
@@ -648,7 +659,7 @@ async function showAgentEditor(orchestrator: Orchestrator, ctx: any, basePath: s
   for (;;) {
     const current = getCurrent();
     const choice = await selectOption(ctx, label, [
-      opt(`Model: ${current.model}`, "Choose the model for this agent"),
+      opt(`Model: ${refLabel(current.model)}`, routeSummary(current.model)),
       opt(`Thinking: ${thinkingLabel(current.thinking)}`, "Choose how much this agent thinks before acting"),
       ...(allowTurnLimit ? [opt(`Turn limit: ${turnLimitLabel(current.maxTurns)}`, "Limit agentic turns; unlimited by default")] : []),
       ...buildResetOptions(orchestrator, basePath),
@@ -701,7 +712,7 @@ async function showPoolEntryEditor(orchestrator: Orchestrator, ctx: any, pool: P
     if (!entry) return;
     const choice = await selectOption(ctx, `${pool === "deepDebuggers" ? "deep-debugger" : pool.replace(/s$/, "")} entry`, [
       opt(`Enabled: ${entry.enabled === false ? "No" : "Yes"}`, "Toggle whether this model registers as a subagent"),
-      opt(`Model: ${entry.model}`, "Choose the model for this pool entry"),
+      opt(`Model: ${refLabel(entry.model)}`, routeSummary(entry.model)),
       opt(`Thinking: ${thinkingLabel(entry.thinking)}`, "Choose how much this agent thinks before acting"),
       opt(`Turn limit: ${turnLimitLabel(entry.maxTurns)}`, "Limit agentic turns; unlimited by default"),
       opt("Delete", "Remove this entry from the pool"),
@@ -755,8 +766,8 @@ async function showPoolSettings(orchestrator: Orchestrator, ctx: any, pool: Pool
     const usedTitles = new Set<string>();
     entries.forEach((entry, i) => {
       const tag = entry.enabled === false ? " (disabled)" : "";
-      const title = makeUniqueTitle(`${entry.model}${tag}`, usedTitles);
-      options.push(opt(title, `thinking ${thinkingLabel(entry.thinking)}`));
+      const title = makeUniqueTitle(`${refLabel(entry.model)}${tag}`, usedTitles);
+      options.push(opt(title, `${thinkingLabel(entry.thinking)} ${routeSummary(entry.model)}`));
       byTitle.set(title, i);
     });
     options.push(opt("New entry", `Add a model to the ${label.toLowerCase()} pool`));
@@ -819,15 +830,15 @@ async function showAgentsSettings(orchestrator: Orchestrator, ctx: any): Promise
   for (;;) {
     const config = orchestrator.config.agents;
     const options: OptionInput[] = [
-      opt("Main", `${config.main.model} / ${thinkingLabel(config.main.thinking)} — identity for the primary session agent`),
-      ...SIMPLE_ROLES.map(({ role, label, description }) => {
+      opt("Main", `${refLabel(config.main.model)} · ${thinkingLabel(config.main.thinking)} ${routeSummary(config.main.model)}`),
+      ...SIMPLE_ROLES.map(({ role, label }) => {
         const current = config.subagents.simple[role];
-        return opt(label, `${current.model} / ${thinkingLabel(current.thinking)} — ${description}`);
+        return opt(label, `${refLabel(current.model)} · ${thinkingLabel(current.thinking)} ${routeSummary(current.model)}`);
       }),
       ...POOL_ITEMS.map((item) => {
         const pool = config.subagents.pools[item.pool] ?? [];
-        const enabled = pool.filter((entry) => entry.enabled !== false).length;
-        return opt(item.label, `${enabled}/${pool.length} enabled — on-demand model pool`);
+        const enabled = pool.filter((entry) => entry.enabled !== false);
+        return opt(item.label, `${enabled.length}/${pool.length} enabled: ${enabled.map((entry) => refLabel(entry.model)).join(", ") || "none"}`);
       }),
       opt(`Max concurrent subagents: ${config.maxConcurrentSubagents}`, "Max background subagents run at once; extras queue"),
       opt(BACK, "Return to the previous menu"),
@@ -1008,319 +1019,361 @@ async function showPromptcapSettings(orchestrator: Orchestrator, ctx: any): Prom
   }
 }
 
-async function setFlantConfigValue(orchestrator: Orchestrator, ctx: any, key: string, value: any): Promise<Scope | null> {
-  const scope = await pickScope(ctx, orchestrator);
-  if (!scope) return null;
-  applyScopeChoice(orchestrator, ["flant", key], value, scope);
-  return scope;
+type ProviderStatus = "Ready" | "Serving" | "Paused" | "No credentials" | "Unused" | "Disabled";
+
+function providerCredential(provider: ProviderName): boolean {
+  switch (provider) {
+    case "claude-sub": return hasClaudeSubCredential();
+    case "codex": return hasCodexCredential();
+    case "copilot": return !!(process.env.COPILOT_GITHUB_TOKEN || readCopilotOAuthToken());
+    case "llm-api": return !!readGatewayApiKey();
+  }
 }
 
-// A higher-precedence scope (project over a global edit) can still govern the
-// effective value, making the click appear to do nothing — surface that.
-function warnIfFlantEditMasked(ctx: any, label: string, scope: Scope, intended: unknown, effective: unknown): boolean {
-  if (intended === effective) return false;
-  const other = scope === "global" ? "project" : "global";
-  ctx.ui?.notify?.(`A higher-precedence (${other}) override still governs "${label}"; your ${scope} change had no effect on the active value.`, "warning");
+function roleRefs(orchestrator: Orchestrator): string[] {
+  const a = orchestrator.config.agents;
+  return [a.main.model, ...Object.values(a.subagents.simple).map((r) => r.model), ...Object.values(a.subagents.pools).flatMap((p) => p.filter((e) => e.enabled !== false).map((e) => e.model))];
+}
+
+function providerStatus(orchestrator: Orchestrator, provider: ProviderName): { status: ProviderStatus; detail: string } {
+  const settings = orchestrator.config;
+  if (!settings.providers[provider].enabled) return { status: "Disabled", detail: "" };
+  if (!providerCredential(provider)) {
+    const how: Record<ProviderName, string> = {
+      "claude-sub": "/login → Anthropic",
+      codex: "/login → OpenAI (ChatGPT Plus/Pro)",
+      copilot: "/login → GitHub Copilot, or COPILOT_GITHUB_TOKEN",
+      "llm-api": "set LLM_API_KEY",
+    };
+    return { status: "No credentials", detail: how[provider] };
+  }
+  if (provider === "claude-sub" && !isClaudeSubInUse(settings, pinnedRoleSpecs(settings))) {
+    return { status: "Unused", detail: `Claude overridden by ${settings.models.claude.override!.provider}` };
+  }
+  const paused = listPauses().find((p) => p.key === provider || p.key.startsWith(`${provider}:`) || p.key.startsWith(`${provider}@`));
+  if (paused) {
+    const until = paused.until === null ? "until it recovers" : `until ${new Date(paused.until).toTimeString().slice(0, 5)}`;
+    return { status: "Paused", detail: `${describePauseKey(paused.key)} ${until}` };
+  }
+  const serving = roleRefs(orchestrator).some((ref) => resolveRef(ref).via === provider);
+  return { status: serving ? "Serving" : "Ready", detail: "" };
+}
+
+function providerServes(provider: ProviderName): string {
+  switch (provider) {
+    case "claude-sub": return "Claude";
+    case "codex": return "GPT";
+    case "copilot": return "Claude, GPT";
+    case "llm-api": return "GPT, any override";
+  }
+}
+
+function warnIfMasked(ctx: any, orchestrator: Orchestrator, keyPath: string[], scope: Scope): void {
+  if (scope === "global" && hasLayerOverride(orchestrator, "project", keyPath)) {
+    ctx.ui?.notify?.("A project setting still governs this; the global change has no effect here until the project one is reset.", "warning");
+  }
+}
+
+async function writeRoutingValue(orchestrator: Orchestrator, ctx: any, keyPath: string[], value: any, scope?: Scope | null): Promise<boolean> {
+  const chosen = scope === undefined ? await pickScope(ctx, orchestrator) : scope;
+  if (!chosen) return false;
+  applyConfigChange(orchestrator, chosen, keyPath, value);
+  warnIfMasked(ctx, orchestrator, keyPath, chosen);
   return true;
 }
 
-function countFlantProviders(settings: FlantSettings): { openai: number; sub: number } {
-  const models = settings.cachedFlantModels ?? [];
-  const bareClaude = models.filter((m) => m.startsWith("claude-")).length;
-  const subConfirmed = models.filter((m) => m.startsWith(SUB_MODEL_PREFIX)).length;
-  const sub = subConfirmed > 0 ? subConfirmed : bareClaude;
-  return { openai: Math.max(0, models.length - bareClaude - subConfirmed), sub };
+async function moveProvider(orchestrator: Orchestrator, ctx: any, provider: ProviderName, delta: -1 | 1): Promise<void> {
+  const order = [...orchestrator.config.providers.order];
+  const from = order.indexOf(provider);
+  const to = from + delta;
+  if (from < 0 || to < 0 || to >= order.length) return;
+  [order[from], order[to]] = [order[to]!, order[from]!];
+  const scope = hasLayerOverride(orchestrator, "project", ["providers", "order"]) ? "project" : hasLayerOverride(orchestrator, "global", ["providers", "order"]) ? "global" : await pickScope(ctx, orchestrator);
+  if (!scope) return;
+  applyConfigChange(orchestrator, scope, ["providers", "order"], order);
 }
 
-function collectRoleAssignments(config: Partial<PiPiConfig> | null): string[] {
-  if (!config) return [];
-  const out: string[] = [];
-  const add = (key: string, value: string | undefined) => {
-    if (typeof value === "string" && value.length > 0) out.push(`${key} = ${value}`);
-  };
-  add("agents.main", config.agents?.main?.model);
-  add("agents.subagents.simple.explore", config.agents?.subagents?.simple?.explore?.model);
-  add("agents.subagents.simple.librarian", config.agents?.subagents?.simple?.librarian?.model);
-  add("agents.subagents.simple.task", config.agents?.subagents?.simple?.task?.model);
-  for (const poolKey of ["advisors", "reviewers", "deepDebuggers"] as const) {
-    const pool = config.agents?.subagents?.pools?.[poolKey];
-    if (!Array.isArray(pool)) continue;
-    pool.forEach((entry: any, i: number) => {
-      if (entry?.enabled !== false) add(`agents.subagents.pools.${poolKey}[${i}]`, entry?.model);
-    });
-  }
-  return out;
-}
-
-function flantStatusText(settings: FlantSettings): string {
-  const providers = countFlantProviders(settings);
-  const assignments = collectRoleAssignments(getFlantGeneratedConfig());
-  const lines = [
-    `Enabled: ${settings.enabled ? "yes" : "no"}`,
-    `Auto-update: ${settings.autoUpdate ? "yes" : "no"}`,
-    `Last updated: ${settings.lastUpdated ?? "never"}`,
-    `Providers: pp-flant-openai (${providers.openai} models); Claude routes ONLY via the personal subscription (sub/)`,
+async function showClaudeSubRoute(orchestrator: Orchestrator, ctx: any): Promise<void> {
+  const keyPath = ["providers", "claude-sub", "route"];
+  const choices: Array<{ title: string; route: ClaudeSubRoute[]; description: string }> = [
+    { title: "Via LLM API, then direct", route: ["llm-api", "direct"], description: "Through the gateway; straight to Anthropic when the gateway fails" },
+    { title: "Direct, then via LLM API", route: ["direct", "llm-api"], description: "Straight to Anthropic; through the gateway when that fails" },
+    { title: "Direct only", route: ["direct"], description: "Straight to Anthropic; no LLM API key needed" },
+    { title: "Via LLM API only", route: ["llm-api"], description: "Only through the gateway" },
   ];
-  if (settings.subscription) {
-    const hasOAuth = !!readClaudeOAuthToken();
-    const hasGatewayKey = !!readGatewayApiKey();
-    const subActive = hasOAuth && hasGatewayKey;
-    lines.push(`Personal subscription: on (${subActive ? `active — pp-flant-anthropic-sub, ${providers.sub} models` : "inactive"})`);
-    lines.push(`Rate-limit switch-back check: every ${settings.switchBackIntervalMinutes} min`);
-    if (!subActive) {
-      if (!hasOAuth) lines.push("  - missing Claude OAuth token (run pi /login for Anthropic)");
-      if (!hasGatewayKey) lines.push("  - missing gateway key (set LLM_API_KEY or FLANT_API_KEY)");
+  for (;;) {
+    const info = getConfigSourceInfo(orchestrator, keyPath);
+    const options: OptionInput[] = choices.map((c) => opt(withTags(c.title, formatSourceTags(c.route, info)), c.description));
+    options.push(...buildResetOptions(orchestrator, keyPath), opt(BACK, "Return to the previous menu"));
+    const choice = await selectOption(ctx, "Claude subscription › Route", options);
+    if (!choice || choice === BACK) return;
+    const picked = choices.find((c) => choice.startsWith(c.title));
+    if (picked) await writeRoutingValue(orchestrator, ctx, keyPath, picked.route);
+    else await maybeHandleResetChoice(orchestrator, ctx, choice, keyPath);
+  }
+}
+
+function routeLabel(route: ClaudeSubRoute[]): string {
+  return route.map((r) => (r === "direct" ? "direct" : "via LLM API")).join(", then ");
+}
+
+async function showProvider(orchestrator: Orchestrator, ctx: any, provider: ProviderName): Promise<void> {
+  for (;;) {
+    const config = orchestrator.config.providers;
+    const index = config.order.indexOf(provider);
+    const { status, detail } = providerStatus(orchestrator, provider);
+    const enabledPath = ["providers", provider, "enabled"];
+    const options: OptionInput[] = [
+      opt(`Status: ${status}`, detail || `Serves ${providerServes(provider)}`),
+      opt(withTags(`Enabled: ${config[provider].enabled ? "ON" : "OFF"}`, tagsString(getOwnedScopes(orchestrator, enabledPath))), config[provider].enabled ? "Stop routing anything here" : "Route through this provider again"),
+    ];
+    if (index > 0) options.push(opt("Move up", `Position ${index + 1} of ${config.order.length} → ${index}`));
+    if (index < config.order.length - 1) options.push(opt("Move down", `Position ${index + 1} of ${config.order.length} → ${index + 2}`));
+    if (provider === "claude-sub") options.push(opt(`Route: ${routeLabel(config["claude-sub"].route)}`, "How requests reach Anthropic; both bill the same subscription"));
+    if (provider === "llm-api") {
+      const cache = loadLlmApiCache();
+      options.push(
+        opt(`Auto-update on startup: ${config["llm-api"].autoUpdate ? "ON" : "OFF"}`, "Refresh the model list each time pi starts"),
+        opt(`Cache period: ${config["llm-api"].cacheTTLDays} ${config["llm-api"].cacheTTLDays === 1 ? "day" : "days"}`, "How long the fetched model list is reused"),
+        opt("Update now", `Last updated: ${cache.lastUpdated ?? "never"} · ${cache.cachedFlantModels?.length ?? 0} models`),
+      );
     }
-  } else {
-    lines.push("Personal subscription: off");
+    options.push(opt(BACK, "Return to the previous menu"));
+    const choice = await selectOption(ctx, PROVIDER_LABEL[provider], options);
+    if (!choice || choice === BACK) return;
+    if (choice.startsWith("Status:")) {
+      ctx.ui?.notify?.(`${PROVIDER_LABEL[provider]}: ${status}${detail ? ` — ${detail}` : ""}`, "info");
+    } else if (choice.startsWith("Enabled:")) {
+      await writeRoutingValue(orchestrator, ctx, enabledPath, !config[provider].enabled);
+    } else if (choice === "Move up") {
+      await moveProvider(orchestrator, ctx, provider, -1);
+    } else if (choice === "Move down") {
+      await moveProvider(orchestrator, ctx, provider, 1);
+    } else if (choice.startsWith("Route:")) {
+      await showClaudeSubRoute(orchestrator, ctx);
+    } else if (choice.startsWith("Auto-update on startup:")) {
+      await showBooleanSetting(orchestrator, ctx, "Auto-update on startup", ["providers", "llm-api", "autoUpdate"], "Refresh the model list each time pi starts", "Reuse the cached list until it is updated by hand");
+    } else if (choice.startsWith("Cache period:")) {
+      const selected = await selectOption(ctx, "Cache period", [
+        opt("1 day", "Refresh daily"), opt("3 days", "Default"), opt("7 days", "Weekly"), opt("30 days", "Monthly"), opt(BACK, "Return to the previous menu"),
+      ]);
+      const days = selected && selected !== BACK ? Number(selected.split(" ")[0]) : NaN;
+      if (Number.isFinite(days)) await writeRoutingValue(orchestrator, ctx, ["providers", "llm-api", "cacheTTLDays"], days);
+    } else if (choice === "Update now") {
+      const result = await updateFlantInfra(orchestrator.pi, { force: true, cwd: orchestrator.cwd, pinnedSpecs: pinnedRoleSpecs(orchestrator.config) });
+      await reconcileRouting(orchestrator, ctx, false);
+      ctx.ui?.notify?.(result.ok ? `LLM API: ${result.models?.length ?? 0} models.` : `LLM API update failed: ${result.error ?? "unknown error"}`, result.ok ? "info" : "error");
+    }
   }
-  if (assignments.length === 0) {
-    lines.push("Role assignments: none");
-  } else {
-    lines.push("Role assignments:");
-    for (const assignment of assignments) lines.push(`- ${assignment}`);
+}
+
+function explainRouting(orchestrator: Orchestrator): string {
+  const lines: string[] = [`Priority: ${orchestrator.config.providers.order.map((p) => PROVIDER_LABEL[p]).join(" › ")}`];
+  const refs = new Set<string>();
+  for (const family of FAMILIES) for (const def of slotsOf(family)) refs.add(formatSlotRef(family, def.slot));
+  for (const ref of roleRefs(orchestrator)) refs.add(ref);
+  for (const ref of refs) {
+    const resolution = resolveRef(ref);
+    lines.push("", `${refLabel(ref)} (${ref})`);
+    lines.push(...resolution.steps.map((step) => `  ${step}`));
   }
-  const demotions = listTierDemotions();
-  if (demotions.length > 0) lines.push(`Monthly-cap tier demotions (active): ${demotions.join(", ")}`);
+  const pauses = listPauses();
+  if (pauses.length > 0) {
+    lines.push("", "Paused:");
+    for (const p of pauses) lines.push(`  ${describePauseKey(p.key)} — ${p.reason}${p.until ? ` (until ${new Date(p.until).toTimeString().slice(0, 5)})` : " (until a probe succeeds)"}`);
+  }
   return lines.join("\n");
 }
 
-function describeUpdateResult(result: { ok: boolean; error?: string; models?: string[] }): { text: string; kind: "info" | "error" } {
-  if (!result.ok) return { text: `Flant update failed: ${result.error ?? "unknown error"}`, kind: "error" };
-  const models = result.models ?? [];
-  const sub = models.filter((m) => m.startsWith(SUB_MODEL_PREFIX) || m.startsWith("claude-")).length;
-  return { text: `Flant update completed: ${models.length} models (subscription Claude: ${sub}, pp-flant-openai: ${Math.max(0, models.length - sub)}).`, kind: "info" };
+async function showProvidersSettings(orchestrator: Orchestrator, ctx: any): Promise<void> {
+  for (;;) {
+    const config = orchestrator.config.providers;
+    const byTitle = new Map<string, ProviderName>();
+    const options: OptionInput[] = config.order.map((provider, i) => {
+      const { status, detail } = providerStatus(orchestrator, provider);
+      const extra = provider === "claude-sub" ? ` · ${routeLabel(config["claude-sub"].route)}` : provider === "llm-api" ? " · paid" : "";
+      const title = `${i + 1}  ${PROVIDER_LABEL[provider]}  [${status}]`;
+      byTitle.set(title, provider);
+      return opt(title, `${detail || `Serves ${providerServes(provider)}`}${extra}`);
+    });
+    const pauses = listPauses();
+    options.push(
+      opt(`Automatic fallback: ${config.fallback.auto ? "ON" : "OFF"}`, "On a rate limit, move to the next provider that serves the model (LLM API is paid)"),
+      opt(`Retry paused providers after: ${config.fallback.retryAfterMinutes} min`, "First retry; doubles while the limit keeps refusing, or follows what the provider says"),
+    );
+    if (pauses.length > 0) options.push(opt(`Clear pauses (${pauses.length})`, pauses.map((p) => describePauseKey(p.key)).join(", ")));
+    options.push(opt("Explain routing", "Each model slot: which provider serves it now, and why the others were skipped"), opt(BACK, "Return to the previous menu"));
+    const choice = await selectOption(ctx, "Providers · first that serves a model wins", options);
+    if (!choice || choice === BACK) return;
+    const provider = byTitle.get(choice);
+    if (provider) {
+      await showProvider(orchestrator, ctx, provider);
+    } else if (choice.startsWith("Automatic fallback:")) {
+      await showBooleanSetting(orchestrator, ctx, "Automatic fallback", ["providers", "fallback", "auto"], "Move to the next provider on a rate limit, paid ones included", "Only warn; switch models by hand");
+    } else if (choice.startsWith("Retry paused providers after:")) {
+      const selected = await selectOption(ctx, "Retry paused providers after", [
+        opt("5 min", "Retry sooner"), opt("10 min", "Default"), opt("30 min", "Retry less often"), opt("60 min", "Hourly"), opt(BACK, "Return to the previous menu"),
+      ]);
+      const mins = selected && selected !== BACK ? Number(selected.split(" ")[0]) : NaN;
+      if (Number.isFinite(mins)) await writeRoutingValue(orchestrator, ctx, ["providers", "fallback", "retryAfterMinutes"], mins);
+    } else if (choice.startsWith("Clear pauses")) {
+      const cleared = clearAllPauses(orchestrator);
+      await reconcileRouting(orchestrator, ctx, false);
+      ctx.ui?.notify?.(`Cleared ${cleared.length} pause(s).`, "info");
+    } else if (choice === "Explain routing") {
+      ctx.ui?.notify?.(explainRouting(orchestrator), "info");
+    }
+  }
 }
 
-async function showFlantMenu(orchestrator: Orchestrator, ctx: any): Promise<void> {
+function overrideScopeTag(orchestrator: Orchestrator, family: FamilyName): string {
+  const keyPath = ["models", family, "override"];
+  const g = getLayerOverrideValue(orchestrator, "global", keyPath);
+  const p = getLayerOverrideValue(orchestrator, "project", keyPath);
+  if (p !== undefined && g !== undefined && !isDeepStrictEqual(p, g)) return `[project: ${p?.provider ?? "none"} · global: ${g?.provider ?? "none"}]`;
+  if (p !== undefined) return "[project]";
+  if (g !== undefined) return "[global]";
+  return "";
+}
+
+async function pickOverrideProvider(orchestrator: Orchestrator, ctx: any, family: FamilyName): Promise<string | null> {
+  const providers = catalogProviders();
+  const byTitle = new Map<string, string>();
+  const options: OptionInput[] = providers.map((provider) => {
+    const label = concreteProviderLabel(provider);
+    const title = label === provider ? provider : `${label} (${provider})`;
+    byTitle.set(title, provider);
+    return opt(title, `${catalogModelsOf(provider).length} models · credentials present`);
+  });
+  options.push(opt(BACK, "Return to the previous menu"));
+  const choice = await selectOption(ctx, `${FAMILY_LABEL[family]} › Override › Provider`, options);
+  return choice && choice !== BACK ? byTitle.get(choice) ?? null : null;
+}
+
+async function pickOverrideModel(ctx: any, provider: string, title: string): Promise<string | null> {
+  const ids = catalogModelsOf(provider).sort((a, b) => compareModelVersion(b, a));
+  const options: OptionInput[] = ids.map((id) => opt(id, modelCapabilities(ctx, `${provider}/${id}`) || `${provider}/${id}`));
+  options.push(opt(BACK, "Return to the previous menu"));
+  const choice = await selectOption(ctx, title, options);
+  return choice && choice !== BACK ? choice : null;
+}
+
+async function showOverrideEditor(orchestrator: Orchestrator, ctx: any, family: FamilyName): Promise<void> {
+  const keyPath = ["models", family, "override"];
   for (;;) {
-    const settings = loadFlantSettings(orchestrator.cwd);
-    const enableLabel = `Enable: ${settings.enabled ? "ON" : "OFF"}`;
-    const subscriptionLabel = `Personal Claude subscription: ${settings.subscription ? "ON" : "OFF"}`;
+    const override = orchestrator.config.models[family].override;
+    if (!override) return;
     const options: OptionInput[] = [
-      opt(enableLabel, "Turn the Flant AI model providers on or off"),
+      opt(`Provider: ${concreteProviderLabel(override.provider)}`, "Replace with another provider (resets the models)"),
+      opt(`Default model: ${override.model}`, "Fills every slot without its own model"),
+      ...slotsOf(family).slice().reverse().map((def) => {
+        const own = override.slots?.[def.slot];
+        const spec = overrideModelFor(family, def.slot)!;
+        return opt(`${def.label}: ${own ?? `${override.model} (default)`}`, `${def.tier} role · ${modelCapabilities(ctx, spec) || spec}`);
+      }),
+      opt("Remove override", `Back to real ${FAMILY_LABEL[family]} through provider priority`),
+      opt(BACK, "Return to the previous menu"),
     ];
-    if (settings.enabled) {
-      options.push(
-        opt(subscriptionLabel, "Route Claude roles through your personal Claude subscription instead of the gateway"),
-        opt(`Auto-update on startup: ${settings.autoUpdate ? "ON" : "OFF"}`, "Refresh the available model list automatically each time pi starts"),
-        opt(`Cache period: ${settings.cacheTTLDays} ${settings.cacheTTLDays === 1 ? "day" : "days"}`, "How long the fetched model list is reused before it is refreshed"),
-        opt(`Automatic fallback on rate limit: ${settings.autoRateLimitFallback ? "ON" : "OFF"}`, "On a rate limit, switch to the next provider tier automatically"),
-      );
-      if (settings.subscription) {
-        options.push(opt(`Rate-limit switch-back check: every ${settings.switchBackIntervalMinutes} min`, "How often to retry your subscription after it was rate-limited"));
-      }
-      options.push(
-        opt("Update now", "Fetch the latest model list from Flant right away"),
-        opt("Current status", "Show the current Flant configuration, providers, and model counts"),
-      );
+    const choice = await selectOption(ctx, `${FAMILY_LABEL[family]} › Override ${overrideScopeTag(orchestrator, family)}`, options);
+    if (!choice || choice === BACK) return;
+    if (choice.startsWith("Provider:")) {
+      const provider = await pickOverrideProvider(orchestrator, ctx, family);
+      if (!provider) continue;
+      const model = await pickOverrideModel(ctx, provider, `${FAMILY_LABEL[family]} › Override › Default model`);
+      if (model) await writeRoutingValue(orchestrator, ctx, keyPath, { provider, model });
+    } else if (choice.startsWith("Default model:")) {
+      const model = await pickOverrideModel(ctx, override.provider, `${FAMILY_LABEL[family]} › Override › Default model`);
+      if (model) await writeRoutingValue(orchestrator, ctx, keyPath, { ...override, model });
+    } else if (choice === "Remove override") {
+      const scope = await pickScope(ctx, orchestrator);
+      if (!scope) continue;
+      // `null` rather than deleting: in the project layer it has to cancel a
+      // global override, not fall through to it.
+      const below = scope === "project" ? getLayerOverrideValue(orchestrator, "global", keyPath) : undefined;
+      if (below) applyConfigChange(orchestrator, scope, keyPath, null);
+      else clearConfigOverride(orchestrator, scope, keyPath);
+      return;
+    } else {
+      const def = slotsOf(family).find((d) => choice.startsWith(`${d.label}:`));
+      if (!def) continue;
+      const model = await pickOverrideModel(ctx, override.provider, `${FAMILY_LABEL[family]} › Override › ${def.label}`);
+      if (!model) continue;
+      const slots = { ...(override.slots ?? {}) };
+      if (model === override.model) delete slots[def.slot];
+      else slots[def.slot] = model;
+      await writeRoutingValue(orchestrator, ctx, keyPath, { ...override, slots });
     }
-    const demotions = listTierDemotions();
-    if (demotions.length > 0) {
-      options.push(opt(`Clear provider tier demotions (${demotions.length})`, `Restore tiers demoted by a monthly usage cap: ${demotions.join(", ")}`));
+  }
+}
+
+async function showSlotPin(orchestrator: Orchestrator, ctx: any, family: FamilyName, slot: SlotName): Promise<void> {
+  const keyPath = ["models", family, "pins", slot];
+  const def = slotsOf(family).find((d) => d.slot === slot)!;
+  const versions = new Set<string>();
+  for (const provider of catalogProviders()) {
+    for (const id of catalogModelsOf(provider)) {
+      const bare = id.replace(/^sub\//, "");
+      if (def.pattern.test(bare) && !bare.endsWith("-pro")) versions.add(bare.replace(/\./g, "-"));
+    }
+  }
+  const options: OptionInput[] = [opt("Latest", "Use the newest version any provider serves")];
+  for (const version of [...versions].sort((a, b) => compareModelVersion(b, a))) options.push(opt(version, "Lock this slot to this version"));
+  options.push(...buildResetOptions(orchestrator, keyPath), opt(BACK, "Return to the previous menu"));
+  const choice = await selectOption(ctx, `${def.label} › Version`, options);
+  if (!choice || choice === BACK) return;
+  if (choice === "Latest") {
+    const scope = await pickScope(ctx, orchestrator);
+    if (scope) clearConfigOverride(orchestrator, scope, keyPath);
+    return;
+  }
+  if (await maybeHandleResetChoice(orchestrator, ctx, choice, keyPath)) return;
+  await writeRoutingValue(orchestrator, ctx, keyPath, choice);
+}
+
+async function showFamilySettings(orchestrator: Orchestrator, ctx: any, family: FamilyName): Promise<void> {
+  for (;;) {
+    const config = orchestrator.config.models[family];
+    if (config.override) {
+      await showOverrideEditor(orchestrator, ctx, family);
+      if (orchestrator.config.models[family].override) return;
+      continue;
+    }
+    const byTitle = new Map<string, SlotName>();
+    const options: OptionInput[] = [opt(`Override: none ${overrideScopeTag(orchestrator, family)}`.trim(), `Replace the whole ${FAMILY_LABEL[family]} family with another provider's models`)];
+    for (const def of slotsOf(family).slice().reverse()) {
+      const pin = config.pins[def.slot];
+      const title = `${def.label}${pin ? ` [pinned ${pin}]` : ""}`;
+      byTitle.set(title, def.slot);
+      options.push(opt(title, `${def.tier} ${routeSummary(formatSlotRef(family, def.slot))}`));
     }
     options.push(opt(BACK, "Return to the previous menu"));
-
-    const choice = await selectOption(ctx, "Flant", options);
+    const choice = await selectOption(ctx, `Models › ${FAMILY_LABEL[family]}`, options);
     if (!choice || choice === BACK) return;
-
-    if (choice.startsWith("Clear provider tier demotions")) {
-      const cleared = clearAllTierDemotions();
-      ctx.ui?.notify?.(cleared.length > 0 ? `Cleared ${cleared.length} provider tier demotion(s): ${cleared.join(", ")}.` : "No provider tier demotions to clear.", "info");
+    if (choice.startsWith("Override:")) {
+      const provider = await pickOverrideProvider(orchestrator, ctx, family);
+      if (!provider) continue;
+      const model = await pickOverrideModel(ctx, provider, `${FAMILY_LABEL[family]} › Override › Model for every slot`);
+      if (model) await writeRoutingValue(orchestrator, ctx, ["models", family, "override"], { provider, model });
       continue;
     }
-
-    if (choice === enableLabel) {
-      const intended = !settings.enabled;
-      if (intended && !process.env.FLANT_API_KEY && !process.env.LLM_API_KEY) {
-        ctx.ui?.notify?.("Set FLANT_API_KEY (or LLM_API_KEY) environment variable first.", "warning");
-        continue;
-      }
-      const scope = await setFlantConfigValue(orchestrator, ctx, "enabled", intended);
-      if (!scope) continue;
-      const eff = loadFlantSettings(orchestrator.cwd);
-      if (warnIfFlantEditMasked(ctx, "Enable", scope, intended, eff.enabled)) continue;
-      if (eff.enabled) {
-        const result = await updateFlantInfra(orchestrator.pi, { cwd: orchestrator.cwd });
-        const message = describeUpdateResult(result);
-        ctx.ui?.notify?.(message.text, message.kind);
-      } else {
-        unregisterFlantProviders(orchestrator.pi);
-        clearFlantGeneratedConfig();
-        ctx.ui?.notify?.("Flant disabled.", "info");
-      }
-      reconcileAfterFlantChange(orchestrator, ctx);
-      continue;
-    }
-
-    if (choice === subscriptionLabel) {
-      const turningOn = !settings.subscription;
-      if (turningOn) {
-        if (!readClaudeOAuthToken()) {
-          ctx.ui?.notify?.("No Claude OAuth token found. Log in to your personal Claude subscription in pi first (/login → Anthropic), then retry.", "warning");
-          continue;
-        }
-        if (!readGatewayApiKey()) {
-          ctx.ui?.notify?.("Set LLM_API_KEY (or FLANT_API_KEY) for the gateway first.", "warning");
-          continue;
-        }
-      }
-      const scope = await setFlantConfigValue(orchestrator, ctx, "subscription", turningOn);
-      if (!scope) continue;
-      const eff = loadFlantSettings(orchestrator.cwd);
-      if (warnIfFlantEditMasked(ctx, "Personal Claude subscription", scope, turningOn, eff.subscription)) continue;
-      const result = await updateFlantInfra(orchestrator.pi, { cwd: orchestrator.cwd });
-      reconcileAfterFlantChange(orchestrator, ctx);
-      ctx.ui?.notify?.(
-        result.ok
-          ? eff.subscription
-            ? "Personal Claude subscription ON — Claude roles now route through sub/claude-* (billed to your subscription)."
-            : "Personal Claude subscription OFF — Claude models are unavailable (the paid gateway no longer serves Claude)."
-          : `Personal subscription ${eff.subscription ? "enable" : "disable"} failed: ${result.error ?? "unknown error"}`,
-        result.ok ? "info" : "error",
-      );
-      continue;
-    }
-
-    if (choice.startsWith("Auto-update on startup:")) {
-      const intended = !settings.autoUpdate;
-      const scope = await setFlantConfigValue(orchestrator, ctx, "autoUpdate", intended);
-      if (!scope) continue;
-      const eff = loadFlantSettings(orchestrator.cwd);
-      if (warnIfFlantEditMasked(ctx, "Auto-update on startup", scope, intended, eff.autoUpdate)) continue;
-      ctx.ui?.notify?.(`Auto-update on startup: ${eff.autoUpdate ? "ON" : "OFF"}`, "info");
-      continue;
-    }
-
-    if (choice.startsWith("Automatic fallback on rate limit:")) {
-      const intended = !settings.autoRateLimitFallback;
-      const scope = await setFlantConfigValue(orchestrator, ctx, "autoRateLimitFallback", intended);
-      if (!scope) continue;
-      const eff = loadFlantSettings(orchestrator.cwd);
-      if (warnIfFlantEditMasked(ctx, "Automatic fallback on rate limit", scope, intended, eff.autoRateLimitFallback)) continue;
-      ctx.ui?.notify?.(eff.autoRateLimitFallback ? "Automatic fallback ON — rate limits switch provider tier without asking." : "Automatic fallback OFF — rate limits only warn; switch models manually with /model.", "info");
-      continue;
-    }
-
-    if (choice.startsWith("Rate-limit switch-back check:")) {
-      const selected = await selectOption(ctx, "Switch-back check interval", [
-        opt("10 min", "Default — probe the subscription limit every 10 minutes"),
-        opt("15 min", "Probe every 15 minutes"),
-        opt("30 min", "Probe every 30 minutes"),
-        opt("60 min", "Probe hourly"),
-        opt("120 min", "Probe every two hours"),
-        opt(BACK, "Return to the previous menu"),
-      ]);
-      if (!selected || selected === BACK) continue;
-      const mins = Number(selected.split(" ")[0]);
-      if (!Number.isFinite(mins) || mins <= 0) continue;
-      const scope = await setFlantConfigValue(orchestrator, ctx, "switchBackIntervalMinutes", mins);
-      if (!scope) continue;
-      const eff = loadFlantSettings(orchestrator.cwd);
-      if (warnIfFlantEditMasked(ctx, "Switch-back check interval", scope, mins, eff.switchBackIntervalMinutes)) continue;
-      ctx.ui?.notify?.(`Switch-back check interval set to ${eff.switchBackIntervalMinutes} min.`, "info");
-      continue;
-    }
-
-    if (choice.startsWith("Cache period:")) {
-      const selected = await selectOption(ctx, "Cache period", [
-        opt("1 day", "Refresh model metadata daily"),
-        opt("3 days", "Default — refresh every three days"),
-        opt("7 days", "Refresh model metadata weekly"),
-        opt("14 days", "Refresh model metadata every two weeks"),
-        opt("30 days", "Refresh model metadata monthly"),
-        opt(BACK, "Return to the previous menu"),
-      ]);
-      if (!selected || selected === BACK) continue;
-      const days = Number(selected.split(" ")[0]);
-      if (!Number.isFinite(days) || days <= 0) continue;
-      const scope = await setFlantConfigValue(orchestrator, ctx, "cacheTTLDays", days);
-      if (!scope) continue;
-      const eff = loadFlantSettings(orchestrator.cwd);
-      if (warnIfFlantEditMasked(ctx, "Cache period", scope, days, eff.cacheTTLDays)) continue;
-      ctx.ui?.notify?.(`Cache period set to ${eff.cacheTTLDays} ${eff.cacheTTLDays === 1 ? "day" : "days"}.`, "info");
-      continue;
-    }
-
-    if (choice === "Update now") {
-      const result = await updateFlantInfra(orchestrator.pi, { force: true, cwd: orchestrator.cwd });
-      reconcileAfterFlantChange(orchestrator, ctx);
-      const message = describeUpdateResult(result);
-      ctx.ui?.notify?.(message.text, message.kind);
-      continue;
-    }
-
-    ctx.ui?.notify?.(flantStatusText(settings), "info");
+    const slot = byTitle.get(choice);
+    if (slot) await showSlotPin(orchestrator, ctx, family, slot);
   }
 }
 
-async function showCopilotMenu(orchestrator: Orchestrator, ctx: any): Promise<void> {
+async function showModelsSettings(orchestrator: Orchestrator, ctx: any): Promise<void> {
   for (;;) {
-    const settings = loadFlantSettings(orchestrator.cwd);
-    const tokenPresent = !!(process.env.COPILOT_GITHUB_TOKEN || readCopilotOAuthToken());
-    const enableLabel = `Enable Copilot tier: ${settings.copilotEnabled ? "ON" : "OFF"}`;
-    const statusLine = settings.copilotEnabled
-      ? tokenPresent
-        ? "Active — Claude falls here when the subscription is rate-limited (its only automatic fallback)."
-        : "Enabled but Copilot credentials are missing — run /login → GitHub Copilot or set COPILOT_GITHUB_TOKEN."
-      : "Disabled — a rate-limited Claude subscription has no automatic fallback and waits for the limit to clear.";
-    const choice = await selectOption(ctx, "Copilot", [
-      opt(enableLabel, "Use Copilot as the automatic fallback when the Claude subscription is rate-limited"),
-      opt("Current status", statusLine),
-      opt(BACK, "Return to the previous menu"),
-    ]);
+    const options: OptionInput[] = FAMILIES.map((family) => {
+      const override = orchestrator.config.models[family].override;
+      const pins = Object.keys(orchestrator.config.models[family].pins).length;
+      const summary = override ? `overridden by ${override.provider} (${override.model})` : pins > 0 ? `${pins} slot(s) pinned, others latest` : "latest of each slot";
+      return opt(FAMILY_LABEL[family], summary);
+    });
+    options.push(opt(BACK, "Return to the previous menu"));
+    const choice = await selectOption(ctx, "Models", options);
     if (!choice || choice === BACK) return;
-    if (choice === "Current status") {
-      ctx.ui?.notify?.(statusLine, "info");
-      continue;
-    }
-    const turningOn = !settings.copilotEnabled;
-    if (turningOn && !tokenPresent) {
-      ctx.ui?.notify?.("Run /login → GitHub Copilot or set COPILOT_GITHUB_TOKEN first.", "warning");
-      continue;
-    }
-    const scope = await setFlantConfigValue(orchestrator, ctx, "copilotEnabled", turningOn);
-    if (!scope) continue;
-    const eff = loadFlantSettings(orchestrator.cwd);
-    syncProviderTiers(eff);
-    if (warnIfFlantEditMasked(ctx, "Copilot", scope, turningOn, eff.copilotEnabled)) continue;
-    reconcileAfterFlantChange(orchestrator, ctx);
-    ctx.ui?.notify?.(turningOn ? "Copilot tier ON — a rate-limited Claude subscription now falls back to Copilot." : "Copilot tier OFF — a rate-limited Claude subscription waits for the limit to clear.", "info");
-  }
-}
-
-async function showCodexMenu(orchestrator: Orchestrator, ctx: any): Promise<void> {
-  for (;;) {
-    const settings = loadFlantSettings(orchestrator.cwd);
-    const tokenPresent = hasCodexCredential();
-    const enableLabel = `Enable ChatGPT subscription tier: ${settings.codexEnabled ? "ON" : "OFF"}`;
-    const statusLine = settings.codexEnabled
-      ? tokenPresent
-        ? "Active — GPT work routes to the subscription before Copilot and before the paid gateway."
-        : "Enabled but not logged in — run /login → OpenAI (ChatGPT Plus/Pro)."
-      : "Disabled — GPT work is billed per token on the paid gateway unless Copilot serves it.";
-    const choice = await selectOption(ctx, "ChatGPT subscription", [
-      opt(enableLabel, "Serve GPT models from a personal ChatGPT Plus/Pro subscription"),
-      opt("Current status", statusLine),
-      opt(BACK, "Return to the previous menu"),
-    ]);
-    if (!choice || choice === BACK) return;
-    if (choice === "Current status") {
-      ctx.ui?.notify?.(statusLine, "info");
-      continue;
-    }
-    const turningOn = !settings.codexEnabled;
-    if (turningOn && !tokenPresent) {
-      ctx.ui?.notify?.("Run /login → OpenAI (ChatGPT Plus/Pro) first.", "warning");
-      continue;
-    }
-    const scope = await setFlantConfigValue(orchestrator, ctx, "codexEnabled", turningOn);
-    if (!scope) continue;
-    const eff = loadFlantSettings(orchestrator.cwd);
-    syncProviderTiers(eff);
-    if (warnIfFlantEditMasked(ctx, "ChatGPT subscription", scope, turningOn, eff.codexEnabled)) continue;
-    reconcileAfterFlantChange(orchestrator, ctx);
-    ctx.ui?.notify?.(turningOn ? "ChatGPT subscription tier ON — GPT work routes there first." : "ChatGPT subscription tier OFF.", "info");
+    const family = FAMILIES.find((f) => FAMILY_LABEL[f] === choice);
+    if (family) await showFamilySettings(orchestrator, ctx, family);
   }
 }
 
@@ -1669,18 +1722,18 @@ function sessionStatus(orchestrator: Orchestrator, ctx: any): string {
   const usage = ctx.getContextUsage?.();
   const records = workerRecords();
   const active = records.filter((record) => record.status === "running" || record.status === "queued");
-  const settings = loadFlantSettings(orchestrator.cwd);
   const tracker = (globalThis as any)[Symbol.for("pi-pi:usage-tracker")] as { getTotalCost?: () => number } | undefined;
   const cost = tracker?.getTotalCost?.();
   const contextLine = usage && typeof usage.contextWindow === "number" && usage.contextWindow > 0
     ? `${formatTokenCount(usage.tokens ?? 0)} / ${formatTokenCount(usage.contextWindow)} tokens (${Math.round(((usage.tokens ?? 0) / usage.contextWindow) * 100)}%)`
     : "unavailable";
   const lines = [
-    `Model: ${ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "none"} · thinking ${orchestrator.config.agents.main.thinking}`,
+    `Model: ${ctx.model ? `${orchestrator.mainModelInfo(ctx).label} → ${ctx.model.provider}/${ctx.model.id}${ctx.model.provider === "pp-flant-openai" ? " [paid]" : ""}` : "none"} · thinking ${ctx.thinkingLevel ?? orchestrator.config.agents.main.thinking}`,
     `Context: ${contextLine}`,
     ...(typeof cost === "number" && cost > 0 ? [`Session cost: $${cost.toFixed(2)}`] : []),
-    `Flant: ${settings.enabled ? `on · subscription ${settings.subscription ? (readClaudeOAuthToken() ? (readGatewayApiKey() ? "active" : "MISSING GATEWAY KEY") : "MISSING TOKEN") : "off"}` : "off"}`,
-    ...(orchestrator.subFallbackActive ? ["⚠ Subscription rate-limited — waiting for the limit to clear"] : []),
+    `Providers: ${orchestrator.config.providers.order.map((p) => `${PROVIDER_LABEL[p]} [${providerStatus(orchestrator, p).status}]`).join(" › ")}`,
+    ...listPauses().map((p) => `⚠ Paused: ${describePauseKey(p.key)}${p.until ? ` until ${new Date(p.until).toTimeString().slice(0, 5)}` : " until a probe succeeds"}`),
+    ...roleRefs(orchestrator).filter((ref, i, all) => all.indexOf(ref) === i && !resolveRef(ref).spec).map((ref) => `⚠ ${refLabel(ref)} has nothing to run on — /pp › Settings › Providers › Explain routing`),
     ...(orchestrator.continuationHalted ? ["⚠ Automatic continuation paused (repeated stalls) — send a message to resume"] : []),
     ...(orchestrator.configError ? [`⚠ Config error: ${orchestrator.configError}`] : []),
   ];
@@ -1724,17 +1777,15 @@ async function showReportMenu(orchestrator: Orchestrator, ctx: any): Promise<voi
   ctx.ui?.notify?.(`Report written to ${written.reportDir} (${written.captured.length} files). Nothing was sent anywhere.`, "info");
 }
 
-export async function showPpMenu(orchestrator: Orchestrator, ctx: any): Promise<void> {
-  OrchestratorRef.current = orchestrator;
+async function showSettings(orchestrator: Orchestrator, ctx: any): Promise<void> {
   for (;;) {
-    const choice = await selectOption(ctx, "/pp · session control panel", [
-      opt("Status", "Model, context, providers, workers, and warnings"),
-      opt("Workers", "Inspect or stop bounded background workers"),
-      opt("Usage", "Session token usage and cost breakdown"),
-      opt("Agents", "Main agent, worker models, pools, and concurrency"),
-      opt("Flant", "Provider routing and Claude subscription"),
-      opt("ChatGPT subscription", "Serve GPT models from a personal ChatGPT Plus/Pro subscription"),
-      opt("Copilot", "GitHub Copilot provider tier"),
+    const config = orchestrator.config;
+    const models = FAMILIES.map((f) => `${FAMILY_LABEL[f]}: ${config.models[f].override ? `override ${config.models[f].override!.provider}` : "latest"}`).join(" · ");
+    const pools = POOL_ITEMS.map((item) => config.agents.subagents.pools[item.pool].filter((e) => e.enabled !== false).length).join("/");
+    const choice = await selectOption(ctx, "/pp › Settings", [
+      opt("Providers", `${config.providers.order.map((p) => PROVIDER_LABEL[p]).join(" › ")}`),
+      opt("Models", models),
+      opt("Agents", `main ${refLabel(config.agents.main.model)} · pools ${pools} · max ${config.agents.maxConcurrentSubagents} workers`),
       opt("Skills", "Bundled/global/project skill sources and catalog"),
       opt("Context", "AGENTS.md / CLAUDE.md injection (global/ancestor/project)"),
       opt("Prompt size", "How much of the conversation reaches the model, and when old tool calls fold away"),
@@ -1742,6 +1793,30 @@ export async function showPpMenu(orchestrator: Orchestrator, ctx: any): Promise<
       opt("General", "Log level and tracing"),
       opt("Performance", "Stale-turn and stale-worker time limits"),
       opt("LSP", "Language server controls"),
+      opt(BACK, "Return to the previous menu"),
+    ]);
+    if (!choice || choice === BACK) return;
+    if (choice === "Providers") await showProvidersSettings(orchestrator, ctx);
+    else if (choice === "Models") await showModelsSettings(orchestrator, ctx);
+    else if (choice === "Agents") await showAgentsSettings(orchestrator, ctx);
+    else if (choice === "Skills") await showSkillsSettings(orchestrator, ctx);
+    else if (choice === "Context") await showContextSettings(orchestrator, ctx);
+    else if (choice === "Prompt size") await showPromptcapSettings(orchestrator, ctx);
+    else if (choice === "Commands") await showCommandsSettings(orchestrator, ctx);
+    else if (choice === "General") await showGeneralSettings(orchestrator, ctx);
+    else if (choice === "Performance") await showTimeoutsSettings(orchestrator, ctx);
+    else if (choice === "LSP") await showLspSettings(ctx);
+  }
+}
+
+export async function showPpMenu(orchestrator: Orchestrator, ctx: any): Promise<void> {
+  OrchestratorRef.current = orchestrator;
+  for (;;) {
+    const choice = await selectOption(ctx, "/pp · session control panel", [
+      opt("Status", "Model, context, providers, workers, and warnings"),
+      opt("Workers", "Inspect or stop bounded background workers"),
+      opt("Usage", "Session token usage and cost breakdown"),
+      opt("Settings", "Providers, models, agents, and everything else"),
       opt("Report", "Bundle a local feedback report (note + logs)"),
       opt("Doctor", "Run diagnostic checks"),
       opt(CLOSE, "Return to the prompt"),
@@ -1750,17 +1825,7 @@ export async function showPpMenu(orchestrator: Orchestrator, ctx: any): Promise<
     if (choice === "Status") ctx.ui?.notify?.(sessionStatus(orchestrator, ctx), "info");
     else if (choice === "Workers") await showWorkers(orchestrator, ctx);
     else if (choice === "Usage") showUsage(ctx);
-    else if (choice === "Agents") await showAgentsSettings(orchestrator, ctx);
-    else if (choice === "Flant") await showFlantMenu(orchestrator, ctx);
-    else if (choice === "ChatGPT subscription") await showCodexMenu(orchestrator, ctx);
-    else if (choice === "Copilot") await showCopilotMenu(orchestrator, ctx);
-    else if (choice === "Skills") await showSkillsSettings(orchestrator, ctx);
-    else if (choice === "Context") await showContextSettings(orchestrator, ctx);
-    else if (choice === "Prompt size") await showPromptcapSettings(orchestrator, ctx);
-    else if (choice === "Commands") await showCommandsSettings(orchestrator, ctx);
-    else if (choice === "General") await showGeneralSettings(orchestrator, ctx);
-    else if (choice === "Performance") await showTimeoutsSettings(orchestrator, ctx);
-    else if (choice === "LSP") await showLspSettings(ctx);
+    else if (choice === "Settings") await showSettings(orchestrator, ctx);
     else if (choice === "Report") await showReportMenu(orchestrator, ctx);
     else if (choice === "Doctor") {
       const { runDoctor } = await import("./doctor.js");

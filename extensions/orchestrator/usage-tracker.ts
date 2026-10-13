@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { SUB_MODEL_PREFIX, SUB_PROVIDER } from "./flant-infra.js";
+import { COPILOT_PROVIDER, DIRECT_SUB_PROVIDER, GATEWAY_SUB_MODEL_PREFIX as SUB_MODEL_PREFIX, GATEWAY_SUB_PROVIDER as SUB_PROVIDER } from "./routing.js";
 
 /**
  * A usage unit is subscription-routed (flat-rate personal Claude subscription,
@@ -11,15 +11,12 @@ import { SUB_MODEL_PREFIX, SUB_PROVIDER } from "./flant-infra.js";
  * provider field), so we always check it in addition to the provider.
  */
 export function isSubscriptionRouted(modelId?: string, provider?: string): boolean {
-  if (provider === SUB_PROVIDER) return true;
+  if (provider === SUB_PROVIDER || provider === DIRECT_SUB_PROVIDER) return true;
   if (typeof modelId !== "string") return false;
-  // Accept a bare `sub/<m>` id OR a full provider-prefixed spec
-  // `pp-flant-anthropic-sub/sub/<m>` passed as a single id (the form callers
-  // store/pass without a separate provider field).
-  return modelId.startsWith(SUB_MODEL_PREFIX) || modelId.startsWith(`${SUB_PROVIDER}/`);
+  // Accept a bare `sub/<m>` id OR a full provider-prefixed spec passed as a
+  // single id (the form callers store/pass without a separate provider field).
+  return modelId.startsWith(SUB_MODEL_PREFIX) || modelId.startsWith(`${SUB_PROVIDER}/`) || modelId.startsWith(`${DIRECT_SUB_PROVIDER}/`);
 }
-
-const COPILOT_PROVIDER = "github-copilot";
 
 /**
  * Whether a usage unit is paid for by a flat rate rather than by the token.
@@ -42,7 +39,10 @@ function isFlatRateBilled(modelId?: string, provider?: string): boolean {
  */
 function usageKey(modelId: string, provider?: string): string {
   if (provider === COPILOT_PROVIDER && !modelId.startsWith(`${COPILOT_PROVIDER}/`)) return `${COPILOT_PROVIDER}/${modelId}`;
-  if (isSubscriptionRouted(modelId, provider) && !modelId.startsWith(SUB_MODEL_PREFIX)) return `${SUB_MODEL_PREFIX}${modelId}`;
+  if (isSubscriptionRouted(modelId, provider) && !modelId.startsWith(SUB_MODEL_PREFIX)) {
+    const bare = modelId.startsWith(`${DIRECT_SUB_PROVIDER}/`) ? modelId.slice(DIRECT_SUB_PROVIDER.length + 1) : modelId;
+    return `${SUB_MODEL_PREFIX}${bare}`;
+  }
   return modelId;
 }
 

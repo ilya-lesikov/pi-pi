@@ -7,11 +7,23 @@ import { createReviewerAgent } from "./reviewer.js";
 import { createTaskAgent } from "./task.js";
 import { createExploreAgent } from "./explore.js";
 import { createLibrarianAgent } from "./librarian.js";
+import type { ModelDescription } from "../routing.js";
 
 const config = getDefaultConfig();
 
-const poolEntry = { model: "anthropic/claude-fable-latest", thinking: "high" };
-const gptEntry = { model: "openai/gpt-latest", thinking: "high" };
+const poolEntry = { model: "claude/fable", thinking: "high" };
+const gptEntry = { model: "gpt/astra:pro", thinking: "high" };
+
+const describe_ = (label: string, vendor: string, tier: ModelDescription["tier"], spec: string | null): ModelDescription => ({
+  label, family: vendor === "anthropic" ? "claude" : "gpt", slot: null, tier, vendor, spec, overridden: false,
+});
+const OPUS = describe_("Claude Opus", "anthropic", "smart", "pp-claude-sub/claude-opus-5-5");
+const entry = (name: string, ref: string, d: ModelDescription) => ({ name, ref, model: d.spec, via: "test", description: d, proFallback: false, thinking: "high" });
+const POOLS = {
+  advisors: [entry("advisor_x_high", "claude/fable", describe_("Claude Fable", "anthropic", "xsmart", "pp-claude-sub/claude-fable-5-1"))],
+  reviewers: [entry("reviewer_y_high", "gpt/sol", describe_("GPT Sol", "openai", "smart", "openai-codex/gpt-6-sol"))],
+  deepDebuggers: [entry("deep-debugger_z_high", "gpt/sol", describe_("GPT Sol", "openai", "smart", "openai-codex/gpt-6-sol"))],
+};
 
 const workerFactories = (): [string, { frontmatter: { tools: string; description: string; max_turns?: number }; prompt: string }][] => [
   ["explore", createExploreAgent(config)],
@@ -23,24 +35,41 @@ const workerFactories = (): [string, { frontmatter: { tools: string; description
 ];
 
 describe("delegationBlock", () => {
-  const pools = {
-    advisors: [{ name: "advisor_x_high", model: "anthropic/claude-fable-latest", family: "fable", tier: "xsmart", thinking: "high" }],
-    reviewers: [{ name: "reviewer_y_high", model: "openai/gpt-latest", family: "gpt", tier: "smart", thinking: "high" }],
-    deepDebuggers: [{ name: "deep-debugger_z_high", model: "openai/gpt-latest", family: "gpt", tier: "smart", thinking: "high" }],
-  };
+  const pools = POOLS;
 
-  it("covers the free-form roles and the model-named pool rules", () => {
-    const block = delegationBlock("opus", pools);
+  it("covers the free-form roles and the vendor-keyed pool rules", () => {
+    const block = delegationBlock(OPUS, pools);
     for (const name of ["explore", "librarian", "task", "advisor", "deep-debugger", "reviewer"]) {
       expect(block).toContain(name);
     }
-    expect(block).toContain("NEVER spawn a same-provider model at your tier or weaker");
-    expect(block).toContain("DIFFERENT family");
+    expect(block).toContain("NEVER spawn a same-vendor model at your tier or weaker");
+    expect(block).toContain("DIFFERENT vendor");
     expect(block).toContain("dissenting view");
   });
 
+  // An override can put a non-Anthropic model in every Claude slot; a rule
+  // about "the other family" would then send the caller to itself.
+  it("softens the independence rule when no member is confirmed to be another vendor", () => {
+    const same = { ...pools, reviewers: [], deepDebuggers: [] };
+    const block = delegationBlock(OPUS, same);
+    expect(block).not.toContain("NEVER spawn");
+    expect(block).toMatch(/second opinion, not an independent check/);
+    const unknown = { advisors: [entry("advisor_q_high", "zai/glm", { ...describe_("glm-5.3", "unknown", "unknown", "pp-flant-openai/glm-5.3"), family: null })], reviewers: [], deepDebuggers: [] };
+    expect(delegationBlock(OPUS, unknown)).not.toContain("NEVER spawn");
+  });
+
+  it("marks a member nothing serves and a pro request served by its base model", () => {
+    const block = delegationBlock(OPUS, {
+      advisors: [{ ...entry("advisor_a_high", "gpt/astra:pro", describe_("GPT Astra Pro", "openai", "xsmart", "openai-codex/gpt-6-astra")), proFallback: true }],
+      reviewers: [{ ...entry("reviewer_b_high", "claude/haiku", describe_("Claude Haiku", "anthropic", "stupid", null)) }],
+      deepDebuggers: [],
+    });
+    expect(block).toContain("pro unavailable here; base model");
+    expect(block).toContain("reviewer_b_high  —  Claude Haiku · unavailable");
+  });
+
   it("keeps specialists selective without imposing workflow gates", () => {
-    const block = delegationBlock("opus", pools);
+    const block = delegationBlock(OPUS, pools);
     expect(block).toContain("diagnoses ONLY");
     expect(block).toContain("ONE cheap localizing probe");
     expect(block).not.toContain("OPEN with");
@@ -49,7 +78,7 @@ describe("delegationBlock", () => {
   // The role lines alone stated no condition a caller could test, so reviewers
   // and advisors only ever ran when a user asked for one by name.
   it("gives reviewers and advisors observable triggers, with an escape hatch", () => {
-    const block = delegationBlock("opus", pools);
+    const block = delegationBlock(OPUS, pools);
     expect(block).toMatch(/tests cannot exercise \(UI, vendored/);
     expect(block).toMatch(/before reporting a\s*\n?multi-commit batch as done/);
     expect(block).toMatch(/Skip it when a test you wrote already proves the change/);
@@ -57,14 +86,14 @@ describe("delegationBlock", () => {
   });
 
   it("renders the configured pool roster with model metadata", () => {
-    const block = delegationBlock("opus", pools);
+    const block = delegationBlock(OPUS, pools);
     expect(block).toContain("advisor_x_high");
-    expect(block).toContain("anthropic/claude-fable-latest");
-    expect(block).toContain("tier xsmart");
+    expect(block).toContain("Claude Fable · vendor anthropic · tier xsmart");
+    expect(block).toContain("via test");
   });
 
   it("routes on domain-neutral fit rather than coding-only triggers", () => {
-    const block = delegationBlock("opus", pools);
+    const block = delegationBlock(OPUS, pools);
     expect(block).not.toMatch(/Locating code/);
     expect(block).not.toMatch(/implementation slice/);
     expect(block).not.toMatch(/A code review of your changes/);
@@ -72,7 +101,7 @@ describe("delegationBlock", () => {
   });
 
   it("tells the caller that subagents start with empty context", () => {
-    const block = delegationBlock("opus", pools);
+    const block = delegationBlock(OPUS, pools);
     expect(block).toContain("EMPTY context");
     expect(block).toMatch(/recall the main-session\s*\n?history/);
   });
@@ -320,13 +349,9 @@ describe("routing-contract descriptions (what / when / exclusion)", () => {
   });
 
   it("delegationBlock remains the sole owner of numeric routing thresholds", () => {
-    const pools = {
-      advisors: [{ name: "advisor_x_high", model: "anthropic/claude-fable-latest", family: "fable", tier: "xsmart", thinking: "high" }],
-      reviewers: [{ name: "reviewer_y_high", model: "openai/gpt-latest", family: "gpt", tier: "smart", thinking: "high" }],
-      deepDebuggers: [{ name: "deep-debugger_z_high", model: "openai/gpt-latest", family: "gpt", tier: "smart", thinking: "high" }],
-    };
-    expect(delegationBlock("opus", pools)).toContain("2–3 parallel");
-    expect(delegationBlock("opus", pools)).toContain("4+ only");
+    const pools = POOLS;
+    expect(delegationBlock(OPUS, pools)).toContain("2–3 parallel");
+    expect(delegationBlock(OPUS, pools)).toContain("4+ only");
     for (const [, f] of workerFactories()) {
       expect(f.frontmatter.description).not.toMatch(/2–3|4\+/);
     }

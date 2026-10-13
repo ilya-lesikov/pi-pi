@@ -1,23 +1,23 @@
 import type { PiPiConfig } from "../config.js";
-import { getModelInfo, resolveModel } from "../model-registry.js";
+import { agentModel } from "./registry.js";
 import { toolsBlock, parseToolNames, identityBlock, ALL_CBM_TOOLS, WEB_TOOLS, principlesBlock } from "./tool-routing.js";
 
 export function createExploreAgent(config: PiPiConfig) {
-  const model = resolveModel(config.agents.subagents.simple.explore.model);
+  const { model, description } = agentModel(config.agents.subagents.simple.explore.model);
   const thinking = config.agents.subagents.simple.explore.thinking;
   const tools = `read, bash, grep, find, ls, lsp, ast_search, vcc_recall, recall_tool_output, ${ALL_CBM_TOOLS}, ${WEB_TOOLS}`;
-  const info = getModelInfo(model);
   return {
     frontmatter: {
       description: "Finds where something lives locally and how the pieces connect — files, config, data, logs, or code — best for locating and mapping what is already here; not for judgment calls or applying changes (pi-pi)",
       tools,
       model,
+      ref: config.agents.subagents.simple.explore.model,
       thinking,
       max_turns: config.agents.subagents.simple.explore.maxTurns,
       prompt_mode: "replace",
     },
     prompt: [
-      identityBlock({ displayName: info.displayName, family: info.family, tier: info.tier, thinking }),
+      identityBlock(description, thinking),
       "",
       "<constraints>",
       "You are a focused DISCOVERY agent. You locate specific information in the local working environment — source, config, docs, data, logs, command output — and report it with exact paths and anchors.",

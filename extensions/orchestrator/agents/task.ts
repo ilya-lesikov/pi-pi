@@ -1,23 +1,23 @@
 import type { PiPiConfig } from "../config.js";
-import { getModelInfo, resolveModel } from "../model-registry.js";
+import { agentModel } from "./registry.js";
 import { toolsBlock, parseToolNames, identityBlock, ALL_CBM_TOOLS, WEB_TOOLS, principlesBlock, FAILURE_RECOVERY } from "./tool-routing.js";
 
 export function createTaskAgent(config: PiPiConfig) {
-  const model = resolveModel(config.agents.subagents.simple.task.model);
+  const { model, description } = agentModel(config.agents.subagents.simple.task.model);
   const thinking = config.agents.subagents.simple.task.thinking;
   const tools = `read, write, edit, bash, grep, find, ls, lsp, ast_search, vcc_recall, recall_tool_output, ${ALL_CBM_TOOLS}, ${WEB_TOOLS}`;
-  const info = getModelInfo(model);
   return {
     frontmatter: {
       description: "Carries out ONE self-contained, parallelizable slice of work end to end — code, edits to files and documents, data or operational steps — best for a well-scoped chunk you could hand off; not for open-ended design, whole-task ownership, or work you are mid-way through yourself (pi-pi)",
       tools,
       model,
+      ref: config.agents.subagents.simple.task.model,
       thinking,
       max_turns: config.agents.subagents.simple.task.maxTurns,
       prompt_mode: "replace",
     },
     prompt: [
-      identityBlock({ displayName: info.displayName, family: info.family, tier: info.tier, thinking }),
+      identityBlock(description, thinking),
       "",
       // --- static prefix (cacheable) ---
       "<constraints>",

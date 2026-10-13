@@ -1,23 +1,23 @@
 import type { PiPiConfig } from "../config.js";
-import { getModelInfo, resolveModel } from "../model-registry.js";
+import { agentModel } from "./registry.js";
 import { toolsBlock, parseToolNames, identityBlock, principlesBlock } from "./tool-routing.js";
 
 export function createLibrarianAgent(config: PiPiConfig) {
-  const model = resolveModel(config.agents.subagents.simple.librarian.model);
+  const { model, description } = agentModel(config.agents.subagents.simple.librarian.model);
   const thinking = config.agents.subagents.simple.librarian.thinking;
   const tools = "read, bash, grep, find, vcc_recall, recall_tool_output, web_search, web_fetch";
-  const info = getModelInfo(model);
   return {
     frontmatter: {
       description: "Researches knowledge that lives outside this working tree — docs, APIs, standards, vendors, prior art, current facts — from the web and installed sources; best when the answer is not in the repo, not for searching what is here (use explore) or applying changes (pi-pi)",
       tools,
       model,
+      ref: config.agents.subagents.simple.librarian.model,
       thinking,
       max_turns: config.agents.subagents.simple.librarian.maxTurns,
       prompt_mode: "replace",
     },
     prompt: [
-      identityBlock({ displayName: info.displayName, family: info.family, tier: info.tier, thinking }),
+      identityBlock(description, thinking),
       "",
       "<constraints>",
       "You are a RESEARCH agent for knowledge that lives outside this working tree: documentation, APIs and libraries, specifications and standards, products and vendors, published practice, and current facts.",

@@ -1,7 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { PiPiConfig, PoolKey } from "../config.js";
-import { bareModelId, listProviderPrefixes, listRegisteredSpecs, resolveModel, resolveModelAlias, getModelInfo, type Family } from "../model-registry.js";
-import { SUB_MODEL_PREFIX } from "../flant-infra.js";
+import { concreteProviderLabel, describeRef, parseRef, poolToken, resolveRef, slotOfPoolToken, splitSpec, type ModelDescription } from "../routing.js";
 import type { RosterEntry } from "./tool-routing.js";
 
 interface AgentFrontmatter {
@@ -14,8 +13,10 @@ interface AgentFrontmatter {
 }
 
 export interface AgentConfigSnapshot {
-  /** Configured model spec, e.g. "anthropic/claude-opus-latest". */
+  /** The concrete model the definition was registered with. */
   model: string;
+  /** The configured reference it resolved from, e.g. "claude/opus". */
+  ref?: string;
   /** Configured reasoning effort / thinking level, e.g. "high", "xhigh". */
   thinking: string;
 }
@@ -31,23 +32,22 @@ export function getAgentConfigSnapshot(name: string): AgentConfigSnapshot | unde
   return agentConfigByName.get(name);
 }
 
-// Encode a pool entry's model + thinking into a subagent variant token. Subagent
-// type-names are identifiers used as Agent(subagent_type=…); the host allows
-// only [A-Za-z0-9._-], so any other char (notably the `/` in a provider/model
-// spec) is collapsed to `-`. Deterministic, so the same entry always yields the
-// same name.
-//
-// The token carries the model id INCLUDING its version but WITHOUT the provider,
-// because the provider is the one part that moves: the same Fable is
-// `pp-flant-anthropic-sub/sub/claude-fable-5-1` on the subscription and
-// `github-copilot/claude-fable-5.1` on Copilot, so a provider-bearing name is
-// renamed by every rate-limit demotion — mid-turn, invalidating the names the
-// model is holding from its system prompt. Version separators are normalized for
-// the same reason (the two catalogs spell the same version differently).
+// A pool member's subagent name: role, slot, thinking. Names are identifiers
+// (Agent(subagent_type=…), only [A-Za-z0-9._-]) and they live in a system
+// prompt for a whole turn, so they carry the slot rather than the provider or
+// version under it, which a rate limit can move mid-turn.
 export function encodePoolVariant(model: string, thinking: string): string {
-  const sanitize = (s: string) => s.replace(/[^A-Za-z0-9._-]/g, "-");
-  const id = bareModelId(resolveModelAlias(model)).replace(/\./g, "-");
-  return `${sanitize(id)}_${sanitize(thinking)}`;
+  return `${poolToken(model)}_${thinking.replace(/[^A-Za-z0-9._-]/g, "-")}`;
+}
+
+/**
+ * What a role's configured reference runs on now, for its definition and its
+ * prompt. An unresolvable reference keeps its own text as the model, which the
+ * spawn gate refuses with the routing explanation rather than letting the
+ * subagent host silently run it on the parent's model.
+ */
+export function agentModel(ref: string): { model: string; description: ModelDescription } {
+  return { model: resolveRef(ref).spec ?? ref, description: describeRef(ref) };
 }
 
 const POOL_BASE_TYPE: Record<PoolKey, "advisor" | "reviewer" | "deep-debugger"> = {
@@ -56,21 +56,28 @@ const POOL_BASE_TYPE: Record<PoolKey, "advisor" | "reviewer" | "deep-debugger"> 
   deepDebuggers: "deep-debugger",
 };
 
-// Build the roster of ENABLED pool members for one pool, deduped by sanitized
-// name (matching the registration skip). Each entry carries the model metadata
-// the caller needs to apply the same-provider/same-or-weaker-tier rule.
+// The ENABLED members of one pool, deduped by name (matching the registration
+// skip), with what the caller needs to apply the cross-vendor rule.
 export function buildPoolRoster(config: PiPiConfig, poolKey: PoolKey): RosterEntry[] {
   const base = POOL_BASE_TYPE[poolKey];
   const out: RosterEntry[] = [];
   const seen = new Set<string>();
   for (const entry of config.agents.subagents.pools[poolKey]) {
     if (entry.enabled === false) continue;
-    const model = resolveModel(entry.model);
     const name = `${base}_${encodePoolVariant(entry.model, entry.thinking)}`;
     if (seen.has(name)) continue;
     seen.add(name);
-    const info = getModelInfo(model);
-    out.push({ name, model, family: info.family, tier: info.tier, thinking: entry.thinking });
+    const resolution = resolveRef(entry.model);
+    const description = describeRef(entry.model);
+    out.push({
+      name,
+      ref: entry.model,
+      model: resolution.spec,
+      via: resolution.spec ? concreteProviderLabel(splitSpec(resolution.spec)!.provider) : null,
+      description,
+      proFallback: resolution.proFallback,
+      thinking: entry.thinking,
+    });
   }
   return out;
 }
@@ -101,37 +108,6 @@ const POOL_KEY_FOR_BASE: Record<string, PoolKey> = {
   "deep-debugger": "deepDebuggers",
 };
 
-// Recover the family a pool name's model token refers to. Two spellings have to
-// resolve: a name this build produced (bare id, e.g. `claude-fable-5-1`) and one
-// an older build or an older session produced (the whole provider-prefixed spec
-// with its slashes flattened, e.g. `pp-flant-anthropic-sub-sub-claude-fable-5-1`).
-// The flattened form is matched against the live catalog rather than parsed,
-// since the flattening is not reversible.
-function familyOfModelToken(token: string): Family | null {
-  const normalized = token.replace(/\./g, "-");
-  for (const spec of listRegisteredSpecs()) {
-    if (spec.replace(/[^A-Za-z0-9._-]/g, "-").replace(/\./g, "-") !== normalized) continue;
-    const info = getModelInfo(spec);
-    if (info.family !== "unknown") return info.family;
-  }
-  const bare = new Set([normalized]);
-  for (const prefix of [...listProviderPrefixes(), SUB_MODEL_PREFIX.replace(/\/$/, "")]) {
-    for (const candidate of [...bare]) {
-      if (candidate.startsWith(`${prefix}-`)) bare.add(candidate.slice(prefix.length + 1));
-    }
-  }
-  for (const id of bare) {
-    // Version separators were normalized when the name was built, so a `-`
-    // between two digits may be a `.` in the catalog's spelling; both are probed.
-    for (const spelling of [id, id.replace(/(\d)-(\d)/g, "$1.$2")]) {
-      const probe = spelling.startsWith("claude-") ? `pp-flant-anthropic/${spelling}` : `pp-flant-openai/${spelling}`;
-      const info = getModelInfo(probe);
-      if (info.family !== "unknown") return info.family;
-    }
-  }
-  return null;
-}
-
 /**
  * Resolve a pool name that is no longer registered onto the live member of the
  * same pool and family, or null when the pool has no such member.
@@ -149,10 +125,18 @@ export function remapPoolName(config: PiPiConfig, requested: string): string | n
   const variant = requested.slice(base.length + 1);
   const split = variant.lastIndexOf("_");
   if (split <= 0) return null;
-  const family = familyOfModelToken(variant.slice(0, split));
-  if (!family) return null;
+  const slot = slotOfPoolToken(variant.slice(0, split));
+  if (!slot) return null;
   const thinking = variant.slice(split + 1);
-  const candidates = buildPoolRoster(config, poolKey).filter((r) => r.family === family);
+  const sameSlot = (ref: string, ignorePro: boolean) => {
+    const parsed = parseRef(ref);
+    const wanted = parseRef(slot);
+    if (parsed?.kind !== "slot" || wanted?.kind !== "slot") return false;
+    return parsed.family === wanted.family && parsed.slot === wanted.slot && (ignorePro || parsed.pro === wanted.pro);
+  };
+  const roster = buildPoolRoster(config, poolKey);
+  const exact = roster.filter((r) => sameSlot(r.ref, false));
+  const candidates = exact.length > 0 ? exact : roster.filter((r) => sameSlot(r.ref, true));
   // Prefer the effort the caller asked for, then the nearest one ABOVE it: a
   // judgment call silently answered at a weaker effort is worse than one that
   // costs more than intended.
@@ -172,7 +156,7 @@ function rankThinking(thinking: string, wanted: number): number {
 
 export function registerAgentDefinitions(
   pi: ExtensionAPI,
-  agents: Array<{ type: string; variant: string | null; frontmatter: AgentFrontmatter; prompt: string }>,
+  agents: Array<{ type: string; variant: string | null; frontmatter: AgentFrontmatter & { ref?: string }; prompt: string }>,
 ): void {
   const agentMap = new Map<string, any>();
 
@@ -181,7 +165,7 @@ export function registerAgentDefinitions(
     const name = `${agent.type}${suffix}`;
     const toolNames = agent.frontmatter.tools === "none" ? [] : agent.frontmatter.tools.split(",").map((t: string) => t.trim()).filter(Boolean);
 
-    agentConfigByName.set(name, { model: agent.frontmatter.model, thinking: agent.frontmatter.thinking });
+    agentConfigByName.set(name, { model: agent.frontmatter.model, ref: agent.frontmatter.ref, thinking: agent.frontmatter.thinking });
 
     agentMap.set(name, {
       name,
@@ -189,7 +173,7 @@ export function registerAgentDefinitions(
       builtinToolNames: toolNames,
       extensions: true,
       skills: false,
-      model: resolveModel(agent.frontmatter.model),
+      model: agent.frontmatter.model,
       thinking: agent.frontmatter.thinking,
       maxTurns: agent.frontmatter.max_turns,
       systemPrompt: agent.prompt,

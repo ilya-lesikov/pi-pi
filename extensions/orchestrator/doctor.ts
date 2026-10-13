@@ -4,8 +4,9 @@ import { homedir } from "os";
 import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
 import { GLOBAL_CONFIG_PATH, mergeConfigLayers, readRawConfig, type NormalizedPiPiConfig } from "./config.js";
-import { isCodexTierActive, isCopilotTierActive, loadFlantSettings, readClaudeOAuthToken, readGatewayApiKey, resolveAgentDir } from "./flant-infra.js";
-import { getAllAliases, resolveModel } from "./model-registry.js";
+import { hasClaudeSubCredential, isClaudeSubInUse, isCodexActive, isCopilotActive, loadLlmApiCache, loadRoutingSettings, readGatewayApiKey, resolveAgentDir } from "./flant-infra.js";
+import { buildPoolRoster } from "./agents/registry.js";
+import { catalogProviders, describeRef, FAMILIES, FAMILY_LABEL, isSlotRef, overrideModelFor, resolveRef, slotsOf, splitSpec } from "./routing.js";
 import { provisionDir } from "./provision/install.js";
 import { provisionResults } from "./provision/session.js";
 import { listLayeredSkills } from "./skills-manifest.js";
@@ -144,7 +145,7 @@ export async function runDoctor(orchestrator: Orchestrator, ctx: any, options: D
   if (availableSpecs.size === 0) {
     add("warning", "Model registry unavailable — cannot verify agent model routing");
   } else {
-    add("pass", `${availableSpecs.size} models available, ${Object.keys(getAllAliases()).length} aliases registered`);
+    add("pass", `${availableSpecs.size} models available`);
     const roles: Array<{ label: string; model: string }> = [
       { label: "agents.main", model: config.agents.main.model },
       { label: "agents.subagents.simple.explore", model: config.agents.subagents.simple.explore.model },
@@ -157,13 +158,38 @@ export async function runDoctor(orchestrator: Orchestrator, ctx: any, options: D
       });
     }
     for (const role of roles) {
-      const resolved = resolveModel(role.model);
-      if (availableSpecs.has(resolved)) add("pass", `${role.label}: ${role.model} → ${resolved}`);
-      else add("warning", `${role.label}: ${role.model} → ${resolved} is not in the available model list`);
+      const resolution = resolveRef(role.model);
+      if (resolution.spec && availableSpecs.has(resolution.spec)) {
+        const pro = resolution.proFallback ? " (pro unavailable; base model)" : "";
+        const pinned = isSlotRef(role.model) ? "" : " [pinned]";
+        add("pass", `${role.label}: ${role.model}${pinned} → ${resolution.spec}${pro}`);
+      } else {
+        add("failure", `${role.label}: ${role.model} has nothing to run on — ${resolution.steps.join("; ")}`);
+      }
     }
     for (const pool of ["advisors", "reviewers", "deepDebuggers"] as const) {
       const enabled = config.agents.subagents.pools[pool].filter((entry) => entry.enabled !== false).length;
       add(enabled > 0 ? "pass" : "warning", `pools.${pool}: ${enabled} of ${config.agents.subagents.pools[pool].length} enabled`);
+    }
+    const mainVendor = describeRef(config.agents.main.model).vendor;
+    const pools = (["advisors", "reviewers", "deepDebuggers"] as const).flatMap((pool) => buildPoolRoster(config, pool));
+    const crossVendor = pools.some((entry) => entry.model && entry.description.vendor !== "unknown" && entry.description.vendor !== mainVendor);
+    add(crossVendor || pools.length === 0 ? "pass" : "warning", crossVendor
+      ? "At least one pool member comes from a different vendor than the main model"
+      : `No pool member is confirmed to come from a different vendor than the main model (${mainVendor}); second opinions are not independent`);
+    for (const family of FAMILIES) {
+      const override = config.models[family].override;
+      if (!override) continue;
+      const missing = slotsOf(family).map((def) => overrideModelFor(family, def.slot)!).filter((spec) => !availableSpecs.has(spec));
+      if (missing.length === 0) add("pass", `${FAMILY_LABEL[family]} overridden by ${override.provider}`);
+      else if (!catalogProviders().includes(override.provider)) add("failure", `${FAMILY_LABEL[family]} override: no credentials for ${override.provider} (set its API key or /login)`);
+      else add("failure", `${FAMILY_LABEL[family]} override: ${override.provider} does not serve ${missing.map((spec) => splitSpec(spec)!.id).join(", ")}`);
+      for (const spec of new Set(slotsOf(family).map((def) => overrideModelFor(family, def.slot)!))) {
+        const model = ctx?.modelRegistry?.find?.(splitSpec(spec)!.provider, splitSpec(spec)!.id);
+        if (!model) continue;
+        if (!model.input?.includes?.("image")) add("warning", `${spec} does not accept images; screenshots will be dropped`);
+        if (!model.reasoning) add("warning", `${spec} has no thinking; thinking levels are clamped to off`);
+      }
     }
   }
 
@@ -283,34 +309,37 @@ export async function runDoctor(orchestrator: Orchestrator, ctx: any, options: D
     add(path ? "pass" : "failure", `afterEdit.${name}: ${bin} ${path ? `found at ${path}` : "not found"}`);
   }
 
-  category("Flant");
+  category("Providers");
   // Guarded: this rereads the scoped config, and a malformed one throws — which
   // would abort the run before the summary, exactly when the doctor is needed.
-  await guard("Flant settings unreadable", async () => {
-    const flant = loadFlantSettings(orchestrator.cwd);
-    // Copilot and the ChatGPT subscription are their own providers: they route
-    // whether or not the gateway is in use, so their credentials are checked
-    // before the gateway's own settings are allowed to end the section.
-    if (flant.copilotEnabled) {
-      if (isCopilotTierActive(flant)) add("pass", "Copilot credentials present");
-      else add("warning", "Copilot tier enabled but credentials are missing (run /login → GitHub Copilot or set COPILOT_GITHUB_TOKEN)");
+  await guard("Provider settings unreadable", async () => {
+    const settings = loadRoutingSettings(orchestrator.cwd);
+    add("pass", `Priority: ${settings.providers.order.join(" › ")}`);
+    if (settings.providers["claude-sub"].enabled) {
+      if (!isClaudeSubInUse(settings, [])) add("pass", "Claude subscription unused: the Claude family is overridden");
+      else if (hasClaudeSubCredential()) add("pass", `Claude subscription logged in (routes: ${settings.providers["claude-sub"].route.join(", then ")})`);
+      else add("warning", "Claude subscription enabled but not logged in (run /login → Anthropic)");
+      if (settings.providers["claude-sub"].route.length === 1 && settings.providers["claude-sub"].route[0] === "llm-api" && !readGatewayApiKey()) {
+        add("failure", "Claude subscription routes only via LLM API, but LLM_API_KEY is not set");
+      }
     }
-    if (flant.codexEnabled) {
-      if (isCodexTierActive(flant)) add("pass", "ChatGPT subscription credentials present");
-      else add("warning", "ChatGPT subscription tier enabled but not logged in (run /login → OpenAI (ChatGPT Plus/Pro))");
+    if (settings.providers.codex.enabled) {
+      if (isCodexActive(settings)) add("pass", "ChatGPT subscription logged in");
+      else add("warning", "ChatGPT subscription enabled but not logged in (run /login → OpenAI (ChatGPT Plus/Pro))");
     }
-    if (!flant.enabled) {
-      add("pass", "Flant disabled");
+    if (settings.providers.copilot.enabled) {
+      if (isCopilotActive(settings)) add("pass", "Copilot credentials present");
+      else add("warning", "Copilot enabled but credentials are missing (run /login → GitHub Copilot or set COPILOT_GITHUB_TOKEN)");
+    }
+    if (!settings.providers["llm-api"].enabled) {
+      add("pass", "LLM API disabled");
       return;
     }
     const key = readGatewayApiKey();
-    if (key) add("pass", "Gateway API key present");
-    else add("failure", "Flant enabled but no gateway key (set LLM_API_KEY or FLANT_API_KEY)");
-    if (flant.subscription) {
-      if (readClaudeOAuthToken()) add("pass", "Claude OAuth token present for the personal subscription");
-      else add("failure", "Subscription enabled but no Claude OAuth token (run /login → Anthropic)");
-    }
-    add(flant.lastUpdated ? "pass" : "warning", `Model list last updated: ${flant.lastUpdated ?? "never"}`);
+    if (key) add("pass", "LLM API key present");
+    else add("warning", "LLM API enabled but no key (set LLM_API_KEY or FLANT_API_KEY)");
+    const cache = loadLlmApiCache();
+    add(cache.lastUpdated ? "pass" : "warning", `LLM API model list last updated: ${cache.lastUpdated ?? "never"}`);
 
     const cacheDir = join(resolveAgentDir(), "extensions", "pp", "cache");
     try {

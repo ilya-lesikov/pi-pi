@@ -1,9 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../model-registry.js", () => ({
-  resolveModel: (m: string) => ({ resolved: m }),
-}));
-
 import {
   registerAgentDefinitions,
   unregisterAgentDefinitions,
@@ -87,7 +83,7 @@ describe("registerAgentDefinitions", () => {
     expect(pi.emitted[0].data.agents.get("a").builtinToolNames).toEqual(["read", "grep", "bash"]);
   });
 
-  it("emits a full entry with resolved model and defaulted promptMode", () => {
+  it("emits a full entry with the registered model and defaulted promptMode", () => {
     const pi = makePi();
     registerAgentDefinitions(pi as any, [
       { type: "planner", variant: null, frontmatter: fm(), prompt: "SYS" },
@@ -97,7 +93,7 @@ describe("registerAgentDefinitions", () => {
       name: "planner",
       description: "d",
       builtinToolNames: ["read", "grep"],
-      model: { resolved: "m" },
+      model: "m",
       thinking: "low",
       maxTurns: 5,
       systemPrompt: "SYS",

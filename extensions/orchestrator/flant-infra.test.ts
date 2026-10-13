@@ -2,7 +2,8 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getDefaultConfig, type RoutingSettings } from "./config.js";
 
 const refreshAnthropicTokenMock = vi.fn();
 const refreshGitHubCopilotTokenMock = vi.fn();
@@ -19,11 +20,41 @@ function makeTempDir(): string {
   return dir;
 }
 
-// Item 8: durable flant policy now lives in scoped config, not the cache file.
-function writeGlobalFlantConfig(agentDir: string, flant: Record<string, unknown>) {
+// Durable provider policy lives in scoped config, not the cache file.
+function writeGlobalProvidersConfig(agentDir: string, providers: Record<string, unknown>, extra: Record<string, unknown> = {}) {
   const cfgDir = join(agentDir, "extensions", "pp");
   mkdirSync(cfgDir, { recursive: true });
-  writeFileSync(join(cfgDir, "config.json"), JSON.stringify({ flant }), "utf-8");
+  writeFileSync(join(cfgDir, "config.json"), JSON.stringify({ providers, ...extra }), "utf-8");
+}
+
+/** Default routing settings, optionally adjusted. */
+function routing(mutate?: (s: RoutingSettings) => void): RoutingSettings {
+  const defaults = getDefaultConfig();
+  const s = structuredClone({ providers: defaults.providers, models: defaults.models }) as RoutingSettings;
+  mutate?.(s);
+  return s;
+}
+
+const gatewayRouteOnly = () => routing((s) => { s.providers["claude-sub"].route = ["llm-api"]; });
+const directRouteOnly = () => routing((s) => { s.providers["claude-sub"].route = ["direct"]; });
+
+function writeClaudeAuth(dir: string, access = "sk-ant-oat01-test-token") {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "auth.json"),
+    JSON.stringify({ anthropic: { type: "oauth", access, expires: Date.now() + 3_600_000 } }),
+    "utf-8",
+  );
+}
+
+function recordingPi() {
+  const registered = new Map<string, any>();
+  const pi = {
+    registered,
+    registerProvider: vi.fn((name: string, config: any) => registered.set(name, config)),
+    unregisterProvider: vi.fn((name: string) => registered.delete(name)),
+  } as any;
+  return pi;
 }
 
 async function loadFlantInfraModule(agentDir: string) {
@@ -32,49 +63,55 @@ async function loadFlantInfraModule(agentDir: string) {
   return import("./flant-infra.js");
 }
 
-function collectModelSpecs(value: unknown): string[] {
-  if (!value || typeof value !== "object") return [];
-  const out: string[] = [];
-  const walk = (node: any) => {
-    if (!node || typeof node !== "object") return;
-    if (typeof node.model === "string") out.push(node.model);
-    for (const nested of Object.values(node)) {
-      walk(nested);
-    }
-  };
-  walk(value);
-  return out;
-}
+// The ambient shell may carry a real gateway key; every test states its own.
+const savedGatewayKeys = { LLM_API_KEY: process.env.LLM_API_KEY, FLANT_API_KEY: process.env.FLANT_API_KEY };
+beforeEach(() => {
+  delete process.env.LLM_API_KEY;
+  delete process.env.FLANT_API_KEY;
+});
 
 afterEach(() => {
   refreshAnthropicTokenMock.mockReset();
   refreshGitHubCopilotTokenMock.mockReset();
+  vi.unstubAllGlobals();
   delete process.env.PI_CODING_AGENT_DIR;
   delete process.env.COPILOT_GITHUB_TOKEN;
+  for (const [key, value] of Object.entries(savedGatewayKeys)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
 describe("flant-infra", () => {
-  it("registerFlantProviders preserves foreign (copilot/native) catalog specs", async () => {
+  // A provider registered with a placeholder key showed up in the catalog and
+  // won resolution, then failed every request on the missing key.
+  it("registers no LLM API provider without a gateway key", async () => {
     const dir = makeTempDir();
     const mod = await loadFlantInfraModule(dir);
-    const registry = await import("./model-registry.js");
-    const pi = { registerProvider: vi.fn(), unregisterProvider: vi.fn() } as any;
+    const pi = recordingPi();
 
-    registry.updateRegistryFromAvailableModels(["github-copilot/claude-opus-4.5", "anthropic/claude-opus-4-8"]);
     mod.registerFlantProviders(pi, ["sub/claude-opus-4-8", "gpt-5"], {});
 
-    const specs = registry.listRegisteredSpecs();
-    expect(specs).toContain("github-copilot/claude-opus-4.5");
-    expect(specs).toContain("anthropic/claude-opus-4-8");
-    expect(specs).toContain("pp-flant-openai/gpt-5");
-    registry.updateRegistryFromAvailableModels([]);
+    expect(pi.registerProvider).not.toHaveBeenCalled();
+  });
+
+  it("registers no LLM API provider when the provider is disabled, even with a key", async () => {
+    const dir = makeTempDir();
+    process.env.LLM_API_KEY = "sk-gateway-test";
+    const mod = await loadFlantInfraModule(dir);
+    const pi = recordingPi();
+
+    mod.registerFlantProviders(pi, ["gpt-5"], {}, { settings: routing((s) => { s.providers["llm-api"].enabled = false; }) });
+
+    expect(pi.registered.has("pp-flant-openai")).toBe(false);
   });
 
   it("registerFlantProviders is idempotent across repeated calls", async () => {
     const dir = makeTempDir();
+    process.env.LLM_API_KEY = "sk-gateway-test";
     const mod = await loadFlantInfraModule(dir);
 
     const registered = new Map<string, unknown>();
@@ -93,6 +130,7 @@ describe("flant-infra", () => {
 
   it("asks the gateway to pin a session to one upstream", async () => {
     const dir = makeTempDir();
+    process.env.LLM_API_KEY = "sk-gateway-test";
     const mod = await loadFlantInfraModule(dir);
 
     const registered = new Map<string, any>();
@@ -123,7 +161,9 @@ describe("flant-infra", () => {
         unregisterProvider: vi.fn((name: string) => registered.delete(name)),
       } as any;
 
-      mod.registerFlantProviders(pi, ["claude-opus-4-8", "gpt-5"], {}, { subscription: false });
+      mod.registerFlantProviders(pi, ["claude-opus-4-8", "gpt-5"], {}, {
+        settings: routing((s) => { s.providers["claude-sub"].enabled = false; }),
+      });
 
       expect(registered.has("pp-flant-anthropic")).toBe(false);
       expect(registered.get("pp-flant-openai").apiKey).toBe("llm-gateway-key");
@@ -135,17 +175,145 @@ describe("flant-infra", () => {
     }
   });
 
-  it("does not register the sub provider when subscription is disabled", async () => {
+  it("does not register the sub providers when the subscription is disabled", async () => {
+    const dir = makeTempDir();
+    writeClaudeAuth(dir);
+    process.env.LLM_API_KEY = "sk-gateway-test";
+    const mod = await loadFlantInfraModule(dir);
+    const pi = recordingPi();
+
+    mod.registerFlantProviders(pi, ["claude-opus-4-8", "gpt-5"], {}, {
+      settings: routing((s) => { s.providers["claude-sub"].enabled = false; }),
+    });
+    expect([...pi.registered.keys()]).toEqual(["pp-flant-openai"]);
+  });
+
+  it("registers both subscription routes by default", async () => {
+    const dir = makeTempDir();
+    writeClaudeAuth(dir);
+    process.env.LLM_API_KEY = "sk-gateway-test";
+    const mod = await loadFlantInfraModule(dir);
+    const pi = recordingPi();
+
+    mod.registerFlantProviders(pi, ["sub/claude-opus-4-8", "gpt-5"], {});
+
+    expect([...pi.registered.keys()].sort()).toEqual(["pp-claude-sub", "pp-flant-anthropic-sub", "pp-flant-openai"]);
+  });
+
+  it("registers the direct route against Anthropic with bare ids and no gateway header", async () => {
+    const dir = makeTempDir();
+    writeClaudeAuth(dir);
+    process.env.LLM_API_KEY = "sk-gateway-test";
+    const mod = await loadFlantInfraModule(dir);
+    const pi = recordingPi();
+
+    mod.registerFlantProviders(pi, ["sub/claude-opus-4-8", "claude-haiku-4-5", "gpt-5"], {}, { settings: directRouteOnly() });
+
+    expect(pi.registered.has("pp-flant-anthropic-sub")).toBe(false);
+    const direct = pi.registered.get("pp-claude-sub");
+    expect(direct.api).toBe("anthropic-messages");
+    expect(direct.baseUrl).toBe("https://api.anthropic.com");
+    expect(direct.apiKey).toBe("sk-ant-oat01-test-token");
+    expect(Object.keys(direct.headers)).toEqual(["user-agent"]);
+    expect(direct.headers["user-agent"]).toMatch(/^claude-cli\/[0-9.]+ \(external, /);
+    expect(direct.models.map((m: any) => m.id).sort()).toEqual(["claude-haiku-4-5", "claude-opus-4-8"]);
+  });
+
+  it("registers the direct route without any gateway key, from pi's own Claude catalog", async () => {
+    const dir = makeTempDir();
+    writeClaudeAuth(dir);
+    const mod = await loadFlantInfraModule(dir);
+    mod.setModelRegistry({
+      getApiKeyForProvider: async () => undefined,
+      find: () => undefined,
+      getAll: () => [
+        { provider: "anthropic", id: "claude-opus-5" },
+        { provider: "anthropic", id: "claude-fable-5-1" },
+        { provider: "openai", id: "gpt-5" },
+      ],
+    });
+    const pi = recordingPi();
+
+    mod.registerFlantProviders(pi, [], {}, { settings: directRouteOnly() });
+
+    expect([...pi.registered.keys()]).toEqual(["pp-claude-sub"]);
+    expect(pi.registered.get("pp-claude-sub").models.map((m: any) => m.id).sort()).toEqual(["claude-fable-5-1", "claude-opus-5"]);
+  });
+
+  it("registers only the direct route under the default route order when no gateway key is set", async () => {
+    const dir = makeTempDir();
+    writeClaudeAuth(dir);
+    const mod = await loadFlantInfraModule(dir);
+    const pi = recordingPi();
+
+    mod.registerFlantProviders(pi, ["sub/claude-opus-4-8", "gpt-5"], {});
+
+    expect([...pi.registered.keys()]).toEqual(["pp-claude-sub"]);
+  });
+
+  it("registers only the gateway route when the route excludes direct", async () => {
+    const dir = makeTempDir();
+    writeClaudeAuth(dir);
+    process.env.LLM_API_KEY = "sk-gateway-test";
+    const mod = await loadFlantInfraModule(dir);
+    const pi = recordingPi();
+
+    mod.registerFlantProviders(pi, ["sub/claude-opus-4-8"], {}, { settings: gatewayRouteOnly() });
+
+    expect(pi.registered.has("pp-claude-sub")).toBe(false);
+    expect(pi.registered.get("pp-flant-anthropic-sub").models.map((m: any) => m.id)).toEqual(["sub/claude-opus-4-8"]);
+  });
+
+  // A Claude override takes the family elsewhere: with no role pinning a
+  // subscription model, nothing routes onto it, so nothing should refresh or
+  // probe its credential.
+  it("leaves both sub providers unregistered under a Claude override with no pinned sub spec", async () => {
+    const dir = makeTempDir();
+    writeClaudeAuth(dir);
+    process.env.LLM_API_KEY = "sk-gateway-test";
+    const mod = await loadFlantInfraModule(dir);
+    const settings = routing((s) => {
+      s.models.claude.override = { provider: "github-copilot", model: "claude-opus-5" };
+    });
+    expect(mod.isClaudeSubInUse(settings)).toBe(false);
+    expect(mod.isClaudeSubInUse(settings, ["github-copilot/claude-opus-5"])).toBe(false);
+    const pi = recordingPi();
+
+    mod.registerFlantProviders(pi, ["sub/claude-opus-4-8", "gpt-5"], {}, { settings });
+
+    expect([...pi.registered.keys()]).toEqual(["pp-flant-openai"]);
+    await mod.refreshSubProvider(pi);
+    expect(pi.registered.has("pp-flant-anthropic-sub")).toBe(false);
+    expect(pi.registered.has("pp-claude-sub")).toBe(false);
+  });
+
+  it("keeps the subscription registered under a Claude override when a role pins a sub spec", async () => {
+    const dir = makeTempDir();
+    writeClaudeAuth(dir);
+    process.env.LLM_API_KEY = "sk-gateway-test";
+    const mod = await loadFlantInfraModule(dir);
+    const settings = routing((s) => {
+      s.models.claude.override = { provider: "github-copilot", model: "claude-opus-5" };
+    });
+    expect(mod.isClaudeSubInUse(settings, ["pp-claude-sub/claude-opus-4-8"])).toBe(true);
+    expect(mod.isClaudeSubInUse(settings, ["pp-flant-anthropic-sub/sub/claude-opus-4-8"])).toBe(true);
+    expect(mod.isClaudeSubInUse(routing((s) => { s.providers["claude-sub"].enabled = false; }))).toBe(false);
+    expect(mod.isClaudeSubInUse(routing())).toBe(true);
+    const pi = recordingPi();
+
+    mod.registerFlantProviders(pi, ["sub/claude-opus-4-8"], {}, { settings, pinnedSpecs: ["pp-claude-sub/claude-opus-4-8"] });
+
+    expect(pi.registered.has("pp-claude-sub")).toBe(true);
+    expect(pi.registered.has("pp-flant-anthropic-sub")).toBe(true);
+  });
+
+  it("hasClaudeSubCredential counts an expired login but not a missing one", async () => {
     const dir = makeTempDir();
     const mod = await loadFlantInfraModule(dir);
-    const registered = new Map<string, unknown>();
-    const pi = {
-      registerProvider: vi.fn((name: string, config: unknown) => registered.set(name, config)),
-      unregisterProvider: vi.fn((name: string) => registered.delete(name)),
-    } as any;
-
-    mod.registerFlantProviders(pi, ["claude-opus-4-8", "gpt-5"], {}, { subscription: false });
-    expect([...registered.keys()]).toEqual(["pp-flant-openai"]);
+    expect(mod.hasClaudeSubCredential()).toBe(false);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "auth.json"), JSON.stringify({ anthropic: { access: "sk-ant-oat01-old", expires: Date.now() - 1000 } }), "utf-8");
+    expect(mod.hasClaudeSubCredential()).toBe(true);
   });
 
   it("registers the sub provider with sub/ models when subscription enabled and credentials present", async () => {
@@ -166,7 +334,7 @@ describe("flant-infra", () => {
         unregisterProvider: vi.fn((name: string) => registered.delete(name)),
       } as any;
 
-      mod.registerFlantProviders(pi, ["claude-opus-4-8", "claude-haiku-4-5", "gpt-5"], {}, { subscription: true });
+      mod.registerFlantProviders(pi, ["claude-opus-4-8", "claude-haiku-4-5", "gpt-5"], {}, { settings: gatewayRouteOnly() });
 
       expect([...registered.keys()].sort()).toEqual(["pp-flant-anthropic-sub", "pp-flant-openai"]);
       const sub = registered.get("pp-flant-anthropic-sub");
@@ -203,7 +371,7 @@ describe("flant-infra", () => {
         pi,
         ["claude-opus-4-8", "claude-fable-5", "sub/claude-opus-4-8", "gpt-5"],
         {},
-        { subscription: true },
+        {},
       );
 
       const sub = registered.get("pp-flant-anthropic-sub");
@@ -247,7 +415,7 @@ describe("flant-infra", () => {
             modality: "text",
           },
         },
-        { subscription: true },
+        {},
       );
 
       const sub = registered.get("pp-flant-anthropic-sub");
@@ -283,7 +451,7 @@ describe("flant-infra", () => {
         unregisterProvider: vi.fn((name: string) => registered.delete(name)),
       } as any;
 
-      mod.registerFlantProviders(pi, ["sub/claude-opus-5"], {}, { subscription: true });
+      mod.registerFlantProviders(pi, ["sub/claude-opus-5"], {});
 
       expect(registered.get("pp-flant-anthropic-sub").models[0]).toMatchObject({
         id: "sub/claude-opus-5",
@@ -329,7 +497,7 @@ describe("flant-infra", () => {
         unregisterProvider: vi.fn((name: string) => registered.delete(name)),
       } as any;
 
-      mod.registerFlantProviders(pi, ["sub/claude-opus-5"], {}, { subscription: true });
+      mod.registerFlantProviders(pi, ["sub/claude-opus-5"], {});
 
       const model = registered.get("pp-flant-anthropic-sub").models[0];
       expect(model.compat).toEqual({ forceAdaptiveThinking: true, supportsTemperature: false, supportsMidConvoEffort: true });
@@ -366,7 +534,7 @@ describe("flant-infra", () => {
         unregisterProvider: vi.fn((name: string) => registered.delete(name)),
       } as any;
 
-      mod.registerFlantProviders(pi, ["sub/claude-fable-5-1"], {}, { subscription: true });
+      mod.registerFlantProviders(pi, ["sub/claude-fable-5-1"], {});
 
       const model = registered.get("pp-flant-anthropic-sub").models[0];
       expect(model.id).toBe("sub/claude-fable-5-1");
@@ -396,7 +564,7 @@ describe("flant-infra", () => {
         unregisterProvider: vi.fn((name: string) => registered.delete(name)),
       } as any;
 
-      mod.registerFlantProviders(pi, ["sub/claude-unreleased-9"], {}, { subscription: true });
+      mod.registerFlantProviders(pi, ["sub/claude-unreleased-9"], {});
 
       const model = registered.get("pp-flant-anthropic-sub").models[0];
       expect(model.id).toBe("sub/claude-unreleased-9");
@@ -426,7 +594,7 @@ describe("flant-infra", () => {
         unregisterProvider: vi.fn((name: string) => registered.delete(name)),
       } as any;
 
-      mod.registerFlantProviders(pi, ["claude-opus-4-8", "claude-haiku-4-5", "gpt-5"], {}, { subscription: true });
+      mod.registerFlantProviders(pi, ["claude-opus-4-8", "claude-haiku-4-5", "gpt-5"], {});
 
       const sub = registered.get("pp-flant-anthropic-sub");
       expect(sub.models.map((m: any) => m.id).sort()).toEqual(["sub/claude-haiku-4-5", "sub/claude-opus-4-8"]);
@@ -434,29 +602,6 @@ describe("flant-infra", () => {
       if (prevKey === undefined) delete process.env.LLM_API_KEY;
       else process.env.LLM_API_KEY = prevKey;
     }
-  });
-
-  it("generateFlantConfig emits session-first main and bounded worker routing", async () => {
-    const dir = makeTempDir();
-    const mod = await loadFlantInfraModule(dir);
-    const config = mod.generateFlantConfig(
-      ["sub/claude-fable-5", "sub/claude-opus-4-9", "gpt-5.6-sol", "gpt-5.6-sol-pro", "gemini-3-1-pro"],
-      true,
-    ) as any;
-    expect(config.agents.main.model).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-9");
-    expect(config.agents.subagents.simple.task.model).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-9");
-    expect(config.agents.subagents.pools.advisors[0].model).toBe("pp-flant-openai/gpt-5.6-sol-pro");
-    expect(config.agents.subagents.pools.advisors[1].model).toBe("pp-flant-anthropic-sub/sub/claude-fable-5");
-    expect(config.agents.subagents.pools.reviewers[0].model).toBe("pp-flant-openai/gpt-5.6-sol-pro");
-    expect(config.agents.subagents.presetGroups).toBeUndefined();
-    expect(config.agents.orchestrators).toBeUndefined();
-  });
-
-  it("routes all catalog Claude models through sub when the subscription is active", async () => {
-    const dir = makeTempDir();
-    const mod = await loadFlantInfraModule(dir);
-    const mixed = mod.generateFlantConfig(["claude-opus-4-9", "sub/claude-opus-4-8", "gpt-5.6-sol"], true) as any;
-    expect(mixed.agents.main.model).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-9");
   });
 
   it("skips the sub provider when subscription enabled but OAuth token missing", async () => {
@@ -471,7 +616,7 @@ describe("flant-infra", () => {
         unregisterProvider: vi.fn((name: string) => registered.delete(name)),
       } as any;
 
-      mod.registerFlantProviders(pi, ["claude-opus-4-8"], {}, { subscription: true });
+      mod.registerFlantProviders(pi, ["claude-opus-4-8"], {});
       expect(registered.has("pp-flant-anthropic-sub")).toBe(false);
     } finally {
       if (prevKey === undefined) delete process.env.LLM_API_KEY;
@@ -501,7 +646,7 @@ describe("flant-infra", () => {
         unregisterProvider: vi.fn((name: string) => registered.delete(name)),
       } as any;
 
-      mod.registerFlantProviders(pi, ["claude-opus-4-8"], {}, { subscription: true });
+      mod.registerFlantProviders(pi, ["claude-opus-4-8"], {});
 
       const sub = registered.get("pp-flant-anthropic-sub");
       expect(sub.apiKey).toBe("sk-ant-oat01-expired");
@@ -540,7 +685,7 @@ describe("flant-infra", () => {
       // Refresh yields a fresh token, which is what the initial registration reads.
       refreshAnthropicTokenMock.mockResolvedValueOnce({ access: "sk-ant-oat01-fresh", refresh: "rt-fresh", expires: Date.now() + 3_600_000 });
       await mod.refreshClaudeOAuthToken();
-      mod.registerFlantProviders(pi, ["claude-opus-4-8"], {}, { subscription: true });
+      mod.registerFlantProviders(pi, ["claude-opus-4-8"], {});
       expect(registered.get("pp-flant-anthropic-sub").apiKey).toBe("sk-ant-oat01-fresh");
 
       // A no-op refresh (token unchanged) must not re-register.
@@ -582,7 +727,7 @@ describe("flant-infra", () => {
         registerProvider: vi.fn((name: string, config: any) => registered.set(name, config)),
         unregisterProvider: vi.fn((name: string) => registered.delete(name)),
       } as any;
-      mod.registerFlantProviders(pi, ["claude-opus-4-8"], {}, { subscription: true });
+      mod.registerFlantProviders(pi, ["claude-opus-4-8"], {});
       expect(registered.has("pp-flant-anthropic-sub")).toBe(true);
 
       // Credentials revoked: the refresh cannot mint a token any more.
@@ -699,105 +844,6 @@ describe("flant-infra", () => {
     expect(mod.generateDisplayName("api-ai-2")).toBe("API AI 2");
   });
 
-  it("generateFlantConfig creates config with mapped model specs", async () => {
-    const dir = makeTempDir();
-    const mod = await loadFlantInfraModule(dir);
-
-    const config = mod.generateFlantConfig([
-      "claude-opus-4-6",
-      "gpt-5-4",
-      "gpt-5-4-mini",
-      "gemini-3-1-pro",
-      "gemini-3-1-flash",
-      "deepseek-v3",
-      "grok-4",
-    ], true) as any;
-
-    expect(config.agents.main.model).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-6");
-    expect(config.agents.subagents.simple.explore.model).toBe("pp-flant-openai/gpt-5-4-mini");
-    expect(config.agents.subagents.simple.explore.thinking).toBe("medium");
-    expect(config.agents.subagents.simple.librarian.model).toBe("pp-flant-openai/gpt-5-4-mini");
-    expect(config.agents.subagents.simple.librarian.thinking).toBe("medium");
-    expect(config.agents.subagents.pools.advisors[0].model).toBe("pp-flant-openai/gpt-5-4");
-  });
-
-  it("generateFlantConfig gives every pool the same astra-pro + fable pair at high", async () => {
-    const dir = makeTempDir();
-    const mod = await loadFlantInfraModule(dir);
-
-    const config = mod.generateFlantConfig(
-      ["sub/claude-fable-5-1", "sub/claude-fable-5", "sub/claude-opus-5", "gpt-5.6-sol", "gpt-5.6-sol-pro", "gpt-6-astra", "gpt-6-astra-pro"],
-      true,
-    ) as any;
-
-    const pools = config.agents.subagents.pools;
-    for (const key of ["advisors", "reviewers", "deepDebuggers"]) {
-      expect(pools[key]).toEqual([
-        { enabled: true, model: "pp-flant-openai/gpt-6-astra-pro", thinking: "high" },
-        { enabled: true, model: "pp-flant-anthropic-sub/sub/claude-fable-5-1", thinking: "high" },
-      ]);
-    }
-    // Astra is reserved for the pools: the main-line roles stay on their own
-    // pickers rather than following the top-end SKU.
-    expect(config.agents.main.model).toBe("pp-flant-anthropic-sub/sub/claude-opus-5");
-  });
-
-  it("generateFlantConfig degrades the pool gpt slot to sol-pro when astra is absent", async () => {
-    const dir = makeTempDir();
-    const mod = await loadFlantInfraModule(dir);
-
-    const config = mod.generateFlantConfig(["sub/claude-fable-5", "gpt-5.6-sol", "gpt-5.6-sol-pro"], true) as any;
-
-    expect(config.agents.subagents.pools.reviewers[0].model).toBe("pp-flant-openai/gpt-5.6-sol-pro");
-    expect(config.agents.subagents.pools.deepDebuggers[0].model).toBe("pp-flant-openai/gpt-5.6-sol-pro");
-  });
-
-  it("generateFlantConfig routes Claude roles through subs when subscription active", async () => {
-    const dir = makeTempDir();
-    const mod = await loadFlantInfraModule(dir);
-
-    const config = mod.generateFlantConfig(
-      ["claude-opus-4-8", "claude-haiku-4-5", "gpt-5-4", "gpt-5.6-luna", "gemini-3-1-pro", "gemini-3-1-flash"],
-      true,
-    ) as any;
-
-    // Claude roles -> sub provider
-    expect(config.agents.main.model).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
-    expect(config.agents.subagents.simple.task.model).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-8");
-    expect(config.agents.subagents.simple.explore.model).toBe("pp-flant-openai/gpt-5.6-luna");
-    expect(config.agents.subagents.simple.explore.thinking).toBe("medium");
-    expect(config.agents.subagents.pools.reviewers[0].model).toBe("pp-flant-openai/gpt-5-4");
-  });
-
-  it("generateFlantConfig excludes Claude entirely when the subscription is inactive", async () => {
-    const dir = makeTempDir();
-    const mod = await loadFlantInfraModule(dir);
-
-    const config = mod.generateFlantConfig(["claude-opus-4-8", "gpt-5-4"], false) as any;
-    expect(config.agents.main.model).toBe("pp-flant-openai/gpt-5-4");
-  });
-
-  it("isSubscriptionActive requires flag + oauth token + gateway key", async () => {
-    const dir = makeTempDir();
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(
-      join(dir, "auth.json"),
-      JSON.stringify({ anthropic: { access: "sk-ant-oat01-test", expires: Date.now() + 3_600_000 } }),
-      "utf-8",
-    );
-    writeGlobalFlantConfig(dir, { enabled: true, subscription: true });
-    const prevKey = process.env.LLM_API_KEY;
-    process.env.LLM_API_KEY = "sk-gateway-test";
-    try {
-      const mod = await loadFlantInfraModule(dir);
-      expect(mod.isSubscriptionActive()).toBe(true);
-      expect(mod.isSubscriptionActive({ subscription: false } as any)).toBe(false);
-    } finally {
-      if (prevKey === undefined) delete process.env.LLM_API_KEY;
-      else process.env.LLM_API_KEY = prevKey;
-    }
-  });
-
   it("activates the Copilot tier from OAuth credentials created by /login", async () => {
     const dir = makeTempDir();
     mkdirSync(dir, { recursive: true });
@@ -809,7 +855,7 @@ describe("flant-infra", () => {
     const mod = await loadFlantInfraModule(dir);
 
     expect(mod.readCopilotOAuthToken()).toBe("tid=test;exp=1");
-    expect(mod.isCopilotTierActive({ copilotEnabled: true } as any)).toBe(true);
+    expect(mod.isCopilotActive(routing())).toBe(true);
   });
 
   it("refreshes expired Copilot OAuth credentials and persists them for pi", async () => {
@@ -832,7 +878,7 @@ describe("flant-infra", () => {
     await expect(mod.refreshCopilotOAuthToken()).resolves.toBe("tid=fresh;exp=2");
     expect(refreshGitHubCopilotTokenMock).toHaveBeenCalledWith("ghu_refresh", "github.example.com");
     expect(JSON.parse(readFileSync(authPath, "utf-8"))["github-copilot"].access).toBe("tid=fresh;exp=2");
-    expect(mod.isCopilotTierActive({ copilotEnabled: true } as any)).toBe(true);
+    expect(mod.isCopilotActive(routing())).toBe(true);
   });
 
   it("activates the ChatGPT tier from a live OAuth credential", async () => {
@@ -846,7 +892,7 @@ describe("flant-infra", () => {
     const mod = await loadFlantInfraModule(dir);
 
     expect(mod.readCodexOAuthToken()).toBe("codex-access");
-    expect(mod.isCodexTierActive({ codexEnabled: true } as any)).toBe(true);
+    expect(mod.isCodexActive(routing())).toBe(true);
   });
 
   // Disabling the tier here would route the work elsewhere, so the request
@@ -863,7 +909,7 @@ describe("flant-infra", () => {
     const mod = await loadFlantInfraModule(dir);
 
     expect(mod.readCodexOAuthToken()).toBeNull();
-    expect(mod.isCodexTierActive({ codexEnabled: true } as any)).toBe(true);
+    expect(mod.isCodexActive(routing())).toBe(true);
   });
 
   it("deactivates the ChatGPT tier when the expired credential cannot be renewed", async () => {
@@ -876,7 +922,7 @@ describe("flant-infra", () => {
     );
     const mod = await loadFlantInfraModule(dir);
 
-    expect(mod.isCodexTierActive({ codexEnabled: true } as any)).toBe(false);
+    expect(mod.isCodexActive(routing())).toBe(false);
     await expect(mod.refreshCodexOAuthToken()).resolves.toBeNull();
   });
 
@@ -911,117 +957,27 @@ describe("flant-infra", () => {
     process.env.COPILOT_GITHUB_TOKEN = "github_pat_test";
     const mod = await loadFlantInfraModule(dir);
 
-    expect(mod.isCopilotTierActive({ copilotEnabled: true } as any)).toBe(true);
+    expect(mod.isCopilotActive(routing())).toBe(true);
+    expect(mod.isCopilotActive(routing((s) => { s.providers.copilot.enabled = false; }))).toBe(false);
   });
 
-  it("syncProviderTiers respects an active sub-fallback and does not re-enable flant-sub", async () => {
+  it("isCodexActive is false when the provider is disabled despite a live login", async () => {
     const dir = makeTempDir();
     mkdirSync(dir, { recursive: true });
     writeFileSync(
       join(dir, "auth.json"),
-      JSON.stringify({ anthropic: { access: "sk-ant-oat01-test", expires: Date.now() + 3_600_000 } }),
+      JSON.stringify({ "openai-codex": { type: "oauth", access: "codex-access", expires: Date.now() + 3_600_000 } }),
       "utf-8",
     );
-    writeGlobalFlantConfig(dir, { enabled: true, subscription: true });
-    const prevKey = process.env.LLM_API_KEY;
-    process.env.LLM_API_KEY = "sk-gateway-test";
-    try {
-      const mod = await loadFlantInfraModule(dir);
-      const reg = await import("./model-registry.js");
-      // Subscription is active -> sync enables flant-sub.
-      mod.syncProviderTiers();
-      expect(reg.getTierEnabled()["flant-sub"]).toBe(true);
-      // A live rate-limit fallback disables flant-sub; a subsequent sync (e.g.
-      // from toggling Copilot) must NOT clobber it back on.
-      reg.setSubscriptionFallbackActive(true);
-      mod.syncProviderTiers();
-      expect(reg.getTierEnabled()["flant-sub"]).toBe(false);
-      // Clearing the fallback lets sync re-enable it.
-      reg.setSubscriptionFallbackActive(false);
-      mod.syncProviderTiers();
-      expect(reg.getTierEnabled()["flant-sub"]).toBe(true);
-    } finally {
-      const reg = await import("./model-registry.js");
-      reg.setSubscriptionFallbackActive(false);
-      if (prevKey === undefined) delete process.env.LLM_API_KEY;
-      else process.env.LLM_API_KEY = prevKey;
-    }
+    const mod = await loadFlantInfraModule(dir);
+    expect(mod.isCodexActive(routing((s) => { s.providers.codex.enabled = false; }))).toBe(false);
   });
 
-  it("isSubscriptionActive is false without a gateway key", async () => {
-    const dir = makeTempDir();
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(
-      join(dir, "auth.json"),
-      JSON.stringify({ anthropic: { access: "sk-ant-oat01-test", expires: Date.now() + 3_600_000 } }),
-      "utf-8",
-    );
-    const prevKey = process.env.LLM_API_KEY;
-    const prevFlant = process.env.FLANT_API_KEY;
-    delete process.env.LLM_API_KEY;
-    delete process.env.FLANT_API_KEY;
-    try {
-      const mod = await loadFlantInfraModule(dir);
-      expect(mod.isSubscriptionActive({ subscription: true } as any)).toBe(false);
-    } finally {
-      if (prevKey !== undefined) process.env.LLM_API_KEY = prevKey;
-      if (prevFlant !== undefined) process.env.FLANT_API_KEY = prevFlant;
-    }
-  });
-
-  it("generateFlantConfig returns empty object for empty models", async () => {
+  it("loadLlmApiCache returns an empty cache when the file is missing", async () => {
     const dir = makeTempDir();
     const mod = await loadFlantInfraModule(dir);
 
-    expect(mod.generateFlantConfig([])).toEqual({});
-  });
-
-  it("generateFlantConfig with anthropic-only models routes everything through sub", async () => {
-    const dir = makeTempDir();
-    const mod = await loadFlantInfraModule(dir);
-
-    const config = mod.generateFlantConfig(["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-3-5"], true);
-    const specs = collectModelSpecs(config);
-
-    expect(specs.length).toBeGreaterThan(0);
-    expect(specs.every((spec) => spec.startsWith("pp-flant-anthropic-sub/sub/"))).toBe(true);
-    expect(specs.some((spec) => spec.startsWith("pp-flant-openai/"))).toBe(false);
-  });
-
-  it("generateFlantConfig picks latest models per family", async () => {
-    const dir = makeTempDir();
-    const mod = await loadFlantInfraModule(dir);
-
-    const config = mod.generateFlantConfig([
-      "claude-opus-4-5",
-      "claude-opus-4-7",
-      "gpt-5-3",
-      "gpt-5-4",
-      "gemini-3-0-pro",
-      "gemini-3-1-pro",
-      "gemini-3-1-flash",
-      "gemini-3-1-flash-lite",
-    ], true) as any;
-
-    expect(config.agents.main.model).toBe("pp-flant-anthropic-sub/sub/claude-opus-4-7");
-    expect(config.agents.subagents.pools.advisors).toHaveLength(2);
-    expect(config.agents.subagents.simple.explore.model).toBe("pp-flant-openai/gpt-5-4");
-    expect(collectModelSpecs(config).some((spec) => spec.includes("gemini"))).toBe(false);
-  });
-
-  it("loadFlantSettings returns defaults when file is missing", async () => {
-    const dir = makeTempDir();
-    const mod = await loadFlantInfraModule(dir);
-
-    expect(mod.loadFlantSettings()).toEqual({
-      enabled: false,
-      autoUpdate: true,
-      cacheTTLDays: 3,
-      switchBackIntervalMinutes: 10,
-      autoRateLimitFallback: true,
-      copilotEnabled: true,
-      codexEnabled: true,
-      subscription: true,
+    expect(mod.loadLlmApiCache()).toEqual({
       lastUpdated: null,
       cachedFlantModels: null,
       cachedOpenRouterData: null,
@@ -1029,272 +985,109 @@ describe("flant-infra", () => {
     });
   });
 
-  it("loadFlantSettings composes durable config + cache fields", async () => {
+  it("loadLlmApiCache reads only cache fields and drops malformed entries", async () => {
     const dir = makeTempDir();
     const mod = await loadFlantInfraModule(dir);
-    // Durable policy lives in scoped config (item 8).
-    const cfgDir = join(dir, "extensions", "pp");
-    mkdirSync(cfgDir, { recursive: true });
-    writeFileSync(join(cfgDir, "config.json"), JSON.stringify({ flant: { enabled: true, autoUpdate: false, cacheTTLDays: 3 } }), "utf-8");
-    // Cache-only fields live in the cache file.
-    const settingsDir = join(cfgDir, "cache");
-    mkdirSync(settingsDir, { recursive: true });
+    const cacheDir = join(dir, "extensions", "pp", "cache");
+    mkdirSync(cacheDir, { recursive: true });
+    const metadata = {
+      "gpt-5-4": {
+        name: "GPT 5.4",
+        context_length: 123,
+        max_completion_tokens: 45,
+        pricing: { prompt: 1, completion: 2, cacheRead: 3, cacheWrite: 4 },
+        modality: "text",
+      },
+    };
     writeFileSync(
-      join(settingsDir, "flant-models.json"),
+      join(cacheDir, "flant-models.json"),
       JSON.stringify({
+        // A legacy cache still carrying durable policy: ignored here.
+        enabled: true,
+        switchBackIntervalMinutes: 30,
         lastUpdated: "2026-01-02T03:04:05.000Z",
         cachedFlantModels: ["gpt-5-4", 123, "claude-opus-4-6"],
-        cachedOpenRouterData: {
-          "gpt-5-4": {
-            name: "GPT 5.4",
-            context_length: 123,
-            max_completion_tokens: 45,
-            pricing: { prompt: 1, completion: 2, cacheRead: 3, cacheWrite: 4 },
-            modality: "text",
-          },
-        },
+        cachedOpenRouterData: metadata,
+        unmappedModels: { "qwen3": "qwen/qwen-3" },
       }),
       "utf-8",
     );
 
-    expect(mod.loadFlantSettings()).toEqual({
-      enabled: true,
-      autoUpdate: false,
-      cacheTTLDays: 3,
-      switchBackIntervalMinutes: 10,
-      autoRateLimitFallback: true,
-      copilotEnabled: true,
-      codexEnabled: true,
-      subscription: true,
+    expect(mod.loadLlmApiCache()).toEqual({
       lastUpdated: "2026-01-02T03:04:05.000Z",
       cachedFlantModels: ["gpt-5-4", "claude-opus-4-6"],
-      unmappedModels: null,
-      cachedOpenRouterData: {
-        "gpt-5-4": {
-          name: "GPT 5.4",
-          context_length: 123,
-          max_completion_tokens: 45,
-          pricing: { prompt: 1, completion: 2, cacheRead: 3, cacheWrite: 4 },
-          modality: "text",
-        },
-      },
+      cachedOpenRouterData: metadata,
+      unmappedModels: { "qwen3": "qwen/qwen-3" },
     });
   });
 
-  it("saveFlantSettings writes ONLY cache fields; durable policy stays in config", async () => {
+  it("loadLlmApiCache treats an unparsable cache as empty", async () => {
     const dir = makeTempDir();
     const mod = await loadFlantInfraModule(dir);
-    // Durable policy in scoped config.
+    const cacheDir = join(dir, "extensions", "pp", "cache");
+    mkdirSync(cacheDir, { recursive: true });
+    writeFileSync(join(cacheDir, "flant-models.json"), "{\"cachedFlantModels\": [", "utf-8");
+    expect(mod.loadLlmApiCache().cachedFlantModels).toBeNull();
+  });
+
+  it("loadRoutingSettings returns the provider defaults when no config exists", async () => {
+    const dir = makeTempDir();
+    const mod = await loadFlantInfraModule(dir);
+    const settings = mod.loadRoutingSettings();
+    expect(settings.providers["claude-sub"]).toEqual({ enabled: true, route: ["llm-api", "direct"] });
+    expect(settings.providers["llm-api"]).toEqual({ enabled: true, autoUpdate: true, cacheTTLDays: 3 });
+    expect(settings.providers.fallback).toEqual({ auto: true, retryAfterMinutes: 10 });
+    expect(settings.models.claude.override).toBeNull();
+  });
+
+  it("loadRoutingSettings reads the providers section and binds the project layer through cwd", async () => {
+    const dir = makeTempDir();
+    writeGlobalProvidersConfig(dir, { "llm-api": { cacheTTLDays: 14 }, fallback: { retryAfterMinutes: 30 } });
+    const projCwd = makeTempDir();
+    mkdirSync(join(projCwd, ".pp"), { recursive: true });
+    writeFileSync(join(projCwd, ".pp", "config.json"), JSON.stringify({ providers: { "claude-sub": { route: ["direct"] } } }), "utf-8");
+    const mod = await loadFlantInfraModule(dir);
+
+    const global = mod.loadRoutingSettings();
+    expect(global.providers["llm-api"].cacheTTLDays).toBe(14);
+    expect(global.providers.fallback.retryAfterMinutes).toBe(30);
+    expect(global.providers["claude-sub"].route).toEqual(["llm-api", "direct"]);
+
+    const scoped = mod.loadRoutingSettings(projCwd);
+    expect(scoped.providers["claude-sub"].route).toEqual(["direct"]);
+    expect(scoped.providers["llm-api"].cacheTTLDays).toBe(14);
+  });
+
+  it("loadRoutingSettings still honours a legacy flant section in memory", async () => {
+    const dir = makeTempDir();
     const cfgDir = join(dir, "extensions", "pp");
     mkdirSync(cfgDir, { recursive: true });
-    writeFileSync(join(cfgDir, "config.json"), JSON.stringify({ flant: { enabled: true, subscription: true, switchBackIntervalMinutes: 30, autoRateLimitFallback: false, copilotEnabled: true, autoUpdate: true, cacheTTLDays: 14 } }), "utf-8");
+    writeFileSync(
+      join(cfgDir, "config.json"),
+      JSON.stringify({ flant: { enabled: false, subscription: true, switchBackIntervalMinutes: 45, cacheTTLDays: 9 } }),
+      "utf-8",
+    );
+    const mod = await loadFlantInfraModule(dir);
 
-    mod.saveFlantSettings({
-      enabled: true,
-      autoUpdate: true,
-      cacheTTLDays: 14,
-      switchBackIntervalMinutes: 30,
-      autoRateLimitFallback: false,
-      copilotEnabled: true,
-      codexEnabled: false,
-      subscription: true,
-      lastUpdated: "2026-02-01T00:00:00.000Z",
-      cachedFlantModels: ["claude-opus-4-6", "gpt-5-4"],
-      unmappedModels: null,
-      cachedOpenRouterData: {
-        "claude-opus-4-6": {
-          name: "Claude Opus 4.6",
-          context_length: 200000,
-          max_completion_tokens: 32000,
-          pricing: { prompt: 0.01, completion: 0.02, cacheRead: 0.003, cacheWrite: 0.004 },
-          modality: "text",
-        },
-      },
-    });
-
-    // Cache file exists and holds ONLY cache fields (no durable policy).
-    const cachePath = join(cfgDir, "cache", "flant-models.json");
-    expect(existsSync(cachePath)).toBe(true);
-    const cacheRaw = JSON.parse(readFileSync(cachePath, "utf-8"));
-    expect(Object.keys(cacheRaw).sort()).toEqual(["cachedFlantModels", "cachedOpenRouterData", "lastUpdated", "unmappedModels"]);
-
-    // Durable fields are read back from config, cache fields from the cache file.
-    const loaded = mod.loadFlantSettings();
-    expect(loaded.subscription).toBe(true);
-    expect(loaded.switchBackIntervalMinutes).toBe(30);
-    expect(loaded.copilotEnabled).toBe(true);
-    expect(loaded.lastUpdated).toBe("2026-02-01T00:00:00.000Z");
-    expect(loaded.cachedFlantModels).toEqual(["claude-opus-4-6", "gpt-5-4"]);
+    const settings = mod.loadRoutingSettings();
+    expect(settings.providers["llm-api"].enabled).toBe(false);
+    expect(settings.providers["llm-api"].cacheTTLDays).toBe(9);
+    expect(settings.providers["claude-sub"]).toEqual({ enabled: true, route: ["direct"] });
+    expect(settings.providers.fallback.retryAfterMinutes).toBe(45);
   });
 
   it("wiping the cache file does not change any durable setting", async () => {
     const dir = makeTempDir();
-    const mod = await loadFlantInfraModule(dir);
-    const cfgDir = join(dir, "extensions", "pp");
-    mkdirSync(cfgDir, { recursive: true });
-    writeFileSync(join(cfgDir, "config.json"), JSON.stringify({ flant: { enabled: true, subscription: true, switchBackIntervalMinutes: 30 } }), "utf-8");
-    const cacheDir = join(cfgDir, "cache");
+    writeGlobalProvidersConfig(dir, { "claude-sub": { route: ["direct"] }, fallback: { retryAfterMinutes: 30 } });
+    const cacheDir = join(dir, "extensions", "pp", "cache");
     mkdirSync(cacheDir, { recursive: true });
     writeFileSync(join(cacheDir, "flant-models.json"), JSON.stringify({ cachedFlantModels: ["gpt-5-4"] }), "utf-8");
+    const mod = await loadFlantInfraModule(dir);
 
     rmSync(join(cacheDir, "flant-models.json"), { force: true });
-    const loaded = mod.loadFlantSettings();
-    expect(loaded.enabled).toBe(true);
-    expect(loaded.subscription).toBe(true);
-    expect(loaded.switchBackIntervalMinutes).toBe(30);
-    expect(loaded.cachedFlantModels).toBeNull();
-  });
-
-  it("switchBackIntervalMinutes comes from scoped config; defaults to 10 when unset", async () => {
-    const dir = makeTempDir();
-    const mod = await loadFlantInfraModule(dir);
-    const cfgDir = join(dir, "extensions", "pp");
-    mkdirSync(cfgDir, { recursive: true });
-    const cfgPath = join(cfgDir, "config.json");
-
-    // Unset -> default 10.
-    writeFileSync(cfgPath, JSON.stringify({ flant: { enabled: true } }), "utf-8");
-    expect(mod.loadFlantSettings().switchBackIntervalMinutes).toBe(10);
-
-    // Explicit value honored.
-    writeFileSync(cfgPath, JSON.stringify({ flant: { enabled: true, switchBackIntervalMinutes: 45 } }), "utf-8");
-    expect(mod.loadFlantSettings().switchBackIntervalMinutes).toBe(45);
-  });
-
-  describe("legacy flant-settings migration (item 8)", () => {
-    function writeLegacyCache(dir: string, obj: Record<string, unknown>) {
-      const cacheDir = join(dir, "extensions", "pp", "cache");
-      mkdirSync(cacheDir, { recursive: true });
-      writeFileSync(join(cacheDir, "flant-models.json"), JSON.stringify(obj), "utf-8");
-    }
-    function readGlobalFlant(dir: string): Record<string, unknown> {
-      const p = join(dir, "extensions", "pp", "config.json");
-      return existsSync(p) ? (JSON.parse(readFileSync(p, "utf-8")).flant ?? {}) : {};
-    }
-
-    it("migrates genuine choices but skips a historical-default switchBackIntervalMinutes: 30, and strips durable keys from cache", async () => {
-      const dir = makeTempDir();
-      const mod = await loadFlantInfraModule(dir);
-      writeLegacyCache(dir, { enabled: true, subscription: true, switchBackIntervalMinutes: 30, cachedFlantModels: ["gpt-5-4"] });
-
-      mod.migrateLegacyFlantSettings();
-
-      // enabled/subscription are genuine choices (their historical default is
-      // false), so they still migrate.
-      expect(readGlobalFlant(dir)).toMatchObject({ enabled: true, subscription: true });
-      // 30 was the v0.8.0/v0.9.0 default the legacy cache persisted verbatim;
-      // promoting it would permanently outrank the current default of 10.
-      expect(readGlobalFlant(dir)).not.toHaveProperty("switchBackIntervalMinutes");
-      // Cache file no longer holds durable fields, but keeps cache data.
-      const cacheRaw = JSON.parse(readFileSync(join(dir, "extensions", "pp", "cache", "flant-models.json"), "utf-8"));
-      expect(cacheRaw).not.toHaveProperty("switchBackIntervalMinutes");
-      expect(cacheRaw.cachedFlantModels).toEqual(["gpt-5-4"]);
-      expect(mod.loadFlantSettings().switchBackIntervalMinutes).toBe(10);
-    });
-
-    it("skips a historical-default cacheTTLDays: 7 so the new default of 3 applies", async () => {
-      const dir = makeTempDir();
-      const mod = await loadFlantInfraModule(dir);
-      writeLegacyCache(dir, { cacheTTLDays: 7 });
-
-      mod.migrateLegacyFlantSettings();
-
-      expect(readGlobalFlant(dir)).not.toHaveProperty("cacheTTLDays");
-      expect(mod.loadFlantSettings().cacheTTLDays).toBe(3);
-    });
-
-    // Documented benign edge: an INVALID legacy value normalizes to the CURRENT
-    // default (3), which is not in cacheTTLDays' historical list [7], so it is
-    // migrated as an explicit 3. Redundant but harmless — it equals the default
-    // it would have resolved to anyway. Not worth special-casing in the skip rule.
-    it("migrates an invalid legacy cacheTTLDays as the current default, which is harmless", async () => {
-      const dir = makeTempDir();
-      const mod = await loadFlantInfraModule(dir);
-      writeLegacyCache(dir, { cacheTTLDays: "abc" });
-
-      mod.migrateLegacyFlantSettings();
-
-      expect(readGlobalFlant(dir)).toMatchObject({ cacheTTLDays: 3 });
-      expect(mod.loadFlantSettings().cacheTTLDays).toBe(3);
-    });
-
-    it("migrates a non-historical switchBackIntervalMinutes: 45", async () => {
-      const dir = makeTempDir();
-      const mod = await loadFlantInfraModule(dir);
-      writeLegacyCache(dir, { switchBackIntervalMinutes: 45 });
-
-      mod.migrateLegacyFlantSettings();
-
-      expect(readGlobalFlant(dir)).toMatchObject({ switchBackIntervalMinutes: 45 });
-      expect(mod.loadFlantSettings().switchBackIntervalMinutes).toBe(45);
-    });
-
-    it("compares historical defaults AFTER normalization, so a legacy string \"30\" is skipped", async () => {
-      const dir = makeTempDir();
-      const mod = await loadFlantInfraModule(dir);
-      writeLegacyCache(dir, { switchBackIntervalMinutes: "30" });
-
-      mod.migrateLegacyFlantSettings();
-
-      expect(readGlobalFlant(dir)).not.toHaveProperty("switchBackIntervalMinutes");
-    });
-
-    it("still rewrites the cache when every durable key is skipped as historical", async () => {
-      const dir = makeTempDir();
-      const mod = await loadFlantInfraModule(dir);
-      writeLegacyCache(dir, { switchBackIntervalMinutes: 30, cacheTTLDays: 7, cachedFlantModels: ["gpt-5-4"] });
-
-      mod.migrateLegacyFlantSettings();
-
-      expect(readGlobalFlant(dir)).toEqual({});
-      const cacheRaw = JSON.parse(readFileSync(join(dir, "extensions", "pp", "cache", "flant-models.json"), "utf-8"));
-      expect(cacheRaw).not.toHaveProperty("switchBackIntervalMinutes");
-      expect(cacheRaw).not.toHaveProperty("cacheTTLDays");
-      expect(cacheRaw.cachedFlantModels).toEqual(["gpt-5-4"]);
-    });
-
-    it("skips a key already set explicitly in global config", async () => {
-      const dir = makeTempDir();
-      const mod = await loadFlantInfraModule(dir);
-      const cfgDir = join(dir, "extensions", "pp");
-      mkdirSync(cfgDir, { recursive: true });
-      writeFileSync(join(cfgDir, "config.json"), JSON.stringify({ flant: { switchBackIntervalMinutes: 15 } }), "utf-8");
-      writeLegacyCache(dir, { switchBackIntervalMinutes: 30 });
-
-      mod.migrateLegacyFlantSettings();
-      expect(readGlobalFlant(dir)).toMatchObject({ switchBackIntervalMinutes: 15 });
-    });
-
-    it("does not migrate normalization-filled defaults (only raw own-props)", async () => {
-      const dir = makeTempDir();
-      const mod = await loadFlantInfraModule(dir);
-      writeLegacyCache(dir, { subscription: true });
-
-      mod.migrateLegacyFlantSettings();
-      const g = readGlobalFlant(dir);
-      expect(g).toMatchObject({ subscription: true });
-      expect(g).not.toHaveProperty("switchBackIntervalMinutes");
-      expect(g).not.toHaveProperty("autoUpdate");
-    });
-
-    it("is idempotent (a second run makes no further change)", async () => {
-      const dir = makeTempDir();
-      const mod = await loadFlantInfraModule(dir);
-      writeLegacyCache(dir, { switchBackIntervalMinutes: 30 });
-      mod.migrateLegacyFlantSettings();
-      const afterFirst = JSON.stringify(readGlobalFlant(dir));
-      // Re-import to reset the module-level once-guard, then re-run: the cache
-      // no longer has durable own-props, so nothing new is migrated.
-      const mod2 = await loadFlantInfraModule(dir);
-      mod2.migrateLegacyFlantSettings();
-      expect(JSON.stringify(readGlobalFlant(dir))).toBe(afterFirst);
-    });
-
-    it("no-ops on a missing legacy file", async () => {
-      const dir = makeTempDir();
-      const mod = await loadFlantInfraModule(dir);
-      expect(() => mod.migrateLegacyFlantSettings()).not.toThrow();
-      expect(existsSync(join(dir, "extensions", "pp", "config.json"))).toBe(false);
-    });
+    const settings = mod.loadRoutingSettings();
+    expect(settings.providers["claude-sub"].route).toEqual(["direct"]);
+    expect(settings.providers.fallback.retryAfterMinutes).toBe(30);
+    expect(mod.loadLlmApiCache().cachedFlantModels).toBeNull();
   });
 });

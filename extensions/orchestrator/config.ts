@@ -1,9 +1,10 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { copyFileSync, readFileSync, renameSync, unlinkSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { isValidLogLevel, getLogger, type LogLevel } from "./log.js";
+import { migrateConfigLayer } from "./config-migration.js";
 
 export type DurationValue = string | number;
 export type SimpleSubagentRole = "explore" | "librarian" | "task";
@@ -12,6 +13,39 @@ export type SimpleSubagentRole = "explore" | "librarian" | "task";
 // subagent.
 export type PoolKey = "advisors" | "reviewers" | "deepDebuggers";
 export const POOL_KEYS = ["advisors", "reviewers", "deepDebuggers"] as const;
+
+export type ProviderName = "claude-sub" | "codex" | "copilot" | "llm-api";
+export type ClaudeSubRoute = "direct" | "llm-api";
+export type FamilyName = "claude" | "gpt";
+export type SlotName = "haiku" | "sonnet" | "opus" | "fable" | "luna" | "terra" | "sol" | "astra";
+
+export interface ProvidersConfig {
+  /** Priority: the first enabled provider that serves a model wins. */
+  order: ProviderName[];
+  "claude-sub": { enabled: boolean; route: ClaudeSubRoute[] };
+  codex: { enabled: boolean };
+  copilot: { enabled: boolean };
+  "llm-api": { enabled: boolean; autoUpdate: boolean; cacheTTLDays: number };
+  fallback: { auto: boolean; retryAfterMinutes: number };
+}
+
+/**
+ * Replaces a whole family with one provider's models. `model` fills every
+ * slot; `slots` refines individual ones.
+ */
+export interface FamilyOverride {
+  provider: string;
+  model: string;
+  slots?: Partial<Record<SlotName, string>>;
+}
+
+export interface FamilyModelsConfig {
+  override: FamilyOverride | null;
+  /** Lock a slot to one version instead of the latest a provider serves. */
+  pins: Partial<Record<SlotName, string>>;
+}
+
+export type ModelsConfig = Record<FamilyName, FamilyModelsConfig>;
 
 export interface AgentConfig {
   model: string;
@@ -125,20 +159,8 @@ export interface PiPiConfig {
   };
   promptcap: PromptcapConfig;
   images: ImagesConfig;
-  // Durable Flant settings. These used to live in the regenerable
-  // model-metadata cache file (cache/flant-models.json); they are user policy
-  // and belong in scoped config. Only cachedFlantModels/cachedOpenRouterData/
-  // lastUpdated remain in the cache file.
-  flant: {
-    enabled: boolean;
-    subscription: boolean;
-    switchBackIntervalMinutes: number;
-    autoRateLimitFallback: boolean;
-    copilotEnabled: boolean;
-    codexEnabled: boolean;
-    autoUpdate: boolean;
-    cacheTTLDays: number;
-  };
+  providers: ProvidersConfig;
+  models: ModelsConfig;
   agents: {
     main: AgentConfig;
     maxConcurrentSubagents: number;
@@ -210,43 +232,44 @@ const DEFAULT_CONFIG: PiPiConfig = {
     jpegQuality: 80,
     maxBytes: 768 * 1024,
   },
-  flant: {
-    enabled: false,
-    // Both subscription tiers are on by default and cost nothing when their
-    // credentials are absent: each one's activation check requires the token
-    // before the tier is enabled in the resolver.
-    subscription: true,
-    switchBackIntervalMinutes: 10,
-    autoRateLimitFallback: true,
-    copilotEnabled: true,
-    codexEnabled: true,
-    autoUpdate: true,
-    cacheTTLDays: 3,
+  providers: {
+    order: ["claude-sub", "codex", "copilot", "llm-api"],
+    // Every provider is on by default and costs nothing without credentials:
+    // one without them serves no models, so resolution passes over it.
+    "claude-sub": { enabled: true, route: ["llm-api", "direct"] },
+    codex: { enabled: true },
+    copilot: { enabled: true },
+    "llm-api": { enabled: true, autoUpdate: true, cacheTTLDays: 3 },
+    fallback: { auto: true, retryAfterMinutes: 10 },
+  },
+  models: {
+    claude: { override: null, pins: {} },
+    gpt: { override: null, pins: {} },
   },
   agents: {
-    main: { model: "anthropic/claude-opus-latest", thinking: "high" },
+    main: { model: "claude/opus", thinking: "high" },
     maxConcurrentSubagents: 7,
     subagents: {
       simple: {
-        explore: { model: "openai/gpt-luna-latest", thinking: "medium" },
-        librarian: { model: "openai/gpt-luna-latest", thinking: "medium" },
-        task: { model: "anthropic/claude-opus-latest", thinking: "medium" },
+        explore: { model: "gpt/luna", thinking: "medium" },
+        librarian: { model: "gpt/luna", thinking: "medium" },
+        task: { model: "claude/opus", thinking: "medium" },
       },
       pools: {
         // Same pair in every pool: the top-end GPT for a genuinely foreign read,
         // the latest Fable for a same-vendor one. Roles differ in what they are
         // ASKED, not in which models answer.
         advisors: [
-          { enabled: true, model: "openai/gpt-astra-latest", thinking: "high" },
-          { enabled: true, model: "anthropic/claude-fable-latest", thinking: "high" },
+          { enabled: true, model: "gpt/astra:pro", thinking: "high" },
+          { enabled: true, model: "claude/fable", thinking: "high" },
         ],
         reviewers: [
-          { enabled: true, model: "openai/gpt-astra-latest", thinking: "high" },
-          { enabled: true, model: "anthropic/claude-fable-latest", thinking: "high" },
+          { enabled: true, model: "gpt/astra:pro", thinking: "high" },
+          { enabled: true, model: "claude/fable", thinking: "high" },
         ],
         deepDebuggers: [
-          { enabled: true, model: "openai/gpt-astra-latest", thinking: "high" },
-          { enabled: true, model: "anthropic/claude-fable-latest", thinking: "high" },
+          { enabled: true, model: "gpt/astra:pro", thinking: "high" },
+          { enabled: true, model: "claude/fable", thinking: "high" },
         ],
       },
     },
@@ -338,16 +361,72 @@ function validateImages(value: unknown): void {
   ensureNumberInRange(i.maxBytes, "config.images.maxBytes", 1024, 5 * 1024 * 1024);
 }
 
-function validateFlant(value: unknown): void {
-  const f = requireObject(value, "config.flant");
-  ensureBool(f.enabled, "config.flant.enabled");
-  ensureBool(f.subscription, "config.flant.subscription");
-  ensureBool(f.autoRateLimitFallback, "config.flant.autoRateLimitFallback");
-  ensureBool(f.copilotEnabled, "config.flant.copilotEnabled");
-  ensureBool(f.codexEnabled, "config.flant.codexEnabled");
-  ensureBool(f.autoUpdate, "config.flant.autoUpdate");
-  ensureNumberInRange(f.switchBackIntervalMinutes, "config.flant.switchBackIntervalMinutes", 1, 1440);
-  ensureNumberInRange(f.cacheTTLDays, "config.flant.cacheTTLDays", 1, 365);
+const PROVIDER_NAMES: readonly ProviderName[] = ["claude-sub", "codex", "copilot", "llm-api"];
+const CLAUDE_SUB_ROUTES: readonly ClaudeSubRoute[] = ["direct", "llm-api"];
+const FAMILY_SLOTS: Record<FamilyName, readonly SlotName[]> = {
+  claude: ["haiku", "sonnet", "opus", "fable"],
+  gpt: ["luna", "terra", "sol", "astra"],
+};
+
+function ensureUniqueList<T extends string>(value: unknown, allowed: readonly T[], path: string, nonEmpty: boolean): void {
+  if (value === undefined) return;
+  if (!Array.isArray(value) || value.some((v) => !allowed.includes(v)) || new Set(value).size !== value.length || (nonEmpty && value.length === 0)) {
+    throw new Error(`${path} must be ${nonEmpty ? "a non-empty" : "an"} array of distinct values from: ${allowed.join(", ")}`);
+  }
+}
+
+function validateProviders(value: unknown): void {
+  const p = requireObject(value, "config.providers");
+  ensureUniqueList(p.order, PROVIDER_NAMES, "config.providers.order", true);
+  for (const name of PROVIDER_NAMES) {
+    if (p[name] === undefined) continue;
+    const entry = requireObject(p[name], `config.providers.${name}`);
+    ensureBool(entry.enabled, `config.providers.${name}.enabled`);
+  }
+  if (p["claude-sub"] !== undefined) {
+    ensureUniqueList((p["claude-sub"] as Record<string, unknown>).route, CLAUDE_SUB_ROUTES, "config.providers.claude-sub.route", true);
+  }
+  if (p["llm-api"] !== undefined) {
+    const api = p["llm-api"] as Record<string, unknown>;
+    ensureBool(api.autoUpdate, "config.providers.llm-api.autoUpdate");
+    ensureNumberInRange(api.cacheTTLDays, "config.providers.llm-api.cacheTTLDays", 1, 365);
+  }
+  if (p.fallback !== undefined) {
+    const f = requireObject(p.fallback, "config.providers.fallback");
+    ensureBool(f.auto, "config.providers.fallback.auto");
+    ensureNumberInRange(f.retryAfterMinutes, "config.providers.fallback.retryAfterMinutes", 1, 1440);
+  }
+}
+
+function validateSlotMap(value: unknown, family: FamilyName, path: string): void {
+  if (value === undefined) return;
+  const map = requireObject(value, path);
+  for (const [slot, id] of Object.entries(map)) {
+    if (!FAMILY_SLOTS[family].includes(slot as SlotName)) {
+      throw new Error(`${path}.${slot} is not a ${family} slot (expected one of: ${FAMILY_SLOTS[family].join(", ")})`);
+    }
+    ensureString(id, `${path}.${slot}`);
+  }
+}
+
+function validateModels(value: unknown): void {
+  const m = requireObject(value, "config.models");
+  for (const key of Object.keys(m)) {
+    if (!(key in FAMILY_SLOTS)) throw new Error(`config.models.${key} is not a family (expected claude or gpt)`);
+  }
+  for (const family of Object.keys(FAMILY_SLOTS) as FamilyName[]) {
+    if (m[family] === undefined) continue;
+    const f = requireObject(m[family], `config.models.${family}`);
+    if (f.override !== undefined && f.override !== null) {
+      const o = requireObject(f.override, `config.models.${family}.override`);
+      if (typeof o.provider !== "string" || !o.provider || o.provider.includes("/")) {
+        throw new Error(`config.models.${family}.override.provider must be a provider name`);
+      }
+      if (typeof o.model !== "string" || !o.model) throw new Error(`config.models.${family}.override.model must be a non-empty string`);
+      validateSlotMap(o.slots, family, `config.models.${family}.override.slots`);
+    }
+    validateSlotMap(f.pins, family, `config.models.${family}.pins`);
+  }
 }
 
 export function parseDuration(input: DurationValue): number | null {
@@ -441,7 +520,8 @@ export function validateConfig(config: Record<string, any>): void {
 
   if (config.promptcap !== undefined) validatePromptcap(config.promptcap);
   if (config.images !== undefined) validateImages(config.images);
-  if (config.flant !== undefined) validateFlant(config.flant);
+  if (config.providers !== undefined) validateProviders(config.providers);
+  if (config.models !== undefined) validateModels(config.models);
 
   if (config.commands !== undefined) {
     const commands = requireObject(config.commands, "config.commands");
@@ -613,32 +693,47 @@ function loadJsonFile(path: string): Record<string, any> | null {
 
 export const GLOBAL_CONFIG_PATH = join(getAgentDir(), "extensions", "pp", "config.json");
 
+/**
+ * A family override replaces the one below it whole: merging two would let a
+ * project's provider inherit the global layer's per-slot model ids, which name
+ * models on a different provider. `null` in a layer cancels the one below.
+ */
+function applyAtomicOverrides(merged: Record<string, any>, layers: Array<Record<string, any> | null>): void {
+  for (const family of Object.keys(FAMILY_SLOTS) as FamilyName[]) {
+    for (const layer of layers) {
+      const value = layer?.models?.[family]?.override;
+      if (value !== undefined) merged.models[family].override = structuredClone(value);
+    }
+  }
+}
+
+// An order list that leaves a provider out still ranks it, last, so a provider
+// added in a later release is not silently unusable for configs written before.
+function completeProviderOrder(merged: Record<string, any>): void {
+  const order: ProviderName[] = merged.providers.order;
+  merged.providers.order = [...order, ...PROVIDER_NAMES.filter((name) => !order.includes(name))];
+}
+
+function prepareLayer(raw: Record<string, any> | null, name: string): Record<string, any> | null {
+  if (!raw) return null;
+  const { config, changed } = migrateConfigLayer(raw);
+  if (changed) getLogger().debug({ s: "config", layer: name }, "migrated a config layer from the provider-tier schema in memory");
+  validateConfig(config);
+  return config;
+}
+
 export function mergeConfigLayers(
   globalConfig: Record<string, any> | null,
   projectConfig: Record<string, any> | null,
 ): NormalizedPiPiConfig {
   const log = getLogger();
   let merged = getDefaultConfig() as Record<string, any>;
-
-  const getFlantConfig = (globalThis as any)[Symbol.for("pi-pi:flant-config")] as (() => Partial<PiPiConfig> | null) | undefined;
-  const flantConfig = getFlantConfig?.();
-  if (flantConfig) {
-    validateConfig(flantConfig as Record<string, any>);
-    merged = deepMerge(merged, flantConfig as Record<string, any>);
-    log.debug({ s: "config", layer: "flant" }, "merged flant config layer");
+  const layers = [prepareLayer(globalConfig, "global"), prepareLayer(projectConfig, "project")];
+  for (const layer of layers) {
+    if (layer) merged = deepMerge(merged, layer);
   }
-
-  if (globalConfig) {
-    validateConfig(globalConfig);
-    merged = deepMerge(merged, globalConfig);
-    log.debug({ s: "config", layer: "global" }, "merged global config layer");
-  }
-
-  if (projectConfig) {
-    validateConfig(projectConfig);
-    merged = deepMerge(merged, projectConfig);
-    log.debug({ s: "config", layer: "project" }, "merged project config layer");
-  }
+  applyAtomicOverrides(merged, layers);
+  completeProviderOrder(merged);
 
   validateMergedConfig(merged);
   const normalized = normalizeConfigDurations(merged as PiPiConfig);
@@ -653,29 +748,71 @@ export function mergeConfigLayers(
   return normalized;
 }
 
-export type FlantConfigSection = PiPiConfig["flant"];
+export type RoutingSettings = Pick<PiPiConfig, "providers" | "models">;
 
-// Side-effect-free read of the scoped `flant` section. Unlike loadConfig, this
-// NEVER mkdirs: it reads the absolute global config JSON always and
-// <cwd>/.pp/config.json only if it already exists, then folds the `flant`
-// sections over the defaults (defaults -> global -> project). Used at extension
-// init and in subagents, where the real project cwd is not yet known and
-// creating a stray .pp in the launch dir must be avoided.
-export function readScopedFlantSettings(cwd?: string, globalConfigPath = GLOBAL_CONFIG_PATH): FlantConfigSection {
-  const result = { ...(getDefaultConfig().flant) };
-  const apply = (raw: Record<string, any> | null) => {
-    const f = raw?.flant;
-    if (f && typeof f === "object") {
-      validateFlant(f);
-      Object.assign(result, f);
-    }
+// Side-effect-free read of the routing sections. Unlike loadConfig, this NEVER
+// mkdirs: it reads the global config always and <cwd>/.pp/config.json only if
+// it already exists. Used at extension init and in subagents, where the real
+// project cwd is not yet known and a stray .pp in the launch dir must be avoided.
+export function readScopedRoutingSettings(cwd?: string, globalConfigPath = GLOBAL_CONFIG_PATH): RoutingSettings {
+  const defaults = getDefaultConfig();
+  let merged: Record<string, any> = { providers: defaults.providers, models: defaults.models };
+  const pick = (raw: Record<string, any> | null) => {
+    const layer = prepareLayer(raw ? { providers: raw.providers, models: raw.models, flant: raw.flant } : null, "routing");
+    return layer ? { providers: layer.providers, models: layer.models } : null;
   };
-  apply(loadJsonFile(globalConfigPath));
-  if (cwd) {
-    const projectConfigPath = join(cwd, ".pp", "config.json");
-    if (existsSync(projectConfigPath)) apply(loadJsonFile(projectConfigPath));
+  const projectPath = cwd ? join(cwd, ".pp", "config.json") : null;
+  const layers = [pick(loadJsonFile(globalConfigPath)), pick(projectPath && existsSync(projectPath) ? loadJsonFile(projectPath) : null)];
+  for (const layer of layers) {
+    if (layer) merged = deepMerge(merged, Object.fromEntries(Object.entries(layer).filter(([, v]) => v !== undefined)));
   }
-  return result;
+  applyAtomicOverrides(merged, layers);
+  completeProviderOrder(merged);
+  return merged as RoutingSettings;
+}
+
+/**
+ * Persist the provider-tier → providers/models migration of one config file.
+ * The original is kept beside it as `.pre-routing.bak` (never overwritten, so a
+ * second run cannot replace the user's real original with a migrated copy), and
+ * the rewrite goes through a temp file under the config lock.
+ */
+export function migrateConfigFile(configPath: string): boolean {
+  if (!existsSync(configPath)) return false;
+  const release = lockfile.lockSync(configPath, { stale: 10000 });
+  try {
+    const raw = loadJsonFile(configPath);
+    if (!raw) return false;
+    const { config, changed } = migrateConfigLayer(raw);
+    if (!changed) return false;
+    validateConfig(config);
+    const backup = `${configPath}.pre-routing.bak`;
+    if (!existsSync(backup)) copyFileSync(configPath, backup);
+    const temp = `${configPath}.${process.pid}.tmp`;
+    try {
+      writeFileSync(temp, JSON.stringify(config, null, 2) + "\n", "utf-8");
+      renameSync(temp, configPath);
+    } catch (err) {
+      try { unlinkSync(temp); } catch { /* never created */ }
+      throw err;
+    }
+    getLogger().info({ s: "config", configPath, backup }, "migrated config to the providers/models schema");
+    return true;
+  } finally {
+    release();
+  }
+}
+
+// A write carries the file onto the current schema with it, so an old project
+// config is rewritten the first time the user edits it rather than on load.
+function readForWrite(configPath: string): Record<string, any> {
+  const raw = readRawConfig(configPath);
+  const { config, changed } = migrateConfigLayer(raw);
+  if (changed) {
+    const backup = `${configPath}.pre-routing.bak`;
+    if (!existsSync(backup)) copyFileSync(configPath, backup);
+  }
+  return config;
 }
 
 export function readRawConfig(path: string): Record<string, any> {
@@ -700,7 +837,7 @@ export function writeConfigValue(configPath: string, keyPath: string[], value: a
       return;
     }
 
-    const raw = readRawConfig(configPath);
+    const raw = readForWrite(configPath);
     let cursor: Record<string, any> = raw;
     for (let i = 0; i < keyPath.length - 1; i++) {
       const key = keyPath[i];
@@ -731,7 +868,7 @@ export function removeConfigValue(configPath: string, keyPath: string[]): void {
       return;
     }
 
-    const raw = readRawConfig(configPath);
+    const raw = readForWrite(configPath);
     let cursor: Record<string, any> = raw;
     const parents: Array<{ container: Record<string, any>; key: string }> = [];
     for (let i = 0; i < keyPath.length - 1; i++) {

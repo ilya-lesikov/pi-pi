@@ -1,12 +1,14 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Orchestrator } from "./orchestrator.js";
 import { registerCommandHandlers } from "./command-handlers.js";
-import { registerEventHandlers, registerLoadSkill, registerSubagentPromptcap } from "./event-handlers.js";
+import { pinnedRoleSpecs, registerEventHandlers, registerLoadSkill, registerSubagentPromptcap } from "./event-handlers.js";
 import { registerCbmTools } from "./cbm.js";
 import { registerExaTools } from "./exa.js";
 import { registerAstSearchTool } from "./ast-search.js";
-import { initFlantSync, migrateLegacyFlantSettings } from "./flant-infra.js";
-import { getDefaultConfig, loadConfig, normalizeConfigDurations } from "./config.js";
+import { initFlantSync } from "./flant-infra.js";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { GLOBAL_CONFIG_PATH, getDefaultConfig, loadConfig, mergeConfigLayers, migrateConfigFile, normalizeConfigDurations, readRawConfig } from "./config.js";
 import { getLogger } from "./log.js";
 import { registerBillingHook } from "./billing-spoof.js";
 import { suppressPierreThemeSpam } from "./suppress-pierre-theme-spam.js";
@@ -29,7 +31,8 @@ export default function (pi: ExtensionAPI) {
     // Child sessions inherit the root project cwd (seeded/refreshed on the root
     // ORCHESTRATOR_CWD_KEY) so project-scoped flant overrides bind; fall back to
     // global-only when no root cwd is known.
-    initFlantSync(pi, (globalThis as any)[ORCHESTRATOR_CWD_KEY]);
+    const rootCwd = (globalThis as any)[ORCHESTRATOR_CWD_KEY];
+    initFlantSync(pi, rootCwd, childPinnedSpecs(rootCwd));
     // Child sessions never run registerEventHandlers, so without this the
     // root-only billing hook is absent and subagent subscription requests miss
     // the billing system[0] block — the reason switch-back "works" for the main
@@ -44,20 +47,38 @@ export default function (pi: ExtensionAPI) {
   (globalThis as any)[ORCHESTRATOR_KEY] = true;
   (globalThis as any)[ORCHESTRATOR_CWD_KEY] = process.cwd();
 
-  // One-time (root-only) migration of durable flant policy out of the legacy
-  // combined cache file into scoped config, before the first settings read.
-  // Both steps read config: an unreadable one must not abort the whole load,
-  // or pi-pi never registers its handlers and the session has no /pp to fix it.
+  // The global config moves onto the providers/models schema here, once, in
+  // the root process only; project configs are read migrated in memory and
+  // rewritten the first time /pp edits them, so a repo's tracked file is not
+  // dirtied by merely opening it. Both steps read config: an unreadable one must
+  // not abort the whole load, or pi-pi never registers its handlers and the
+  // session has no /pp to fix it.
   try {
-    if (firstActivation) migrateLegacyFlantSettings();
+    if (firstActivation) migrateConfigFile(GLOBAL_CONFIG_PATH);
+  } catch (error: any) {
+    getLogger().error({ s: "config", err: error?.message }, "migrating the global config failed");
+  }
+  try {
     initFlantSync(pi);
   } catch (error: any) {
-    getLogger().error({ s: "flant", err: error?.message }, "flant initialization from config failed");
+    getLogger().error({ s: "flant", err: error?.message }, "provider initialization from config failed");
   }
 
   const orchestrator = new Orchestrator(pi);
   registerEventHandlers(orchestrator);
   registerCommandHandlers(orchestrator);
+}
+
+// The roles' raw pins, read without creating a project .pp directory: a pinned
+// subscription model keeps the subscription registered in a child session even
+// while the Claude family is overridden.
+function childPinnedSpecs(cwd: string | undefined): string[] {
+  try {
+    const project = cwd ? join(cwd, ".pp", "config.json") : null;
+    return pinnedRoleSpecs(mergeConfigLayers(readRawConfig(GLOBAL_CONFIG_PATH), project && existsSync(project) ? readRawConfig(project) : null));
+  } catch {
+    return [];
+  }
 }
 
 function registerSubagentTools(pi: ExtensionAPI): void {

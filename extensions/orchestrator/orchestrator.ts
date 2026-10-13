@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { NormalizedPiPiConfig, PoolEntry, PoolKey } from "./config.js";
-import { getModelInfo, resolveModel } from "./model-registry.js";
+import { configureRouting, describeRef, describeSpec, resolveRef, resolveSpec, type ModelDescription } from "./routing.js";
 import { createExploreAgent } from "./agents/explore.js";
 import { createLibrarianAgent } from "./agents/librarian.js";
 import { createTaskAgent } from "./agents/task.js";
@@ -17,7 +17,17 @@ function isEnabled(value: { enabled?: boolean } | undefined): boolean {
 }
 
 export class Orchestrator {
-  config!: NormalizedPiPiConfig;
+  private _config!: NormalizedPiPiConfig;
+
+  /** Setting the config also re-arms routing, which reads providers/models from it. */
+  get config(): NormalizedPiPiConfig {
+    return this._config;
+  }
+
+  set config(next: NormalizedPiPiConfig) {
+    this._config = next;
+    if (next?.providers && next?.models) configureRouting(next);
+  }
   configError: string | null = null;
   duplicateExtensionError = false;
   cwd = "";
@@ -72,9 +82,10 @@ export class Orchestrator {
    */
   modelSwitchInFlight = false;
   idlePollTimer: ReturnType<typeof setTimeout> | null = null;
-  subFallbackActive = false;
-  subFallbackModelId: string | null = null;
-  subFallbackMainPriorSpec: string | null = null;
+  /** The subscription model the account-pause probe sends its check to. */
+  subProbeSpec: string | null = null;
+  /** Main-session moves a pause made, keyed by the pause, so its expiry can undo exactly that. */
+  pausedMainRoutes = new Map<string, { from: string; to: string }>();
   /**
    * The spec pi-pi last routed the root session onto. A live model still equal
    * to it is one pi-pi chose, so re-routing it is safe; anything else is the
@@ -83,8 +94,8 @@ export class Orchestrator {
   routedMainSpec: string | null = null;
   private agentRegistrationSignature = "";
   subSwitchBackTimer: ReturnType<typeof setTimeout> | null = null;
-  /** Pending per-family tier restores, keyed `${tier}:${family}`. */
-  tierRestoreTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Expiry timers of the timed routing pauses, keyed by pause. */
+  pauseTimers = new Map<string, ReturnType<typeof setTimeout>>();
   tokenRefreshTimer: ReturnType<typeof setInterval> | null = null;
   private _interactivePromptOpen = false;
 
@@ -242,12 +253,15 @@ export class Orchestrator {
     this.modelSwitchPollTimer.unref?.();
   }
 
-  async switchModel(ctx: ExtensionContext, modelSpec: string, thinking: string): Promise<boolean> {
-    const resolved = resolveModel(modelSpec);
-    const separator = resolved.indexOf("/");
+  /**
+   * Put the root session on `spec`, an exact registered model. The thinking
+   * level is clamped by pi to what the model supports.
+   */
+  async switchModel(ctx: ExtensionContext, spec: string, thinking: string): Promise<boolean> {
+    const separator = spec.indexOf("/");
     if (separator < 1) return false;
-    const provider = resolved.slice(0, separator);
-    const id = resolved.slice(separator + 1);
+    const provider = spec.slice(0, separator);
+    const id = spec.slice(separator + 1);
     const model = (ctx as any).modelRegistry?.find?.(provider, id)
       ?? (ctx as any).modelRegistry?.getAvailable?.().find((entry: any) => entry.provider === provider && entry.id === id);
     if (!model || typeof (this.pi as any).setModel !== "function") return false;
@@ -259,26 +273,25 @@ export class Orchestrator {
   }
 
   /**
-   * Re-route the root session onto the configured main model when its preferred
-   * provider tier became usable again. Without this a session that STARTED
-   * while the tier was down (its credential rejected, or the provider missing)
-   * stays on the lower tier for its whole life: only the rate-limit switch-back
-   * restores a model, and it never ran.
+   * Re-route the root session onto what the configured main model resolves to
+   * now, when that changed: a provider came back, a credential appeared, or the
+   * user reordered providers or changed an override. Only a session still on
+   * the model pi-pi last routed it to is moved; anything else is the user's
+   * own /model pick.
    */
   async restoreMainRouting(ctx: ExtensionContext): Promise<void> {
     const main = this.config?.agents?.main;
-    // A live fallback owns the routing until its probe clears; re-resolving
-    // under it would just recompute the same demoted spec anyway.
-    if (!main || this.subFallbackActive || !this.routedMainSpec) return;
+    if (!main || !this.routedMainSpec) return;
     const live = ctx.model?.provider && ctx.model?.id ? `${ctx.model.provider}/${ctx.model.id}` : "";
     if (live !== this.routedMainSpec) return;
-    const target = resolveModel(main.model);
-    if (target === live) return;
+    const target = resolveSpec(main.model);
+    if (!target || target === live) return;
     try {
       if (await this.switchModel(ctx, target, main.thinking)) {
         this.routedMainSpec = target;
-        getLogger().info({ s: "model", from: live, to: target }, "restored the main model after its tier became usable again");
-        (ctx as any).ui?.notify?.(`Provider tier recovered; switched back to ${target}.`, "info");
+        for (const [key, moved] of this.pausedMainRoutes) if (moved.to === live) this.pausedMainRoutes.delete(key);
+        getLogger().info({ s: "model", from: live, to: target }, "re-routed the main model");
+        (ctx as any).ui?.notify?.(`Routing changed; switched to ${target}.`, "info");
       }
     } catch {}
   }
@@ -392,21 +405,28 @@ export class Orchestrator {
   async applyMainAgent(ctx: ExtensionContext): Promise<boolean> {
     const main = this.config?.agents?.main;
     if (!main) return false;
+    const resolution = resolveRef(main.model);
+    if (!resolution.spec) {
+      getLogger().warn({ s: "model", ref: main.model, steps: resolution.steps }, "the main model resolves to nothing");
+      return false;
+    }
     try {
-      if (!await this.switchModel(ctx, main.model, main.thinking)) return false;
-      // Recorded ONLY here and in restoreMainRouting: these are the two places
-      // pi-pi routes the session from the configured main model. Recording it
-      // for every switchModel would also claim the rate-limit switch-back's
-      // restore of the PRIOR spec — which may be a model the user picked by
+      if (!await this.switchModel(ctx, resolution.spec, main.thinking)) return false;
+      // Recorded ONLY here and by re-routing: these are the places pi-pi routes
+      // the session from the configured main model. Recording it for every
+      // switch would also claim a pause's restore of a model the user picked by
       // hand, and re-resolving would then overwrite that choice.
-      this.routedMainSpec = resolveModel(main.model);
+      this.routedMainSpec = resolution.spec;
       return true;
     } catch {
       return false;
     }
   }
 
-  mainModelInfo(): ReturnType<typeof getModelInfo> {
-    return getModelInfo(resolveModel(this.config.agents.main.model));
+  /** What the root session runs on: the live model, or the configured one before any is live. */
+  mainModelInfo(ctx?: any): ModelDescription {
+    const live = ctx?.model?.provider && ctx?.model?.id ? `${ctx.model.provider}/${ctx.model.id}` : "";
+    if (!live) return describeRef(this.config.agents.main.model);
+    return this.routedMainSpec === live ? describeRef(this.config.agents.main.model) : describeSpec(live);
   }
 }

@@ -40,10 +40,10 @@ function writeAuth(agentDir: string, entries: Record<string, unknown>): void {
   writeFileSync(join(agentDir, "auth.json"), JSON.stringify(entries), "utf-8");
 }
 
-function writeGlobalFlantConfig(agentDir: string, flant: Record<string, unknown>): void {
+function writeGlobalProvidersConfig(agentDir: string, providers: Record<string, unknown>): void {
   const dir = join(agentDir, "extensions", "pp");
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "config.json"), JSON.stringify({ flant }), "utf-8");
+  writeFileSync(join(dir, "config.json"), JSON.stringify({ providers }), "utf-8");
 }
 
 afterEach(() => {
@@ -54,24 +54,24 @@ afterEach(() => {
 
 describe("mid-session model catalog refresh", () => {
   // A /login lands between turns: the session-start snapshot predates the
-  // provider's models, so without a refresh the tier is enabled, credentialed
-  // and permanently skipped for having an empty catalog.
-  it("picks up a tier's models when its credential appears after session start", async () => {
+  // provider's models, so without a refresh the provider is enabled,
+  // credentialed and permanently skipped for having an empty catalog.
+  it("picks up a provider's models when its credential appears after session start", async () => {
     const agentDir = makeTempDir();
     process.env.PI_CODING_AGENT_DIR = agentDir;
     writeAuth(agentDir, {});
-    writeGlobalFlantConfig(agentDir, { codexEnabled: true, copilotEnabled: false, subscription: false });
+    writeGlobalProvidersConfig(agentDir, { codex: { enabled: true }, copilot: { enabled: false }, "claude-sub": { enabled: false } });
     vi.resetModules();
 
     const { registerEventHandlers } = await import("./event-handlers.js");
     const { Orchestrator } = await import("./orchestrator.js");
-    const { getDefaultConfig, normalizeConfigDurations } = await import("./config.js");
-    const { resolveModel, listRegisteredSpecs } = await import("./model-registry.js");
+    const { loadConfig } = await import("./config.js");
+    const { resolveSpec, listCatalog } = await import("./routing.js");
 
     const pi = makePi();
     const orchestrator = new Orchestrator(pi);
     orchestrator.cwd = agentDir;
-    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    orchestrator.config = loadConfig(agentDir);
     registerEventHandlers(orchestrator);
 
     const withoutCodex = [
@@ -86,7 +86,8 @@ describe("mid-session model catalog refresh", () => {
     };
 
     await emit(pi, "turn_start", {}, ctx);
-    expect(resolveModel("pp-flant-openai/gpt-6-astra-pro")).toBe("pp-flant-openai/gpt-6-astra-pro");
+    // Copilot is disabled, so only the LLM API serves the slot.
+    expect(resolveSpec("gpt/astra:pro")).toBe("pp-flant-openai/gpt-6-astra-pro");
 
     writeAuth(agentDir, {
       "openai-codex": { type: "oauth", access: "token", refresh: "refresh", expires: Date.now() + 3_600_000 },
@@ -94,21 +95,23 @@ describe("mid-session model catalog refresh", () => {
     available.models = [...withoutCodex, { provider: "openai-codex", id: "gpt-6-astra" }];
 
     await emit(pi, "turn_start", {}, ctx);
-    expect(listRegisteredSpecs()).toContain("openai-codex/gpt-6-astra");
-    expect(resolveModel("pp-flant-openai/gpt-6-astra-pro")).toBe("openai-codex/gpt-6-astra");
+    expect(listCatalog()).toContain("openai-codex/gpt-6-astra");
+    // The ChatGPT subscription precedes the LLM API in the default order; it
+    // has no pro variant, so the slot lands on its base model there.
+    expect(resolveSpec("gpt/astra:pro")).toBe("openai-codex/gpt-6-astra");
   });
 
   it("keeps the catalog when the host reports no models yet", async () => {
     const agentDir = makeTempDir();
     process.env.PI_CODING_AGENT_DIR = agentDir;
     writeAuth(agentDir, {});
-    writeGlobalFlantConfig(agentDir, { codexEnabled: true, copilotEnabled: false, subscription: false });
+    writeGlobalProvidersConfig(agentDir, { codex: { enabled: true }, copilot: { enabled: false }, "claude-sub": { enabled: false } });
     vi.resetModules();
 
     const { registerEventHandlers } = await import("./event-handlers.js");
     const { Orchestrator } = await import("./orchestrator.js");
     const { getDefaultConfig, normalizeConfigDurations } = await import("./config.js");
-    const { listRegisteredSpecs } = await import("./model-registry.js");
+    const { listCatalog } = await import("./routing.js");
 
     const pi = makePi();
     const orchestrator = new Orchestrator(pi);
@@ -124,7 +127,7 @@ describe("mid-session model catalog refresh", () => {
     };
 
     await emit(pi, "turn_start", {}, ctx);
-    expect(listRegisteredSpecs()).toContain("pp-flant-openai/gpt-6-astra-pro");
+    expect(listCatalog()).toContain("pp-flant-openai/gpt-6-astra-pro");
 
     writeAuth(agentDir, {
       "openai-codex": { type: "oauth", access: "token", refresh: "refresh", expires: Date.now() + 3_600_000 },
@@ -132,6 +135,6 @@ describe("mid-session model catalog refresh", () => {
     available.models = [];
 
     await emit(pi, "turn_start", {}, ctx);
-    expect(listRegisteredSpecs()).toContain("pp-flant-openai/gpt-6-astra-pro");
+    expect(listCatalog()).toContain("pp-flant-openai/gpt-6-astra-pro");
   });
 });

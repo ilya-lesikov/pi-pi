@@ -1,3 +1,5 @@
+import type { ModelDescription } from "../routing.js";
+
 export const ALL_CBM_TOOLS = "cbm_search, cbm_search_code, cbm_trace, cbm_changes, cbm_query, cbm_architecture";
 export const WEB_TOOLS = "web_search, web_fetch";
 
@@ -164,31 +166,53 @@ export function toolsBlock(toolNames: string[]): string {
   return ["<tools>", "", segments.join("\n\n"), "</tools>"].join("\n");
 }
 
-// A pool member surfaced to the caller so it can apply the same-provider /
-// same-or-weaker-tier delegation rule against arbitrary configured models.
+// A pool member surfaced to the caller so it can apply the cross-vendor rule.
 export interface RosterEntry {
   name: string;
-  model: string;
-  family: string;
-  tier: string;
+  /** The configured reference, e.g. "gpt/astra:pro". */
+  ref: string;
+  /** The concrete model it routes to now; null when nothing serves it. */
+  model: string | null;
+  via: string | null;
+  description: ModelDescription;
+  proFallback: boolean;
   thinking: string;
+}
+
+function modelLine(d: ModelDescription): string {
+  const parts = [d.label];
+  if (d.overridden && d.spec) parts.push(`override ${d.spec}`);
+  else if (!d.family && d.spec) parts.push(d.spec);
+  parts.push(`vendor ${d.vendor}`);
+  parts.push(d.overridden ? `role tier ${d.tier}` : `tier ${d.tier}`);
+  return parts.join(" · ");
 }
 
 // Self-identity block prepended to EVERY agent prompt (main + subagents) so an
 // agent knows its own model/tier and can reason about which siblings it may call.
-export function identityBlock(info: { displayName: string; family: string; tier: string; thinking: string }): string {
+export function identityBlock(description: ModelDescription, thinking: string): string {
   return [
     "<identity>",
     "You are a pi agent running under the pi-pi orchestrator extension.",
-    `Your model: ${info.displayName} · family ${info.family} · tier ${info.tier} · thinking ${info.thinking}.`,
+    `Your model: ${modelLine(description)} · thinking ${thinking}.`,
     "Tier ranking (weak→strong): stupid < regular < smart < xsmart.",
+    ...(description.overridden ? ["A role tier names the job this model fills, not a measured strength."] : []),
     "</identity>",
   ].join("\n");
 }
 
 function rosterLines(kind: string, roster: RosterEntry[]): string[] {
   if (roster.length === 0) return [`  (no ${kind} configured)`];
-  return roster.map((r) => `  - ${r.name}  —  ${r.model} · family ${r.family} · tier ${r.tier} · thinking ${r.thinking}`);
+  return roster.map((r) => {
+    if (!r.model) return `  - ${r.name}  —  ${r.description.label} · unavailable: nothing serves it right now`;
+    const pro = r.proFallback ? " (pro unavailable here; base model)" : "";
+    return `  - ${r.name}  —  ${modelLine(r.description)} · thinking ${r.thinking} · via ${r.via}${pro}`;
+  });
+}
+
+function knownOtherVendor(driver: string, entry: RosterEntry): boolean {
+  const vendor = entry.description.vendor;
+  return !!entry.model && vendor !== "unknown" && driver !== "unknown" && vendor !== driver;
 }
 
 // Main-agent delegation guidance, now a function of the running model family and
@@ -196,9 +220,24 @@ function rosterLines(kind: string, roster: RosterEntry[]): string[] {
 // no-subagent-for-trivial-work rules; replaces the static advisor=opus legend
 // with the model-named-pool rules.
 export function delegationBlock(
-  driverFamily: string,
+  driver: ModelDescription,
   pools: { advisors: RosterEntry[]; reviewers: RosterEntry[]; deepDebuggers: RosterEntry[] },
 ): string {
+  const crossVendor = [...pools.advisors, ...pools.reviewers, ...pools.deepDebuggers].some((entry) => knownOtherVendor(driver.vendor, entry));
+  const picking = crossVendor
+    ? [
+      "- Default to a DIFFERENT vendor than yours for independent perspective. If the cross-vendor",
+      "  option is weaker than you, treat its output as a dissenting view to weigh, not an authority.",
+      '- "advisors" (plural / high-stakes call) \u2192 spawn ALL eligible.',
+      "- NEVER spawn a same-vendor model at your tier or weaker; a stronger same-vendor sibling",
+      "  or any other-vendor model is allowed. A vendor shown as unknown counts as yours.",
+    ]
+    : [
+      "- No configured member is confirmed to come from a different vendor than yours, so none",
+      "  gives a truly independent view: prefer the strongest one, and weigh what it says as a",
+      "  second opinion, not an independent check.",
+      '- "advisors" (plural / high-stakes call) \u2192 spawn ALL eligible.',
+    ];
   return [
     "<delegation>",
     "Subagents run in parallel. subagent_type is REQUIRED.",
@@ -228,14 +267,11 @@ export function delegationBlock(
     "context small: folding holds the prompt inside its budget on its own, and a slice handed off for",
     "room rather than for parallelism pays a spawn and a briefing to buy nothing.",
     "",
-    `You run on the ${driverFamily} family. Advisor/reviewer/deep-debugger names encode the model`,
-    "and thinking level; the roster below spells out the provider each one currently routes through.",
+    `You run on ${driver.label} (vendor ${driver.vendor}). Advisor/reviewer/deep-debugger names encode`,
+    "the model slot and thinking level; the roster below spells out the model and provider each one",
+    "currently routes through.",
     "Picking rules:",
-    "- Default to a DIFFERENT family than yours for independent perspective. If the cross-family",
-    "  option is weaker than you, treat its output as a dissenting view to weigh, not an authority.",
-    '- "advisors" (plural / high-stakes call) \u2192 spawn ALL eligible.',
-    "- NEVER spawn a same-provider model at your tier or weaker; a stronger same-provider sibling",
-    "  or any other-provider model is allowed.",
+    ...picking,
     "",
     "Configured advisors:",
     ...rosterLines("advisors", pools.advisors),

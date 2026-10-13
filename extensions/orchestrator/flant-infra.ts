@@ -3,11 +3,10 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import lockfile from "proper-lockfile";
 import * as piAiOAuth from "@earendil-works/pi-ai/oauth";
-import { getModel } from "@earendil-works/pi-ai/compat";
+import { getModel, getModels } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
-import { getDefaultConfig, type PiPiConfig, readScopedFlantSettings, GLOBAL_CONFIG_PATH, writeConfigValue } from "./config.js";
-import { listRegisteredSpecs, updateRegistryFromAvailableModels, setTierEnabled, isSubscriptionFallbackActive } from "./model-registry.js";
-import { compareModelVersion } from "./model-version.js";
+import { readScopedRoutingSettings, type RoutingSettings } from "./config.js";
+import { DIRECT_SUB_PROVIDER, GATEWAY_SUB_MODEL_PREFIX, GATEWAY_SUB_PROVIDER, LLM_API_PROVIDER, CODEX_PROVIDER as CODEX, COPILOT_PROVIDER } from "./routing.js";
 import { getLogger } from "./log.js";
 import { buildUserAgent, injectBillingHeader, CC_IDENTITY } from "./billing-spoof.js";
 
@@ -39,10 +38,8 @@ export interface OpenRouterModelData {
   modality: string;
 }
 
-export interface FlantSettings {
-  enabled: boolean;
-  autoUpdate: boolean;
-  cacheTTLDays: number;
+/** The LLM API model catalog cached between sessions. */
+export interface LlmApiCache {
   lastUpdated: string | null;
   cachedFlantModels: string[] | null;
   cachedOpenRouterData: Record<string, OpenRouterModelData> | null;
@@ -53,39 +50,6 @@ export interface FlantSettings {
    * on every startup, so the TTL would never hold.
    */
   unmappedModels: Record<string, string> | null;
-  /**
-   * When true, additionally register the `pp-flant-anthropic-sub` provider,
-   * which routes Claude requests through the gateway using the user's personal
-   * Claude OAuth token (billed against their personal Claude subscription).
-   */
-  subscription: boolean;
-  /**
-   * Minutes between out-of-band "is the subscription limit cleared yet?" probes
-   * while the sub→non-sub rate-limit fallback is active. On each interval a
-   * cheap probe hits the sub model; on success the user is asked to switch back.
-   * Default 10.
-   */
-  switchBackIntervalMinutes: number;
-  /**
-   * When true, automatically fall back to the next provider tier on a rate
-   * limit WITHOUT a confirmation dialogue (a non-blocking notification is shown
-   * on every switch). When false, the legacy manual permission dialogue is
-   * shown instead. Default true.
-   */
-  autoRateLimitFallback: boolean;
-  /**
-   * Enable the Copilot provider tier (built-in `github-copilot` provider, keyed
-   * off COPILOT_GITHUB_TOKEN). When enabled it sits BELOW the subscription
-   * tiers and above the paid gateway. Default true; inert without a token.
-   */
-  copilotEnabled: boolean;
-  /**
-   * Enable the ChatGPT-subscription tier (pi's built-in `openai-codex`
-   * provider). GPT-only, and it outranks Copilot. Default true; inert until
-   * the user logs that provider in. The gateway serves no `sub/` GPT models,
-   * so this is the only subscription route for GPT.
-   */
-  codexEnabled: boolean;
 }
 
 const GEMINI_MAP: Record<string, string> = {
@@ -107,26 +71,11 @@ export function resolveAgentDir(): string {
 
 const SETTINGS_DIR = join(resolveAgentDir(), "extensions", "pp", "cache");
 const SETTINGS_PATH = join(SETTINGS_DIR, "flant-models.json");
-const DEFAULT_SETTINGS: FlantSettings = {
-  enabled: false,
-  autoUpdate: true,
-  cacheTTLDays: 3,
-  lastUpdated: null,
-  cachedFlantModels: null,
-  cachedOpenRouterData: null,
-  unmappedModels: null,
-  subscription: false,
-  switchBackIntervalMinutes: 10,
-  autoRateLimitFallback: true,
-  copilotEnabled: false,
-  codexEnabled: false,
-};
-
 /** Provider name for the personal-subscription Claude routing. */
-export const SUB_PROVIDER = "pp-flant-anthropic-sub";
+export const SUB_PROVIDER = GATEWAY_SUB_PROVIDER;
 
 /** pi's built-in provider for a personal ChatGPT Plus/Pro subscription. */
-export const CODEX_PROVIDER = "openai-codex";
+export const CODEX_PROVIDER = CODEX;
 
 const CLAUDE_REFRESH_MARGIN_MS = 5 * 60_000;
 const FORCED_REFRESH_COOLDOWN_MS = 60_000;
@@ -136,7 +85,7 @@ const ANTHROPIC_TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
 const ANTHROPIC_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 
 /** Prefix the gateway expects for personal-subscription Claude models. */
-export const SUB_MODEL_PREFIX = "sub/";
+export const SUB_MODEL_PREFIX = GATEWAY_SUB_MODEL_PREFIX;
 
 /**
  * Read the Claude OAuth access token persisted by pi's built-in `anthropic`
@@ -195,6 +144,7 @@ interface CopilotOAuthCreds extends AnthropicOAuthCreds {
 let modelRegistryRef: {
   getApiKeyForProvider?: (provider: string) => Promise<string | undefined>;
   find?: (provider: string, modelId: string) => { compat?: unknown; thinkingLevelMap?: unknown; contextWindow?: number; maxTokens?: number } | undefined;
+  getAll?: () => Array<{ provider?: string; id?: string }>;
 } | null = null;
 
 export function setModelRegistry(registry: unknown): void {
@@ -600,28 +550,24 @@ export function readGatewayApiKey(): string | null {
 }
 
 let piRef: ExtensionAPI | null = null;
-let generatedFlantConfig: Partial<PiPiConfig> | null = null;
 
 /**
- * Inputs needed to (re)register the personal-subscription Claude provider.
- * Cached at the last registerFlantProviders call so refreshSubProvider can
- * rebuild the provider with a freshly-read OAuth token without re-discovering
- * models. Null when subscription routing is not active.
+ * Inputs needed to (re)register the personal-subscription Claude providers.
+ * Cached at the last registration so refreshSubProvider can rebuild them with a
+ * freshly-read OAuth token without re-discovering models. Null when no route
+ * of the subscription is registered.
  */
 interface SubProviderContext {
   anthropicModels: string[];
   metadata: Record<string, OpenRouterModelData>;
+  routes: { direct: boolean; gateway: boolean };
 }
 let subProviderContext: SubProviderContext | null = null;
-/** The OAuth access token the sub provider was last registered with. */
+/** The OAuth access token the subscription providers were last registered with. */
 let lastSubToken: string | null = null;
 
 export function setPI(pi: ExtensionAPI): void {
   piRef = pi;
-}
-
-export function clearFlantGeneratedConfig(): void {
-  generatedFlantConfig = null;
 }
 
 export function unregisterFlantProviders(pi?: ExtensionAPI): void {
@@ -632,8 +578,9 @@ export function unregisterFlantProviders(pi?: ExtensionAPI): void {
   const api = pi ?? piRef;
   if (!api) return;
   api.unregisterProvider("pp-flant-anthropic");
-  api.unregisterProvider("pp-flant-openai");
+  api.unregisterProvider(LLM_API_PROVIDER);
   api.unregisterProvider(SUB_PROVIDER);
+  api.unregisterProvider(DIRECT_SUB_PROVIDER);
 }
 
 function ensureSettingsDir(): void {
@@ -651,77 +598,8 @@ function toNumber(value: unknown, fallback = 0): number {
   return fallback;
 }
 
-function normalizeSettings(raw: unknown): FlantSettings {
-  if (!raw || typeof raw !== "object") return { ...DEFAULT_SETTINGS };
-  const value = raw as Record<string, unknown>;
-  const cacheTTLDays = Math.max(1, Math.round(toNumber(value.cacheTTLDays, DEFAULT_SETTINGS.cacheTTLDays)));
-  const switchBackIntervalMinutes = Math.max(
-    1,
-    Math.round(toNumber(value.switchBackIntervalMinutes, DEFAULT_SETTINGS.switchBackIntervalMinutes)),
-  );
-  return {
-    enabled: !!value.enabled,
-    autoUpdate: value.autoUpdate === undefined ? true : !!value.autoUpdate,
-    cacheTTLDays,
-    switchBackIntervalMinutes,
-    autoRateLimitFallback: value.autoRateLimitFallback === undefined ? true : !!value.autoRateLimitFallback,
-    copilotEnabled: !!value.copilotEnabled,
-    codexEnabled: !!value.codexEnabled,
-    subscription: !!value.subscription,
-    lastUpdated: typeof value.lastUpdated === "string" ? value.lastUpdated : null,
-    cachedFlantModels: Array.isArray(value.cachedFlantModels)
-      ? value.cachedFlantModels.filter((m): m is string => typeof m === "string")
-      : null,
-    cachedOpenRouterData: value.cachedOpenRouterData && typeof value.cachedOpenRouterData === "object"
-      ? value.cachedOpenRouterData as Record<string, OpenRouterModelData>
-      : null,
-    unmappedModels: value.unmappedModels && typeof value.unmappedModels === "object"
-      ? value.unmappedModels as Record<string, string>
-      : null,
-  };
-}
-
-// Item 8: durable user policy now lives in scoped PiPiConfig (`flant` section);
-// only these regenerable fields remain in the cache file.
-export interface FlantCache {
-  lastUpdated: string | null;
-  cachedFlantModels: string[] | null;
-  cachedOpenRouterData: Record<string, OpenRouterModelData> | null;
-  unmappedModels: Record<string, string> | null;
-}
-
-const DURABLE_FLANT_KEYS = [
-  "enabled",
-  "subscription",
-  "switchBackIntervalMinutes",
-  "autoRateLimitFallback",
-  "copilotEnabled",
-  "autoUpdate",
-  "cacheTTLDays",
-] as const;
-
-// Values that a RELEASED version shipped as the default for each durable key.
-// The legacy cache file was written with JSON.stringify(settings), so it
-// persisted untouched defaults as if the user had chosen them. Migrating such a
-// value would launder a stale default into permanent explicit policy that
-// outranks every future default change (this is exactly how a v0.8.0-era
-// switchBackIntervalMinutes: 30 kept overriding the current 10). A cached value
-// matching a historical default is therefore treated as "never chosen".
-//
-// Accepted limitation: a user who deliberately picked exactly the old default is
-// indistinguishable from one who never touched it, and loses that choice.
-const HISTORICAL_DEFAULTS: Record<string, unknown[]> = {
-  switchBackIntervalMinutes: [30, 10], // 30 = v0.8.0/v0.9.0, 10 = v0.16.0
-  cacheTTLDays: [7], // 7 in every released version
-  enabled: [false],
-  subscription: [false],
-  copilotEnabled: [false],
-  autoUpdate: [true],
-  autoRateLimitFallback: [true],
-};
-
-function loadFlantCache(): FlantCache {
-  const empty: FlantCache = { lastUpdated: null, cachedFlantModels: null, cachedOpenRouterData: null, unmappedModels: null };
+export function loadLlmApiCache(): LlmApiCache {
+  const empty: LlmApiCache = { lastUpdated: null, cachedFlantModels: null, cachedOpenRouterData: null, unmappedModels: null };
   if (!existsSync(SETTINGS_PATH)) return empty;
   try {
     const value = JSON.parse(readFileSync(SETTINGS_PATH, "utf-8")) as Record<string, unknown>;
@@ -742,21 +620,21 @@ function loadFlantCache(): FlantCache {
   }
 }
 
-function saveFlantCache(cache: FlantCache): void {
+function saveLlmApiCache(cache: LlmApiCache): void {
   ensureSettingsDir();
   if (!existsSync(SETTINGS_PATH)) writeFileSync(SETTINGS_PATH, "{}\n", "utf-8");
   const release = lockfile.lockSync(SETTINGS_PATH, { stale: 10000 });
   try {
-    const out: FlantCache = {
+    const out: LlmApiCache = {
       lastUpdated: cache.lastUpdated,
       cachedFlantModels: cache.cachedFlantModels,
       cachedOpenRouterData: cache.cachedOpenRouterData,
       unmappedModels: cache.unmappedModels,
     };
     // Written through a temp file and renamed: a process killed mid-write would
-    // otherwise leave truncated JSON, and an unreadable cache registers NO flant
-    // providers at extension load — early enough that the host cannot restore
-    // the session's model and falls back to an unrelated one.
+    // otherwise leave truncated JSON, and an unreadable cache registers NO
+    // gateway providers at extension load — early enough that the host cannot
+    // restore the session's model and falls back to an unrelated one.
     const temp = `${SETTINGS_PATH}.${process.pid}.tmp`;
     try {
       writeFileSync(temp, JSON.stringify(out, null, 2) + "\n", "utf-8");
@@ -770,90 +648,9 @@ function saveFlantCache(cache: FlantCache): void {
   }
 }
 
-let migrationDone = false;
-
-// One-time migration (item 8): the legacy combined cache file mixed durable
-// user policy with cache. Copy each durable field that is an OWN-PROPERTY of
-// the RAW legacy JSON (so normalization-filled defaults are NOT migrated) into
-// the GLOBAL config scope, skipping any key GLOBAL already sets explicitly
-// (project scope is never consulted — writing global never overwrites an
-// explicit project value). Then rewrite the cache file with cache fields only.
-// Idempotent: after the rewrite no durable own-props remain, so re-runs no-op.
-export function migrateLegacyFlantSettings(globalConfigPath = GLOBAL_CONFIG_PATH): void {
-  if (migrationDone) return;
-  migrationDone = true;
-  if (!existsSync(SETTINGS_PATH)) return;
-  let raw: Record<string, unknown>;
-  try {
-    raw = JSON.parse(readFileSync(SETTINGS_PATH, "utf-8")) as Record<string, unknown>;
-  } catch {
-    return;
-  }
-  const hasDurableOwnProp = DURABLE_FLANT_KEYS.some((k) => Object.prototype.hasOwnProperty.call(raw, k));
-  if (!hasDurableOwnProp) return;
-
-  let globalRaw: Record<string, any> | null = null;
-  if (existsSync(globalConfigPath)) {
-    try {
-      globalRaw = JSON.parse(readFileSync(globalConfigPath, "utf-8")) as Record<string, any>;
-    } catch {
-      globalRaw = null;
-    }
-  }
-  const globalFlant = (globalRaw?.flant && typeof globalRaw.flant === "object") ? (globalRaw.flant as Record<string, unknown>) : {};
-
-  // Normalize once so a legacy string/other type lands as the correct typed
-  // config value, and so historical-default comparison happens post-coercion
-  // (a legacy "30" must match the numeric 30).
-  const normalized = normalizeSettings(raw) as unknown as Record<string, unknown>;
-
-  for (const key of DURABLE_FLANT_KEYS) {
-    if (!Object.prototype.hasOwnProperty.call(raw, key)) continue;
-    if (Object.prototype.hasOwnProperty.call(globalFlant, key)) continue;
-    if (HISTORICAL_DEFAULTS[key]?.includes(normalized[key])) {
-      getLogger().info({ s: "flant", key }, "skipped legacy flant setting matching a historical default");
-      continue;
-    }
-    writeConfigValue(globalConfigPath, ["flant", key], normalized[key]);
-    getLogger().info({ s: "flant", key }, "migrated legacy flant setting into global config");
-  }
-
-  // Rewrite the cache file WITHOUT durable fields, only after the durable
-  // values above are safely persisted to global config.
-  saveFlantCache(loadFlantCache());
-}
-
-// Compose the runtime FlantSettings bundle from scoped config (durable policy)
-// + the reduced cache file. `cwd` binds project-scope overrides; omit it for
-// the side-effect-free global-only read used at init / in subagents.
-export function loadFlantSettings(cwd?: string): FlantSettings {
-  const durable = readScopedFlantSettings(cwd);
-  const cache = loadFlantCache();
-  return {
-    enabled: durable.enabled,
-    autoUpdate: durable.autoUpdate,
-    cacheTTLDays: durable.cacheTTLDays,
-    switchBackIntervalMinutes: durable.switchBackIntervalMinutes,
-    autoRateLimitFallback: durable.autoRateLimitFallback,
-    copilotEnabled: durable.copilotEnabled,
-    codexEnabled: durable.codexEnabled,
-    subscription: durable.subscription,
-    lastUpdated: cache.lastUpdated,
-    cachedFlantModels: cache.cachedFlantModels,
-    cachedOpenRouterData: cache.cachedOpenRouterData,
-    unmappedModels: cache.unmappedModels,
-  };
-}
-
-// Persist ONLY cache fields (item 8). Durable policy is written through the
-// scoped-config mechanism (applyConfigChange), never back to the cache file.
-export function saveFlantSettings(settings: FlantSettings): void {
-  saveFlantCache({
-    lastUpdated: settings.lastUpdated,
-    cachedFlantModels: settings.cachedFlantModels,
-    cachedOpenRouterData: settings.cachedOpenRouterData,
-    unmappedModels: settings.unmappedModels,
-  });
+/** Effective provider settings: scoped config (cwd binds the project layer). */
+export function loadRoutingSettings(cwd?: string): RoutingSettings {
+  return readScopedRoutingSettings(cwd);
 }
 
 function toTitleCase(token: string): string {
@@ -936,13 +733,31 @@ function mapFlantToOpenRouterId(modelId: string): string | null {
  * instruction keep output at ~1 token.
  */
 // Derive the gateway probe model id (`sub/<bare-claude-id>`) from any stored
-// form: `pp-flant-anthropic-sub/sub/<m>`, `sub/<m>`, or a bare `<m>`. Exported
-// for testing the derivation without a network call.
+// form: `pp-flant-anthropic-sub/sub/<m>`, `pp-claude-sub/<m>`, `sub/<m>`, or a
+// bare `<m>`. Exported for testing the derivation without a network call.
 export function subProbeModelId(modelId: string): string {
   let bare = modelId;
   if (bare.startsWith(`${SUB_PROVIDER}/`)) bare = bare.slice(`${SUB_PROVIDER}/`.length);
+  if (bare.startsWith(`${DIRECT_SUB_PROVIDER}/`)) bare = bare.slice(`${DIRECT_SUB_PROVIDER}/`.length);
   if (bare.startsWith(SUB_MODEL_PREFIX)) bare = bare.slice(SUB_MODEL_PREFIX.length);
   return `${SUB_MODEL_PREFIX}${bare}`;
+}
+
+/**
+ * Where a probe of the subscription goes: through the gateway when that route
+ * is registered, otherwise straight to Anthropic. Both answer for the same
+ * account, so either says whether its quota is back.
+ */
+function probeTarget(probeModel: string): { url: string; model: string; headers: Record<string, string> } | null {
+  const gatewayKey = readGatewayApiKey();
+  const routes = subProviderContext?.routes;
+  if (gatewayKey && (!routes || routes.gateway)) {
+    return { url: "https://llm-api.flant.ru/v1/messages", model: probeModel, headers: { "x-litellm-api-key": `Bearer ${gatewayKey}` } };
+  }
+  if (!routes || routes.direct) {
+    return { url: "https://api.anthropic.com/v1/messages", model: probeModel.slice(SUB_MODEL_PREFIX.length), headers: {} };
+  }
+  return null;
 }
 
 // Local matcher for the 400 "extra usage" body (kept here to avoid a circular
@@ -993,9 +808,9 @@ type SubscriptionProbeOutcome = "ok" | "rate_limited" | "unauthenticated" | "err
 async function sendSubscriptionProbe(probeModel: string): Promise<{ outcome: SubscriptionProbeOutcome; token: string | null }> {
   const log = getLogger();
   const oauthToken = readClaudeOAuthToken();
-  const gatewayKey = readGatewayApiKey();
-  if (!oauthToken || !gatewayKey) {
-    log.debug({ s: "flant", hasOAuth: !!oauthToken, hasGatewayKey: !!gatewayKey }, "probe skipped: missing credentials");
+  const target = probeTarget(probeModel);
+  if (!oauthToken || !target) {
+    log.debug({ s: "flant", hasOAuth: !!oauthToken, hasRoute: !!target }, "probe skipped: missing credentials");
     return { outcome: "error", token: oauthToken };
   }
   // Build a payload that matches a LIVE subscription request's billing shape:
@@ -1004,7 +819,7 @@ async function sendSubscriptionProbe(probeModel: string): Promise<{ outcome: Sub
   // Without this the probe lands in the "extra usage" bucket, keeps getting the
   // 400, is classified rate_limited, and the switch-back timer re-arms forever.
   const probePayload: Record<string, unknown> = {
-    model: probeModel,
+    model: target.model,
     max_tokens: 1,
     system: [{ type: "text", text: CC_IDENTITY }],
     messages: [{ role: "user", content: "just respond hi" }],
@@ -1013,7 +828,7 @@ async function sendSubscriptionProbe(probeModel: string): Promise<{ outcome: Sub
   };
   injectBillingHeader(probePayload);
   try {
-    const res = await fetch("https://llm-api.flant.ru/v1/messages", {
+    const res = await fetch(target.url, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -1028,7 +843,7 @@ async function sendSubscriptionProbe(probeModel: string): Promise<{ outcome: Sub
         "user-agent": buildUserAgent(),
         "x-app": "cli",
         Authorization: `Bearer ${oauthToken}`,
-        "x-litellm-api-key": `Bearer ${gatewayKey}`,
+        ...target.headers,
       },
       body: JSON.stringify(probePayload),
       signal: AbortSignal.timeout(30000),
@@ -1163,22 +978,29 @@ export async function fetchOpenRouterMetadata(modelIds: string[]): Promise<Recor
   return out;
 }
 
-/**
- * Returns true when the personal-subscription Claude path is fully usable:
- * the setting is enabled AND both credentials (Claude OAuth token + gateway
- * key) are present. Mirrors the gate in registerFlantProviders so we never
- * generate `sub/` role assignments that cannot resolve to a real provider.
- */
-export function isSubscriptionActive(settings?: FlantSettings): boolean {
-  const s = settings ?? loadFlantSettings();
-  return s.subscription && !!readClaudeOAuthToken() && !!readGatewayApiKey();
+/** Whether the Claude subscription is enabled and logged in. */
+export function hasClaudeSubCredential(): boolean {
+  return !!readStoredClaudeOAuthToken();
 }
 
-function modelSpec(modelId: string): string {
-  if (modelId.startsWith("claude-")) {
-    return `${SUB_PROVIDER}/${SUB_MODEL_PREFIX}${modelId}`;
-  }
-  return `pp-flant-openai/${modelId}`;
+function claudeSubRoutes(settings: RoutingSettings): { direct: boolean; gateway: boolean } {
+  const sub = settings.providers["claude-sub"];
+  if (!sub.enabled) return { direct: false, gateway: false };
+  return {
+    direct: sub.route.includes("direct"),
+    gateway: sub.route.includes("llm-api") && settings.providers["llm-api"].enabled && !!readGatewayApiKey(),
+  };
+}
+
+/**
+ * Whether anything is routed onto the subscription at all. When a family
+ * override takes Claude elsewhere and no role pins a subscription model, its
+ * providers stay unregistered and nothing refreshes or probes its credential.
+ */
+export function isClaudeSubInUse(settings: RoutingSettings, pinnedSpecs: string[] = []): boolean {
+  if (!settings.providers["claude-sub"].enabled) return false;
+  if (!settings.models.claude.override) return true;
+  return pinnedSpecs.some((spec) => spec.startsWith(`${SUB_PROVIDER}/`) || spec.startsWith(`${DIRECT_SUB_PROVIDER}/`));
 }
 
 /**
@@ -1277,10 +1099,18 @@ function applyClaudeModelCapabilities(config: ProviderModelConfig, bareModelId: 
 }
 
 export interface RegisterFlantOptions {
-  /** Whether to also register the personal-subscription provider. Defaults to loadFlantSettings().subscription. */
-  subscription?: boolean;
+  /** Effective provider settings; defaults to the global-only read. */
+  settings?: RoutingSettings;
+  /** Role pins, so a pinned subscription model keeps the provider registered under a Claude override. */
+  pinnedSpecs?: string[];
 }
 
+/**
+ * Register the LLM API provider (every non-Claude model the gateway serves) and
+ * the Claude subscription's routes. Which of these a role lands on is decided by
+ * routing, not here: a provider without models or credentials is simply absent
+ * from the catalog the resolver reads.
+ */
 export function registerFlantProviders(
   pi: ExtensionAPI,
   models: string[],
@@ -1288,12 +1118,11 @@ export function registerFlantProviders(
   options: RegisterFlantOptions = {},
 ): void {
   const log = getLogger();
+  const settings = options.settings ?? loadRoutingSettings();
   const uniqueModels = [...new Set(models)];
-  // The gateway no longer serves bare claude-* models over the paid API —
-  // Claude is available EXCLUSIVELY through the personal subscription's `sub/`
-  // groups. pp-flant-anthropic is not registered at all; every claude id in the
-  // catalog (bare from legacy caches, or `sub/`-prefixed from the live gateway)
-  // is a subscription candidate.
+  // The gateway serves Claude only through the personal subscription's `sub/`
+  // groups; every claude id in the catalog (bare from legacy caches, or
+  // `sub/`-prefixed from the live gateway) is a subscription candidate.
   const subCandidates = [...new Set(
     uniqueModels
       .filter((m) => m.startsWith("claude-") || m.startsWith(`${SUB_MODEL_PREFIX}claude-`))
@@ -1303,107 +1132,140 @@ export function registerFlantProviders(
 
   unregisterFlantProviders(pi);
 
-  const gatewayKey = readGatewayApiKey() ?? "$FLANT_API_KEY";
-
-  pi.registerProvider("pp-flant-openai", {
-    api: "openai-completions",
-    baseUrl: "https://llm-api.flant.ru/v1",
-    apiKey: gatewayKey,
-    models: openaiModels.map((m) => {
-      const config = buildProviderModelConfig(m, metadata);
-      noteFallbackWindow(m, metadata[m], config.contextWindow ?? 0);
-      return { ...config, compat: { ...SESSION_AFFINITY_COMPAT } };
-    }),
-  });
-
-  const availableSpecs = openaiModels.map((id) => `pp-flant-openai/${id}`);
-
-  const subscription = options.subscription ?? loadFlantSettings().subscription;
-  let subModels: string[] = [];
-  if (subscription) {
-    // Remember the models/metadata so refreshSubProvider can rebuild the
-    // provider with a fresh OAuth token on each turn (see below).
-    subProviderContext = { anthropicModels: subCandidates, metadata };
-    subModels = registerSubProvider(pi, subCandidates, metadata);
-    availableSpecs.push(...subModels.map((id) => `${SUB_PROVIDER}/${id}`));
-  } else {
-    subProviderContext = null;
-    lastSubToken = null;
+  const gatewayKey = readGatewayApiKey();
+  if (settings.providers["llm-api"].enabled && gatewayKey) {
+    pi.registerProvider(LLM_API_PROVIDER, {
+      name: "LLM API",
+      api: "openai-completions",
+      baseUrl: "https://llm-api.flant.ru/v1",
+      apiKey: gatewayKey,
+      models: openaiModels.map((m) => {
+        const config = buildProviderModelConfig(m, metadata);
+        noteFallbackWindow(m, metadata[m], config.contextWindow ?? 0);
+        return { ...config, compat: { ...SESSION_AFFINITY_COMPAT } };
+      }),
+    });
   }
 
-  log.debug({ s: "flant", total: uniqueModels.length, sub: subModels.length, openai: openaiModels.length }, "registering flant providers");
-
-  // updateRegistryFromAvailableModels REPLACES the catalog. Keep the non-flant
-  // specs (github-copilot, native anthropic/openai) that session_start already
-  // registered, or tier resolution loses the Copilot fallback right after this
-  // re-registration.
-  const foreignSpecs = listRegisteredSpecs().filter((spec) =>
-    !spec.startsWith("pp-flant-anthropic/") && !spec.startsWith("pp-flant-openai/") && !spec.startsWith(`${SUB_PROVIDER}/`));
-  updateRegistryFromAvailableModels([...foreignSpecs, ...availableSpecs]);
+  registerClaudeSub(pi, subCandidates, metadata, settings, options.pinnedSpecs ?? []);
+  log.debug({ s: "flant", total: uniqueModels.length, sub: subCandidates.length, openai: openaiModels.length }, "registered gateway providers");
 }
 
 /**
- * Register (or re-register) the personal-subscription Claude provider using the
- * OAuth access token currently persisted in auth.json. Returns the list of
- * `sub/`-prefixed model ids registered (empty when credentials are missing).
+ * Register the subscription's routes from cached gateway ids, or — with no
+ * gateway at all — from pi's own Claude catalog, so the direct route works on a
+ * machine that never had an LLM API key.
+ */
+export function registerClaudeSub(
+  pi: ExtensionAPI,
+  gatewayClaudeIds: string[],
+  metadata: Record<string, OpenRouterModelData>,
+  settings: RoutingSettings,
+  pinnedSpecs: string[] = [],
+): void {
+  const routes = isClaudeSubInUse(settings, pinnedSpecs) ? claudeSubRoutes(settings) : { direct: false, gateway: false };
+  if (!routes.direct && !routes.gateway) {
+    subProviderContext = null;
+    lastSubToken = null;
+    pi.unregisterProvider(SUB_PROVIDER);
+    pi.unregisterProvider(DIRECT_SUB_PROVIDER);
+    return;
+  }
+  const anthropicModels = gatewayClaudeIds.length > 0 ? gatewayClaudeIds : nativeClaudeIds();
+  subProviderContext = { anthropicModels, metadata, routes };
+  registerSubProvider(pi, anthropicModels, metadata, routes);
+}
+
+function nativeClaudeIds(): string[] {
+  const all = modelRegistryRef?.getAll?.() ?? [];
+  const ids = all.filter((m) => m?.provider === "anthropic" && typeof m.id === "string").map((m) => m.id as string);
+  if (ids.length > 0) return [...new Set(ids)];
+  try {
+    return (getModels("anthropic" as never) as Array<{ id: string }>).map((m) => m.id);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Register (or re-register) the subscription's providers with the OAuth access
+ * token currently persisted in auth.json: the gateway route (model ids carry the
+ * `sub/` prefix the gateway expects) and the direct route to Anthropic.
  *
- * The provider is registered with a literal `apiKey` (the resolved token), so
- * the value is a static snapshot for the lifetime of the registration. Because
- * the OAuth token expires within a few hours, refreshSubProvider must be called
- * periodically (on each turn) to rebuild the provider with a fresh token;
- * otherwise long-lived sessions send a stale token and the gateway returns 401.
+ * Both take the token as a literal `apiKey`, so it is a snapshot for the life of
+ * the registration. The token expires within hours, so refreshSubProvider must
+ * run periodically to rebuild them; otherwise long sessions send a stale token.
+ *
+ * The direct route is registered by pi-pi rather than left to pi's own
+ * `anthropic` provider because pi sends a bare `claude-cli/<its version>` agent,
+ * and the subscription bills against the version the billing header signs.
  */
 function registerSubProvider(
   pi: ExtensionAPI,
   anthropicModels: string[],
   metadata: Record<string, OpenRouterModelData>,
-): string[] {
+  routes: { direct: boolean; gateway: boolean },
+): void {
   const log = getLogger();
   const stored = readStoredClaudeOAuthToken();
   const gatewayKey = readGatewayApiKey();
-  if (!stored || !gatewayKey) {
-    log.debug({ s: "flant", hasOAuth: !!stored, hasGatewayKey: !!gatewayKey }, "subscription enabled but credentials missing; skipping sub provider");
+  if (!stored) {
+    log.debug({ s: "flant" }, "Claude subscription enabled but not logged in; skipping its providers");
+    pi.unregisterProvider(SUB_PROVIDER);
+    pi.unregisterProvider(DIRECT_SUB_PROVIDER);
     lastSubToken = null;
-    return [];
+    return;
   }
   const oauthToken = stored.access;
   if (stored.expired) {
-    log.debug({ s: "flant" }, "registering the sub provider with an expired token; a refresh re-registers it before the first request");
+    log.debug({ s: "flant" }, "registering the subscription with an expired token; a refresh re-registers it before the first request");
   }
-  pi.registerProvider(SUB_PROVIDER, {
-    name: "Flant (personal Claude subscription)",
-    api: "anthropic-messages",
-    baseUrl: "https://llm-api.flant.ru",
-    // The OAuth token (sk-ant-oat...) triggers pi-ai's Claude Code identity
-    // headers and is forwarded as `Authorization: Bearer ...`.
-    apiKey: oauthToken,
-    // Gateway key travels in a side header so it does not clobber the OAuth auth.
-    // The full-form Claude Code user-agent (item 10) overrides pi-ai's hardcoded
-    // bare `claude-cli/<ver>`: mergeHeaders applies these model headers AFTER the
-    // default UA, and Anthropic's plan-billing validation expects this form. Its
-    // version must match the billing header's cc_version (both from CC_VERSION).
-    // Best-effort — LiteLLM may replace it upstream.
-    headers: { "x-litellm-api-key": `Bearer ${gatewayKey}`, "user-agent": buildUserAgent() },
-    // Model id carries the `sub/` prefix the gateway expects, while pricing/
-    // metadata is looked up by the bare claude-* id.
-    models: anthropicModels.map((m) => {
-      const cfg = applyClaudeModelCapabilities(buildProviderModelConfig(m, metadata), m);
-      noteFallbackWindow(`${SUB_MODEL_PREFIX}${m}`, metadata[m], cfg.contextWindow ?? 0);
-      return { ...cfg, id: `${SUB_MODEL_PREFIX}${m}` };
-    }),
+  const claudeModels = (prefix: string) => anthropicModels.map((m) => {
+    const cfg = applyClaudeModelCapabilities(buildProviderModelConfig(m, metadata), m);
+    noteFallbackWindow(`${prefix}${m}`, metadata[m], cfg.contextWindow ?? 0);
+    return { ...cfg, id: `${prefix}${m}` };
   });
+  if (routes.gateway && gatewayKey) {
+    pi.registerProvider(SUB_PROVIDER, {
+      name: "Claude subscription (via LLM API)",
+      api: "anthropic-messages",
+      baseUrl: "https://llm-api.flant.ru",
+      // The OAuth token (sk-ant-oat...) triggers pi-ai's Claude Code identity
+      // headers and is forwarded as `Authorization: Bearer ...`.
+      apiKey: oauthToken,
+      // Gateway key travels in a side header so it does not clobber the OAuth
+      // auth. The full-form Claude Code user-agent overrides pi-ai's bare one:
+      // mergeHeaders applies these AFTER the default, and plan billing expects
+      // this form, at the version the billing header's cc_version carries.
+      headers: { "x-litellm-api-key": `Bearer ${gatewayKey}`, "user-agent": buildUserAgent() },
+      models: claudeModels(SUB_MODEL_PREFIX),
+    });
+  } else {
+    pi.unregisterProvider(SUB_PROVIDER);
+  }
+  if (routes.direct) {
+    pi.registerProvider(DIRECT_SUB_PROVIDER, {
+      name: "Claude subscription (direct)",
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com",
+      apiKey: oauthToken,
+      headers: { "user-agent": buildUserAgent() },
+      models: claudeModels(""),
+    });
+  } else {
+    pi.unregisterProvider(DIRECT_SUB_PROVIDER);
+  }
   lastSubToken = oauthToken;
-  return anthropicModels.map((m) => `${SUB_MODEL_PREFIX}${m}`);
 }
 
 /**
- * Ensure the personal-subscription Claude provider is registered with a
- * non-expired OAuth token. Refreshes the token (persisting it to auth.json when
- * needed) and, when it changed since the last registration, re-registers the
- * provider so subsequent LLM calls pick up the fresh token.
+ * Ensure the subscription's providers are registered with a non-expired OAuth
+ * token. Refreshes the token (persisting it to auth.json when needed) and, when
+ * it changed since the last registration, re-registers them so subsequent
+ * calls pick up the fresh token.
  *
- * Called on each turn for the root session. No-op when subscription routing is
- * not active. Cheap when the token is unchanged (only a token read + compare).
+ * Called on each turn for the root session. No-op while nothing routes onto the
+ * subscription. Cheap when the token is unchanged (a token read + compare).
  */
 export async function refreshSubProvider(pi?: ExtensionAPI): Promise<void> {
   const ctx = subProviderContext;
@@ -1417,30 +1279,29 @@ export async function refreshSubProvider(pi?: ExtensionAPI): Promise<void> {
   if (!token) {
     // The registration still carries the previous token as a literal apiKey, so
     // leaving it in place turns every Claude request into a 401 instead of
-    // letting resolution fall to another tier. The cached context stays, so a
-    // later refresh that succeeds re-registers the provider.
+    // letting resolution move on. The cached context stays, so a later refresh
+    // that succeeds re-registers the providers.
     api.unregisterProvider(SUB_PROVIDER);
+    api.unregisterProvider(DIRECT_SUB_PROVIDER);
     lastSubToken = null;
-    log.debug({ s: "flant" }, "subscription oauth token unavailable; unregistered the sub provider");
+    log.debug({ s: "flant" }, "subscription oauth token unavailable; unregistered its providers");
     return;
   }
-  // Only re-register when the token actually changed; registerProvider takes
-  // effect immediately, so re-registering every turn would be wasteful churn.
   if (token === lastSubToken) return;
 
-  registerSubProvider(api, ctx.anthropicModels, ctx.metadata);
-  log.debug({ s: "flant" }, "re-registered the sub provider with a refreshed oauth token");
+  registerSubProvider(api, ctx.anthropicModels, ctx.metadata, ctx.routes);
+  log.debug({ s: "flant" }, "re-registered the subscription with a refreshed oauth token");
 }
 
 /**
- * Recover from a subscription request the gateway rejected as unauthenticated.
- * Rotates the OAuth credential past its unexpired-looking state and rebinds the
- * sub provider to the new token. Returns false when no usable credential could
- * be minted — the caller must then route away from the subscription, because
- * the registration keeps failing every request until the user re-logs in.
+ * Recover from a subscription request rejected as unauthenticated. Rotates the
+ * OAuth credential past its unexpired-looking state and rebinds the providers
+ * to the new token. Returns false when no usable credential could be minted —
+ * the caller must then route away from the subscription, because the
+ * registration keeps failing every request until the user re-logs in.
  *
  * `rejectedToken` is the credential the failed request carried; it defaults to
- * the one the provider is registered with, NOT to whatever is on disk now,
+ * the one the providers are registered with, NOT to whatever is on disk now,
  * which may already be another instance's replacement.
  */
 export async function recoverRejectedSubCredential(
@@ -1453,110 +1314,10 @@ export async function recoverRejectedSubCredential(
   const ctx = subProviderContext;
   const api = pi ?? piRef;
   if (ctx && api && result.token !== lastSubToken) {
-    registerSubProvider(api, ctx.anthropicModels, ctx.metadata);
-    getLogger().info({ s: "flant" }, "rebound the sub provider after a rejected credential");
+    registerSubProvider(api, ctx.anthropicModels, ctx.metadata, ctx.routes);
+    getLogger().info({ s: "flant" }, "rebound the subscription after a rejected credential");
   }
   return "rotated";
-}
-
-function pickLatest(models: string[]): string | null {
-  if (models.length === 0) return null;
-  return models
-    .slice()
-    .sort((a, b) => compareModelVersion(b, a))[0] ?? null;
-}
-
-function pickFastFallbackModel(models: string[]): string | null {
-  const gptMini = pickLatest(models.filter((m) => /^gpt-5.*-mini$/.test(m)));
-  if (gptMini) return gptMini;
-  return pickLatest(models.filter((m) => /^claude-haiku-/.test(m)));
-}
-
-function makeVariant(modelId: string | null, fallbackModelId: string): { enabled: boolean; model: string; thinking: string } {
-  if (!modelId) return { enabled: false, model: modelSpec(fallbackModelId), thinking: "high" };
-  return { enabled: true, model: modelSpec(modelId), thinking: "high" };
-}
-
-export function generateFlantConfig(models: string[], subscriptionActive = false): Partial<PiPiConfig> {
-  const rawModels = [...new Set(models)];
-  if (rawModels.length === 0) return {};
-  // Claude is served EXCLUSIVELY through the subscription's `sub/` groups — the
-  // paid gateway has no Claude anymore. Normalize `sub/claude-*` ids to bare
-  // claude ids for the pickers, and drop Claude entirely when the subscription
-  // is inactive so generated roles never point at an unroutable model.
-  const uniqueModels = [...new Set(rawModels.map((m) => (m.startsWith(SUB_MODEL_PREFIX) ? m.slice(SUB_MODEL_PREFIX.length) : m)))]
-    .filter((m) => (subscriptionActive || !m.startsWith("claude-")) && !m.startsWith("gemini-"));
-  if (uniqueModels.length === 0) return {};
-
-  const latestOpus = pickLatest(uniqueModels.filter((m) => /^claude-opus-/.test(m)));
-  const latestFable = pickLatest(uniqueModels.filter((m) => /^claude-fable-/.test(m)));
-  const latestClaude = pickLatest(uniqueModels.filter((m) => /^claude-/.test(m)));
-  // gpt-5.6+ tier pickers. Base and -pro are distinct SKUs within a tier: the
-  // `-pro` regexes are end-anchored on `-pro`, the base regexes negative-look
-  // ahead to exclude `-pro`, so gpt-6-astra and gpt-6-astra-pro never collide.
-  const gptAstra = pickLatest(uniqueModels.filter((m) => /^gpt-[0-9.]+-astra$/.test(m)));
-  const gptAstraPro = pickLatest(uniqueModels.filter((m) => /^gpt-[0-9.]+-astra-pro$/.test(m)));
-  const gptSol = pickLatest(uniqueModels.filter((m) => /^gpt-[0-9.]+-sol$/.test(m)));
-  const gptSolPro = pickLatest(uniqueModels.filter((m) => /^gpt-[0-9.]+-sol-pro$/.test(m)));
-  const gptTerra = pickLatest(uniqueModels.filter((m) => /^gpt-[0-9.]+-terra$/.test(m)));
-  const gptLuna = pickLatest(uniqueModels.filter((m) => /^gpt-[0-9.]+-luna$/.test(m)));
-  // Legacy fallback for pre-5.6 gateways that expose a single gpt SKU: keep the
-  // old "latest gpt-5, else any gpt" behavior so tier pickers degrade to it.
-  const isLegacyGpt = (model: string) => !model.endsWith("-mini") && !model.endsWith("-codex") && !/-(?:sol|terra|luna)(?:-pro)?$/.test(model);
-  const latestGpt5 = pickLatest(uniqueModels.filter((m) => /^gpt-5/.test(m) && isLegacyGpt(m)));
-  const latestGptLegacy = latestGpt5 ?? pickLatest(uniqueModels.filter((m) => /^gpt-/.test(m) && isLegacyGpt(m)));
-  // Per-role gpt selections with graceful degradation to the legacy single SKU
-  // when the split tiers are absent (older catalogs / non-flant gateways).
-  const gptSmartPro = gptSolPro ?? gptSol ?? latestGptLegacy;
-  const gptSmart = gptSol ?? latestGptLegacy;
-  // The GPT the on-demand pools consult: the strongest SKU the gateway serves,
-  // Astra Pro first. The pools are the one place worth the top-end price — they
-  // run on demand, for judgment the session cannot produce itself — so they do
-  // NOT degrade to the Sol tier that main-line roles (debug, fast) run on.
-  const gptTop = gptAstraPro ?? gptAstra ?? gptSmartPro;
-  const gptBalanced = gptTerra ?? gptSmart;
-  const gptFast = gptLuna ?? gptBalanced;
-  const latestGpt = gptSmart;
-  const latestDeepseek = pickLatest(uniqueModels.filter((m) => /^deepseek-/.test(m)));
-  const latestGrok = pickLatest(uniqueModels.filter((m) => /^grok-/.test(m)));
-  const fastFallback = pickFastFallbackModel(uniqueModels);
-
-  const fallback = latestOpus ?? latestClaude ?? latestGpt ?? latestDeepseek ?? latestGrok ?? uniqueModels[0];
-  const mainModel = latestOpus ?? latestClaude ?? fallback;
-  const debugModel = gptSmart ?? latestDeepseek ?? fallback;
-  const taskModel = latestOpus ?? latestClaude ?? fallback;
-  const fastModel = gptLuna ?? fastFallback ?? gptFast ?? debugModel;
-
-  return {
-    agents: {
-      main: { model: modelSpec(mainModel), thinking: "high" },
-      maxConcurrentSubagents: getDefaultConfig().agents.maxConcurrentSubagents,
-      subagents: {
-        simple: {
-          explore: { model: modelSpec(fastModel), thinking: "medium" },
-          librarian: { model: modelSpec(fastModel), thinking: "medium" },
-          task: { model: modelSpec(taskModel), thinking: "medium" },
-        },
-        pools: {
-          // Every pool is the same pair: the top-end GPT for a genuinely foreign
-          // read, the latest Fable for a same-vendor one. Roles differ in what
-          // they are ASKED, not in which models answer.
-          advisors: [
-            makeVariant(gptTop, fallback),
-            makeVariant(latestFable, fallback),
-          ],
-          reviewers: [
-            makeVariant(gptTop, fallback),
-            makeVariant(latestFable, fallback),
-          ],
-          deepDebuggers: [
-            makeVariant(gptTop, fallback),
-            makeVariant(latestFable, fallback),
-          ],
-        },
-      },
-    },
-  };
 }
 
 // Bare gateway id → the OpenRouter id a metadata fetch would look up. Only ids
@@ -1572,33 +1333,27 @@ function collectUnmappedModels(models: string[], metadata: Record<string, OpenRo
   return out;
 }
 
-function isCacheValid(settings: FlantSettings): boolean {
-  if (!settings.lastUpdated || !settings.cachedFlantModels || !settings.cachedOpenRouterData) return false;
+function isCacheValid(cache: LlmApiCache, ttlDays: number): boolean {
+  if (!cache.lastUpdated || !cache.cachedFlantModels || !cache.cachedOpenRouterData) return false;
   // An empty metadata map carries no context window and no pricing, so it is
   // never worth serving from cache — including caches an earlier build stamped.
-  if (Object.keys(settings.cachedOpenRouterData).length === 0) return false;
+  if (Object.keys(cache.cachedOpenRouterData).length === 0) return false;
   // A cache an earlier build stamped can be missing a whole family whose ids it
   // could not yet map, which leaves those models on the fallback window for the
   // rest of the TTL. Any mappable model without an entry means refetch, unless
   // the last fetch already established that OpenRouter has nothing under that id.
-  const metadata = settings.cachedOpenRouterData;
-  const unmapped = settings.unmappedModels ?? {};
-  for (const modelId of settings.cachedFlantModels) {
+  const metadata = cache.cachedOpenRouterData;
+  const unmapped = cache.unmappedModels ?? {};
+  for (const modelId of cache.cachedFlantModels) {
     const bare = modelId.startsWith(SUB_MODEL_PREFIX) ? modelId.slice(SUB_MODEL_PREFIX.length) : modelId;
     const mapped = mapFlantToOpenRouterId(bare);
     if (mapped && !metadata[bare] && unmapped[bare] !== mapped) return false;
   }
-  const updatedAt = new Date(settings.lastUpdated).getTime();
+  const updatedAt = new Date(cache.lastUpdated).getTime();
   if (!Number.isFinite(updatedAt)) return false;
-  const ttlMs = Math.max(1, settings.cacheTTLDays) * 24 * 60 * 60 * 1000;
+  const ttlMs = Math.max(1, ttlDays) * 24 * 60 * 60 * 1000;
   return Date.now() - updatedAt < ttlMs;
 }
-
-export function getFlantGeneratedConfig(): Partial<PiPiConfig> | null {
-  return generatedFlantConfig;
-}
-
-(globalThis as any)[Symbol.for("pi-pi:flant-config")] = getFlantGeneratedConfig;
 
 export interface UpdateFlantOptions {
   /**
@@ -1607,8 +1362,14 @@ export interface UpdateFlantOptions {
    * what its label promises; auto/startup callers omit it and stay cache-bound.
    */
   force?: boolean;
-  /** Project dir for binding project-scoped flant overrides; omit for global-only. */
+  /** Project dir for binding project-scoped settings; omit for global-only. */
   cwd?: string;
+  pinnedSpecs?: string[];
+}
+
+/** Whether the gateway catalog has anything to offer: the provider is on and its key is set. */
+function gatewayWanted(settings: RoutingSettings): boolean {
+  return !!readGatewayApiKey() && (settings.providers["llm-api"].enabled || claudeSubRoutes(settings).gateway);
 }
 
 export async function updateFlantInfra(
@@ -1616,175 +1377,113 @@ export async function updateFlantInfra(
   options: UpdateFlantOptions = {},
 ): Promise<{ ok: boolean; error?: string; models?: string[] }> {
   setPI(pi);
-  const settings = loadFlantSettings(options.cwd);
+  const settings = loadRoutingSettings(options.cwd);
+  const cache = loadLlmApiCache();
 
   // Refresh the personal-subscription Claude OAuth token before (re)registering
   // providers so the sub provider is built with a valid, non-expired token.
-  if (settings.subscription) {
-    await refreshClaudeOAuthToken();
+  if (settings.providers["claude-sub"].enabled) await refreshClaudeOAuthToken();
+
+  if (!gatewayWanted(settings)) {
+    registerFlantProviders(pi, [], {}, { settings, pinnedSpecs: options.pinnedSpecs });
+    return readGatewayApiKey() ? { ok: true, models: [] } : { ok: false, error: "LLM_API_KEY (or FLANT_API_KEY) is not set" };
   }
 
-  const cacheOk = !options.force && isCacheValid(settings);
-  let models = cacheOk ? settings.cachedFlantModels : null;
-  let metadata = cacheOk ? settings.cachedOpenRouterData : null;
+  const cacheOk = !options.force && isCacheValid(cache, settings.providers["llm-api"].cacheTTLDays);
+  let models = cacheOk ? cache.cachedFlantModels : null;
+  let metadata = cacheOk ? cache.cachedOpenRouterData : null;
   let refreshed = false;
 
   if (!models || !metadata) {
-    const apiKey = readGatewayApiKey();
-    if (!apiKey) {
-      if (settings.cachedFlantModels && settings.cachedOpenRouterData) {
-        models = settings.cachedFlantModels;
-        metadata = settings.cachedOpenRouterData;
-      } else {
-        return { ok: false, error: "LLM_API_KEY (or FLANT_API_KEY) is not set" };
-      }
-    } else {
+    const apiKey = readGatewayApiKey()!;
+    try {
+      models = await discoverFlantModels(apiKey);
+      let metadataFetched = true;
       try {
-        models = await discoverFlantModels(apiKey);
-        let metadataFetched = true;
-        try {
-          metadata = await fetchOpenRouterMetadata(models);
-        } catch {
-          metadataFetched = false;
-          metadata = settings.cachedOpenRouterData ?? {};
-        }
-        settings.cachedFlantModels = models;
-        settings.cachedOpenRouterData = metadata;
-        // Only a fetch that actually reached OpenRouter can establish that a
-        // model has no entry there; recording it after a failed one would
-        // suppress the retry that fills in the models still missing metadata.
-        if (metadataFetched) settings.unmappedModels = collectUnmappedModels(models, metadata);
-        // Serving empty metadata pins every model to the fallback context window
-        // and zero cost, so it must never look cache-valid: clear the timestamp
-        // outright rather than merely declining to refresh it — a forced update
-        // inside the TTL would otherwise keep the previous one alive. A fetch
-        // that succeeds but matches nothing is just as empty as a failed one.
-        settings.lastUpdated = Object.keys(metadata).length > 0 ? new Date().toISOString() : null;
-        saveFlantSettings(settings);
-        refreshed = true;
-      } catch (err: any) {
-        if (settings.cachedFlantModels && settings.cachedOpenRouterData) {
-          models = settings.cachedFlantModels;
-          metadata = settings.cachedOpenRouterData;
-        } else {
-          return { ok: false, error: err?.message ?? "Failed to update Flant infrastructure" };
-        }
+        metadata = await fetchOpenRouterMetadata(models);
+      } catch {
+        metadataFetched = false;
+        metadata = cache.cachedOpenRouterData ?? {};
+      }
+      cache.cachedFlantModels = models;
+      cache.cachedOpenRouterData = metadata;
+      // Only a fetch that actually reached OpenRouter can establish that a
+      // model has no entry there; recording it after a failed one would
+      // suppress the retry that fills in the models still missing metadata.
+      if (metadataFetched) cache.unmappedModels = collectUnmappedModels(models, metadata);
+      // Serving empty metadata pins every model to the fallback context window
+      // and zero cost, so it must never look cache-valid: clear the timestamp
+      // outright rather than merely declining to refresh it — a forced update
+      // inside the TTL would otherwise keep the previous one alive. A fetch
+      // that succeeds but matches nothing is just as empty as a failed one.
+      cache.lastUpdated = Object.keys(metadata).length > 0 ? new Date().toISOString() : null;
+      refreshed = true;
+      // A cache that cannot be written still served this session; the next
+      // start just fetches again.
+      try { saveLlmApiCache(cache); } catch (err: any) {
+        getLogger().warn({ s: "flant", err: err?.message }, "could not write the LLM API model cache");
+      }
+    } catch (err: any) {
+      if (cache.cachedFlantModels && cache.cachedOpenRouterData) {
+        models = cache.cachedFlantModels;
+        metadata = cache.cachedOpenRouterData;
+      } else {
+        return { ok: false, error: err?.message ?? "Failed to update the LLM API model list" };
       }
     }
-  }
-
-  if (!models || !metadata) {
-    return { ok: false, error: "No Flant model data available" };
   }
 
   try {
-    // Forward the EFFECTIVE (cwd-scoped) subscription so a project override
-    // binds, instead of letting registerFlantProviders fall back to a
-    // global-only read.
-    registerFlantProviders(pi, models, metadata, { subscription: settings.subscription });
-    generatedFlantConfig = generateFlantConfig(models, isSubscriptionActive(settings));
+    registerFlantProviders(pi, models, metadata, { settings, pinnedSpecs: options.pinnedSpecs });
     // Backfill a timestamp for a cache that predates stamping — but never for an
     // empty metadata map, which is exactly the state the stamp must not bless.
-    if (!refreshed && settings.cachedFlantModels && !settings.lastUpdated && Object.keys(settings.cachedOpenRouterData ?? {}).length > 0) {
-      settings.lastUpdated = new Date().toISOString();
-      saveFlantSettings(settings);
+    if (!refreshed && cache.cachedFlantModels && !cache.lastUpdated && Object.keys(cache.cachedOpenRouterData ?? {}).length > 0) {
+      cache.lastUpdated = new Date().toISOString();
+      saveLlmApiCache(cache);
     }
     return { ok: true, models };
   } catch (err: any) {
-    return { ok: false, error: err?.message ?? "Failed to register Flant providers" };
+    return { ok: false, error: err?.message ?? "Failed to register the LLM API providers" };
   }
 }
 
-/** Whether the Copilot provider tier is enabled and has environment or /login credentials. */
-export function isCopilotTierActive(settings?: FlantSettings): boolean {
-  const s = settings ?? loadFlantSettings();
-  return s.copilotEnabled && !!(process.env.COPILOT_GITHUB_TOKEN || readCopilotOAuthToken());
+/** Whether Copilot is enabled and has environment or /login credentials. */
+export function isCopilotActive(settings: RoutingSettings): boolean {
+  return settings.providers.copilot.enabled && !!(process.env.COPILOT_GITHUB_TOKEN || readCopilotOAuthToken());
 }
 
-/** Whether the ChatGPT-subscription tier is enabled and logged in. */
-export function isCodexTierActive(settings?: FlantSettings): boolean {
-  const s = settings ?? loadFlantSettings();
-  return s.codexEnabled && hasCodexCredential();
+/** Whether the ChatGPT subscription is enabled and logged in. */
+export function isCodexActive(settings: RoutingSettings): boolean {
+  return settings.providers.codex.enabled && hasCodexCredential();
 }
 
 /**
- * Push the current provider-tier enable flags from settings into the model
- * registry's resolver. flant-api is the always-on paid floor; flant-sub follows
- * the subscription toggle + credentials; copilot follows its toggle + token.
+ * Register providers from the cache only, without touching the network. Runs at
+ * extension load (global-only settings, before any project is known) and in
+ * every subagent session, which must see the same providers as its parent.
  */
-export function syncProviderTiers(settings?: FlantSettings): void {
-  const s = settings ?? loadFlantSettings();
-  // Respect a LIVE rate-limit sub-fallback: setSubscriptionFallbackActive(true)
-  // disables flant-sub, and syncProviderTiers must NOT clobber that back on
-  // (e.g. when the Copilot toggle triggers a resync) or resolutions would route
-  // onto the still-limited subscription while the fallback timers believe it's
-  // off. flant-sub is enabled only when the subscription is active AND no live
-  // fallback is in effect.
-  setTierEnabled({
-    "copilot": isCopilotTierActive(s),
-    "codex-sub": isCodexTierActive(s),
-    "flant-sub": isSubscriptionActive(s) && !isSubscriptionFallbackActive(),
-    "flant-api": true,
-  });
-}
-
-// `cwd`, when supplied, binds project-scoped flant overrides (the root session's
-// project dir, shared with child sessions via ORCHESTRATOR_CWD_KEY). Omit for a
-// global-only read (e.g. before any cwd is known).
-export function initFlantSync(pi: ExtensionAPI, cwd?: string): void {
+export function initFlantSync(pi: ExtensionAPI, cwd?: string, pinnedSpecs: string[] = []): void {
   setPI(pi);
-  const settings = loadFlantSettings(cwd);
-  const log = getLogger();
-  syncProviderTiers(settings);
-  if (!settings.enabled) {
-    log.debug({ s: "flant" }, "flant disabled");
-    generatedFlantConfig = null;
-    return;
-  }
-  if (settings.cachedFlantModels && settings.cachedOpenRouterData) {
-    // Forward the EFFECTIVE (cwd-scoped) subscription — registerFlantProviders
-    // otherwise falls back to a GLOBAL-only read, missing a project override.
-    registerFlantProviders(pi, settings.cachedFlantModels, settings.cachedOpenRouterData, { subscription: settings.subscription });
-    generatedFlantConfig = generateFlantConfig(settings.cachedFlantModels, isSubscriptionActive(settings));
-  }
+  const settings = loadRoutingSettings(cwd);
+  const cache = loadLlmApiCache();
+  const usable = gatewayWanted(settings) && cache.cachedFlantModels && cache.cachedOpenRouterData;
+  registerFlantProviders(pi, usable ? cache.cachedFlantModels! : [], usable ? cache.cachedOpenRouterData! : {}, { settings, pinnedSpecs });
 }
 
 // `cwd` is the root session's project dir (known at session_start); passing it
-// lets project-scoped flant overrides bind. Omit for the global-only read.
-export async function initFlantOnStartup(pi: ExtensionAPI, cwd?: string): Promise<void> {
+// lets project-scoped settings bind. Omit for the global-only read.
+export async function initFlantOnStartup(pi: ExtensionAPI, cwd?: string, pinnedSpecs: string[] = []): Promise<void> {
   setPI(pi);
-  const settings = loadFlantSettings(cwd);
-  if (settings.copilotEnabled && !process.env.COPILOT_GITHUB_TOKEN) await refreshCopilotOAuthToken();
-  if (settings.codexEnabled) await refreshCodexOAuthToken();
-  // Refresh before reading tiers: a stored subscription token that merely
-  // expired still refreshes, but the tier check reads it as absent, and nothing
-  // re-syncs afterwards — every Claude spec would resolve away from the
-  // subscription for the rest of the session.
-  if (settings.subscription) await refreshClaudeOAuthToken();
-  // Sync tiers from the EFFECTIVE (cwd-scoped) settings so a project override
-  // rebinds what initFlantSync (global-only, at extension init) computed.
-  syncProviderTiers(settings);
-  if (!settings.enabled) {
-    // A project override may DISABLE flant even though initFlantSync already
-    // registered the global-enabled providers — unregister them so the override
-    // is honored rather than leaving stale registrations in place.
-    unregisterFlantProviders(pi);
-    generatedFlantConfig = null;
+  const settings = loadRoutingSettings(cwd);
+  if (settings.providers.copilot.enabled && !process.env.COPILOT_GITHUB_TOKEN) await refreshCopilotOAuthToken();
+  if (settings.providers.codex.enabled) await refreshCodexOAuthToken();
+  const cache = loadLlmApiCache();
+  if (!settings.providers["llm-api"].autoUpdate && cache.cachedFlantModels && cache.cachedOpenRouterData) {
+    // autoUpdate=false means "do not REFRESH the cache", not "stay unregistered".
+    if (settings.providers["claude-sub"].enabled) await refreshClaudeOAuthToken();
+    const usable = gatewayWanted(settings);
+    registerFlantProviders(pi, usable ? cache.cachedFlantModels : [], usable ? cache.cachedOpenRouterData : {}, { settings, pinnedSpecs });
     return;
   }
-  if (!settings.autoUpdate) {
-    // autoUpdate=false means "do not REFRESH the cache", NOT "stay unregistered".
-    // With effective (project-scoped) enabled=true, still register from the
-    // cached models so a global-disabled + project-enabled + autoUpdate=false
-    // session actually gets its providers (initFlantSync ran global-only and
-    // registered nothing). If there is no cache yet, bootstrap once via update.
-    if (settings.cachedFlantModels && settings.cachedOpenRouterData) {
-      registerFlantProviders(pi, settings.cachedFlantModels, settings.cachedOpenRouterData, { subscription: settings.subscription });
-      generatedFlantConfig = generateFlantConfig(settings.cachedFlantModels, isSubscriptionActive(settings));
-      return;
-    }
-    await updateFlantInfra(pi, { cwd });
-    return;
-  }
-  await updateFlantInfra(pi, { cwd });
+  await updateFlantInfra(pi, { cwd, pinnedSpecs });
 }

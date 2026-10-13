@@ -2,12 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Orchestrator } from "./orchestrator.js";
 import { getDefaultConfig, normalizeConfigDurations } from "./config.js";
 import { registerEventHandlers } from "./event-handlers.js";
-import { clearAllTierDemotions, setSubscriptionFallbackActive, setTierEnabled, updateRegistryFromAvailableModels } from "./model-registry.js";
+import { clearPauses, forgetLastGood, pause, setCatalog } from "./routing.js";
+import { clearAllPauses } from "./rate-limit-fallback.js";
 import { retrySubagentOnNewRouting } from "./subagent-retry.js";
 
 vi.mock("./flant-infra.js", async (original) => ({
   ...(await original<any>()),
-  loadFlantSettings: () => ({ autoRateLimitFallback: true, switchBackIntervalMinutes: 10 }),
+  loadRoutingSettings: () => {
+    const defaults = getDefaultConfig();
+    return { providers: defaults.providers, models: defaults.models };
+  },
   probeSubscriptionCleared: vi.fn(async () => "rate_limited"),
   refreshSubProvider: vi.fn(async () => {}),
 }));
@@ -59,11 +63,17 @@ function installManager(record: any, running: any[] = []) {
   return resume;
 }
 
+const created: Orchestrator[] = [];
+
+// The Claude subscription's account pause, as a rate limit on it leaves it.
+const pauseSubscription = () => pause("claude-sub", null, "test");
+
 function makeOrchestrator(pi: any): Orchestrator {
   const orchestrator = new Orchestrator(pi);
+  created.push(orchestrator);
   orchestrator.cwd = "/tmp/project";
   orchestrator.config = normalizeConfigDurations(getDefaultConfig());
-  orchestrator.config.agents.subagents.simple.task.model = SUB_SPEC;
+  orchestrator.config.agents.subagents.simple.task.model = "claude/opus";
   orchestrator.lastCtx = {
     isIdle: () => true,
     ui: { notify: vi.fn() },
@@ -75,14 +85,15 @@ function makeOrchestrator(pi: any): Orchestrator {
 
 describe("retrying a rate-limited worker on the new routing", () => {
   beforeEach(() => {
-    setSubscriptionFallbackActive(false);
-    clearAllTierDemotions();
-    setTierEnabled({ "copilot": true, "flant-sub": true, "flant-api": true });
-    updateRegistryFromAvailableModels([SUB_SPEC, COPILOT_SPEC]);
+    clearPauses();
+    forgetLastGood();
+    setCatalog([SUB_SPEC, COPILOT_SPEC]);
   });
   afterEach(() => {
-    setSubscriptionFallbackActive(false);
-    updateRegistryFromAvailableModels([]);
+    for (const orchestrator of created.splice(0)) clearAllPauses(orchestrator);
+    clearPauses();
+    forgetLastGood();
+    setCatalog([]);
     delete (globalThis as any)[MANAGER_KEY];
   });
 
@@ -93,7 +104,7 @@ describe("retrying a rate-limited worker on the new routing", () => {
     const orchestrator = makeOrchestrator(makePi());
     const record = makeRecord();
     const resume = installManager(record);
-    setSubscriptionFallbackActive(true);
+    pauseSubscription();
     orchestrator.registerAgents();
 
     expect(await retrySubagentOnNewRouting(orchestrator, { id: "agent-1", modelId: SUB_SPEC })).toBe(true);
@@ -119,7 +130,7 @@ describe("retrying a rate-limited worker on the new routing", () => {
     const resume = installManager(unmoved);
     expect(await retrySubagentOnNewRouting(orchestrator, { id: "agent-1", modelId: SUB_SPEC })).toBe(false);
 
-    setSubscriptionFallbackActive(true);
+    pauseSubscription();
     orchestrator.registerAgents();
     const stopped = makeRecord({ id: "agent-2", status: "stopped" });
     installManager(stopped);
@@ -144,7 +155,7 @@ describe("retrying a rate-limited worker on the new routing", () => {
       { id: "other-2", status: "running" },
       { id: "other-3", status: "completed" },
     ]);
-    setSubscriptionFallbackActive(true);
+    pauseSubscription();
     orchestrator.registerAgents();
 
     expect(await retrySubagentOnNewRouting(orchestrator, { id: "agent-1", modelId: SUB_SPEC })).toBe(false);
@@ -160,7 +171,7 @@ describe("retrying a rate-limited worker on the new routing", () => {
     const record = makeRecord();
     installManager(record);
     (globalThis as any)[MANAGER_KEY].resume = vi.fn(async () => undefined);
-    setSubscriptionFallbackActive(true);
+    pauseSubscription();
     orchestrator.registerAgents();
 
     expect(await retrySubagentOnNewRouting(orchestrator, { id: "agent-1", modelId: SUB_SPEC })).toBe(false);
@@ -179,7 +190,7 @@ describe("retrying a rate-limited worker on the new routing", () => {
     const manager = (globalThis as any)[MANAGER_KEY];
     const seen: number[] = [];
     manager.setMaxConcurrent = vi.fn((n: number) => { seen.push(n); });
-    setSubscriptionFallbackActive(true);
+    pauseSubscription();
     orchestrator.registerAgents();
 
     await retrySubagentOnNewRouting(orchestrator, { id: "agent-1", modelId: SUB_SPEC });
@@ -192,7 +203,7 @@ describe("retrying a rate-limited worker on the new routing", () => {
     const record = makeRecord();
     installManager(record);
     (globalThis as any)[MANAGER_KEY].resume = vi.fn(async () => { throw new Error("no tool_result for tool_use"); });
-    setSubscriptionFallbackActive(true);
+    pauseSubscription();
     orchestrator.registerAgents();
 
     expect(await retrySubagentOnNewRouting(orchestrator, { id: "agent-1", modelId: SUB_SPEC })).toBe(false);
@@ -201,9 +212,9 @@ describe("retrying a rate-limited worker on the new routing", () => {
     orchestrator.stopStaleAgentWatchdog();
   });
 
-  // The whole chain: the failure must flip the routing BEFORE the retry reads
+  // The whole chain: the failure must pause the provider BEFORE the retry reads
   // it, or the worker is resumed onto the provider that just refused it.
-  it("resumes on the tier the fallback moved to, not the one that refused it", async () => {
+  it("resumes on the provider the fallback moved to, not the one that refused it", async () => {
     const pi = makePi();
     const orchestrator = makeOrchestrator(pi);
     orchestrator.switchModel = vi.fn(async () => true);

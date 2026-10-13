@@ -1,6 +1,6 @@
 import type { Orchestrator } from "./orchestrator.js";
-import { loadFlantSettings, probeSubscriptionCleared, reviveSubscriptionCredential } from "./flant-infra.js";
-import { demoteTierForFamily, getModelInfo, isTierDemoted, refusalFallbackSpec, resolveModel, restoreTierForFamily, setSubscriptionFallbackActive, tierOfSpec, type Family, type ProviderTierName } from "./model-registry.js";
+import { loadRoutingSettings, probeSubscriptionCleared, reviveSubscriptionCredential } from "./flant-infra.js";
+import { clearPauses, describePauseKey, getPause, isPaused, nextPauseMs, pause, pauseKeyForSpec, refusalFallbackSpec, resolveSpec, routeOfConcrete, routePauseKey, splitSpec, unpause, slotRefOfSpec, type Pause } from "./routing.js";
 import { isSubscriptionRouted } from "./usage-tracker.js";
 import { getLogger } from "./log.js";
 
@@ -54,164 +54,165 @@ function thinking(orchestrator: Orchestrator): string {
   return orchestrator.config.agents.main.thinking;
 }
 
-type FallbackCause = "rate-limit" | "auth";
+function liveSpec(ctx: any): string {
+  return ctx?.model?.provider && ctx?.model?.id ? `${ctx.model.provider}/${ctx.model.id}` : "";
+}
 
-// The paid gateway no longer serves Claude, so a sub rate limit cannot fall
-// back to flant-api. The only fallback tier for Claude is Copilot (when the
-// user enabled it). Without one, wait for the switch-back probe to detect the
-// cleared limit rather than routing onto a dead provider.
-async function activate(
-  orchestrator: Orchestrator,
-  ctx: any,
-  modelId: string,
-  origin: "main" | "subagent",
-  cause: FallbackCause = "rate-limit",
-  resumeRequest = true,
-): Promise<void> {
-  if (orchestrator.subFallbackActive) return;
-  const settings = loadFlantSettings(orchestrator.cwd);
-  const trigger = cause === "auth"
-    ? "The personal subscription credential was rejected and could not be renewed"
-    : "Subscription rate limit detected";
-  if (!settings.autoRateLimitFallback) {
-    ctx.ui?.notify?.(`${trigger}. Automatic fallback is disabled in .pp/config.json.`, "warning");
-    return;
-  }
-  const mainSpec = ctx.model?.provider && ctx.model?.id ? `${ctx.model.provider}/${ctx.model.id}` : "";
-  const sameFamily = getModelInfo(modelId).family === getModelInfo(mainSpec).family;
-  const switchMain = origin === "main" || (isSubscriptionRouted(mainSpec, ctx.model?.provider) && sameFamily);
-
-  orchestrator.subFallbackActive = true;
-  orchestrator.subFallbackModelId = modelId;
-  setSubscriptionFallbackActive(true);
-  orchestrator.registerAgents();
-
-  const originSpec = origin === "main" ? modelId : mainSpec;
-  const next = resolveModel(originSpec);
-  const hasFallbackTier = next !== originSpec && !isSubscriptionRouted(next);
-
-  const recovery = cause === "auth"
-    ? " Run /login \u2192 Anthropic to restore subscription routing."
-    : "";
-
-  if (!switchMain || !hasFallbackTier) {
-    orchestrator.subFallbackMainPriorSpec = null;
-    armSwitchBackProbe(orchestrator);
-    if (switchMain) {
-      ctx.ui?.notify?.(`${trigger}. Claude has no paid-gateway fallback anymore; waiting for it to clear (periodic probe armed). Enable the Copilot tier for an automatic fallback, or /model to a non-Claude model to keep working.${recovery}`, "warning");
-    } else {
-      ctx.ui?.notify?.(`${trigger} on a worker; subscription routing is paused until it clears.${recovery}`, "warning");
-    }
-    return;
-  }
-
+function fallbackSettings(orchestrator: Orchestrator): { auto: boolean; retryAfterMinutes: number } {
   try {
-    if (!await orchestrator.switchModel(ctx, next, thinking(orchestrator))) {
-      orchestrator.subFallbackMainPriorSpec = null;
-      armSwitchBackProbe(orchestrator);
-      ctx.ui?.notify?.(`${trigger}, but the fallback model is unavailable. Waiting for it to clear.${recovery}`, "error");
-      return;
-    }
+    return loadRoutingSettings(orchestrator.cwd).providers.fallback;
   } catch {
-    orchestrator.subFallbackMainPriorSpec = null;
-    armSwitchBackProbe(orchestrator);
-    ctx.ui?.notify?.(`${trigger}, but switching to the fallback model failed. Waiting for it to clear.${recovery}`, "error");
-    return;
+    return { auto: true, retryAfterMinutes: 10 };
   }
-  orchestrator.subFallbackMainPriorSpec = mainSpec || modelId;
-  ctx.ui?.notify?.(`${trigger}; switched to ${next} and will switch back once the subscription works again.${recovery}`, "warning");
-  armSwitchBackProbe(orchestrator);
-  if (resumeRequest) orchestrator.queueContinuation("[PI-PI] Provider routing changed after a subscription failure. Continue the current request.");
 }
 
 /**
- * A rate limit on a tier that is NOT the personal subscription. The
- * subscription's quota is account-wide, so its fallback latches globally; every
- * other tier is limited per model family, so only that one (tier, family) pair
- * steps aside and the rest keep their routing. The pair comes back on its own
- * after the switch-back interval — a limit that has not cleared by then simply
- * demotes it again on the next refusal, which costs one request instead of the
- * live probe the subscription needs.
+ * How long the provider said to wait, when it said: a Retry-After the adapter
+ * folded into its message, or the ChatGPT subscription's own "Try again in ~N
+ * min" sentence.
  */
-async function demoteFamilyTier(orchestrator: Orchestrator, ctx: any, spec: string, origin: "main" | "subagent"): Promise<void> {
-  const tier = tierOfSpec(spec);
-  const family = getModelInfo(spec).family;
-  if (!tier || tier === "flant-sub" || family === "unknown") return;
-  if (isTierDemoted(tier, family)) return;
-  if (!loadFlantSettings(orchestrator.cwd).autoRateLimitFallback) {
-    ctx?.ui?.notify?.(`Rate limit on ${spec}. Automatic fallback is disabled in .pp/config.json.`, "warning");
-    return;
-  }
-  demoteTierForFamily(tier, family);
-  orchestrator.registerAgents();
+export function retryHintMs(message?: string): number | null {
+  if (typeof message !== "string") return null;
+  const minutes = /try again in ~?\s*(\d+)\s*min/i.exec(message);
+  if (minutes) return Math.max(1, Number(minutes[1])) * 60_000;
+  const seconds = /retry[- ]after[:= ]\s*(\d+)\s*s?\b/i.exec(message);
+  if (seconds) return Math.max(1, Number(seconds[1])) * 1000;
+  return null;
+}
 
-  const mainSpec = ctx?.model?.provider && ctx?.model?.id ? `${ctx.model.provider}/${ctx.model.id}` : "";
-  const mainAffected = origin === "main"
-    || (tierOfSpec(mainSpec) === tier && getModelInfo(mainSpec).family === family);
-  if (!mainAffected) {
-    armTierRestore(orchestrator, tier, family);
-    ctx?.ui?.notify?.(`Rate limit on ${spec} for a worker; that provider is paused for this model until it clears.`, "warning");
+function formatUntil(entry: Pause): string {
+  if (entry.until === null) return "it recovers";
+  const d = new Date(entry.until);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+type FallbackCause = "rate-limit" | "auth" | "outage";
+
+/**
+ * Take `key` out of routing and move the session off it.
+ *
+ * The session's configured main model is re-resolved, which now skips the
+ * paused provider; a model the user picked by hand is moved to whatever its own
+ * slot resolves to. A pinned model or an override has nowhere else to go and
+ * waits: the pause carries the time it is retried. The Claude subscription's
+ * account pause is lifted by a live probe; every other pause expires on its own,
+ * and a limit that has not cleared by then pauses again for twice as long.
+ */
+async function pauseAndReroute(
+  orchestrator: Orchestrator,
+  ctx: any,
+  key: string,
+  spec: string,
+  origin: "main" | "subagent",
+  cause: FallbackCause,
+  hintMs: number | null,
+  resumeRequest = true,
+): Promise<void> {
+  if (isPaused(key)) return;
+  const fallback = fallbackSettings(orchestrator);
+  const what = describePauseKey(key);
+  const trigger = cause === "auth"
+    ? `${what}: the credential was rejected and could not be renewed`
+    : cause === "outage"
+      ? `${what} is failing`
+      : `Rate limit on ${what}`;
+  if (!fallback.auto) {
+    ctx?.ui?.notify?.(`${trigger}. Automatic fallback is off (Settings › Providers).`, "warning");
     return;
   }
-  const prior = mainSpec || spec;
-  const next = resolveModel(prior);
-  if (next === prior) {
-    armTierRestore(orchestrator, tier, family);
-    ctx?.ui?.notify?.(`Rate limit on ${spec}, and there is no lower provider tier for it; waiting for it to clear.`, "warning");
+  const probed = key === "claude-sub";
+  const entry = pause(key, probed ? null : nextPauseMs(key, fallback.retryAfterMinutes, hintMs), trigger);
+  if (probed) armSwitchBackProbe(orchestrator, spec);
+  else armPauseExpiry(orchestrator, entry);
+  orchestrator.registerAgents();
+  const recovery = cause === "auth" && key.startsWith("claude-sub") ? " Run /login → Anthropic to restore it." : "";
+
+  const live = liveSpec(ctx);
+  const mainAffected = origin === "main" || (!!live && pauseKeyForSpec(live) !== null && isPausedFor(live));
+  if (!mainAffected) {
+    ctx?.ui?.notify?.(`${trigger} on a worker; paused until ${formatUntil(entry)}.${recovery}`, "warning");
+    return;
+  }
+  const current = live || spec;
+  // A session pi-pi routed follows its configured model; one the user picked by
+  // hand stays theirs, moved only within the same slot.
+  const owned = orchestrator.routedMainSpec === current;
+  const ref = owned ? orchestrator.config.agents.main.model : slotRefOfSpec(current);
+  const next = ref ? resolveSpec(ref) : null;
+  if (!next || next === current) {
+    ctx?.ui?.notify?.(`${trigger}; nothing else serves ${current}. Waiting until ${formatUntil(entry)}.${recovery}`, "warning");
     return;
   }
   try {
     if (!await orchestrator.switchModel(ctx, next, thinking(orchestrator))) {
-      armTierRestore(orchestrator, tier, family);
-      ctx?.ui?.notify?.(`Rate limit on ${spec}, but ${next} is unavailable; waiting for it to clear.`, "error");
+      ctx?.ui?.notify?.(`${trigger}, but ${next} is unavailable; waiting until ${formatUntil(entry)}.${recovery}`, "error");
       return;
     }
   } catch {
-    armTierRestore(orchestrator, tier, family);
-    ctx?.ui?.notify?.(`Rate limit on ${spec}, but switching to ${next} failed; waiting for it to clear.`, "error");
+    ctx?.ui?.notify?.(`${trigger}, but switching to ${next} failed; waiting until ${formatUntil(entry)}.${recovery}`, "error");
     return;
   }
-  // The restore carries the exact spec this moved off, rather than re-resolving
-  // the configured main model: the session may have been on a model the user
-  // picked by hand, and that choice must come back, not pi-pi's own.
-  armTierRestore(orchestrator, tier, family, { from: prior, to: next });
-  ctx?.ui?.notify?.(`Rate limit on ${spec}; switched to ${next} until it clears.`, "warning");
-  orchestrator.queueContinuation("[PI-PI] Provider routing changed after a rate limit. Continue the current request.");
+  if (owned) orchestrator.routedMainSpec = next;
+  orchestrator.pausedMainRoutes.set(key, { from: current, to: next });
+  const paid = splitSpec(next)?.provider === "pp-flant-openai" ? " (paid)" : "";
+  ctx?.ui?.notify?.(`${trigger}; switched to ${next}${paid} until ${formatUntil(entry)}.${recovery}`, "warning");
+  if (resumeRequest) orchestrator.queueContinuation("[PI-PI] Provider routing changed after a provider failure. Continue the current request.");
 }
 
-function armTierRestore(
-  orchestrator: Orchestrator,
-  tier: ProviderTierName,
-  family: Family,
-  mainRestore?: { from: string; to: string },
-): void {
-  const key = `${tier}:${family}`;
-  const existing = orchestrator.tierRestoreTimers.get(key);
+/** Whether `spec` is unusable under the current pauses. */
+function isPausedFor(spec: string): boolean {
+  const key = pauseKeyForSpec(spec);
+  if (key && isPaused(key)) return true;
+  const route = routeOfConcrete(splitSpec(spec)?.provider ?? "");
+  return !!route && isPaused(routePauseKey(route));
+}
+
+/**
+ * When a timed pause runs out, routing is rebuilt so the next spawn sees the
+ * provider again, and a main session this pause moved goes back — but only if
+ * it is still where the pause put it: anything else is the user's own pick, or
+ * another move, and not this timer's to undo.
+ */
+function armPauseExpiry(orchestrator: Orchestrator, entry: Pause): void {
+  const existing = orchestrator.pauseTimers.get(entry.key);
   if (existing) clearTimeout(existing);
-  let minutes = 10;
-  try { minutes = loadFlantSettings(orchestrator.cwd).switchBackIntervalMinutes; } catch {}
+  if (entry.until === null) return;
   const timer = setTimeout(async () => {
-    orchestrator.tierRestoreTimers.delete(key);
-    restoreTierForFamily(tier, family);
+    orchestrator.pauseTimers.delete(entry.key);
+    // By now the pause has lapsed on its own; only a newer one, armed after a
+    // fresh limit, means this timer is stale.
+    const current = getPause(entry.key);
+    if (current && current !== entry) return;
+    unpause(entry.key);
     orchestrator.registerAgents();
-    if (!mainRestore) return;
-    // Wall-clock time, so this lands as readily inside a live request as between
-    // two, and switching the model compacts and aborts whatever it interrupts.
-    await orchestrator.runModelSwitchBetweenTurns(async () => {
-      const ctx = orchestrator.lastCtx as any;
-      const live = ctx?.model?.provider && ctx?.model?.id ? `${ctx.model.provider}/${ctx.model.id}` : "";
-      // Anything else means the session moved on — the user's own pick, or
-      // another demotion — and is not this timer's to undo.
-      if (live !== mainRestore.to) return;
-      try {
-        if (await orchestrator.switchModel(ctx, mainRestore.from, thinking(orchestrator))) {
-          ctx?.ui?.notify?.(`Rate limit window elapsed; switched back to ${mainRestore.from}.`, "info");
-        }
-      } catch {}
-    });
-  }, Math.max(1, minutes) * 60_000);
+    await restoreMovedMain(orchestrator, entry.key, "Rate limit window elapsed");
+  }, Math.max(1000, entry.until - Date.now()));
   timer.unref?.();
-  orchestrator.tierRestoreTimers.set(key, timer);
+  orchestrator.pauseTimers.set(entry.key, timer);
+}
+
+async function restoreMovedMain(orchestrator: Orchestrator, key: string, why: string): Promise<boolean> {
+  const moved = orchestrator.pausedMainRoutes.get(key);
+  orchestrator.pausedMainRoutes.delete(key);
+  if (!moved) return true;
+  let restored = false;
+  await orchestrator.runModelSwitchBetweenTurns(async () => {
+    const ctx = orchestrator.lastCtx as any;
+    if (liveSpec(ctx) !== moved.to) {
+      restored = true;
+      return;
+    }
+    const ref = orchestrator.config.agents.main.model;
+    const target = orchestrator.routedMainSpec === moved.to ? resolveSpec(ref) ?? moved.from : moved.from;
+    try {
+      if (target !== moved.to && await orchestrator.switchModel(ctx, target, thinking(orchestrator))) {
+        orchestrator.routedMainSpec = target;
+        ctx?.ui?.notify?.(`${why}; switched back to ${target}.`, "info");
+      }
+      restored = true;
+    } catch {}
+  });
+  return restored;
 }
 
 const RESEND_REFUSED = "[PI-PI] The model returned a refusal instead of an answer and produced nothing. It judges the whole conversation, not your last step, and it fires unpredictably on the same content, so the request is worth making again as it was. Carry on exactly where you stopped: do not start over, do not repeat work already finished, and do not quote or reconstruct anything to explain the refusal.";
@@ -239,8 +240,8 @@ export async function handleMainRefusal(orchestrator: Orchestrator, ctx: any): P
     return;
   }
 
-  const mainSpec = ctx?.model?.provider && ctx?.model?.id ? `${ctx.model.provider}/${ctx.model.id}` : "";
-  const next = refusalFallbackSpec();
+  const mainSpec = liveSpec(ctx);
+  const next = refusalFallbackSpec(mainSpec);
   if (!next || next === mainSpec) {
     orchestrator.continuationHalted = true;
     ctx?.ui?.notify?.("The model keeps refusing this conversation and there is nowhere left to move it. Stopping; start a new session, or remove the history it objects to — most often captured model reasoning in a tool result.", "error");
@@ -259,51 +260,63 @@ export async function handleMainRefusal(orchestrator: Orchestrator, ctx: any): P
   orchestrator.queueContinuation(CONTINUE_AFTER_REROUTE, true);
 }
 
-export async function handleMainRateLimit(orchestrator: Orchestrator, ctx: any, modelId?: string, provider?: string): Promise<void> {
+/**
+ * Where a rate limit on `spec` lands: the Claude subscription and ChatGPT
+ * accounts as a whole, every other provider per model line.
+ */
+export async function handleMainRateLimit(orchestrator: Orchestrator, ctx: any, modelId?: string, provider?: string, message?: string): Promise<void> {
   const spec = modelId?.includes("/") ? modelId : provider && modelId ? `${provider}/${modelId}` : modelId ?? "";
   try { ctx.abort?.(); } catch {}
-  if (!isSubscriptionRouted(spec, provider)) {
-    await demoteFamilyTier(orchestrator, ctx, spec, "main");
-    return;
-  }
-  await activate(orchestrator, ctx, spec, "main");
+  const key = pauseKeyForSpec(spec);
+  if (!key) return;
+  await pauseAndReroute(orchestrator, ctx, key, spec, "main", "rate-limit", retryHintMs(message));
 }
 
-export async function handleSubagentRateLimit(orchestrator: Orchestrator, ctx: any, modelId?: string): Promise<void> {
+export async function handleSubagentRateLimit(orchestrator: Orchestrator, ctx: any, modelId?: string, message?: string): Promise<void> {
   if (!modelId) return;
-  if (!isSubscriptionRouted(modelId)) {
-    await demoteFamilyTier(orchestrator, ctx, modelId, "subagent");
-    return;
-  }
-  await activate(orchestrator, ctx, modelId, "subagent");
+  const key = pauseKeyForSpec(modelId);
+  if (!key) return;
+  await pauseAndReroute(orchestrator, ctx, key, modelId, "subagent", "rate-limit", retryHintMs(message));
+}
+
+/**
+ * The subscription's gateway route failing on its own — a 5xx or a refused
+ * gateway key — says nothing about the account, so only that route steps aside
+ * and the direct one carries on.
+ */
+export async function handleSubscriptionRouteOutage(orchestrator: Orchestrator, ctx: any, spec: string, origin: "main" | "subagent"): Promise<boolean> {
+  const route = routeOfConcrete(splitSpec(spec)?.provider ?? "");
+  if (route !== "llm-api") return false;
+  const routes = loadRoutingSettings(orchestrator.cwd).providers["claude-sub"].route;
+  if (!routes.includes("direct")) return false;
+  await pauseAndReroute(orchestrator, ctx, routePauseKey(route), spec, origin, "outage", null, origin === "main");
+  return true;
 }
 
 // A rejected subscription credential is recoverable in place: rotate it, rebind
 // the provider, and resume. Only when no fresh credential can be minted does
-// this become a routing problem, handled exactly like a rate limit (fall to a
-// lower tier and let the probe decide when the subscription works again).
+// this become a routing problem, handled exactly like a rate limit.
 //
 // The rotation decision is re-derived from a live probe rather than taken from
 // the reported error: by the time a turn ends or a worker settles, the rejected
 // credential may already have been replaced, and rotating on a stale report is
 // how two instances revoke each other's token.
 async function recoverOrDemote(orchestrator: Orchestrator, ctx: any, spec: string, origin: "main" | "subagent"): Promise<void> {
-  if (orchestrator.subFallbackActive) return;
+  if (isPaused("claude-sub")) return;
   const outcome = await reviveSubscriptionCredential(spec, orchestrator.pi);
   if (outcome === "failed") {
-    await activate(orchestrator, ctx, spec, origin, "auth");
+    await pauseAndReroute(orchestrator, ctx, "claude-sub", spec, origin, "auth", null);
     return;
   }
   // Only an outcome that establishes something justifies resuming, because a
   // resumed turn that fails the same way comes straight back here. "Throttled"
   // means the rejected credential is still the persisted one and a rotation is
   // barred for now; "inconclusive" means the check itself could not reach the
-  // gateway. Either way an automatic retry would just spin. Stop the turn and
-  // let the next request try again.
+  // gateway. Either way an automatic retry would just spin.
   if (outcome === "throttled" || outcome === "inconclusive") {
     const why = outcome === "throttled"
       ? "was rejected moments after a renewal"
-      : "was rejected, and the check that would renew it could not reach the gateway";
+      : "was rejected, and the check that would renew it could not reach the provider";
     ctx?.ui?.notify?.(`The subscription credential ${why}; not retrying automatically. Send a message to try again.`, "warning");
     return;
   }
@@ -334,59 +347,47 @@ export async function handleSubagentAuthFailure(orchestrator: Orchestrator, ctx:
  */
 export async function demoteUnusableSubscription(orchestrator: Orchestrator, ctx: any, modelId: string): Promise<void> {
   if (!isSubscriptionRouted(modelId)) return;
-  await activate(orchestrator, ctx, modelId, "main", "auth", false);
+  await pauseAndReroute(orchestrator, ctx, "claude-sub", modelId, "main", "auth", null, false);
 }
 
-export function armSwitchBackProbe(orchestrator: Orchestrator): void {
+/**
+ * The subscription's quota is the account's, so its pause has no expiry a
+ * timer could guess: a cheap probe asks the provider directly, at the retry
+ * interval, and the pause lifts on the first one that gets through.
+ */
+export function armSwitchBackProbe(orchestrator: Orchestrator, probeSpec: string): void {
   if (orchestrator.subSwitchBackTimer) clearTimeout(orchestrator.subSwitchBackTimer);
-  // The probe re-arms itself from inside its own callback, so an unreadable
-  // config here would strand the session on the fallback tier for good.
-  let minutes = 10;
-  try { minutes = loadFlantSettings(orchestrator.cwd).switchBackIntervalMinutes; } catch {}
-  const delay = Math.max(1, minutes) * 60_000;
+  orchestrator.subProbeSpec = probeSpec;
+  const delay = Math.max(1, fallbackSettings(orchestrator).retryAfterMinutes) * 60_000;
   orchestrator.subSwitchBackTimer = setTimeout(async () => {
     orchestrator.subSwitchBackTimer = null;
-    if (!orchestrator.subFallbackActive || !orchestrator.subFallbackModelId) return;
-    const outcome = await probeSubscriptionCleared(orchestrator.subFallbackModelId);
-    // Shutdown may have cleared the fallback while the probe was in flight.
-    if (!orchestrator.subFallbackActive) return;
+    const spec = orchestrator.subProbeSpec;
+    if (!isPaused("claude-sub") || !spec) return;
+    const outcome = await probeSubscriptionCleared(spec);
+    // Shutdown or a manual clear may have lifted the pause while the probe was in flight.
+    if (!isPaused("claude-sub")) return;
     if (outcome !== "ok") {
-      armSwitchBackProbe(orchestrator);
+      armSwitchBackProbe(orchestrator, spec);
       return;
     }
-    // The probe fires on wall-clock time, so it lands as readily inside a live
-    // request as between two; the restore below switches the model, which
-    // compacts, which aborts whatever run it interrupted.
-    await orchestrator.runModelSwitchBetweenTurns(async () => {
-      if (!orchestrator.subFallbackActive) return;
-      const ctx = orchestrator.lastCtx;
-      const prior = orchestrator.subFallbackMainPriorSpec;
-      // The prior spec is subscription-born, so the fallback flag has to come off
-      // before it is resolved: while the flag is set the flant-sub tier is
-      // disabled and the spec walks straight back down onto the fallback tier.
-      setSubscriptionFallbackActive(false);
-      orchestrator.registerAgents();
-      if (prior) {
-        // Restore BEFORE tearing down the rest of the fallback state so a failed
-        // switch keeps the prior spec and the probe re-arms instead of stranding
-        // the session on the fallback tier while reporting success.
-        let restored = false;
-        try {
-          restored = await orchestrator.switchModel(ctx, resolveModel(prior), thinking(orchestrator));
-        } catch {}
-        if (!restored) {
-          setSubscriptionFallbackActive(true);
-          orchestrator.registerAgents();
-          armSwitchBackProbe(orchestrator);
-          ctx?.ui?.notify?.(`Subscription limit cleared, but switching back to ${prior} failed; will retry.`, "warning");
-          return;
-        }
-      }
-      orchestrator.subFallbackActive = false;
-      orchestrator.subFallbackMainPriorSpec = null;
-      orchestrator.subFallbackModelId = null;
-      ctx?.ui?.notify?.("Subscription limit cleared; switched back to personal subscription routing.", "info");
-    });
+    unpause("claude-sub");
+    orchestrator.subProbeSpec = null;
+    orchestrator.registerAgents();
+    if (!await restoreMovedMain(orchestrator, "claude-sub", "Subscription limit cleared")) {
+      getLogger().warn({ s: "routing" }, "the subscription cleared but switching the session back failed");
+    }
+    orchestrator.lastCtx?.ui?.notify?.("Claude subscription limit cleared; routing through it again.", "info");
   }, delay);
   orchestrator.subSwitchBackTimer.unref?.();
+}
+
+/** Lift every pause and stop their timers. */
+export function clearAllPauses(orchestrator: Orchestrator): string[] {
+  for (const timer of orchestrator.pauseTimers.values()) clearTimeout(timer);
+  orchestrator.pauseTimers.clear();
+  if (orchestrator.subSwitchBackTimer) clearTimeout(orchestrator.subSwitchBackTimer);
+  orchestrator.subSwitchBackTimer = null;
+  orchestrator.subProbeSpec = null;
+  orchestrator.pausedMainRoutes.clear();
+  return clearPauses();
 }

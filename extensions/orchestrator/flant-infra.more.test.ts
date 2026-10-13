@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import lockfile from "proper-lockfile";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const refreshAnthropicTokenMock = vi.fn();
 vi.mock("@earendil-works/pi-ai/oauth", () => ({
@@ -10,15 +10,6 @@ vi.mock("@earendil-works/pi-ai/oauth", () => ({
   // Declared absent rather than omitted: pi-ai >= 0.84 publishes this subpath
   // empty, and a key left out of the mock throws on access instead.
   refreshGitHubCopilotToken: undefined,
-}));
-
-const updateRegistryMock = vi.fn();
-const setTierEnabledMock = vi.fn();
-vi.mock("./model-registry.js", () => ({
-  updateRegistryFromAvailableModels: (...args: unknown[]) => updateRegistryMock(...args),
-  setTierEnabled: (...args: unknown[]) => setTierEnabledMock(...args),
-  listRegisteredSpecs: () => [],
-  isSubscriptionFallbackActive: () => false,
 }));
 
 const tempDirs: string[] = [];
@@ -41,14 +32,36 @@ function stubFetch(handler: (url: string, opts: any) => any) {
   return fn;
 }
 
+function writeAuth(dir: string, access = "sk-ant-oat01-x") {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "auth.json"),
+    JSON.stringify({ anthropic: { type: "oauth", access, refresh: "rt", expires: Date.now() + 3_600_000 } }),
+    "utf-8",
+  );
+}
+
+function writeGlobalProvidersConfig(agentDir: string, providers: Record<string, unknown>) {
+  const cfgDir = join(agentDir, "extensions", "pp");
+  mkdirSync(cfgDir, { recursive: true });
+  writeFileSync(join(cfgDir, "config.json"), JSON.stringify({ providers }), "utf-8");
+}
+
+// The ambient shell may carry a real gateway key; every test states its own.
+const savedGatewayKeys = { LLM_API_KEY: process.env.LLM_API_KEY, FLANT_API_KEY: process.env.FLANT_API_KEY };
+beforeEach(() => {
+  delete process.env.LLM_API_KEY;
+  delete process.env.FLANT_API_KEY;
+});
+
 afterEach(() => {
   refreshAnthropicTokenMock.mockReset();
-  updateRegistryMock.mockReset();
-  setTierEnabledMock.mockReset();
   vi.unstubAllGlobals();
   delete process.env.PI_CODING_AGENT_DIR;
-  delete process.env.FLANT_API_KEY;
-  delete process.env.LLM_API_KEY;
+  for (const [key, value] of Object.entries(savedGatewayKeys)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -280,6 +293,64 @@ describe("probeSubscriptionCleared", () => {
     const fn = stubFetch(() => ({ ok: false, status: 401 }));
     await expect(mod.probeSubscriptionCleared("sub/claude-haiku-4-5")).resolves.toBe("error");
     expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it("probes the gateway with its key when one is set and nothing is registered yet", async () => {
+    const dir = makeTempDir();
+    writeAuth(dir);
+    process.env.LLM_API_KEY = "gw";
+    const mod = await loadModule(dir);
+    const fn = stubFetch(() => ({ ok: true, status: 200 }));
+    await mod.probeSubscriptionCleared("pp-claude-sub/claude-haiku-4-5");
+    const [url, req] = fn.mock.calls[0];
+    expect(url).toBe("https://llm-api.flant.ru/v1/messages");
+    expect(req.headers["x-litellm-api-key"]).toBe("Bearer gw");
+    expect(JSON.parse(req.body).model).toBe("sub/claude-haiku-4-5");
+  });
+
+  // Without a gateway key the subscription is reachable only directly, and the
+  // probe must follow it there or the switch-back never fires.
+  it("probes Anthropic directly with a bare model id when no gateway key is set", async () => {
+    const dir = makeTempDir();
+    writeAuth(dir);
+    const mod = await loadModule(dir);
+    const fn = stubFetch(() => ({ ok: true, status: 200 }));
+    await expect(mod.probeSubscriptionCleared("pp-flant-anthropic-sub/sub/claude-haiku-4-5")).resolves.toBe("ok");
+    const [url, req] = fn.mock.calls[0];
+    expect(url).toBe("https://api.anthropic.com/v1/messages");
+    expect(req.headers).not.toHaveProperty("x-litellm-api-key");
+    expect(req.headers.Authorization).toBe("Bearer sk-ant-oat01-x");
+    expect(JSON.parse(req.body).model).toBe("claude-haiku-4-5");
+  });
+
+  it("probes directly when only the direct route is registered, even with a gateway key", async () => {
+    const dir = makeTempDir();
+    writeAuth(dir);
+    writeGlobalProvidersConfig(dir, { "claude-sub": { route: ["direct"] } });
+    process.env.LLM_API_KEY = "gw";
+    const mod = await loadModule(dir);
+    const pi = { registerProvider: vi.fn(), unregisterProvider: vi.fn() } as any;
+    mod.registerFlantProviders(pi, ["sub/claude-haiku-4-5"], {});
+    expect(pi.registerProvider).toHaveBeenCalledWith("pp-claude-sub", expect.anything());
+    const fn = stubFetch(() => ({ ok: false, status: 429 }));
+    await expect(mod.probeSubscriptionCleared("pp-claude-sub/claude-haiku-4-5")).resolves.toBe("rate_limited");
+    const [url, req] = fn.mock.calls[0];
+    expect(url).toBe("https://api.anthropic.com/v1/messages");
+    expect(req.headers).not.toHaveProperty("x-litellm-api-key");
+    expect(JSON.parse(req.body).model).toBe("claude-haiku-4-5");
+  });
+
+  it("skips the probe when only the gateway route is registered and the key is gone", async () => {
+    const dir = makeTempDir();
+    writeAuth(dir);
+    writeGlobalProvidersConfig(dir, { "claude-sub": { route: ["llm-api"] } });
+    process.env.LLM_API_KEY = "gw";
+    const mod = await loadModule(dir);
+    mod.registerFlantProviders({ registerProvider: vi.fn(), unregisterProvider: vi.fn() } as any, ["sub/claude-haiku-4-5"], {});
+    delete process.env.LLM_API_KEY;
+    const fn = stubFetch(() => ({ ok: true, status: 200 }));
+    await expect(mod.probeSubscriptionCleared("sub/claude-haiku-4-5")).resolves.toBe("error");
+    expect(fn).not.toHaveBeenCalled();
   });
 });
 
@@ -526,7 +597,7 @@ describe("recoverRejectedSubCredential", () => {
     process.env.LLM_API_KEY = "gw";
     const mod = await loadModule(dir);
     const pi = makePi();
-    mod.registerFlantProviders(pi, ["claude-haiku-4-5"], {}, { subscription: true });
+    mod.registerFlantProviders(pi, ["claude-haiku-4-5"], {});
     return { mod, pi };
   }
 
@@ -575,9 +646,63 @@ describe("updateFlantInfra", () => {
 
   it("fails when no cache and no FLANT_API_KEY", async () => {
     const mod = await loadModule(makeTempDir());
+    const fetchFn = stubFetch(() => { throw new Error("no key, no fetch"); });
     const res = await mod.updateFlantInfra(makePi());
     expect(res.ok).toBe(false);
     expect(res.error).toContain("FLANT_API_KEY");
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  // The direct route needs no gateway, so a missing key still leaves the
+  // subscription usable; only the LLM API part reports the failure.
+  it("registers the direct subscription route without a gateway key", async () => {
+    const dir = makeTempDir();
+    writeAuth(dir, "sk-ant-oat01-live");
+    writeGlobalProvidersConfig(dir, { "claude-sub": { route: ["direct"] } });
+    const mod = await loadModule(dir);
+    const fetchFn = stubFetch(() => { throw new Error("no key, no fetch"); });
+    const pi = makePi();
+    const res = await mod.updateFlantInfra(pi);
+    expect(res).toEqual({ ok: false, error: "LLM_API_KEY (or FLANT_API_KEY) is not set" });
+    expect([...pi.registered.keys()]).toEqual(["pp-claude-sub"]);
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("skips the gateway catalog when nothing wants it, despite a key", async () => {
+    const dir = makeTempDir();
+    writeAuth(dir, "sk-ant-oat01-live");
+    writeGlobalProvidersConfig(dir, { "llm-api": { enabled: false }, "claude-sub": { route: ["direct"] } });
+    process.env.LLM_API_KEY = "gw";
+    const mod = await loadModule(dir);
+    const fetchFn = stubFetch(() => { throw new Error("gateway not wanted"); });
+    const pi = makePi();
+    const res = await mod.updateFlantInfra(pi);
+    expect(res).toEqual({ ok: true, models: [] });
+    expect([...pi.registered.keys()]).toEqual(["pp-claude-sub"]);
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("passes pinned specs through so a Claude override keeps a pinned subscription registered", async () => {
+    const dir = makeTempDir();
+    writeAuth(dir, "sk-ant-oat01-live");
+    const cfgDir = join(dir, "extensions", "pp");
+    mkdirSync(cfgDir, { recursive: true });
+    writeFileSync(
+      join(cfgDir, "config.json"),
+      JSON.stringify({
+        providers: { "llm-api": { enabled: false }, "claude-sub": { route: ["direct"] } },
+        models: { claude: { override: { provider: "github-copilot", model: "claude-opus-5" } } },
+      }),
+      "utf-8",
+    );
+    const mod = await loadModule(dir);
+    const unpinned = makePi();
+    await mod.updateFlantInfra(unpinned);
+    expect(unpinned.registered.size).toBe(0);
+
+    const pinned = makePi();
+    await mod.updateFlantInfra(pinned, { pinnedSpecs: ["pp-claude-sub/claude-opus-4-8"] });
+    expect([...pinned.registered.keys()]).toEqual(["pp-claude-sub"]);
   });
 
   it("discovers models, saves cache, and registers providers on success", async () => {
@@ -887,49 +1012,72 @@ describe("updateFlantInfra", () => {
 
 describe("initFlantSync / initFlantOnStartup", () => {
   function makePi() {
-    return { registerProvider: vi.fn(), unregisterProvider: vi.fn() } as any;
+    const registered = new Map<string, any>();
+    return {
+      registered,
+      registerProvider: vi.fn((n: string, c: any) => registered.set(n, c)),
+      unregisterProvider: vi.fn((n: string) => registered.delete(n)),
+    } as any;
   }
 
-  it("initFlantSync is a no-op when disabled", async () => {
-    const mod = await loadModule(makeTempDir());
-    const pi = makePi();
-    mod.initFlantSync(pi);
-    expect(pi.registerProvider).not.toHaveBeenCalled();
-    expect(mod.getFlantGeneratedConfig()).toBeNull();
-  });
-
-  it("initFlantSync registers from cache when enabled", async () => {
-    const dir = makeTempDir();
-    const cfgDir = join(dir, "extensions", "pp");
-    mkdirSync(cfgDir, { recursive: true });
-    // Durable `enabled` now lives in scoped config (item 8).
-    writeFileSync(join(cfgDir, "config.json"), JSON.stringify({ flant: { enabled: true } }), "utf-8");
-    const cacheDir = join(cfgDir, "cache");
+  function writeCache(dir: string, models = ["sub/claude-opus-4-8", "gpt-5"]) {
+    const cacheDir = join(dir, "extensions", "pp", "cache");
     mkdirSync(cacheDir, { recursive: true });
-    writeFileSync(
-      join(cacheDir, "flant-models.json"),
-      JSON.stringify({ cachedFlantModels: ["sub/claude-opus-4-8", "gpt-5"], cachedOpenRouterData: {} }),
-      "utf-8",
-    );
+    writeFileSync(join(cacheDir, "flant-models.json"), JSON.stringify({ cachedFlantModels: models, cachedOpenRouterData: {} }), "utf-8");
+  }
+
+  function writeProjectProviders(providers: Record<string, unknown>): string {
+    const projCwd = makeTempDir();
+    mkdirSync(join(projCwd, ".pp"), { recursive: true });
+    writeFileSync(join(projCwd, ".pp", "config.json"), JSON.stringify({ providers }), "utf-8");
+    return projCwd;
+  }
+
+  it("initFlantSync registers nothing without a gateway key or a Claude login", async () => {
+    const dir = makeTempDir();
+    writeCache(dir);
     const mod = await loadModule(dir);
     const pi = makePi();
     mod.initFlantSync(pi);
-    expect(pi.registerProvider).toHaveBeenCalled();
-    expect(mod.getFlantGeneratedConfig()).not.toBeNull();
-  });
-
-  it("initFlantOnStartup is a no-op when disabled", async () => {
-    const mod = await loadModule(makeTempDir());
-    const pi = makePi();
-    await mod.initFlantOnStartup(pi);
     expect(pi.registerProvider).not.toHaveBeenCalled();
   });
 
-  it("initFlantOnStartup refreshes an expired subscription token before computing tiers", async () => {
+  it("initFlantSync registers from cache when a gateway key is set", async () => {
     const dir = makeTempDir();
-    const cfgDir = join(dir, "extensions", "pp");
-    mkdirSync(cfgDir, { recursive: true });
-    writeFileSync(join(cfgDir, "config.json"), JSON.stringify({ flant: { enabled: true, autoUpdate: false, subscription: true } }), "utf-8");
+    writeCache(dir);
+    process.env.LLM_API_KEY = "gw";
+    const mod = await loadModule(dir);
+    const fetchFn = stubFetch(() => { throw new Error("initFlantSync must not touch the network"); });
+    const pi = makePi();
+    mod.initFlantSync(pi);
+    expect(pi.registered.get("pp-flant-openai").models.map((m: any) => m.id)).toEqual(["gpt-5"]);
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("initFlantSync registers the direct subscription route without any gateway key", async () => {
+    const dir = makeTempDir();
+    writeAuth(dir, "sk-ant-oat01-live");
+    writeGlobalProvidersConfig(dir, { "claude-sub": { route: ["direct"] } });
+    const mod = await loadModule(dir);
+    const pi = makePi();
+    mod.initFlantSync(pi);
+    expect([...pi.registered.keys()]).toEqual(["pp-claude-sub"]);
+    expect(pi.registered.get("pp-claude-sub").apiKey).toBe("sk-ant-oat01-live");
+  });
+
+  it("initFlantOnStartup registers nothing without credentials", async () => {
+    const mod = await loadModule(makeTempDir());
+    const fetchFn = stubFetch(() => { throw new Error("no key, no fetch"); });
+    const pi = makePi();
+    await mod.initFlantOnStartup(pi);
+    expect(pi.registerProvider).not.toHaveBeenCalled();
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("initFlantOnStartup refreshes an expired subscription token before registering the subscription", async () => {
+    const dir = makeTempDir();
+    writeGlobalProvidersConfig(dir, { "llm-api": { autoUpdate: false }, "claude-sub": { route: ["llm-api"] } });
+    mkdirSync(dir, { recursive: true });
     writeFileSync(
       join(dir, "auth.json"),
       JSON.stringify({ anthropic: { type: "oauth", access: "stale", refresh: "rt", expires: Date.now() - 1000 } }),
@@ -937,107 +1085,97 @@ describe("initFlantSync / initFlantOnStartup", () => {
     );
     process.env.LLM_API_KEY = "gw";
     refreshAnthropicTokenMock.mockResolvedValue({ access: "fresh", refresh: "rt2", expires: Date.now() + 3_600_000 });
-    // No cache is written, so this settings shape bootstraps one through a real
-    // discovery request; keep it off the network.
-    stubFetch(() => ({ ok: true, status: 200, json: async () => ({ data: [] }) }));
+    // No cache is written, so this bootstraps one through a real discovery
+    // request; keep it off the network.
+    stubFetch(() => ({ ok: true, status: 200, json: async () => ({ data: [{ id: "sub/claude-opus-4-8" }] }) }));
 
-    const mod = await loadModule(dir);
-    await mod.initFlantOnStartup(makePi());
-
-    // Reading the stored token before refreshing it would classify the tier as
-    // unavailable, and nothing re-syncs afterwards.
-    expect(refreshAnthropicTokenMock).toHaveBeenCalled();
-    expect(setTierEnabledMock).toHaveBeenCalledWith(expect.objectContaining({ "flant-sub": true }));
-  });
-
-  it("initFlantOnStartup skips update when autoUpdate is off", async () => {
-    const dir = makeTempDir();
-    const cfgDir = join(dir, "extensions", "pp");
-    mkdirSync(cfgDir, { recursive: true });
-    writeFileSync(join(cfgDir, "config.json"), JSON.stringify({ flant: { enabled: true, autoUpdate: false, subscription: false } }), "utf-8");
     const mod = await loadModule(dir);
     const pi = makePi();
     await mod.initFlantOnStartup(pi);
-    expect(pi.registerProvider).not.toHaveBeenCalled();
+
+    // Registering before refreshing would bind the expired token as the
+    // provider's literal apiKey.
+    expect(refreshAnthropicTokenMock).toHaveBeenCalled();
+    expect(pi.registered.get("pp-flant-anthropic-sub").apiKey).toBe("fresh");
   });
 
-  it("initFlantOnStartup registers from cache when autoUpdate is off but flant is enabled", async () => {
+  it("initFlantOnStartup serves the cache without fetching when autoUpdate is off", async () => {
     const dir = makeTempDir();
-    const cfgDir = join(dir, "extensions", "pp");
-    mkdirSync(cfgDir, { recursive: true });
+    writeGlobalProvidersConfig(dir, { "llm-api": { autoUpdate: false } });
+    writeCache(dir);
+    process.env.LLM_API_KEY = "gw";
+    const mod = await loadModule(dir);
+    const fetchFn = stubFetch(() => { throw new Error("autoUpdate is off"); });
+    const pi = makePi();
+    await mod.initFlantOnStartup(pi);
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(pi.registered.has("pp-flant-openai")).toBe(true);
+  });
+
+  it("initFlantOnStartup registers from cache when autoUpdate is off but a project enables the LLM API", async () => {
+    const dir = makeTempDir();
     // Global disables; a PROJECT override enables with autoUpdate off — the
-    // provider must still register from the cached model list (finding 3).
-    writeFileSync(join(cfgDir, "config.json"), JSON.stringify({ flant: { enabled: false } }), "utf-8");
-    const cacheDir = join(cfgDir, "cache");
-    mkdirSync(cacheDir, { recursive: true });
-    writeFileSync(
-      join(cacheDir, "flant-models.json"),
-      JSON.stringify({ cachedFlantModels: ["sub/claude-opus-4-8", "gpt-5"], cachedOpenRouterData: {} }),
-      "utf-8",
-    );
-    const projCwd = makeTempDir();
-    mkdirSync(join(projCwd, ".pp"), { recursive: true });
-    writeFileSync(join(projCwd, ".pp", "config.json"), JSON.stringify({ flant: { enabled: true, autoUpdate: false, subscription: false } }), "utf-8");
+    // provider must still register from the cached model list.
+    writeGlobalProvidersConfig(dir, { "llm-api": { enabled: false } });
+    writeCache(dir);
+    const projCwd = writeProjectProviders({ "llm-api": { enabled: true, autoUpdate: false } });
+    process.env.LLM_API_KEY = "gw";
 
     const mod = await loadModule(dir);
+    const fetchFn = stubFetch(() => { throw new Error("autoUpdate is off"); });
     const pi = makePi();
     await mod.initFlantOnStartup(pi, projCwd);
-    expect(pi.registerProvider).toHaveBeenCalled();
-    expect(mod.getFlantGeneratedConfig()).not.toBeNull();
+    expect(pi.registerProvider).toHaveBeenCalledWith("pp-flant-openai", expect.anything());
+    expect(fetchFn).not.toHaveBeenCalled();
   });
 
   it("initFlantSync honors a project enable via the shared root cwd", async () => {
     const dir = makeTempDir();
-    const cfgDir = join(dir, "extensions", "pp");
-    mkdirSync(cfgDir, { recursive: true });
-    // Global disables flant; the project (root cwd) ENABLES it with a cache.
-    writeFileSync(join(cfgDir, "config.json"), JSON.stringify({ flant: { enabled: false } }), "utf-8");
-    const cacheDir = join(cfgDir, "cache");
-    mkdirSync(cacheDir, { recursive: true });
-    writeFileSync(
-      join(cacheDir, "flant-models.json"),
-      JSON.stringify({ cachedFlantModels: ["sub/claude-opus-4-8", "gpt-5"], cachedOpenRouterData: {} }),
-      "utf-8",
-    );
-    const projCwd = makeTempDir();
-    mkdirSync(join(projCwd, ".pp"), { recursive: true });
-    writeFileSync(join(projCwd, ".pp", "config.json"), JSON.stringify({ flant: { enabled: true } }), "utf-8");
+    // Global disables the LLM API; the project (root cwd) ENABLES it.
+    writeGlobalProvidersConfig(dir, { "llm-api": { enabled: false } });
+    writeCache(dir);
+    const projCwd = writeProjectProviders({ "llm-api": { enabled: true } });
+    process.env.LLM_API_KEY = "gw";
 
     const mod = await loadModule(dir);
+    const globalOnly = makePi();
+    mod.initFlantSync(globalOnly);
+    expect(globalOnly.registered.has("pp-flant-openai")).toBe(false);
+
     const pi = makePi();
-    // Global-only read would register nothing; the shared root cwd must bind.
     mod.initFlantSync(pi, projCwd);
     expect(pi.registerProvider).toHaveBeenCalledWith("pp-flant-openai", expect.anything());
   });
 
-  it("a project override disabling flant unregisters providers at session_start", async () => {
+  it("a project override disabling the providers unregisters them at session_start", async () => {
     const dir = makeTempDir();
-    // Global enables flant + subscription (what initFlantSync would register).
-    const cfgDir = join(dir, "extensions", "pp");
-    mkdirSync(cfgDir, { recursive: true });
-    writeFileSync(join(cfgDir, "config.json"), JSON.stringify({ flant: { enabled: true, subscription: true } }), "utf-8");
-    // Project (cwd/.pp) DISABLES flant.
-    const projCwd = makeTempDir();
-    mkdirSync(join(projCwd, ".pp"), { recursive: true });
-    writeFileSync(join(projCwd, ".pp", "config.json"), JSON.stringify({ flant: { enabled: false } }), "utf-8");
+    writeAuth(dir, "sk-ant-oat01-live");
+    process.env.LLM_API_KEY = "gw";
+    // Project (cwd/.pp) DISABLES both the LLM API and the subscription.
+    const projCwd = writeProjectProviders({ "llm-api": { enabled: false }, "claude-sub": { enabled: false } });
 
     const mod = await loadModule(dir);
+    const fetchFn = stubFetch(() => { throw new Error("disabled providers must not fetch"); });
     const pi = makePi();
-    await mod.initFlantOnStartup(pi, projCwd);
-    // Honor the project override: no registration, providers unregistered.
+    const res = await mod.initFlantOnStartup(pi, projCwd);
+    expect(res).toBeUndefined();
     expect(pi.registerProvider).not.toHaveBeenCalled();
     expect(pi.unregisterProvider).toHaveBeenCalledWith("pp-flant-anthropic-sub");
+    expect(pi.unregisterProvider).toHaveBeenCalledWith("pp-claude-sub");
+    expect(pi.unregisterProvider).toHaveBeenCalledWith("pp-flant-openai");
+    expect(fetchFn).not.toHaveBeenCalled();
   });
 });
 
 describe("unregisterFlantProviders", () => {
-  it("unregisters all three providers via the passed pi", async () => {
+  it("unregisters every gateway and subscription provider via the passed pi", async () => {
     const mod = await loadModule(makeTempDir());
     const pi = { unregisterProvider: vi.fn(), registerProvider: vi.fn() } as any;
     mod.unregisterFlantProviders(pi);
     expect(pi.unregisterProvider).toHaveBeenCalledWith("pp-flant-anthropic");
     expect(pi.unregisterProvider).toHaveBeenCalledWith("pp-flant-openai");
     expect(pi.unregisterProvider).toHaveBeenCalledWith("pp-flant-anthropic-sub");
+    expect(pi.unregisterProvider).toHaveBeenCalledWith("pp-claude-sub");
   });
 
   it("is a no-op when no pi is set", async () => {

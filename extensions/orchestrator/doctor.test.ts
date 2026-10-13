@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { getDefaultConfig, normalizeConfigDurations } from "./config.js";
 import { runDoctor } from "./doctor.js";
+import { setCatalog } from "./routing.js";
 
 const dirs: string[] = [];
 
@@ -15,11 +16,11 @@ function makeAgentDir(packages: unknown): string {
 }
 
 /** Run the doctor against a throwaway agent dir and return everything it reported. */
-async function report(agentDir: string): Promise<string> {
+async function report(agentDir: string, modelRegistry?: unknown): Promise<string> {
   process.env.PI_CODING_AGENT_DIR = agentDir;
   const orchestrator: any = { cwd: agentDir, config: normalizeConfigDurations(getDefaultConfig()) };
   let text = "";
-  await runDoctor(orchestrator, { ui: { notify: (message: string) => { text = message; } } }, { probes: false, probeServers: false });
+  await runDoctor(orchestrator, { modelRegistry, ui: { notify: (message: string) => { text = message; } } }, { probes: false, probeServers: false });
   return text;
 }
 
@@ -68,10 +69,34 @@ describe("runDoctor", () => {
   it("reports the sections the audit found missing", async () => {
     const text = await report(makeAgentDir([]));
 
-    for (const section of ["Config", "Models", "Extensions", "Tools", "Provisioning", "LSP", "Skills", "Commands", "Flant", "Connectivity", "Environment"]) {
+    for (const section of ["Config", "Models", "Extensions", "Tools", "Provisioning", "LSP", "Skills", "Commands", "Providers", "Connectivity", "Environment"]) {
       expect(text).toContain(section);
     }
     expect(text).toMatch(/Summary: \d+ passed, \d+ warnings, \d+ failures/);
+  });
+
+  it("reports the provider priority in the Providers section", async () => {
+    const text = await report(makeAgentDir([]));
+    expect(text).toContain("Priority: claude-sub › codex › copilot › llm-api");
+  });
+
+  // A role whose slot no provider serves must say why, provider by provider,
+  // rather than only that it is missing.
+  it("fails a role nothing serves with the routing steps, and passes one that resolves", async () => {
+    const models = [
+      { provider: "openai-codex", id: "gpt-6-luna" },
+      { provider: "openai-codex", id: "gpt-6-astra" },
+    ];
+    setCatalog(models.map((m) => `${m.provider}/${m.id}`));
+    try {
+      const text = await report(makeAgentDir([]), { getAvailable: () => models, find: () => undefined });
+      expect(text).toContain("2 models available");
+      expect(text).toContain("agents.subagents.simple.explore: gpt/luna → openai-codex/gpt-6-luna");
+      expect(text).toMatch(/✗ agents\.main: claude\/opus has nothing to run on — .*Claude subscription: no credentials/);
+      expect(text).toContain("pools.advisors[0]: gpt/astra:pro → openai-codex/gpt-6-astra (pro unavailable; base model)");
+    } finally {
+      setCatalog([]);
+    }
   });
 
   it("names the globalThis handles extensions couple through", async () => {

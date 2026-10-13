@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import { tmpdir } from "os";
-import { deepMerge, getDefaultConfig, loadConfig, mergeConfigLayers, readRawConfig, readScopedFlantSettings, removeConfigValue, validateConfig, writeConfigValue } from "./config.js";
+import { deepMerge, getDefaultConfig, loadConfig, mergeConfigLayers, migrateConfigFile, readRawConfig, readScopedRoutingSettings, removeConfigValue, validateConfig, writeConfigValue } from "./config.js";
+import { migrateConfigLayer, migrateModelRef } from "./config-migration.js";
 
 const tempDirs: string[] = [];
 
@@ -77,21 +78,21 @@ describe("validateConfig", () => {
     expect(() => validateConfig({ promptcap: { perModel: { m: { maxPromptTokens: 1 } } } })).toThrow("config.promptcap.perModel.m.maxPromptTokens");
   });
 
-  it("defaults the flant section to today's DEFAULT_SETTINGS and validates it", () => {
+  it("defaults every provider on, in subscription-first order, and validates the sections", () => {
     const d = getDefaultConfig();
-    expect(d.flant).toEqual({
-      enabled: false,
-      subscription: true,
-      switchBackIntervalMinutes: 10,
-      autoRateLimitFallback: true,
-      copilotEnabled: true,
-      codexEnabled: true,
-      autoUpdate: true,
-      cacheTTLDays: 3,
-    });
-    expect(() => validateConfig({ flant: { enabled: true, switchBackIntervalMinutes: 30 } })).not.toThrow();
-    expect(() => validateConfig({ flant: { switchBackIntervalMinutes: 0 } })).toThrow("config.flant.switchBackIntervalMinutes");
-    expect(() => validateConfig({ flant: { enabled: "yes" } })).toThrow("config.flant.enabled");
+    expect(d.providers.order).toEqual(["claude-sub", "codex", "copilot", "llm-api"]);
+    expect(d.providers["claude-sub"]).toEqual({ enabled: true, route: ["llm-api", "direct"] });
+    expect(d.providers.fallback).toEqual({ auto: true, retryAfterMinutes: 10 });
+    expect(d.models.claude).toEqual({ override: null, pins: {} });
+    expect(() => validateConfig({ providers: { order: ["copilot", "claude-sub"] } })).not.toThrow();
+    expect(() => validateConfig({ providers: { order: ["copilot", "copilot"] } })).toThrow("config.providers.order");
+    expect(() => validateConfig({ providers: { order: ["bogus"] } })).toThrow("config.providers.order");
+    expect(() => validateConfig({ providers: { "claude-sub": { route: [] } } })).toThrow("config.providers.claude-sub.route");
+    expect(() => validateConfig({ providers: { fallback: { retryAfterMinutes: 0 } } })).toThrow("config.providers.fallback.retryAfterMinutes");
+    expect(() => validateConfig({ models: { claude: { override: { provider: "zai", model: "glm-5.3", slots: { opus: "glm-5.3" } } } } })).not.toThrow();
+    expect(() => validateConfig({ models: { claude: { override: { provider: "zai", model: "glm-5.3", slots: { astra: "x" } } } } })).toThrow("not a claude slot");
+    expect(() => validateConfig({ models: { claude: { override: { provider: "zai/x", model: "glm" } } } })).toThrow("provider name");
+    expect(() => validateConfig({ models: { gemini: {} } })).toThrow("not a family");
   });
 
   it("defaults contextInjection with all six toggles on and validates toggles", () => {
@@ -167,40 +168,107 @@ describe("validateConfig", () => {
   });
 });
 
-describe("readScopedFlantSettings", () => {
+describe("readScopedRoutingSettings", () => {
   it("returns defaults with no files and creates NO .pp directory", () => {
     const cwd = makeTempDir();
-    const s = readScopedFlantSettings(cwd, "/nonexistent/global/config.json");
-    expect(s).toEqual(getDefaultConfig().flant);
+    const s = readScopedRoutingSettings(cwd, "/nonexistent/global/config.json");
+    expect(s.providers).toEqual(getDefaultConfig().providers);
     expect(existsSync(join(cwd, ".pp"))).toBe(false);
   });
 
-  it("folds global then project (project wins) without mkdir", () => {
+  it("folds global then project (project wins), reading legacy flant keys migrated", () => {
     const globalDir = makeTempDir();
     const globalPath = join(globalDir, "global-config.json");
-    writeFileSync(globalPath, JSON.stringify({ flant: { enabled: true, switchBackIntervalMinutes: 30, subscription: true } }), "utf-8");
-
+    writeFileSync(globalPath, JSON.stringify({ flant: { copilotEnabled: false, switchBackIntervalMinutes: 30 } }), "utf-8");
     const cwd = makeTempDir();
-    // Global-only (no project file): global values resolve, no .pp created.
-    const globalOnly = readScopedFlantSettings(cwd, globalPath);
-    expect(globalOnly.enabled).toBe(true);
-    expect(globalOnly.switchBackIntervalMinutes).toBe(30);
+    const globalOnly = readScopedRoutingSettings(cwd, globalPath);
+    expect(globalOnly.providers.copilot.enabled).toBe(false);
+    expect(globalOnly.providers.fallback.retryAfterMinutes).toBe(30);
     expect(existsSync(join(cwd, ".pp"))).toBe(false);
 
-    // With an existing project file, project overrides global per-key.
-    const ppDir = join(cwd, ".pp");
-    mkdirSync(ppDir, { recursive: true });
-    writeFileSync(join(ppDir, "config.json"), JSON.stringify({ flant: { switchBackIntervalMinutes: 5 } }), "utf-8");
-    const merged = readScopedFlantSettings(cwd, globalPath);
-    expect(merged.enabled).toBe(true);
-    expect(merged.subscription).toBe(true);
-    expect(merged.switchBackIntervalMinutes).toBe(5);
+    mkdirSync(join(cwd, ".pp"), { recursive: true });
+    writeFileSync(join(cwd, ".pp", "config.json"), JSON.stringify({ providers: { fallback: { retryAfterMinutes: 5 } } }), "utf-8");
+    const merged = readScopedRoutingSettings(cwd, globalPath);
+    expect(merged.providers.copilot.enabled).toBe(false);
+    expect(merged.providers.fallback.retryAfterMinutes).toBe(5);
+  });
+});
+
+describe("family override layering", () => {
+  it("replaces a lower layer's override whole, and null cancels it", () => {
+    const global = { models: { claude: { override: { provider: "zai", model: "glm-5.3", slots: { haiku: "glm-5.3-flash" } } } } };
+    const replaced = mergeConfigLayers(global, { models: { claude: { override: { provider: "kimi-coding", model: "kimi-k3" } } } });
+    expect(replaced.models.claude.override).toEqual({ provider: "kimi-coding", model: "kimi-k3" });
+    const cancelled = mergeConfigLayers(global, { models: { claude: { override: null } } });
+    expect(cancelled.models.claude.override).toBeNull();
+    expect(mergeConfigLayers(global, null).models.claude.override).toEqual(global.models.claude.override);
   });
 
-  it("reads a project file only if it already exists (never mkdirs)", () => {
+  it("ranks a provider an order list leaves out last, rather than dropping it", () => {
+    expect(mergeConfigLayers({ providers: { order: ["copilot", "codex"] } }, null).providers.order).toEqual(["copilot", "codex", "claude-sub", "llm-api"]);
+  });
+});
+
+describe("migration from the provider-tier schema", () => {
+  it("maps model lines the old resolver moved between tiers onto slots, and keeps real pins", () => {
+    expect(migrateModelRef("pp-flant-anthropic-sub/sub/claude-opus-5-5")).toBe("claude/opus");
+    expect(migrateModelRef("pp-flant-openai/gpt-6-astra-pro")).toBe("gpt/astra:pro");
+    expect(migrateModelRef("anthropic/claude-fable-latest")).toBe("claude/fable");
+    expect(migrateModelRef("openai/gpt-luna-latest")).toBe("gpt/luna");
+    expect(migrateModelRef("pp-flant-anthropic/claude-haiku-latest")).toBe("claude/haiku");
+    expect(migrateModelRef("github-copilot/claude-opus-4.8")).toBe("github-copilot/claude-opus-4.8");
+    expect(migrateModelRef("openai-codex/gpt-6-astra")).toBe("openai-codex/gpt-6-astra");
+    expect(migrateModelRef("pp-flant-openai/gemini-3.1-pro")).toBe("pp-flant-openai/gemini-3.1-pro");
+  });
+
+  it("moves flant.* onto providers.* without overriding what the layer already sets", () => {
+    const { config, changed } = migrateConfigLayer({
+      flant: { enabled: false, subscription: false, copilotEnabled: true, autoRateLimitFallback: false, switchBackIntervalMinutes: 20, cacheTTLDays: 7 },
+      providers: { copilot: { enabled: false } },
+      agents: { main: { model: "pp-flant-anthropic-sub/sub/claude-opus-5", thinking: "high" } },
+    });
+    expect(changed).toBe(true);
+    expect(config.flant).toBeUndefined();
+    expect(config.providers).toEqual({
+      copilot: { enabled: false },
+      "claude-sub": { enabled: false, route: ["direct"] },
+      "llm-api": { enabled: false, cacheTTLDays: 7 },
+      fallback: { auto: false, retryAfterMinutes: 20 },
+    });
+    expect(config.agents.main.model).toBe("claude/opus");
+    expect(migrateConfigLayer(config).changed).toBe(false);
+  });
+
+  it("rewrites the global file once, keeping the original beside it", () => {
+    const dir = makeTempDir();
+    const path = join(dir, "config.json");
+    const original = JSON.stringify({ flant: { enabled: true, copilotEnabled: true } });
+    writeFileSync(path, original, "utf-8");
+    expect(migrateConfigFile(path)).toBe(true);
+    expect(JSON.parse(readFileSync(path, "utf-8"))).toEqual({ providers: { copilot: { enabled: true } } });
+    expect(readFileSync(`${path}.pre-routing.bak`, "utf-8")).toBe(original);
+    writeFileSync(path, JSON.stringify({ flant: { codexEnabled: false } }), "utf-8");
+    expect(migrateConfigFile(path)).toBe(true);
+    expect(readFileSync(`${path}.pre-routing.bak`, "utf-8")).toBe(original);
+    expect(migrateConfigFile(path)).toBe(false);
+  });
+
+  it("leaves a project file alone on load and migrates it on the first write", () => {
     const cwd = makeTempDir();
-    readScopedFlantSettings(cwd, "/nonexistent/global/config.json");
-    expect(existsSync(join(cwd, ".pp"))).toBe(false);
+    const path = join(cwd, ".pp", "config.json");
+    mkdirSync(dirname(path), { recursive: true });
+    const original = JSON.stringify({ flant: { copilotEnabled: false }, agents: { task: undefined, main: { model: "pp-flant-anthropic-sub/sub/claude-opus-5", thinking: "high" } } });
+    writeFileSync(path, original, "utf-8");
+    const config = loadConfig(cwd, "/nonexistent/global/config.json");
+    expect(config.providers.copilot.enabled).toBe(false);
+    expect(config.agents.main.model).toBe("claude/opus");
+    expect(readFileSync(path, "utf-8")).toBe(original);
+    writeConfigValue(path, ["general", "logLevel"], "debug");
+    const written = JSON.parse(readFileSync(path, "utf-8"));
+    expect(written.flant).toBeUndefined();
+    expect(written.providers.copilot.enabled).toBe(false);
+    expect(written.agents.main.model).toBe("claude/opus");
+    expect(readFileSync(`${path}.pre-routing.bak`, "utf-8")).toBe(original);
   });
 });
 
@@ -230,7 +298,7 @@ describe("loadConfig", () => {
 
     expect(config.agents.main).toEqual({ model: "custom/main", thinking: "low" });
     expect(config.agents.subagents.simple.explore).toEqual({ model: "custom/explore", thinking: "medium" });
-    expect(config.agents.subagents.simple.task.model).toBe("anthropic/claude-opus-latest");
+    expect(config.agents.subagents.simple.task.model).toBe("claude/opus");
     expect(config.agents.subagents.pools.advisors).toEqual([{ enabled: true, model: "custom/advisor", thinking: "high" }]);
     expect(config.agents.subagents.pools.reviewers.length).toBe(2);
     expect(config.general.logLevel).toBe("debug");
@@ -300,7 +368,7 @@ describe("loadConfig", () => {
     const config = loadConfig(cwd, "/nonexistent/global/config.json");
 
     expect(existsSync(configPath)).toBe(false);
-    expect(config.agents.main.model).toBe("anthropic/claude-opus-latest");
+    expect(config.agents.main.model).toBe("claude/opus");
   });
 
   it("throws parse errors with config file path", () => {
@@ -437,8 +505,8 @@ describe("config regressions", () => {
     const pools = config.agents.subagents.pools;
     for (const key of ["advisors", "reviewers", "deepDebuggers"] as const) {
       expect(pools[key]).toEqual([
-        { enabled: true, model: "openai/gpt-astra-latest", thinking: "high" },
-        { enabled: true, model: "anthropic/claude-fable-latest", thinking: "high" },
+        { enabled: true, model: "gpt/astra:pro", thinking: "high" },
+        { enabled: true, model: "claude/fable", thinking: "high" },
       ]);
     }
     expect("advisor" in (config.agents.subagents.simple as Record<string, unknown>)).toBe(false);
@@ -457,7 +525,7 @@ describe("config write helpers", () => {
     first.agents.main.model = "custom/model";
     first.agents.subagents.pools.advisors.push({ model: "extra/model", thinking: "low" });
 
-    expect(second.agents.main.model).toBe("anthropic/claude-opus-latest");
+    expect(second.agents.main.model).toBe("claude/opus");
     expect(second.agents.subagents.pools.advisors.length).toBe(2);
   });
 

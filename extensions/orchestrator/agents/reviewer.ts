@@ -1,22 +1,22 @@
 import type { PoolEntry } from "../config.js";
-import { getModelInfo, resolveModel } from "../model-registry.js";
+import { agentModel } from "./registry.js";
 import { toolsBlock, parseToolNames, identityBlock, ALL_CBM_TOOLS, WEB_TOOLS, principlesBlock } from "./tool-routing.js";
 
 export function createReviewerAgent(entry: PoolEntry) {
-  const model = resolveModel(entry.model);
+  const { model, description } = agentModel(entry.model);
   const tools = `read, bash, grep, find, ls, lsp, ast_search, vcc_recall, recall_tool_output, ${ALL_CBM_TOOLS}, ${WEB_TOOLS}`;
-  const info = getModelInfo(model);
   return {
     frontmatter: {
       description: "Read-only reviewer that inspects finished work — a diff, a document, a config or data change — and returns severity-rated findings anchored to exact locations (never edits); best when fresh independent scrutiny materially reduces risk, not as a routine step (pi-pi)",
       tools,
       model,
+      ref: entry.model,
       thinking: entry.thinking,
       max_turns: entry.maxTurns,
       prompt_mode: "replace",
     },
     prompt: [
-      identityBlock({ displayName: info.displayName, family: info.family, tier: info.tier, thinking: entry.thinking }),
+      identityBlock(description, entry.thinking),
       "",
       "<constraints>",
       "You are a REVIEWER. You review finished work — code changes, documents, configuration, data, or a described outcome — for correctness, soundness, and quality against its stated intent.",

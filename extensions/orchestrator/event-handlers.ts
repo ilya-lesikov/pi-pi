@@ -14,8 +14,8 @@ import { fileRatioStore } from "./promptcap/ratios.js";
 import { collectContextFiles, renderContextInjection, summarizeContextInjectionSize } from "./context-injection.js";
 import { enabledSkillLayers, listLayeredSkills, loadLayeredSkill } from "./skills-manifest.js";
 import { identityBlock, principlesBlock, toolsBlock, delegationBlock } from "./agents/tool-routing.js";
-import { buildPoolRoster, registeredAgentNames, remapPoolName, setExtensionOnlyMode } from "./agents/registry.js";
-import { clearAllTierDemotions, getModelInfo, setSubscriptionFallbackActive, updateRegistryFromAvailableModels } from "./model-registry.js";
+import { buildPoolRoster, getAgentConfigSnapshot, registeredAgentNames, remapPoolName, setExtensionOnlyMode } from "./agents/registry.js";
+import { catalogHas, isSlotRef, resolveRef, setCatalog } from "./routing.js";
 import { createCustomFooter, setFooterContext, setFooterTracker, setFooterOrchestrator } from "./custom-footer.js";
 import { createUsageTracker, dumpUsageSummary, isSubscriptionRouted, loadUsageSummary, type UsageTracker } from "./usage-tracker.js";
 import { publishAcpState, resetAcpStateCache } from "./acp.js";
@@ -24,11 +24,12 @@ import { registerImageShrink } from "./image-shrink.js";
 import { checkDuplicateExtensions } from "./duplicate-extension-guard.js";
 import { ensureProvisionDirOnPath, ensureServerForFile, provisionEagerTools } from "./provision/session.js";
 import { installConsoleGuard } from "./console-guard.js";
-import { demoteUnusableSubscription, handleMainAuthFailure, handleMainRateLimit, handleMainRefusal, handleSubagentAuthFailure, handleSubagentRateLimit, isAuthError, isModelRefusal, isPolicyBlockError, isRateLimitError } from "./rate-limit-fallback.js";
+import { clearAllPauses, demoteUnusableSubscription, handleMainAuthFailure, handleMainRateLimit, handleMainRefusal, handleSubagentAuthFailure, handleSubagentRateLimit, handleSubscriptionRouteOutage, isAuthError, isModelRefusal, isPolicyBlockError, isRateLimitError } from "./rate-limit-fallback.js";
 import { adjudicateCheckIn, adjudicateContinuation } from "./continuation-adjudicator.js";
 import { retrySubagentOnNewRouting } from "./subagent-retry.js";
 import { ensureProviderRetrySettings, patchRetryPredicate } from "./provider-retry.js";
-import { isCodexTierActive, isCopilotTierActive, isSubscriptionActive, loadFlantSettings, noteSubscriptionCredentialAccepted, refreshCodexOAuthToken, refreshCopilotOAuthToken, refreshSubProvider, reviveSubscriptionCredential, setModelRegistry, syncProviderTiers, type FlantSettings } from "./flant-infra.js";
+import { hasClaudeSubCredential, isCodexActive, isCopilotActive, loadRoutingSettings, noteSubscriptionCredentialAccepted, refreshCodexOAuthToken, refreshCopilotOAuthToken, refreshSubProvider, reviveSubscriptionCredential, setModelRegistry } from "./flant-infra.js";
+import type { RoutingSettings } from "./config.js";
 import type { Orchestrator } from "./orchestrator.js";
 
 const USAGE_TRACKER_KEY = Symbol.for("pi-pi:usage-tracker");
@@ -102,18 +103,47 @@ function tracker(): UsageTracker | undefined {
 }
 
 // The credential state the model catalog was last captured under.
-let lastTierCredentialSignature: string | null = null;
+let lastCredentialSignature: string | null = null;
 
-function tierCredentialSignature(flant: FlantSettings): string {
-  return [isSubscriptionActive(flant), isCodexTierActive(flant), isCopilotTierActive(flant)].join("|");
+function credentialSignature(settings: RoutingSettings): string {
+  return [hasClaudeSubCredential(), isCodexActive(settings), isCopilotActive(settings)].join("|");
 }
 
-function captureAvailableModels(ctx: any): void {
+export function captureAvailableModels(ctx: any): void {
   const available = ctx?.modelRegistry?.getAvailable?.();
   // An empty list is a host refresh in flight, not a world without models:
-  // adopting it would strip every tier of its catalog.
+  // adopting it would strip every provider of its catalog.
   if (!Array.isArray(available) || available.length === 0) return;
-  updateRegistryFromAvailableModels(available.flatMap((model: any) => model?.provider && model?.id ? [`${model.provider}/${model.id}`] : []));
+  setCatalog(available.flatMap((model: any) => model?.provider && model?.id ? [`${model.provider}/${model.id}`] : []));
+}
+
+/** Role models pinned to an exact provider/model, which routing never moves. */
+export function pinnedRoleSpecs(config: Orchestrator["config"]): string[] {
+  if (!config?.agents) return [];
+  const refs = [
+    config.agents.main.model,
+    ...Object.values(config.agents.subagents.simple).map((agent) => agent.model),
+    ...Object.values(config.agents.subagents.pools).flatMap((pool) => pool.map((entry) => entry.model)),
+  ];
+  return refs.filter((ref) => !isSlotRef(ref));
+}
+
+export function mainUnavailableMessage(orchestrator: Orchestrator): string {
+  const ref = orchestrator.config.agents.main.model;
+  const steps = resolveRef(ref).steps;
+  return [`Main model ${ref} has nothing to run on; keeping the current model.`, ...steps.slice(0, 6)].join("\n");
+}
+
+/**
+ * A provider failing on its own rather than refusing this account: a 5xx, or a
+ * connection that never got through, still failing after pi's own retries.
+ * Only acted on for the subscription's gateway route, which has a direct route
+ * to fall back to. A rejected credential is deliberately not one: it may be the
+ * account's token, which rotating fixes and no other route would.
+ */
+function isProviderOutage(message?: string): boolean {
+  return typeof message === "string"
+    && /\b(500|502|503|504)\b|bad gateway|service unavailable|fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT/i.test(message);
 }
 
 function resetRequestActivity(orchestrator: Orchestrator): void {
@@ -156,8 +186,7 @@ function requestPhasesBlock(canAsk: boolean): string {
 }
 
 export function renderGenericPrompt(orchestrator: Orchestrator, ctx: any, toolNames: string[]): string {
-  const modelSpec = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : orchestrator.config.agents.main.model;
-  const info = getModelInfo(modelSpec);
+  const info = orchestrator.mainModelInfo(ctx);
   const contextFiles = collectContextFiles(orchestrator.cwd, orchestrator.config.contextInjection);
   const contextSize = summarizeContextInjectionSize(contextFiles);
   if (contextSize.warning) ctx.ui?.notify?.(contextSize.warning, "warning");
@@ -172,7 +201,7 @@ export function renderGenericPrompt(orchestrator: Orchestrator, ctx: any, toolNa
   const now = new Date();
   const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
   return [
-    identityBlock({ displayName: info.displayName, family: info.family, tier: info.tier, thinking: orchestrator.config.agents.main.thinking }),
+    identityBlock(info, ctx?.thinkingLevel ?? orchestrator.config.agents.main.thinking),
     [
       "<constraints>",
       "- Own the request end to end. Once the request phases below have cleared, continue autonomously until the outcome is implemented and proportionately validated, or you are blocked by missing information, permissions, or an external failure you cannot resolve.",
@@ -186,7 +215,7 @@ export function renderGenericPrompt(orchestrator: Orchestrator, ctx: any, toolNa
     principlesBlock(),
     skillManifest,
     toolsBlock(toolNames),
-    delegationBlock(info.family, {
+    delegationBlock(info, {
       advisors: buildPoolRoster(orchestrator.config, "advisors"),
       reviewers: buildPoolRoster(orchestrator.config, "reviewers"),
       deepDebuggers: buildPoolRoster(orchestrator.config, "deepDebuggers"),
@@ -350,8 +379,11 @@ function registerLifecycle(orchestrator: Orchestrator): void {
   pi.events.on("subagents:failed", (data: any) => {
     settle(data);
     if (isRateLimitError(data?.error)) {
-      void handleSubagentRateLimit(orchestrator, orchestrator.lastCtx, data?.modelId)
+      void handleSubagentRateLimit(orchestrator, orchestrator.lastCtx, data?.modelId, data?.error)
         .then(() => retrySubagentOnNewRouting(orchestrator, data));
+    } else if (isProviderOutage(data?.error) && data?.modelId) {
+      void handleSubscriptionRouteOutage(orchestrator, orchestrator.lastCtx, data.modelId, "subagent")
+        .then((moved) => moved && retrySubagentOnNewRouting(orchestrator, data));
     } else if (isAuthError(data?.error)) {
       void handleSubagentAuthFailure(orchestrator, orchestrator.lastCtx, data?.modelId)
         .then(() => retrySubagentOnNewRouting(orchestrator, data));
@@ -387,22 +419,19 @@ function registerLifecycle(orchestrator: Orchestrator): void {
     // happens near expiry, exactly when waiting is required.
     try { await refreshSubProvider(pi); } catch {}
     try {
-      const flant = loadFlantSettings(orchestrator.cwd);
-      if (flant.copilotEnabled && !process.env.COPILOT_GITHUB_TOKEN) await refreshCopilotOAuthToken();
-      if (flant.codexEnabled) await refreshCodexOAuthToken();
-      // Unconditional: refreshSubProvider above may have revived a subscription
-      // token that was expired when the tiers were last computed.
-      syncProviderTiers(flant);
-      // A /login between turns gives a tier its credential only after the
+      const settings = loadRoutingSettings(orchestrator.cwd);
+      if (settings.providers.copilot.enabled && !process.env.COPILOT_GITHUB_TOKEN) await refreshCopilotOAuthToken();
+      if (settings.providers.codex.enabled) await refreshCodexOAuthToken();
+      // A /login between turns gives a provider its credential only after the
       // session-start catalog snapshot was taken. pi refreshes its own
       // availability on login, but this copy would still hold no model for the
-      // provider, and tier resolution skips a tier whose catalog is empty.
-      const signature = tierCredentialSignature(flant);
-      if (signature !== lastTierCredentialSignature) {
-        lastTierCredentialSignature = signature;
+      // provider, and resolution skips a provider whose catalog is empty.
+      const signature = credentialSignature(settings);
+      if (signature !== lastCredentialSignature) {
+        lastCredentialSignature = signature;
         captureAvailableModels(ctx);
       }
-      // A tier that just went up or down changes which model each worker
+      // A provider that just went up or down changes which model each worker
       // definition names; the guard inside makes this a no-op when it did not.
       orchestrator.registerAgents();
     } catch {}
@@ -532,8 +561,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     // The ceiling is worth nothing to a status pi does not count as retryable.
     patchRetryPredicate();
     setModelRegistry((ctx as any).modelRegistry);
-    lastTierCredentialSignature = null;
-    captureAvailableModels(ctx);
+    lastCredentialSignature = null;
     try {
       orchestrator.config = loadConfig(ctx.cwd);
       orchestrator.configError = null;
@@ -556,11 +584,11 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     try {
       const { setPI, initFlantOnStartup } = await import("./flant-infra.js");
       setPI(pi);
-      await initFlantOnStartup(pi, ctx.cwd);
-      orchestrator.config = loadConfig(ctx.cwd);
+      await initFlantOnStartup(pi, ctx.cwd, pinnedRoleSpecs(orchestrator.config));
     } catch (error: any) {
-      getLogger().error({ s: "flant", err: error?.message }, "flant initialization failed");
+      getLogger().error({ s: "flant", err: error?.message }, "provider initialization failed");
     }
+    captureAvailableModels(ctx);
     const usage = createUsageTracker();
     const sessionId = ctx.sessionManager?.getSessionId?.() || "";
     if (orchestrator.config.general.tracing && sessionId) initTracer(`${ctx.cwd}/.pp`, sessionId);
@@ -584,7 +612,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       registerFeatureToolsAndAgents(orchestrator);
     });
     if (!await orchestrator.applyMainAgent(ctx)) {
-      ctx.ui?.notify?.(`Main agent model "${orchestrator.config.agents.main.model}" is not available; keeping the current model.`, "warning");
+      ctx.ui?.notify?.(mainUnavailableMessage(orchestrator), "warning");
     }
     // The Claude OAuth token expires within hours. Turn-start refreshes cover
     // active work; this timer keeps the sub provider fresh through long idle
@@ -628,6 +656,13 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     // provider tiers, never back up to the one it came from.
     const type = valid.includes(requested) ? requested : remapPoolName(orchestrator.config, requested);
     if (!type) return { block: true, reason: `subagent_type must be one of: ${valid.join(", ")}` };
+    // The subagent host falls back to the parent's model when a definition's
+    // model is not available, silently: a worker meant to give a second
+    // opinion from another vendor would then just be this session again.
+    const snapshot = getAgentConfigSnapshot(type);
+    if (snapshot?.ref && !catalogHas(snapshot.model)) {
+      return { block: true, reason: `${type} has no model to run on right now (${snapshot.ref}):\n${resolveRef(snapshot.ref).steps.join("\n")}\nPick another subagent, or fix routing in /pp › Settings › Providers.` };
+    }
     input.subagent_type = type;
     input.inherit_context = false;
     input.isolation = undefined;
@@ -690,8 +725,13 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     // whole conversation on a cold cache from inside a tool-call chain.
     await orchestrator.restoreMainRouting(ctx);
     if (message?.stopReason === "error" && isRateLimitError(message?.errorMessage)) {
-      await handleMainRateLimit(orchestrator, ctx, message?.model ?? ctx.model?.id, message?.provider ?? ctx.model?.provider);
+      await handleMainRateLimit(orchestrator, ctx, message?.model ?? ctx.model?.id, message?.provider ?? ctx.model?.provider, message?.errorMessage);
       return;
+    }
+    if (message?.stopReason === "error" && isProviderOutage(message?.errorMessage)) {
+      const provider = message?.provider ?? ctx.model?.provider;
+      const id = message?.model ?? ctx.model?.id;
+      if (provider && id && await handleSubscriptionRouteOutage(orchestrator, ctx, `${provider}/${id}`, "main")) return;
     }
     if (message?.stopReason === "error" && isAuthError(message?.errorMessage)) {
       await handleMainAuthFailure(orchestrator, ctx, message?.model ?? ctx.model?.id, message?.provider ?? ctx.model?.provider);
@@ -768,10 +808,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       delete (globalThis as any)[USAGE_TRACKER_KEY];
       if (orchestrator.mainTurnTimer) clearInterval(orchestrator.mainTurnTimer);
       if (orchestrator.staleAgentTimer) clearInterval(orchestrator.staleAgentTimer);
-      if (orchestrator.subSwitchBackTimer) clearTimeout(orchestrator.subSwitchBackTimer);
-      for (const timer of orchestrator.tierRestoreTimers.values()) clearTimeout(timer);
-      orchestrator.tierRestoreTimers.clear();
-      clearAllTierDemotions();
+      clearAllPauses(orchestrator);
       if (orchestrator.idlePollTimer) clearTimeout(orchestrator.idlePollTimer);
       if (orchestrator.tokenRefreshTimer) clearInterval(orchestrator.tokenRefreshTimer);
       if (orchestrator.modelSwitchPollTimer) clearTimeout(orchestrator.modelSwitchPollTimer);
@@ -781,10 +818,6 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       orchestrator.idlePollTimer = null;
       orchestrator.tokenRefreshTimer = null;
       orchestrator.modelSwitchPollTimer = null;
-      setSubscriptionFallbackActive(false);
-      orchestrator.subFallbackActive = false;
-      orchestrator.subFallbackModelId = null;
-      orchestrator.subFallbackMainPriorSpec = null;
       orchestrator.routedMainSpec = null;
       // A worker settles by lifecycle event; one still in flight at shutdown
       // never sends it, and the watchdog that would have swept it is gone.
