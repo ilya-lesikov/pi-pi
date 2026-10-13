@@ -16,7 +16,7 @@ import {
   isRateLimitError,
   retryHintMs,
 } from "./rate-limit-fallback.js";
-import { clearPauses, forgetLastGood, getPause, isPaused, listPauses, refusalFallbackSpec, resolveSpec, setCatalog } from "./routing.js";
+import { clearPauses, forgetLastGood, getPause, isPaused, listPauses, pause, refusalFallbackSpec, resolveSpec, setCatalog } from "./routing.js";
 
 vi.mock("./flant-infra.js", async (original) => ({
   ...(await original<any>()),
@@ -177,7 +177,7 @@ describe("pause-based rate-limit fallback", () => {
     await handleMainRateLimit(orchestrator, ctx, SUB);
     expect(pauseKeys()).toEqual(["claude-sub"]);
     expect(orchestrator.switchModel).toHaveBeenCalledWith(ctx, COPILOT_OPUS, expect.any(String));
-    expect(orchestrator.pausedMainRoutes.get("claude-sub")).toEqual({ from: SUB, to: COPILOT_OPUS, owned: true, resume: false });
+    expect(orchestrator.pausedMainRoutes.get("claude-sub")).toEqual({ from: SUB, to: COPILOT_OPUS, owned: true, resume: false, generation: 0 });
     expect(orchestrator.routedMainSpec).toBe(COPILOT_OPUS);
     expect(pi.sendUserMessage).toHaveBeenCalled();
   });
@@ -353,6 +353,75 @@ describe("pause-based rate-limit fallback", () => {
     expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Waiting until"), "warning");
   });
 
+  it("does not resume a waiting request the user has since moved past", async () => {
+    vi.useFakeTimers();
+    try {
+      setCatalog([COPILOT_OPUS]);
+      const pi = makePi();
+      const orchestrator = makeOrchestrator(pi);
+      const config = normalizeConfigDurations(getDefaultConfig());
+      config.agents.main.model = COPILOT_OPUS;
+      orchestrator.config = config;
+      orchestrator.routedMainSpec = COPILOT_OPUS;
+      orchestrator.switchModel = vi.fn(async () => true);
+      orchestrator.lastCtx = idleCtxOn(COPILOT_OPUS);
+      await handleMainRateLimit(orchestrator, orchestrator.lastCtx, COPILOT_OPUS, "retry-after: 60");
+      orchestrator.resetContinuation();
+      await vi.advanceTimersByTimeAsync(63_000);
+      expect(pi.sendUserMessage).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a request waiting while another pause still covers its model", async () => {
+    vi.useFakeTimers();
+    try {
+      setCatalog([SUB]);
+      vi.mocked(probeSubscriptionCleared).mockResolvedValue("ok");
+      const pi = makePi();
+      const orchestrator = makeOrchestrator(pi);
+      const config = normalizeConfigDurations(getDefaultConfig());
+      config.agents.main.model = SUB;
+      orchestrator.config = config;
+      orchestrator.routedMainSpec = SUB;
+      orchestrator.switchModel = vi.fn(async () => true);
+      orchestrator.lastCtx = idleCtxOn(SUB);
+      await handleMainRateLimit(orchestrator, orchestrator.lastCtx, SUB);
+      expect(orchestrator.pausedMainRoutes.get("claude-sub")).toMatchObject({ resume: true });
+      // The gateway route fails on its own while the account waits.
+      pause("claude-sub@llm-api", 60 * 60_000, "outage");
+      await vi.advanceTimersByTimeAsync(11 * 60_000);
+      expect(isPaused("claude-sub")).toBe(false);
+      expect(pi.sendUserMessage).not.toHaveBeenCalled();
+      expect(orchestrator.pausedMainRoutes.get("claude-sub@llm-api")).toMatchObject({ resume: true, to: SUB });
+    } finally {
+      vi.mocked(probeSubscriptionCleared).mockResolvedValue("rate_limited");
+      vi.useRealTimers();
+    }
+  });
+
+  it("lifts the subscription's pause when an override leaves nothing routed onto it", async () => {
+    vi.useFakeTimers();
+    try {
+      setCatalog([SUB]);
+      const orchestrator = makeOrchestrator();
+      orchestrator.switchModel = vi.fn(async () => true);
+      orchestrator.lastCtx = idleCtxOn(SUB);
+      await handleMainRateLimit(orchestrator, orchestrator.lastCtx, SUB);
+      expect(isPaused("claude-sub")).toBe(true);
+      const settings = defaultRoutingSettings();
+      settings.models.claude.override = { provider: "zai", model: "glm-5.3" };
+      vi.mocked(loadRoutingSettings).mockReturnValue(settings);
+      await vi.advanceTimersByTimeAsync(11 * 60_000);
+      expect(isPaused("claude-sub")).toBe(false);
+      expect(probeSubscriptionCleared).not.toHaveBeenCalledWith(SUB);
+    } finally {
+      vi.mocked(loadRoutingSettings).mockReturnValue(defaultRoutingSettings());
+      vi.useRealTimers();
+    }
+  });
+
   it("resumes a request that waited out a pause once the pause expires", async () => {
     vi.useFakeTimers();
     try {
@@ -406,7 +475,7 @@ describe("pause-based rate-limit fallback", () => {
     expect(isPaused("claude-sub")).toBe(false);
     expect(orchestrator.switchModel).toHaveBeenCalledWith(ctx, DIRECT, expect.any(String));
     expect(orchestrator.routedMainSpec).toBe(DIRECT);
-    expect(orchestrator.pausedMainRoutes.get("claude-sub@llm-api")).toEqual({ from: SUB, to: DIRECT, owned: true, resume: false });
+    expect(orchestrator.pausedMainRoutes.get("claude-sub@llm-api")).toEqual({ from: SUB, to: DIRECT, owned: true, resume: false, generation: 0 });
     expect(pi.sendUserMessage).toHaveBeenCalled();
   });
 

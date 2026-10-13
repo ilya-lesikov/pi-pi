@@ -149,7 +149,7 @@ async function pauseAndReroute(
     const next = ref ? resolveSpec(ref) : null;
     if (!next || next === current) {
       switchCtx?.ui?.notify?.(`${trigger}; nothing else serves ${current}. Waiting until ${formatUntil(entry)}; the request resumes then.${recovery}`, "warning");
-      if (resumeRequest) orchestrator.pausedMainRoutes.set(key, { from: current, to: current, owned, resume: true });
+      if (resumeRequest) orchestrator.pausedMainRoutes.set(key, { from: current, to: current, owned, resume: true, generation: orchestrator.continuationGeneration });
       return;
     }
     try {
@@ -162,19 +162,24 @@ async function pauseAndReroute(
       return;
     }
     if (owned) orchestrator.routedMainSpec = next;
-    orchestrator.pausedMainRoutes.set(key, { from: current, to: next, owned, resume: false });
+    orchestrator.pausedMainRoutes.set(key, { from: current, to: next, owned, resume: false, generation: orchestrator.continuationGeneration });
     const paid = splitSpec(next)?.provider === LLM_API_PROVIDER ? " (paid)" : "";
     switchCtx?.ui?.notify?.(`${trigger}; switched to ${next}${paid} until ${formatUntil(entry)}.${recovery}`, "warning");
     if (resumeRequest) orchestrator.queueContinuation("[PI-PI] Provider routing changed after a provider failure. Continue the current request.");
   });
 }
 
+/** The pause still covering `spec`, so a waiting request can follow it. */
+function routeHolding(spec: string): string | null {
+  const key = pauseKeyForSpec(spec);
+  if (key && isPaused(key)) return key;
+  const route = routeOfConcrete(splitSpec(spec)?.provider ?? "");
+  return route && isPaused(routePauseKey(route)) ? routePauseKey(route) : null;
+}
+
 /** Whether `spec` is unusable under the current pauses. */
 function isPausedFor(spec: string): boolean {
-  const key = pauseKeyForSpec(spec);
-  if (key && isPaused(key)) return true;
-  const route = routeOfConcrete(splitSpec(spec)?.provider ?? "");
-  return !!route && isPaused(routePauseKey(route));
+  return routeHolding(spec) !== null;
 }
 
 /**
@@ -221,6 +226,18 @@ async function restoreMovedMain(orchestrator: Orchestrator, key: string, why: st
       return;
     }
     if (moved.resume) {
+      // Only the request that stopped, and only once nothing else holds it:
+      // the user may have moved on, or another limit may still cover the model.
+      if (moved.generation !== orchestrator.continuationGeneration) {
+        restored = true;
+        return;
+      }
+      const holder = routeHolding(moved.to);
+      if (holder) {
+        if (!orchestrator.pausedMainRoutes.has(holder)) orchestrator.pausedMainRoutes.set(holder, moved);
+        restored = true;
+        return;
+      }
       restored = true;
       ctx?.ui?.notify?.(`${why}; resuming.`, "info");
       orchestrator.queueContinuation("[PI-PI] The provider limit cleared. Continue the current request.");
@@ -390,8 +407,13 @@ export function armSwitchBackProbe(orchestrator: Orchestrator, probeSpec: string
     if (!isPaused("claude-sub") || !spec) return;
     // Nothing routes onto the subscription any more — an override took the
     // Claude family elsewhere — so its credential is left alone.
+    // Its pause is lifted rather than left without a probe to end it: should
+    // routing come back to the subscription, it is tried afresh.
     if (!isClaudeSubInUse(loadRoutingSettings(orchestrator.cwd), pinnedRoleSpecs(orchestrator.config))) {
       orchestrator.subProbeSpec = null;
+      unpause("claude-sub");
+      orchestrator.pausedMainRoutes.delete("claude-sub");
+      orchestrator.registerAgents();
       return;
     }
     const outcome = await probeSubscriptionCleared(spec);

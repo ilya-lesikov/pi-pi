@@ -92,7 +92,7 @@ export class Orchestrator {
    * exactly that: whether pi-pi owned the session's model, and whether the
    * request was left waiting rather than moved.
    */
-  pausedMainRoutes = new Map<string, { from: string; to: string; owned: boolean; resume: boolean }>();
+  pausedMainRoutes = new Map<string, { from: string; to: string; owned: boolean; resume: boolean; generation: number }>();
   /**
    * The spec pi-pi last routed the root session onto. A live model still equal
    * to it is one pi-pi chose, so re-routing it is safe; anything else is the

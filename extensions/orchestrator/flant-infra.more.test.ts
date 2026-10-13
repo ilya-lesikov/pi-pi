@@ -357,6 +357,19 @@ describe("probeSubscriptionCleared", () => {
     mod.setProbeRoutePolicy(["llm-api", "direct"], () => false);
   });
 
+  it("probes a model the chosen route actually serves", async () => {
+    const dir = makeTempDir();
+    writeAuth(dir);
+    process.env.LLM_API_KEY = "gw";
+    const mod = await loadModule(dir);
+    mod.setModelRegistry({ getApiKeyForProvider: async () => undefined, find: () => undefined, getAll: () => [{ provider: "anthropic", id: "claude-opus-5" }] });
+    mod.registerFlantProviders({ registerProvider: vi.fn(), unregisterProvider: vi.fn() } as any, ["sub/claude-haiku-4-5"], {});
+    const fn = stubFetch(() => ({ ok: true, status: 200 }));
+    await mod.probeSubscriptionCleared("pp-claude-sub/claude-opus-5");
+    expect(fn.mock.calls[0][0]).toBe("https://llm-api.flant.ru/v1/messages");
+    expect(JSON.parse(fn.mock.calls[0][1].body).model).toBe("sub/claude-haiku-4-5");
+  });
+
   it("skips the probe when only the gateway route is registered and the key is gone", async () => {
     const dir = makeTempDir();
     writeAuth(dir);

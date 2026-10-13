@@ -823,13 +823,23 @@ export function setProbeRoutePolicy(order: Array<"direct" | "llm-api">, skip: (r
 function probeTarget(probeModel: string): { url: string; model: string; headers: Record<string, string> } | null {
   const gatewayKey = readGatewayApiKey();
   const catalogs = subProviderContext?.catalogs;
+  const bare = probeModel.slice(SUB_MODEL_PREFIX.length);
+  // The model the probe names has to exist on the route it goes to, or every
+  // probe fails as model-not-found and the account pause never lifts; any model
+  // the route serves answers for the same account's quota.
+  const servedOn = (ids: string[] | undefined): string | null => {
+    if (!ids) return bare;
+    return ids.includes(bare) ? bare : ids[0] ?? null;
+  };
   for (const route of probeRouteOrder) {
     if (probeRouteSkip(route)) continue;
-    if (route === "llm-api" && gatewayKey && (!catalogs || catalogs.gateway.length > 0)) {
-      return { url: "https://llm-api.flant.ru/v1/messages", model: probeModel, headers: { "x-litellm-api-key": `Bearer ${gatewayKey}` } };
+    if (route === "llm-api" && gatewayKey) {
+      const model = servedOn(catalogs?.gateway);
+      if (model) return { url: "https://llm-api.flant.ru/v1/messages", model: `${SUB_MODEL_PREFIX}${model}`, headers: { "x-litellm-api-key": `Bearer ${gatewayKey}` } };
     }
-    if (route === "direct" && (!catalogs || catalogs.direct.length > 0)) {
-      return { url: "https://api.anthropic.com/v1/messages", model: probeModel.slice(SUB_MODEL_PREFIX.length), headers: {} };
+    if (route === "direct") {
+      const model = servedOn(catalogs?.direct);
+      if (model) return { url: "https://api.anthropic.com/v1/messages", model, headers: {} };
     }
   }
   return null;

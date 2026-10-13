@@ -968,7 +968,7 @@ describe("session-first core", () => {
     const expiry = vi.fn();
     orchestrator.pauseTimers.set("copilot:claude/opus", setTimeout(expiry, 60_000));
     orchestrator.subProbeSpec = "pp-flant-anthropic-sub/sub/claude-opus-4-8";
-    orchestrator.pausedMainRoutes.set("claude-sub", { from: "pp-flant-anthropic-sub/sub/claude-opus-4-8", to: "github-copilot/claude-opus-4.5", owned: true, resume: false });
+    orchestrator.pausedMainRoutes.set("claude-sub", { from: "pp-flant-anthropic-sub/sub/claude-opus-4-8", to: "github-copilot/claude-opus-4.5", owned: true, resume: false, generation: 0 });
     orchestrator.routedMainSpec = "github-copilot/claude-opus-4.5";
     registerEventHandlers(orchestrator);
     await emit(pi, "session_shutdown", {}, { sessionManager: {}, ui: {} });
