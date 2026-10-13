@@ -14,7 +14,9 @@ function claudePayload(system: Array<{ type: string; text: string }>) {
 describe("buildUserAgent", () => {
   it("uses a Claude Code version supported by current subscription models", () => {
     const [major, minor, patch] = CC_VERSION.split(".").map(Number);
-    expect(major * 1_000_000 + minor * 1_000 + patch).toBeGreaterThanOrEqual(2_001_251);
+    // Floor = the newest version gate Anthropic has rejected us with so far
+    // (claude-opus-5-5 demands 2.1.280+). Raise it when a newer model gates higher.
+    expect(major * 1_000_000 + minor * 1_000 + patch).toBeGreaterThanOrEqual(2_001_280);
   });
 
   it("produces the full-form claude-cli user agent matching cc_version", () => {
