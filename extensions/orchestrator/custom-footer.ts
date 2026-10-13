@@ -6,6 +6,7 @@ import type { ExtensionContext, ReadonlyFooterDataProvider, Theme } from "@earen
 import { truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 import type { UsageTracker } from "./usage-tracker.js";
 import type { Orchestrator } from "./orchestrator.js";
+import { LLM_API_PROVIDER, concreteProviderLabel } from "./routing.js";
 
 // Resolve the pi-pi package version once at module load. ESM-safe: resolve
 // package.json relative to this module's URL (never __dirname or a fixed
@@ -137,7 +138,10 @@ function renderStatsLine(width: number, theme: Theme): string {
   const modelId = ctx?.model?.id ?? "no-model";
   const provider = ctx?.model?.provider ?? "unknown";
   const thinkingLevel = toThinkingLevel(ctx);
-  let right = `(${provider}) ${modelId} • ${thinkingLevel}`;
+  // Per-token billing is the one routing outcome worth seeing at a glance:
+  // automatic fallback can land there without asking.
+  const paid = provider === LLM_API_PROVIDER ? " [paid]" : "";
+  let right = `(${concreteProviderLabel(provider)}) ${modelId}${paid} • ${thinkingLevel}`;
 
   let leftWidth = visibleWidth(left);
   if (leftWidth > width) {
