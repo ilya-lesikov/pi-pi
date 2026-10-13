@@ -24,8 +24,8 @@ Start Pi and talk to it normally. The initial Pi session owns all work; pi-pi do
 - bounded background workers;
 - reloadable skills;
 - prompt size and recall;
-- main and worker model routing;
-- provider configuration.
+- providers, model slots and family overrides;
+- main and worker models.
 
 ## Memory
 
@@ -70,6 +70,17 @@ Workers receive no duplicated task artifact bundle. They can search the owning s
 
 The pi-acp fork can expose `/pp`, usage, workers, elicitation, and session status in clients such as Zed. pi-pi no longer publishes a phase pipeline because there is none.
 
-## Flant
+## Models and providers
 
-Flant model discovery and provider routing remain available through scoped `.pp/config.json` configuration.
+Roles name a model slot, not a provider: Claude Haiku, Sonnet, Opus and Fable, and GPT Luna, Terra, Sol and Astra (GPT also with a costlier Pro variant), written `claude/opus` or `gpt/astra:pro` in config. Each slot runs on the newest version the first provider in a priority list serves:
+
+- Claude subscription — reached directly or through the LLM API gateway, in the order you choose;
+- ChatGPT subscription;
+- GitHub Copilot;
+- LLM API — paid per token.
+
+A provider without credentials serves nothing and is passed over. On a rate limit the provider steps aside — a subscription for the whole account, the others for that one model — and work moves to the next one that serves the slot, paid LLM API included; it comes back once the limit clears. A slot can be locked to one version, and a role can name an exact `provider/model`, which routing then never moves.
+
+A whole family can be replaced by another provider's models, for example every Claude slot served by a cheaper model from a provider pi already has credentials for. It still reads as "Claude Opus · override zai/glm-5.3" everywhere; an overridden family does not fall back to another provider.
+
+All of this is under `/pp → Settings → Providers` and `Models`, scoped globally or per project; `Explain routing` shows what each slot runs on and why.
