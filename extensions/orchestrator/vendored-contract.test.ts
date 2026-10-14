@@ -135,6 +135,15 @@ describe("vendored pi-subagents contract — local patches", () => {
     const index = readFileSync(join(vendoredSrc, "index.ts"), "utf-8");
     expect(index).toContain("MODEL_CHOICE_GUIDELINES");
     expect(index).toMatch(/applyExtensionOnlyToolSurface\(data\.enabled\)/);
+    expect(index).toContain("ISOLATION_GUIDELINES");
+  });
+
+  // pi validates a tool call against its schema before the tool_call hook runs,
+  // so without the parameter a spawn naming skills is rejected outright, and
+  // code-rules silently stops reaching the workers that write code.
+  it("accepts the skills list pi-pi preloads into a spawn", () => {
+    const index = readFileSync(join(vendoredSrc, "index.ts"), "utf-8");
+    expect(index).toMatch(/skills: Type\.Optional\(\s*Type\.Array\(Type\.String\(\)/);
   });
 
   // pi-pi resumes a worker that died on a rate-limited provider instead of

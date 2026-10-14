@@ -148,6 +148,27 @@ function selectedSkills(orchestrator: Orchestrator) {
   return listLayeredSkills(orchestrator.cwd, enabledSkillLayers(orchestrator.config.skills));
 }
 
+// Subagents cannot load skills themselves, so the spawn names them and they
+// arrive inside the prompt, resolved through the same layers the main agent
+// sees. A name that resolves to nothing, or to guidance written for the main
+// agent, blocks the spawn: a worker started without the rules it was promised
+// would follow none of them and say nothing.
+export function preloadSkillsForSpawn(orchestrator: Orchestrator, requested: unknown): string[] | string {
+  if (requested === undefined || requested === null) return [];
+  if (!Array.isArray(requested) || requested.some((name) => typeof name !== "string")) return "skills must be an array of skill names.";
+  const layers = enabledSkillLayers(orchestrator.config.skills);
+  const available = listLayeredSkills(orchestrator.cwd, layers);
+  const shareable = available.filter((skill) => skill.audience === "any").map((skill) => skill.name);
+  const documents: string[] = [];
+  for (const name of [...new Set(requested as string[])]) {
+    const skill = available.find((candidate) => candidate.name === name);
+    if (!skill) return `Unknown skill "${name}". Skills a subagent can use: ${shareable.join(", ") || "none"}.`;
+    if (skill.audience !== "any") return `Skill "${name}" is written for the main agent and cannot be given to a subagent; inline what the subagent needs instead. Skills a subagent can use: ${shareable.join(", ") || "none"}.`;
+    documents.push(loadLayeredSkill(name, orchestrator.cwd, layers).document);
+  }
+  return documents;
+}
+
 // Front-load everything that needs the user, so they are present for
 // clarification and design and absent for execution. The gate is a written
 // proposal AND an ask_user call, never one alone: prose by itself only ends the
@@ -186,7 +207,8 @@ export function renderGenericPrompt(orchestrator: Orchestrator, ctx: any, toolNa
   const skillManifest = skills.length === 0 ? "" : [
     "<skills>",
     "Detailed operating guidance lives in skills, loaded via load_skill. Each entry below is the skill's own description and states WHEN it applies — a hard trigger: load the skill BEFORE starting matching work. Skill documents are stateless and reloadable.",
-    ...skills.map((skill) => `- ${skill.name}: ${skill.description} (${skill.layer})`),
+    ...(skills.some((skill) => skill.audience === "any") ? ["Subagents cannot load skills. Entries marked \"subagents\" can be handed to one: name them in the Agent call's skills parameter and they are preloaded into its prompt. The rest are written for you alone."] : []),
+    ...skills.map((skill) => `- ${skill.name}: ${skill.description} (${skill.layer}${skill.audience === "any" ? ", subagents" : ""})`),
     "</skills>",
   ].join("\n");
   const now = new Date();
@@ -210,7 +232,7 @@ export function renderGenericPrompt(orchestrator: Orchestrator, ctx: any, toolNa
       advisors: buildPoolRoster(orchestrator.config, "advisors"),
       reviewers: buildPoolRoster(orchestrator.config, "reviewers"),
       deepDebuggers: buildPoolRoster(orchestrator.config, "deepDebuggers"),
-    }),
+    }, skills.filter((skill) => skill.audience === "any").map((skill) => skill.name)),
     // Explained once here rather than beside every notice: a long session folds
     // hundreds of calls, and repeating it would cost thousands of tokens out of
     // the recent tool history the folding exists to protect.
@@ -654,6 +676,11 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (snapshot?.ref && !catalogHas(snapshot.model)) {
       return { block: true, reason: `${type} has no model to run on right now (${snapshot.ref}):\n${resolveRef(snapshot.ref).steps.join("\n")}\nPick another subagent, or fix routing in /pp › Settings › Providers.` };
     }
+    // A resumed agent already holds what its first spawn preloaded.
+    const preload = input.resume ? [] : preloadSkillsForSpawn(orchestrator, input.skills);
+    if (typeof preload === "string") return { block: true, reason: preload };
+    if (preload.length > 0) input.prompt = [...preload, String(input.prompt ?? "")].join("\n\n");
+    delete input.skills;
     input.subagent_type = type;
     input.inherit_context = false;
     input.isolation = undefined;

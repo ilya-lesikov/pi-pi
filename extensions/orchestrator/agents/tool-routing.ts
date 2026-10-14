@@ -23,9 +23,9 @@ export function principlesBlock(): string {
 export const FAILURE_RECOVERY = [
   "<failure_recovery>",
   "If an attempt fails, analyze root cause before retrying — don't repeat the same approach.",
-  "After 3 failed attempts at the same issue:",
+  "After two failed attempts at the same issue:",
   "1. STOP immediately",
-  "2. Revert to the last known-good state if possible",
+  "2. Revert your own edits to the last known-good state if possible; never touch changes you did not make",
   "3. Document what you tried and why it failed",
   "4. Report the blocker — do not keep pushing",
   "</failure_recovery>",
@@ -222,6 +222,7 @@ function knownOtherVendor(driver: string, entry: RosterEntry): boolean {
 export function delegationBlock(
   driver: ModelDescription,
   pools: { advisors: RosterEntry[]; reviewers: RosterEntry[]; deepDebuggers: RosterEntry[] },
+  shareableSkills: readonly string[] = [],
 ): string {
   const crossVendor = [...pools.advisors, ...pools.reviewers, ...pools.deepDebuggers].some((entry) => knownOtherVendor(driver.vendor, entry));
   const picking = crossVendor
@@ -251,7 +252,8 @@ export function delegationBlock(
     "",
     "Spawn a reviewer on the diff when the change is one your tests cannot exercise (UI, vendored",
     "code, packaging), when it alters behavior on a path other code shares, or before reporting a",
-    "multi-commit batch as done. Skip it when a test you wrote already proves the change.",
+    "multi-commit batch as done. Skip it when a test you wrote already proves the change, unless a",
+    "skill you loaded requires the review: the skill's rule wins.",
     "Spawn advisors BEFORE committing to something you would have to unwind: deleting or renaming",
     "public surface, changing a default others depend on, or choosing between materially different",
     "designs. A green suite is not evidence that either judgment was right.",
@@ -282,6 +284,7 @@ export function delegationBlock(
     "",
     "Every subagent starts with an EMPTY context: state what matters in the spawn prompt, or tell",
     "it to vcc_recall the main-session history.",
+    ...(shareableSkills.includes("code-rules") ? ['Pass skills: ["code-rules"] on every spawn that writes code.'] : []),
     "</delegation>",
   ].join("\n");
 }

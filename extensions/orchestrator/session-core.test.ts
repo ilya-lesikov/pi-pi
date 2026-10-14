@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -6,7 +6,7 @@ import { getDefaultConfig, normalizeConfigDurations } from "./config.js";
 import { Orchestrator } from "./orchestrator.js";
 import { buildAcpState } from "./acp.js";
 import { clearPauses, forgetLastGood, isPaused, listPauses, pause, setCatalog, unpause } from "./routing.js";
-import { classifyContinuation, isMainTurnStalled, registerEventHandlers, registerLoadSkill, registerSubagentPromptcap, renderGenericPrompt } from "./event-handlers.js";
+import { classifyContinuation, isMainTurnStalled, preloadSkillsForSpawn, registerEventHandlers, registerLoadSkill, registerSubagentPromptcap, renderGenericPrompt } from "./event-handlers.js";
 import { listLayeredSkills } from "./skills-manifest.js";
 import { createUsageTracker } from "./usage-tracker.js";
 import initExtension from "./index.js";
@@ -1253,10 +1253,115 @@ describe("session-first core", () => {
     const pi = makePi();
     registerLoadSkill(pi, "/tmp/project");
     const registration = pi.registerTool.mock.calls.find((call: any[]) => call[0].name === "load_skill")[0];
-    expect(registration.description).toContain("software-engineering");
-    const result = await registration.execute("id", { name: "software-engineering" });
+    expect(registration.description).toContain("code-rules");
+    const result = await registration.execute("id", { name: "code-rules" });
     expect(result.isError).not.toBe(true);
-    expect(result.content[0].text).toContain('<skill name="software-engineering" source="bundled" dir=');
+    expect(result.content[0].text).toContain('<skill name="code-rules" source="bundled" dir=');
+  });
+
+  describe("skills preloaded into a spawn", () => {
+    const setup = () => {
+      const project = mkdtempSync(join(tmpdir(), "pp-spawn-skills-"));
+      const write = (name: string, audience: string | undefined, body: string) => {
+        mkdirSync(join(project, ".pi", "skills", name), { recursive: true });
+        writeFileSync(join(project, ".pi", "skills", name, "SKILL.md"), `---\nname: ${name}\ndescription: ${name} guidance\n${audience ? `audience: ${audience}\n` : ""}---\n\n${body}\n`);
+      };
+      write("shared-rules", "any", "Rule for everyone.");
+      write("main-flow", undefined, "Spawn three reviewers.");
+      const pi = makePi();
+      const orchestrator = new Orchestrator(pi);
+      orchestrator.cwd = project;
+      orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+      return { project, pi, orchestrator };
+    };
+
+    it("prepends a shareable skill to the prompt and strips the parameter", async () => {
+      const { project, pi, orchestrator } = setup();
+      setCatalog(["openai-codex/gpt-6-astra-pro", "pp-flant-anthropic-sub/sub/claude-fable-5-1"]);
+      try {
+        orchestrator.registerAgents(true);
+        registerEventHandlers(orchestrator);
+        const ctx = { cwd: project, model: { provider: "test", id: "model" }, ui: { notify: vi.fn() }, sessionManager: {} };
+        const call = { toolName: "Agent", input: { subagent_type: "advisor_gpt-astra-pro_high", prompt: "Do the slice.", skills: ["shared-rules"] } as Record<string, unknown> };
+        expect(await emitForResult(pi, "tool_call", call, ctx)).toBeUndefined();
+        expect(call.input.skills).toBeUndefined();
+        expect(String(call.input.prompt)).toMatch(/^<skill name="shared-rules" source="project" dir="[^"]+">\nRule for everyone\.\n<\/skill>\n\nDo the slice\.$/);
+        // A resumed agent already holds the skill from its first spawn.
+        const resumed = { toolName: "Agent", input: { subagent_type: "advisor_gpt-astra-pro_high", resume: "abc", prompt: "Continue.", skills: ["shared-rules"] } as Record<string, unknown> };
+        expect(await emitForResult(pi, "tool_call", resumed, ctx)).toBeUndefined();
+        expect(resumed.input.prompt).toBe("Continue.");
+        expect(resumed.input.skills).toBeUndefined();
+      } finally {
+        resetRouting();
+        rmSync(project, { recursive: true, force: true });
+      }
+    });
+
+    it("blocks a spawn naming an unknown or main-only skill", () => {
+      const { project, orchestrator } = setup();
+      try {
+        expect(preloadSkillsForSpawn(orchestrator, ["nope"])).toContain('Unknown skill "nope"');
+        const mainOnly = preloadSkillsForSpawn(orchestrator, ["main-flow"]);
+        expect(mainOnly).toContain("written for the main agent");
+        expect(mainOnly).toContain("shared-rules");
+        expect(preloadSkillsForSpawn(orchestrator, "shared-rules")).toContain("must be an array");
+        expect(preloadSkillsForSpawn(orchestrator, undefined)).toEqual([]);
+        expect(preloadSkillsForSpawn(orchestrator, [])).toEqual([]);
+        expect(preloadSkillsForSpawn(orchestrator, ["shared-rules", "shared-rules"])).toHaveLength(1);
+      } finally {
+        rmSync(project, { recursive: true, force: true });
+      }
+    });
+
+    // A project skill shadows the bundled one by name, audience included: a
+    // local code-rules without the key turns the shared one main-only.
+    it("follows the shadowing skill's audience", () => {
+      const { project, orchestrator } = setup();
+      try {
+        mkdirSync(join(project, ".pi", "skills", "code-rules"), { recursive: true });
+        writeFileSync(join(project, ".pi", "skills", "code-rules", "SKILL.md"), "---\nname: code-rules\ndescription: local rules\n---\n\nLocal.\n");
+        expect(preloadSkillsForSpawn(orchestrator, ["code-rules"])).toContain("written for the main agent");
+        const prompt = renderGenericPrompt(orchestrator, { cwd: project, model: { provider: "test", id: "model" } } as any, ["Agent", "load_skill"]);
+        expect(prompt).not.toContain('skills: ["code-rules"]');
+      } finally {
+        rmSync(project, { recursive: true, force: true });
+      }
+    });
+
+    it("tells the main agent to pass code-rules only while it is shareable", () => {
+      const { project, orchestrator } = setup();
+      try {
+        const prompt = renderGenericPrompt(orchestrator, { cwd: project, model: { provider: "test", id: "model" } } as any, ["Agent", "load_skill"]);
+        expect(prompt).toContain('Pass skills: ["code-rules"] on every spawn that writes code.');
+        orchestrator.config.skills.loadBundled = false;
+        const without = renderGenericPrompt(orchestrator, { cwd: project, model: { provider: "test", id: "model" } } as any, ["Agent", "load_skill"]);
+        expect(without).not.toContain('skills: ["code-rules"]');
+      } finally {
+        rmSync(project, { recursive: true, force: true });
+      }
+    });
+
+    it("respects disabled skill layers", () => {
+      const { project, orchestrator } = setup();
+      try {
+        orchestrator.config.skills.loadProject = false;
+        expect(preloadSkillsForSpawn(orchestrator, ["shared-rules"])).toContain('Unknown skill "shared-rules"');
+      } finally {
+        rmSync(project, { recursive: true, force: true });
+      }
+    });
+
+    it("marks shareable skills in the catalog", () => {
+      const { project, orchestrator } = setup();
+      try {
+        const prompt = renderGenericPrompt(orchestrator, { cwd: project, model: { provider: "test", id: "model" } } as any, ["Agent", "load_skill"]);
+        expect(prompt).toContain("- shared-rules: shared-rules guidance (project, subagents)");
+        expect(prompt).toContain("- main-flow: main-flow guidance (project)");
+        expect(prompt).toContain("Agent call's skills parameter");
+      } finally {
+        rmSync(project, { recursive: true, force: true });
+      }
+    });
   });
 
   // The <skills> catalog already carries every description and the rule that

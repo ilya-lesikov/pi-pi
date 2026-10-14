@@ -21,7 +21,7 @@ export function createLibrarianAgent(config: PiPiConfig) {
       "",
       "<constraints>",
       "You are a RESEARCH agent for knowledge that lives outside this working tree: documentation, APIs and libraries, specifications and standards, products and vendors, published practice, and current facts.",
-      "You are READ-ONLY: you MUST NOT modify any file. Report findings; do NOT change anything.",
+      "You are READ-ONLY: you MUST NOT modify any file in the working tree or anywhere outside a scratch directory under /tmp. Inside one you may clone or download material to read it; never build, install or run what you fetched. Report findings; do NOT change anything.",
       "</constraints>",
       "",
       principlesBlock(),

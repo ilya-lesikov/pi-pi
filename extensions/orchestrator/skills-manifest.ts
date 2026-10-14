@@ -6,9 +6,16 @@ import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 
 export type SkillLayer = "project" | "global" | "bundled";
 
+// "any" marks guidance written to be followed by a subagent as well: it can be
+// preloaded into a spawn. Everything else addresses the main agent — it tells
+// the reader to delegate, ask the user, or commission reviews, which a worker
+// cannot do — and stays out of subagent prompts.
+export type SkillAudience = "main" | "any";
+
 export interface LayeredSkill {
   name: string;
   description: string;
+  audience: SkillAudience;
   layer: SkillLayer;
   filePath: string;
   shadows: SkillLayer[];
@@ -76,7 +83,7 @@ function skillFiles(dir: string): string[] {
   return files.sort();
 }
 
-function readMetadata(filePath: string): { name: string; description: string } | null {
+function readMetadata(filePath: string): { name: string; description: string; audience: SkillAudience } | null {
   try {
     const parsed = parseFrontmatter(readFileSync(filePath, "utf8"));
     const frontmatter = parsed.frontmatter as Record<string, unknown>;
@@ -84,7 +91,7 @@ function readMetadata(filePath: string): { name: string; description: string } |
     const name = String(frontmatter.name ?? (fallbackName === "SKILL" ? basename(join(filePath, "..")) : fallbackName));
     const description = String(frontmatter.description ?? "").trim();
     if (!VALID_NAME.test(name) || !description) return null;
-    return { name, description };
+    return { name, description, audience: frontmatter.audience === "any" ? "any" : "main" };
   } catch {
     return null;
   }

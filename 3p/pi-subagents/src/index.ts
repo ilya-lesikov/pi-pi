@@ -58,6 +58,14 @@ import { addUsage, getLifetimeTotal, getSessionContextPercent, type LifetimeUsag
 const MODEL_CHOICE_GUIDELINES = `- Use model to specify a different model (as "provider/modelId", or fuzzy e.g. "haiku", "sonnet").
 - Use thinking to control extended thinking level.
 `;
+// LOCAL PATCH (pi-pi): likewise dropped in extension-only mode, where the host
+// forces a fresh context and no worktree on every spawn.
+const ISOLATION_GUIDELINES = `- Use inherit_context if the agent needs the parent conversation history.
+- Use isolation: "worktree" to run the agent in an isolated git worktree (safe parallel file modifications). The worktree is automatically cleaned up if the agent makes no changes; otherwise the path and branch are returned in the result.`;
+const COMPACT_ISOLATION_GUIDELINE = `
+- isolation: "worktree" runs the agent in an isolated git worktree; changes land on a branch.`;
+const INHERIT_CONTEXT_PARAM_DESC = "If true, fork parent conversation into the agent. Default: false (fresh context).";
+const ISOLATION_PARAM_DESC = 'Set to "worktree" to run the agent in a temporary git worktree (isolated copy of the repo). Changes are saved to a branch on completion.';
 const MODEL_PARAM_DESC = 'Optional model override. Accepts "provider/modelId" or fuzzy name (e.g. "haiku", "sonnet"). Omit to use the agent type\'s default.';
 const THINKING_PARAM_DESC = "Thinking level: off, minimal, low, medium, high, xhigh. Overrides agent default.";
 
@@ -293,14 +301,19 @@ export default function (pi: ExtensionAPI) {
   // a parameter schema, it is copied by value when the tool is wrapped.
   let modelParamSchema: { description?: string } | undefined;
   let thinkingParamSchema: { description?: string } | undefined;
+  let inheritContextParamSchema: { description?: string } | undefined;
+  let isolationParamSchema: { description?: string } | undefined;
   let agentToolDefinition: { description: string } | undefined;
   const applyExtensionOnlyToolSurface = (enabled: boolean): void => {
     const pinned = "Ignored in this session: the agent type fixes this.";
     if (modelParamSchema) modelParamSchema.description = enabled ? pinned : MODEL_PARAM_DESC;
     if (thinkingParamSchema) thinkingParamSchema.description = enabled ? pinned : THINKING_PARAM_DESC;
+    const forced = "Ignored in this session: every agent starts with a fresh context in the shared working tree.";
+    if (inheritContextParamSchema) inheritContextParamSchema.description = enabled ? forced : INHERIT_CONTEXT_PARAM_DESC;
+    if (isolationParamSchema) isolationParamSchema.description = enabled ? forced : ISOLATION_PARAM_DESC;
     if (!agentToolDefinition) return;
     const next = enabled
-      ? agentToolDescription.replace(MODEL_CHOICE_GUIDELINES, "")
+      ? agentToolDescription.replace(MODEL_CHOICE_GUIDELINES, "").replace(`\n${ISOLATION_GUIDELINES}`, "").replace(COMPACT_ISOLATION_GUIDELINE, "")
       : agentToolDescription;
     if (next === agentToolDefinition.description) return;
     agentToolDefinition.description = next;
@@ -796,8 +809,7 @@ Notes:
 - description: 3-5 words (shown in UI). Prompts must be self-contained — the agent has not seen this conversation.
 - Parallel work: one message, multiple Agent calls, run_in_background: true on each. You are notified when background agents finish — never poll or sleep.
 - The result is not shown to the user — summarize it for them. Verify an agent's claimed code changes before reporting work done.
-- resume continues a previous agent by ID; steer_subagent messages a running one.
-- isolation: "worktree" runs the agent in an isolated git worktree; changes land on a branch.`;
+- resume continues a previous agent by ID; steer_subagent messages a running one.${COMPACT_ISOLATION_GUIDELINE}`;
 
   const fullAgentToolDescription = `Launch a new agent to handle complex, multi-step tasks autonomously. Each agent type has specific capabilities and tools available to it.
 
@@ -826,8 +838,7 @@ If the target is already known, use a direct tool — \`read\` for a known path,
 - Use steer_subagent to send mid-run messages to a running background agent.
 - Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, etc.), since it is not aware of the user's intent.
 - If an agent's description says it should be used proactively, try to use it without the user having to ask for it first.
-${MODEL_CHOICE_GUIDELINES}- Use inherit_context if the agent needs the parent conversation history.
-- Use isolation: "worktree" to run the agent in an isolated git worktree (safe parallel file modifications). The worktree is automatically cleaned up if the agent makes no changes; otherwise the path and branch are returned in the result.${scheduleGuideline}
+${MODEL_CHOICE_GUIDELINES}${ISOLATION_GUIDELINES}${scheduleGuideline}
 
 ## Writing the prompt
 
@@ -941,14 +952,21 @@ Terse command-style prompts produce shallow, generic work.
           description: "If true, agent gets no extension/MCP tools — only built-in tools.",
         }),
       ),
-      inherit_context: Type.Optional(
+      inherit_context: (inheritContextParamSchema = Type.Optional(
         Type.Boolean({
-          description: "If true, fork parent conversation into the agent. Default: false (fresh context).",
+          description: INHERIT_CONTEXT_PARAM_DESC,
         }),
-      ),
-      isolation: Type.Optional(
+      )),
+      isolation: (isolationParamSchema = Type.Optional(
         Type.Literal("worktree", {
-          description: 'Set to "worktree" to run the agent in a temporary git worktree (isolated copy of the repo). Changes are saved to a branch on completion.',
+          description: ISOLATION_PARAM_DESC,
+        }),
+      )),
+      // LOCAL PATCH (pi-pi): the host extension resolves these through its own
+      // skill layers and preloads them into the prompt before the call runs.
+      skills: Type.Optional(
+        Type.Array(Type.String(), {
+          description: "Skill names to preload into the agent's prompt. Only skills marked as usable by subagents in your skills catalog are accepted.",
         }),
       ),
       ...scheduleParam,

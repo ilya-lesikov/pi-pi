@@ -129,9 +129,25 @@ describe("toolDescriptionMode", () => {
     expect(pinned.description).toContain("## Usage notes");
     expect(pinned.parameters.properties.model.description).toContain("the agent type fixes this");
     expect(pinned.parameters.properties.thinking.description).toContain("the agent type fixes this");
+    // The host also forces a fresh context and no worktree on every spawn.
+    expect(pinned.description).not.toContain("inherit_context");
+    expect(pinned.description).not.toContain('isolation: "worktree"');
+    expect(pinned.description).toMatch(/ask for it first\.\n(- Use `schedule`[^\n]*\n)?\n## Writing the prompt/);
+    expect(pinned.parameters.properties.isolation.description).toContain("shared working tree");
+    expect(pinned.parameters.properties.inherit_context.description).toContain("fresh context");
 
     handlers.get("evt:subagents:set-extension-only")({ enabled: false });
     expect(tools.get("Agent").description).toContain("- Use model to specify a different model");
     expect(tools.get("Agent").parameters.properties.model.description).toContain("Optional model override");
+    expect(tools.get("Agent").description).toContain('- Use isolation: "worktree"');
+    expect(tools.get("Agent").parameters.properties.isolation.description).toContain("temporary git worktree");
+  });
+
+  // LOCAL PATCH (pi-pi): the host resolves these names through its own skill
+  // layers; the schema must accept them or pi rejects the call before the
+  // host's hook ever sees it.
+  it("accepts a skills list on the Agent call", () => {
+    const { tools } = setup();
+    expect(tools.get("Agent").parameters.properties.skills.type).toBe("array");
   });
 });

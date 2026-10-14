@@ -38,6 +38,7 @@ describe("layered skills", () => {
   it("ships a focused general-purpose catalog", () => {
     const bundled = listLayeredSkills(cwd).filter((skill) => skill.layer === "bundled");
     expect(bundled.map((skill) => skill.name)).toEqual([
+      "code-rules",
       "feature-work",
       "repository-work",
       "research-and-design",
@@ -46,6 +47,10 @@ describe("layered skills", () => {
       "software-engineering",
     ]);
     expect(bundled.every((skill) => skill.filePath.startsWith(bundledSkillsDir()))).toBe(true);
+    // Only guidance a worker can follow is shareable: the rest tells its reader
+    // to delegate, ask the user or commission reviews.
+    expect(bundled.filter((skill) => skill.audience === "any").map((skill) => skill.name)).toEqual(["code-rules"]);
+    expect(loadLayeredSkill("code-rules", cwd).document).toContain("## After every edit");
     expect(loadLayeredSkill("software-engineering", cwd).document).toContain("## Verification gate");
     expect(loadLayeredSkill("repository-work", cwd).document).toContain("conventional-commit type");
     expect(loadLayeredSkill("skill-work", cwd).document).toContain("Never recommend, adapt, or merge a skill whose body you have not fetched");

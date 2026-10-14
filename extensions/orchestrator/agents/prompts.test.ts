@@ -81,7 +81,7 @@ describe("delegationBlock", () => {
     const block = delegationBlock(OPUS, pools);
     expect(block).toMatch(/tests cannot exercise \(UI, vendored/);
     expect(block).toMatch(/before reporting a\s*\n?multi-commit batch as done/);
-    expect(block).toMatch(/Skip it when a test you wrote already proves the change/);
+    expect(block).toMatch(/Skip it when a test you wrote already proves the change, unless a\nskill you loaded requires the review/);
     expect(block).toMatch(/advisors BEFORE committing to something you would have to unwind/);
   });
 
