@@ -12,9 +12,9 @@ Finding and building are one workflow — what you learn reading candidates is t
 The host is pi-pi, and its loader decides what a skill can be:
 
 - Three layers — `<project>/.pi/skills`, `~/.pi/skills`, and the bundled set — resolved by name in that order, so a project skill silently shadows a global one of the same name. `PI_SKILLS_DIR` moves the global layer elsewhere; project and bundled skills stay in the catalog, so it isolates a candidate under test without emptying the field it competes against.
-- Only `name` and `description` are read from the frontmatter. Every other key is dropped without a word, so a skill's own switches do not survive the trip.
-- `load_skill` is registered in subagent sessions too, but no pool's tool allowlist includes it, so in practice no reviewer, advisor, librarian, explore or task agent can call it. Anything a delegated agent must follow is inlined into its prompt by whoever reads the skill — write for that, and do not assume a subagent will read a reference you point it at.
-- A skill may therefore address the main agent's full toolset: the subagent pools and their parallel fan-out, `cbm_*`, `lsp`, `vcc_recall`, `ask_user`. Use them in what you write when they make the skill better, and use them while writing it.
+- The loader reads `name`, `description` and `audience` from the frontmatter. Every other key is dropped without a word, so a skill's own switches do not survive the trip.
+- No subagent can call `load_skill`. A skill reaches a subagent only when the main agent names it in the Agent call's `skills` parameter, which preloads the whole document into the subagent's prompt, and only if its frontmatter says `audience: any`. Without that key a skill is main-only, and a spawn naming it is refused.
+- Decide the audience first, because it decides what the skill may say. A main-only skill may address the main agent's full toolset: the subagent pools and their parallel fan-out, `cbm_*`, `lsp`, `vcc_recall`, `ask_user`. Use them when they make the skill better. An `audience: any` skill is read by workers that have none of that: no subagents, no `ask_user`, often no write access. It must hold only what any reader can act on: rules, checks, and a return contract ("report it back" rather than "ask the user"). Do not assume a subagent will read a reference you point it at. Anything a worker must follow goes in the body or into its prompt.
 
 ## Establish what is being solved
 
@@ -39,7 +39,7 @@ The host is pi-pi, and its loader decides what a skill can be:
 - Inventory the whole folder: `scripts/`, `references/`, templates, assets. A skill is everything it ships.
 - Read every file the body directs the agent to read, with the same suspicion as the body. A reference is loaded as instructions exactly like the body, so a clean `SKILL.md` with a poisoned reference passes a body-only review.
 - Grade against `references/rubric.md`. Check description-versus-body alignment on every candidate — a description promising more than the body delivers is the failure mode bulk generation produces most.
-- Check host parity, not just file layout. pi-pi's loader reads `name` and `description` and drops every other frontmatter key: a skill setting `disable-model-invocation: true` to stay quiet until asked becomes model-invocable here, which changes its threat surface as well as its behaviour.
+- Check host parity, not just file layout. pi-pi's loader reads `name`, `description` and `audience` and drops every other frontmatter key: a skill setting `disable-model-invocation: true` to stay quiet until asked becomes model-invocable here, which changes its threat surface as well as its behaviour.
 - Note the maintenance reality — last commit to that path, open issues, whether one author has moved on.
 
 ## Choose the mode before writing anything
@@ -78,7 +78,7 @@ Writing the result:
 
 ## Have it reviewed before you hand it over
 
-- **A reviewer pass is mandatory, not a finishing touch.** Before recommending or installing anything — adopted unchanged as much as written fresh, since an adopted skill is the one case where nobody has read it with this user's tools in mind — send the whole folder, body and every reference, to the reviewer pool to be read cold. Prefer a family other than your own; a sibling model shares your blind spots.
+- **A reviewer pass is mandatory, not a finishing touch.** Before recommending or installing anything — adopted unchanged as much as written fresh, since an adopted skill is the one case where nobody has read it with this user's tools in mind — send the whole folder, body and every reference, to an eligible reviewer to be read cold, preferring another vendor; a sibling model shares your blind spots.
 - Brief it as if it knows nothing, because it does: what the skill is for, who loads it, what it must not duplicate, that references are injected as instructions exactly like the body, and the verification results, which it cannot produce for itself. Paste in what the rubric asks for rather than naming the rubric.
 - If no eligible reviewer is configured, say the skill is unreviewed and let the user decide. Do not substitute your own second reading and call it review.
 - Ask an advisor when a design choice is genuinely contested and you would have to unwind it later: one skill or two, body or reference, how far to couple to the host, whether to adapt a source or write fresh. One advisor for an ordinary contested call; all eligible ones only when the answer reshapes the whole artifact, and then weigh the disagreement rather than averaging it. Never spend one on a question `references/rubric.md` already settles.

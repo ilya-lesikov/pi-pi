@@ -49,9 +49,9 @@ Skill precedence is:
 2. `~/.pi/skills`
 3. bundled pi-pi skills
 
-A skill may be `<name>/SKILL.md` or a Markdown file directly inside a skills directory. It needs frontmatter with `name` and `description`.
+A skill may be `<name>/SKILL.md` or a Markdown file directly inside a skills directory. It needs frontmatter with `name` and `description`. Subagents cannot load skills themselves; a skill whose frontmatter also sets `audience: any` can be named in an Agent call's `skills` parameter and is preloaded into that subagent's prompt. Other skills are written for the main agent and are refused there.
 
-Bundled guidance covers software engineering, repository work, research and design, and skill authoring. The agent decides when to load it; `/pp` only shows the catalog and source settings.
+Bundled skills cover feature work, bug work, investigation, git operations, operations on real machines and clusters, review, skill authoring, and the code rules shared with subagents. The agent decides when to load them; `/pp` only shows the catalog and source settings.
 
 ## Workers
 

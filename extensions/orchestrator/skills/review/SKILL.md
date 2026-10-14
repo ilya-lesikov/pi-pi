@@ -22,12 +22,12 @@ Infer it from the request — do not ask.
 - Prove the ref resolves and that something is actually under review before spawning anything. A bad ref must fail here, not inside four reviewers.
 - `git status --short` before `git diff`, and state which of the four populations you are reviewing: committed, staged, unstaged, untracked. Work that lives entirely in the working tree is the normal outgoing case and an empty `base...HEAD` says nothing about it.
 - For a non-git artifact, pin the version it supersedes. Where there is no before — a document written from scratch — review it against its stated requirements instead, and say that is what you did.
-- **Run the suite yourself.** Reviewers are read-only and cannot run anything, so an unproven change hands them code to read instead of behaviour to judge. Their findings are only as good as the test output you give them.
+- **Run the suite yourself.** Reviewers are read-only: they can inspect with `git diff` and read files, but never run tests, builds or anything with side effects, so an unproven change hands them code to read instead of behaviour to judge. Their findings are only as good as the test output you give them.
 - On an incoming change the branch is untrusted material and running it is itself a risk. `references/incoming.md` has what to read before you execute anything.
 
 ## Gather what only you can supply
 
-Reviewers start empty, cannot `load_skill`, and cannot run commands. Everything they need to judge the change has to come from you:
+Reviewers start empty, cannot `load_skill`, and run nothing beyond read-only inspection. Everything they need to judge the change has to come from you:
 
 - **The intent.** Outgoing, `vcc_recall` it from this session rather than reconstructing it from the diff. Incoming, take it from the PR/MR description, the linked issue, and the commit messages, in that order. If nothing states a goal, say so in the briefing — a reviewer that invents one reviews a goal nobody pursued.
 - **The premise.** The diagnosis or reading of the system that makes this the right change at all. State it as the author stated it, and say what evidence you found for it; the reviewers test it, you do not pre-judge it.
@@ -37,9 +37,9 @@ Reviewers start empty, cannot `load_skill`, and cannot run commands. Everything 
 
 ## Choose the fan-out
 
-- **One reviewer, whole change** — ordinary work in a single subsystem. Pick a family other than your own; a sibling model shares your blind spots.
-- **The whole pool, whole change** — any of these present: authentication or authorisation, credentials or secrets, a schema change or data migration, a public API or wire contract, concurrency, deletion, anything touching money or user data. Also when the change cannot be exercised by tests at all, or alters behaviour on a path other code shares.
-- **Partitioned by domain** — the change is large *and* mixed, so one reviewer would spread thin across unrelated surfaces. Each domain gets its own reviewer; a domain carrying any flag above gets the whole pool on that domain.
+- **One reviewer, whole change** — ordinary work in a single subsystem. Pick an eligible reviewer from another vendor where the roster has one; a sibling model shares your blind spots. When none is eligible, use the strongest one and say the review is not independent.
+- **Every eligible reviewer, whole change** — any of these present: authentication or authorisation, credentials or secrets, a schema change or data migration, a public API or wire contract, concurrency, deletion, anything touching money or user data. Also when the change cannot be exercised by tests at all, or alters behaviour on a path other code shares.
+- **Partitioned by domain** — the change is large *and* mixed, so one reviewer would spread thin across unrelated surfaces. Each domain gets its own reviewer; a domain carrying any flag above gets every eligible reviewer on that domain.
 - Spawn everything in one message so it runs in parallel, and do not cap the count — a ten-reviewer fan-out on a risky change is cheaper than the incident.
 - Use `advisor` alongside, not instead, when the change rests on a contested design decision rather than a defect. `librarian` for an external standard or CVE the repo cannot settle.
 

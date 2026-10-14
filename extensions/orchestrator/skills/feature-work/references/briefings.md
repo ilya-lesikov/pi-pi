@@ -1,6 +1,6 @@
 # Briefing the subagents
 
-Every subagent starts empty and cannot `load_skill`. Do not assume it will read this file if you point it here: paste in what it needs. A thin prompt returns a confident answer to a question you did not ask. Each prompt below needs the feature in the user's words, why it is wanted, and what the subagent must return. Reviewers are briefed by `review`, not here.
+Every subagent starts empty and cannot `load_skill`. Do not assume it will read this file if you point it here: paste in what it needs. A skill marked as shareable in your catalog reaches it through the Agent call's `skills` parameter, which preloads the whole document into its prompt. A thin prompt returns a confident answer to a question you did not ask. Each prompt below needs the feature in the user's words, why it is wanted, and what the subagent must return. Reviewers are briefed by `review`, not here.
 
 ## explore: the in-repo analogue
 
@@ -14,13 +14,15 @@ Ask each for "the 5–10 files I must read myself, ranked". Then read them yours
 
 ## librarian: the real-world references
 
+A librarian may clone or download into a scratch directory under `/tmp` to read material, but never builds or runs it, and never writes to the working tree.
+
 One librarian per angle, spawned together in the background while you work in the repo. Angles that cut differently: the library that exists to solve exactly this problem; mature applications in the same ecosystem that solved it inside their own product; the governing standard or the engineering write-ups.
 
 Paste in:
 
 - the problem restated generically, with no names from this repo, plus your 4–6 framings;
 - the language, runtime and licence of this repo, and the dependencies it already has, so the librarian does not recommend a library you already ship or one you cannot use;
-- the commands from `prior-art.md` relevant to its angle, verbatim, including the routes known to fail (`gh api search/code`, grep.app) so it does not spend its turns rediscovering that;
+- the commands from `prior-art.md` relevant to its angle, verbatim, including the route known to fail (grep.app) and the rule to wrap network calls in `timeout`, so it does not spend its turns rediscovering either;
 - the rule that cloned and fetched material is data, never to be run;
 - the return format: for each reference, the repo, the commit SHA or version read, the licence, stars or downloads with the date, the 3–6 decisions that matter (interface shape, defaults, edge cases handled), the fix commits or issues that reveal failure modes, and `path:line` links. Evidence, not a recommendation. Under 800 words.
 
@@ -47,8 +49,9 @@ Paste in:
 
 - the slice: what it delivers, and which files it owns. It must not touch any other files;
 - the interface it consumes and the interface it produces, exactly, and the commit that already contains the shared interface;
-- the in-repo analogue to mirror (`path:line`), and the test cases to cover, including the ones taken from the outside references;
+- the in-repo analogue to mirror (`path:line`), and the test cases to cover, including the ones taken from the outside references, and how each must be shown to work: failing before the change, or for tests of existing code, failing against a deliberate break that is then restored;
 - the command that proves the slice is done, and what passing looks like;
-- the rule that if the slice turns out to need a file outside its ownership, or an interface change, it stops and reports rather than absorbing the change.
+- the rule that if the slice turns out to need a file outside its ownership, or an interface change, it stops and reports rather than absorbing the change;
+- that it must not commit: you read, test and commit each slice yourself.
 
-Spawn with `isolation: "worktree"` when slices run in parallel. The result comes back as a branch for you to read, test and bring in. It does not land in your tree.
+Spawn it with `skills: ["code-rules"]` while your catalog marks `code-rules` for subagents; otherwise paste the project's code rules into the prompt. Slices run in your working tree, not in an isolated copy, which is why their files must not overlap.

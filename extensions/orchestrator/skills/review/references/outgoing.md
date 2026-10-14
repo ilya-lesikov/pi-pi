@@ -19,6 +19,6 @@ No audience, no diplomacy, no verdict line. The output is a worklist. The whole 
 ## Before the commit or the push
 
 - Each commit is one independently verifiable unit, staged deliberately — not everything that happens to be dirty.
-- The message says what changed and why; the subject is in English with a conventional-commit type.
+- The message follows the commit contract in `git-work`.
 - Nothing in the diff that the request did not call for. An improvement you noticed is a separate commit or a note in your report, never a passenger.
 - State plainly in your report what you could not verify, and what would verify it. An unverified claim that passes silently into a report is the one that costs trust.

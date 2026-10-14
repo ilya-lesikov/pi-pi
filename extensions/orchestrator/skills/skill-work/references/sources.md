@@ -50,8 +50,10 @@ Do not guess `raw.githubusercontent.com` URLs. The branch and the in-repo layout
 Reaches skills that no index has picked up, including ones inside product repositories:
 
 ```
-gh api "search/code?q=filename:SKILL.md+<term>&per_page=20" --jq '.items[] | "\(.repository.full_name)  \(.path)"'
+timeout 60 gh api "search/code?q=filename:SKILL.md+<term>&per_page=20" --jq '.items[] | "\(.repository.full_name)  \(.path)"'
 ```
+
+Join terms with `+`: raw spaces in the URL fail. `gh search code '<term>' --filename SKILL.md` reaches the same index.
 
 Code search matches file contents as well as names, so the result count is large and unranked by quality — treat it as a candidate pool, not an ordering. For collections rather than individual skills:
 
@@ -85,7 +87,7 @@ gh api "repos/<owner>/<repo>/commits?path=<path>&per_page=1" --jq '.[0].commit.c
 
 pi-pi loads `<name>.md` and `<dir>/SKILL.md` from `~/.pi/skills` (global) and `<project>/.pi/skills` (project), so an ecosystem skill folder is copied in as-is — `SKILL.md` with any `scripts/` and `references/` beside it. Project shadows global shadows bundled, by skill name.
 
-The layout ports; the frontmatter does not all port. pi-pi's loader reads `name` and `description` and nothing else, so a key the author relied on is dropped in silence:
+The layout ports; the frontmatter does not all port. pi-pi's loader reads `name`, `description` and its own `audience` key and nothing else, so a key the author relied on is dropped in silence:
 
 - `disable-model-invocation: true` means "load only when asked". Upstream pi honours it; pi-pi does not, so such a skill becomes model-invocable here and will fire on its description alone. Check for it, and say so — a skill deliberately built to stay quiet behaves differently under pi-pi than its author intended.
 - Any other non-standard key is inert rather than honoured. Judge a candidate on what pi-pi will actually do with it, not on what its frontmatter asks for.

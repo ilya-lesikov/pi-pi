@@ -457,9 +457,9 @@ describe("fold", () => {
   it("never folds the newest load of a skill", () => {
     const messages = [
       user("go"),
-      call("s0", "load_skill", { name: "repository-work" }),
+      call("s0", "load_skill", { name: "git-work" }),
       result("s0", "load_skill", "OLD skill text ".repeat(500)),
-      call("s1", "load_skill", { name: "repository-work" }),
+      call("s1", "load_skill", { name: "git-work" }),
       result("s1", "load_skill", "NEW skill text ".repeat(500)),
       call("t0", "read", { path: "/a" }),
       result("t0", "read", "o".repeat(9000)),
@@ -549,9 +549,9 @@ describe("fold", () => {
   it("pins each distinct skill separately", () => {
     const messages = [
       user("go"),
-      call("s0", "load_skill", { name: "repository-work" }),
+      call("s0", "load_skill", { name: "git-work" }),
       result("s0", "load_skill", "repo skill ".repeat(500)),
-      call("s1", "load_skill", { name: "software-engineering" }),
+      call("s1", "load_skill", { name: "code-rules" }),
       result("s1", "load_skill", "eng skill ".repeat(500)),
     ];
     fold(messages, 0, { ceiling: 10, lowWater: 5 }, new FoldState());

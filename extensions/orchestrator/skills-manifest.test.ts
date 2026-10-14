@@ -38,24 +38,27 @@ describe("layered skills", () => {
   it("ships a focused general-purpose catalog", () => {
     const bundled = listLayeredSkills(cwd).filter((skill) => skill.layer === "bundled");
     expect(bundled.map((skill) => skill.name)).toEqual([
+      "bug-work",
       "code-rules",
       "feature-work",
-      "repository-work",
-      "research-and-design",
+      "git-work",
+      "investigate",
+      "ops-work",
       "review",
       "skill-work",
-      "software-engineering",
     ]);
-    expect(bundled.every((skill) => skill.filePath.startsWith(bundledSkillsDir()))).toBe(true);
     // Only guidance a worker can follow is shareable: the rest tells its reader
     // to delegate, ask the user or commission reviews.
     expect(bundled.filter((skill) => skill.audience === "any").map((skill) => skill.name)).toEqual(["code-rules"]);
+    expect(bundled.every((skill) => skill.filePath.startsWith(bundledSkillsDir()))).toBe(true);
     expect(loadLayeredSkill("code-rules", cwd).document).toContain("## After every edit");
-    expect(loadLayeredSkill("software-engineering", cwd).document).toContain("## Verification gate");
-    expect(loadLayeredSkill("repository-work", cwd).document).toContain("conventional-commit type");
+    expect(loadLayeredSkill("git-work", cwd).document).toContain("conventional-commit type");
     expect(loadLayeredSkill("skill-work", cwd).document).toContain("Never recommend, adapt, or merge a skill whose body you have not fetched");
     expect(loadLayeredSkill("review", cwd).document).toContain("Zero findings is a valid result");
     expect(loadLayeredSkill("feature-work", cwd).document).toContain("Most features are problems someone has already solved");
+    expect(loadLayeredSkill("bug-work", cwd).document).toContain("Reproduce before you theorise");
+    expect(loadLayeredSkill("ops-work", cwd).document).toContain("Ask before anything destructive");
+    expect(loadLayeredSkill("investigate", cwd).document).toContain("Read the source, not your memory of it");
   });
 
   it("resolves project over global over bundled", () => {

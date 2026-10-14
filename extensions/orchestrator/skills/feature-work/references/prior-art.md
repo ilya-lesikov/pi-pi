@@ -67,13 +67,14 @@ for l in sys.stdin:
 
 It excludes forks and archived repositories by default. A wide query may stop early (`shard-match-limit`), so narrow it with `repo:` or `file:` rather than trusting a partial set. Scope to one repository with `r:github.com/<owner>/<repo>`.
 
-GitHub code search works through the CLI only:
+GitHub code search:
 
 ```
 gh search code 'jitter backoff' --language Go --limit 20 --json repository,path,url
+gh api "search/code?q=jitter+backoff+language:go&per_page=20" --jq '.items[] | "\(.repository.full_name)  \(.path)"'
 ```
 
-It is capped at 10 requests per minute (`gh api rate_limit --jq .resources.code_search`), cannot sort by stars, and supports no regex. `gh api search/code` returns 404 here, so do not use it. grep.app answered 429 with a bot checkpoint and is unusable from a script.
+Both hit the same index. It is capped at 10 requests per minute (`gh api rate_limit --jq .resources.code_search`), cannot sort by stars, and supports no regex. Join terms with `+` in the `gh api` form: a query with raw spaces in the URL failed here. Wrap every call in `timeout 60`, because a search call has hung for most of an hour. grep.app answered 429 with a bot checkpoint and is unusable from a script.
 
 ## Read a reference properly
 
