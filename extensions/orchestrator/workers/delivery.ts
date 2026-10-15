@@ -10,6 +10,7 @@ export interface DeliveryItem {
 }
 
 export interface WorkerMessageDetails {
+  deliveryId?: string;
   items: Array<{
     kind: DeliveryKind;
     id: string;
@@ -33,6 +34,8 @@ export interface DeliveryHost {
   isStreaming(): boolean;
   /** Whether waking an idle root agent now would collide with the user (dialog open, typing, model switch). */
   canWake(): boolean;
+  /** Whether the session cannot take a message at all right now (compacting): hold and retry. */
+  isBusy?(): boolean;
   send(message: { customType: string; content: string; display: boolean; details: WorkerMessageDetails }, options: { deliverAs?: "steer" | "nextTurn"; triggerTurn?: boolean }): void;
   now(): number;
 }
@@ -45,22 +48,28 @@ export interface DeliveryHost {
  */
 export class WorkerDelivery {
   private readonly outbox: DeliveryItem[] = [];
+  /** Steered items not yet seen in the transcript; a cleared queue drops them silently. */
+  private readonly inFlight = new Map<string, DeliveryItem[]>();
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private closed = false;
+  private sequence = 0;
 
   constructor(private readonly host: DeliveryHost, private readonly options: { pollMs?: number; coalesceMs?: number } = {}) {}
 
   enqueue(item: DeliveryItem): void {
+    if (this.closed) return;
     const existing = this.outbox.findIndex((entry) => entry.record.id === item.record.id && entry.kind === item.kind);
     if (existing >= 0) this.outbox.splice(existing, 1);
     this.outbox.push(item);
     this.schedule(this.options.coalesceMs ?? 250);
   }
 
-  /** Drops queued items a wait already returned to the agent. */
-  forget(ids: string[]): void {
+  /** Drops queued items of one kind a tool call already showed the agent. */
+  forget(ids: string[], kind: DeliveryKind): void {
     const set = new Set(ids);
     for (let i = this.outbox.length - 1; i >= 0; i--) {
-      if (set.has(this.outbox[i]!.record.id)) this.outbox.splice(i, 1);
+      const item = this.outbox[i]!;
+      if (item.kind === kind && set.has(item.record.id)) this.outbox.splice(i, 1);
     }
   }
 
@@ -68,10 +77,29 @@ export class WorkerDelivery {
     return this.outbox.length;
   }
 
-  clear(): void {
+  /** Stops delivering for good: the session it delivers to is going away. */
+  close(): void {
+    this.closed = true;
     this.outbox.length = 0;
+    this.inFlight.clear();
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
+  }
+
+  /** The root transcript took in a steered update. */
+  confirm(deliveryId: string | undefined): void {
+    if (deliveryId) this.inFlight.delete(deliveryId);
+  }
+
+  /** The root run ended; steered updates it never took in were dropped with its queue. */
+  requeueUnseen(): void {
+    if (this.closed || this.inFlight.size === 0) return;
+    const lost = [...this.inFlight.values()].flat();
+    this.inFlight.clear();
+    for (const item of lost) {
+      if (item.kind === "settled") item.record.undelivered = true;
+      this.enqueue(item);
+    }
   }
 
   private schedule(delayMs: number): void {
@@ -86,6 +114,11 @@ export class WorkerDelivery {
   flush(): void {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
+    if (this.closed) return;
+    if (this.host.isBusy?.()) {
+      if (this.outbox.length) this.schedule(this.options.pollMs ?? 1000);
+      return;
+    }
     const held = this.outbox.filter((item) => item.record.waitHolds > 0 && stillRelevant(item));
     const ready = this.outbox.filter((item) => item.record.waitHolds === 0 && stillRelevant(item));
     this.outbox.length = 0;
@@ -95,18 +128,24 @@ export class WorkerDelivery {
       return;
     }
     const silent = ready.every((item) => item.kind === "settled" && item.record.spec.notify === "silent");
-    const message = { customType: WORKER_MESSAGE_TYPE, content: renderForModel(ready, this.host.now()), display: true, details: describe(ready, this.host.now()) };
-    if (silent) {
-      this.host.send(message, { deliverAs: "nextTurn" });
-    } else if (this.host.isStreaming()) {
-      this.host.send(message, { deliverAs: "steer" });
-    } else if (this.host.canWake()) {
-      this.host.send(message, { triggerTurn: true });
-    } else {
+    const deliveryId = `d${++this.sequence}`;
+    const message = { customType: WORKER_MESSAGE_TYPE, content: renderForModel(ready, this.host.now()), display: true, details: { ...describe(ready, this.host.now()), deliveryId } };
+    const streaming = this.host.isStreaming();
+    if (!silent && !streaming && !this.host.canWake()) {
       this.outbox.unshift(...ready);
       this.schedule(this.options.pollMs ?? 1000);
       return;
     }
+    try {
+      if (silent) this.host.send(message, { deliverAs: "nextTurn" });
+      else if (streaming) this.host.send(message, { deliverAs: "steer" });
+      else this.host.send(message, { triggerTurn: true });
+    } catch {
+      // The session went away under us; nothing left to deliver to.
+      this.close();
+      return;
+    }
+    if (streaming && !silent) this.inFlight.set(deliveryId, ready);
     for (const item of ready) if (item.kind === "settled") item.record.undelivered = false;
     if (held.length) this.schedule(this.options.pollMs ?? 1000);
   }

@@ -391,4 +391,68 @@ describe("WorkerManager — lifecycle", () => {
     workers.spawn(spec());
     expect(workers.get(record.id)).toBeUndefined();
   });
+
+  it("does not resolve an empty or ambiguous id", () => {
+    const { factory } = fakeFactory();
+    const workers = manager(factory);
+    workers.spawn(spec());
+    workers.spawn(spec());
+    expect(workers.get("")).toBeUndefined();
+    expect(workers.get("explore-")).toBeUndefined();
+    expect(workers.get("explore-2")?.id).toBe("explore-2");
+  });
+
+  it("starts a resumed run with its own text and turn count", async () => {
+    const { factory, sessions } = fakeFactory();
+    const workers = manager(factory, { graceTurns: () => 1 });
+    const record = workers.spawn(spec({ maxTurns: 2 }));
+    await flush();
+    sessions[0]!.hooks.onTurnEnd();
+    sessions[0]!.finishRun("first answer");
+    await flush();
+    workers.send(record.id, "more");
+    await flush();
+    expect(record.turns).toBe(0);
+    expect(record.lastText).toBe("");
+    sessions[0]!.hooks.onTurnEnd();
+    expect(sessions[0]!.steers.some((steer) => steer.includes("turn limit"))).toBe(false);
+  });
+
+  it("emits nothing while shutting down", async () => {
+    const { factory } = fakeFactory({ hangAbort: true });
+    const workers = manager(factory);
+    const events: string[] = [];
+    workers.subscribe((event) => events.push(event.type));
+    workers.spawn(spec());
+    await flush();
+    events.length = 0;
+    workers.shutdown();
+    expect(events).toEqual([]);
+  });
+
+  it("lets a question wait indefinitely when its timeout is 0", async () => {
+    const { factory, sessions } = fakeFactory();
+    const workers = manager(factory, { questionTimeoutMs: () => 0 });
+    const record = workers.spawn(spec());
+    await flush();
+    const answer = sessions[0]!.hooks.askParent("?", undefined);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(record.question).toBeDefined();
+    workers.answer(record.id, "yes");
+    await expect(answer).resolves.toBe("yes");
+  });
+
+  it("starts queued workers when the limit is raised", async () => {
+    const { factory } = fakeFactory();
+    let limit = 1;
+    const workers = manager(factory, { maxConcurrent: () => limit });
+    workers.spawn(spec());
+    const second = workers.spawn(spec());
+    await flush();
+    expect(second.status).toBe("queued");
+    limit = 2;
+    workers.poke();
+    expect(second.status).toBe("running");
+  });
 });
+

@@ -284,6 +284,7 @@ function refreshRuntimeAfterConfigChange(orchestrator: Orchestrator, keyPath: st
   }
   if (keyPath[0] === "agents") {
     orchestrator.registerAgents(true);
+    if (keyPath[1] === "maxConcurrentSubagents") orchestrator.workers?.poke();
     if (keyPath[1] === "main" && orchestrator.lastCtx) {
       void orchestrator.applyMainAgent(orchestrator.lastCtx).then((ok) => {
         if (!ok) orchestrator.lastCtx?.ui?.notify?.(mainUnavailableMessage(orchestrator), "warning");
@@ -1708,7 +1709,7 @@ async function showWorkers(orchestrator: Orchestrator, ctx: any): Promise<void> 
     const byTitle = new Map<string, string>();
     const options: OptionInput[] = records.map((record) => {
       const state = record.question ? "? waiting on you" : record.status;
-      const title = `${record.spec.type}: ${record.spec.description} [${state}]`;
+      const title = `${record.spec.type}: ${record.spec.description} [${state}] · ${record.id}`;
       byTitle.set(title, record.id);
       const age = formatAge(now - (record.startedAt ?? record.createdAt));
       const detail = record.question

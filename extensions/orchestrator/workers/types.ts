@@ -94,6 +94,7 @@ export interface WorkerRecord {
   spec: WorkerSpawnSpec;
   status: WorkerStatus;
   createdAt: number;
+  /** Start of the current or most recent run. */
   startedAt?: number;
   settledAt?: number;
   lastEventAt: number;

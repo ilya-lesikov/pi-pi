@@ -26,7 +26,7 @@ import { ensureProvisionDirOnPath, ensureServerForFile, provisionEagerTools } fr
 import { installConsoleGuard } from "./console-guard.js";
 import { clearAllPauses, demoteUnusableSubscription, handleMainAuthFailure, handleMainRateLimit, handleMainRefusal, handleSubagentAuthFailure, handleSubagentRateLimit, handleSubscriptionRouteOutage, isAuthError, isModelRefusal, isPolicyBlockError, isRateLimitError } from "./rate-limit-fallback.js";
 import { adjudicateCheckIn, adjudicateContinuation } from "./continuation-adjudicator.js";
-import { createWorkers, publishWorkersHandle, registerWorkerToolsFor, resumeOnNewRouting, type WorkerHooks } from "./workers/index.js";
+import { createWorkers, publishWorkersHandle, registerWorkerToolsFor, resumeOnNewRouting, WORKER_MESSAGE_TYPE, type WorkerHooks } from "./workers/index.js";
 import { registerWorkerUi } from "./workers/ui.js";
 import type { WorkerRecord } from "./workers/types.js";
 import { ensureProviderRetrySettings, patchRetryPredicate } from "./provider-retry.js";
@@ -473,11 +473,18 @@ export function registerWorkerExtension(orchestrator: Orchestrator, pi: Extensio
   lsp?.registerTool?.(pi);
 }
 
-/** Gives the root session a fresh worker manager; the previous session's workers are killed. */
-export function startWorkers(orchestrator: Orchestrator, ctx: any): void {
-  orchestrator.workerDelivery?.clear();
+/** Ends the root session's workers; nothing they would still report has a session to go to. */
+function stopWorkers(orchestrator: Orchestrator): void {
   orchestrator.workers?.shutdown();
-  const workers = createWorkers(orchestrator, createWorkerHooks(orchestrator), orchestrator.workerSessionFactory);
+  orchestrator.workerDelivery?.close();
+  orchestrator.workers = null;
+  orchestrator.workerDelivery = null;
+}
+
+/** Gives the root session a fresh worker manager; the previous session's workers are killed. */
+export function startWorkers(orchestrator: Orchestrator, ctx: any, hooks: WorkerHooks = createWorkerHooks(orchestrator)): void {
+  stopWorkers(orchestrator);
+  const workers = createWorkers(orchestrator, hooks, orchestrator.workerSessionFactory);
   orchestrator.workers = workers.manager;
   orchestrator.workerDelivery = workers.delivery;
   orchestrator.onWorkersReplaced?.();
@@ -572,6 +579,13 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   registerWorkerToolsFor(orchestrator, workerHooks);
   publishWorkersHandle(orchestrator, workerHooks);
   registerWorkerUi(orchestrator);
+  pi.on("message_end", async (event: any) => {
+    const message = event?.message;
+    if (message?.role === "custom" && message.customType === WORKER_MESSAGE_TYPE) orchestrator.workerDelivery?.confirm(message.details?.deliveryId);
+  });
+  pi.on("agent_end", async () => {
+    orchestrator.workerDelivery?.requeueUnseen();
+  });
 
   pi.on("session_start", async (_event, ctx) => {
     orchestrator.lastCtx = ctx;
@@ -642,7 +656,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     setFooterTracker(usage);
     setFooterOrchestrator(orchestrator);
     ctx.ui?.setFooter?.(createCustomFooter);
-    startWorkers(orchestrator, ctx);
+    startWorkers(orchestrator, ctx, workerHooks);
     registerFeatureToolsAndAgents(orchestrator);
     // Never awaited: a first run downloads tens of megabytes, and a session
     // must not wait on a network to become usable. Tools whose registration
@@ -840,10 +854,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       orchestrator.routedMainSpec = null;
       // Workers die with the session that spawned them: a replaced session can
       // no longer receive what they would deliver.
-      orchestrator.workerDelivery?.clear();
-      orchestrator.workers?.shutdown();
-      orchestrator.workers = null;
-      orchestrator.workerDelivery = null;
+      stopWorkers(orchestrator);
       orchestrator.retriedSubagentIds.clear();
       orchestrator.pendingModelSwitches = [];
       orchestrator.modelSwitchInFlight = false;

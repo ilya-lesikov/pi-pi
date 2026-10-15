@@ -50,6 +50,8 @@ export function createChildSessionFactory(env: ChildSessionEnv) {
       appendSystemPromptOverride: () => [],
     });
     await loader.reload();
+    const loadErrors = loader.getExtensions().errors;
+    if (loadErrors.length) throw new Error(`worker tools failed to load: ${loadErrors.map((entry: any) => entry.error).join("; ")}`);
     const { session } = await createAgentSession({
       cwd: env.cwd,
       agentDir,

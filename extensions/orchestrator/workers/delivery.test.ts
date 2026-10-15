@@ -150,4 +150,59 @@ describe("WorkerDelivery", () => {
     expect(content).toContain("Error: 429 too many requests");
     expect(sent[0]!.message.details.items[0]).toMatchObject({ findings: 1, seriousFindings: 1 });
   });
+
+  it("sends nothing once closed, even for a settlement enqueued afterwards", () => {
+    const { host: h, sent } = host();
+    const delivery = new WorkerDelivery(h);
+    delivery.close();
+    delivery.enqueue({ kind: "settled", record: record() });
+    delivery.flush();
+    expect(sent).toHaveLength(0);
+  });
+
+  it("closes instead of throwing when the session is gone", () => {
+    const { host: h } = host({ send: () => { throw new Error("This extension ctx is stale"); } });
+    const delivery = new WorkerDelivery(h);
+    delivery.enqueue({ kind: "settled", record: record() });
+    expect(() => delivery.flush()).not.toThrow();
+    delivery.enqueue({ kind: "settled", record: record({ id: "later" }) });
+    expect(delivery.pending()).toBe(0);
+  });
+
+  it("re-sends a steered update the run ended without taking in", () => {
+    let streaming = true;
+    const { host: h, sent } = host({ isStreaming: () => streaming });
+    const delivery = new WorkerDelivery(h);
+    const r = record();
+    delivery.enqueue({ kind: "settled", record: r });
+    delivery.flush();
+    expect(sent[0]!.options).toEqual({ deliverAs: "steer" });
+    streaming = false;
+    delivery.requeueUnseen();
+    expect(r.undelivered).toBe(true);
+    delivery.flush();
+    expect(sent).toHaveLength(2);
+    expect(sent[1]!.options).toEqual({ triggerTurn: true });
+  });
+
+  it("does not re-send a steered update the transcript confirmed", () => {
+    const { host: h, sent } = host({ isStreaming: () => true });
+    const delivery = new WorkerDelivery(h);
+    delivery.enqueue({ kind: "settled", record: record() });
+    delivery.flush();
+    delivery.confirm(sent[0]!.message.details.deliveryId);
+    delivery.requeueUnseen();
+    expect(delivery.pending()).toBe(0);
+  });
+
+  it("holds everything while the session is compacting", () => {
+    const { host: h, sent } = host({ isBusy: () => true });
+    const delivery = new WorkerDelivery(h);
+    delivery.enqueue({ kind: "settled", record: record() });
+    delivery.flush();
+    expect(sent).toHaveLength(0);
+    expect(delivery.pending()).toBe(1);
+    delivery.close();
+  });
 });
+

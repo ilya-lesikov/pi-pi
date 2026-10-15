@@ -32,7 +32,10 @@ const SUBMIT_REMINDER = "[PI-PI] You ended without calling submit_result. Call i
 
 interface Live {
   session?: WorkerSession;
-  /** Bumped on every kill/resume so callbacks from a superseded run are ignored. */
+  /**
+   * Bumped on kill so callbacks from the killed session are ignored. A resume
+   * keeps it: the same session (and the hooks bound to it) carries on.
+   */
   epoch: number;
   questionResolve?: (answer: string | undefined) => void;
   questionTimer?: ReturnType<typeof setTimeout>;
@@ -71,8 +74,12 @@ export class WorkerManager {
     return [...this.records.values()];
   }
 
+  /** Looks a worker up by id, or by a prefix that names exactly one. */
   get(id: string): WorkerRecord | undefined {
-    return this.records.get(id) ?? [...this.records.values()].find((record) => record.id.startsWith(id));
+    const exact = this.records.get(id);
+    if (exact || !id) return exact;
+    const matches = [...this.records.values()].filter((record) => record.id.startsWith(id));
+    return matches.length === 1 ? matches[0] : undefined;
   }
 
   /** The live session of a worker, for callers that must act on it directly (model moves, the viewer). */
@@ -154,6 +161,9 @@ export class WorkerManager {
     record.status = "queued";
     record.result = undefined;
     record.error = undefined;
+    record.lastText = "";
+    record.progress = undefined;
+    record.turns = 0;
     record.undelivered = false;
     record.stallWarned = false;
     record.lastEventAt = this.now();
@@ -232,6 +242,10 @@ export class WorkerManager {
 
   /** Disposes every retained session; for a parent session that is going away. */
   shutdown(): void {
+    // Nobody is left to tell: the kills below must not reach a delivery or a
+    // UI bound to the session being torn down.
+    this.listeners.clear();
+    this.queue.length = 0;
     this.killAll();
     for (const [id, live] of this.live) {
       try { live.session?.dispose(); } catch {}
@@ -287,6 +301,11 @@ export class WorkerManager {
     }
   }
 
+  /** Starts queued workers a raised concurrency limit now has room for. */
+  poke(): void {
+    this.drain();
+  }
+
   /** Marks settlements as seen by the parent so they are not pushed again. */
   markDelivered(records: WorkerRecord[]): void {
     for (const record of records) record.undelivered = false;
@@ -316,7 +335,7 @@ export class WorkerManager {
     const epoch = live.epoch;
     const now = this.now();
     record.status = "running";
-    record.startedAt ??= now;
+    record.startedAt = now;
     record.lastEventAt = now;
     record.runs++;
     record.runUsage = emptyUsage();
@@ -336,6 +355,7 @@ export class WorkerManager {
       let session = live.session;
       if (!session) {
         session = await this.options.createSession(record.spec, this.hooks(record, epoch));
+        record.lastEventAt = this.now();
         // Killed while the session was being built: nobody else holds it.
         if (live.epoch !== epoch) {
           try { session.dispose(); } catch {}
@@ -440,13 +460,16 @@ export class WorkerManager {
       record.question = { id: `${record.id}/q${record.turns}`, text, askedAt: this.now() };
       record.undelivered = true;
       const timeoutMs = this.options.questionTimeoutMs?.() ?? 10 * 60_000;
-      live.questionTimer = setTimeout(() => {
-        if (live.questionResolve !== done) return;
-        this.clearQuestion(record, live);
-        this.emit({ type: "changed", record });
-        done(undefined);
-      }, timeoutMs);
-      live.questionTimer.unref?.();
+      // 0 means the question waits until it is answered or the worker is stopped.
+      if (timeoutMs > 0) {
+        live.questionTimer = setTimeout(() => {
+          if (live.questionResolve !== done) return;
+          this.clearQuestion(record, live);
+          this.emit({ type: "changed", record });
+          done(undefined);
+        }, timeoutMs);
+        live.questionTimer.unref?.();
+      }
       signal?.addEventListener("abort", onAbort, { once: true });
       this.touch(record);
       this.emit({ type: "question", record });

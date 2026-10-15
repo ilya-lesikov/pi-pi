@@ -804,6 +804,7 @@ describe("session-first core", () => {
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(pi.sendMessage).toHaveBeenCalledWith(expect.objectContaining({ customType: "pi-pi-worker", content: expect.stringContaining("found it") }), { triggerTurn: true });
 
+    orchestrator.mainTurnInFlight = true;
     ctx.isIdle = () => false;
     orchestrator.workers!.spawn(workerSpec());
     await flushWorkers();
@@ -825,7 +826,7 @@ describe("session-first core", () => {
     expect(pi.sendMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("kills the previous session's workers when the session is replaced", async () => {
+  it("kills the previous session's workers when the session is replaced, and reports nothing to it", async () => {
     const { pi, orchestrator, sessions, ctx } = workerHarness();
     const record = orchestrator.workers!.spawn(workerSpec());
     await flushWorkers();
@@ -833,6 +834,26 @@ describe("session-first core", () => {
     expect(record.status).toBe("killed");
     expect(sessions[0]!.disposed).toBe(true);
     expect(orchestrator.workers).toBeNull();
+    // The host invalidates the old session's API right after shutdown; a send
+    // from a timer armed by the kill would throw outside any handler.
+    pi.sendMessage.mockImplementation(() => { throw new Error("stale"); });
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(pi.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("re-sends a steered result the root run dropped with its queue", async () => {
+    const { pi, orchestrator, sessions } = workerHarness();
+    orchestrator.mainTurnInFlight = true;
+    orchestrator.workers!.spawn(workerSpec());
+    await flushWorkers();
+    sessions[0]!.finish("result");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(pi.sendMessage).toHaveBeenLastCalledWith(expect.anything(), { deliverAs: "steer" });
+    orchestrator.mainTurnInFlight = false;
+    await emit(pi, "agent_end", {}, {});
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(pi.sendMessage).toHaveBeenCalledTimes(2);
+    expect(pi.sendMessage).toHaveBeenLastCalledWith(expect.objectContaining({ customType: "pi-pi-worker" }), { triggerTurn: true });
   });
 
   it("marks ask_user execution as waiting, suppresses recovery, and clears abnormal terminal state", async () => {

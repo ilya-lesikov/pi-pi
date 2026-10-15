@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { getAgentDefinition, listAgentDefinitions, registeredAgentNames, remapPoolName } from "../agents/registry.js";
+import { getAgentDefinition, registeredAgentNames, remapPoolName } from "../agents/registry.js";
 import { catalogHas, resolveRef } from "../routing.js";
 import { getLogger } from "../log.js";
 import { getTracer } from "../tracer.js";
@@ -21,6 +21,8 @@ export interface WorkerHooks {
   onProviderFailure(record: WorkerRecord): Promise<boolean>;
   onChange(): void;
 }
+
+const RECOVERY_DECISION_MS = 30_000;
 
 const RESUME_AFTER_REROUTE = "[PI-PI] The provider that refused your last request has been routed around, and you are now on another one. Everything above is your own work — continue from where you stopped. Do not start over and do not repeat work you already finished.";
 
@@ -48,10 +50,10 @@ export function createWorkers(orchestrator: Orchestrator, hooks: WorkerHooks, cr
     graceTurns: () => 5,
   });
   const delivery = new WorkerDelivery({
-    isStreaming: () => {
-      const current = ctx();
-      return typeof current?.isIdle === "function" ? !current.isIdle() : orchestrator.mainTurnInFlight;
-    },
+    // The host's idle check also covers compaction, during which a message
+    // neither steers nor starts a turn; mainTurnInFlight tracks the run alone.
+    isStreaming: () => orchestrator.mainTurnInFlight,
+    isBusy: () => !orchestrator.mainTurnInFlight && ctx()?.isIdle?.() === false,
     canWake: () => {
       const current = ctx();
       if (!current || orchestrator.modelSwitchInFlight || orchestrator.interactivePromptOpen) return false;
@@ -78,7 +80,7 @@ function onWorkerEvent(event: WorkerEvent, hooks: WorkerHooks, delivery: WorkerD
         status: record.status,
         error: record.error,
         result: record.result,
-        tokens: record.usage,
+        tokens: record.runUsage,
         durationMs: (record.settledAt ?? Date.now()) - (record.startedAt ?? record.createdAt),
         toolUses: record.toolUses,
         modelId: record.modelId,
@@ -90,13 +92,14 @@ function onWorkerEvent(event: WorkerEvent, hooks: WorkerHooks, delivery: WorkerD
         break;
       }
       // Held until the routing decision: a worker resumed on another provider
-      // has nothing to report yet.
-      void hooks.onProviderFailure(record)
-        .catch((error: any) => {
-          getLogger().error({ s: "agents", id: record.id, err: error?.message }, "worker failure handling failed");
-          return false;
-        })
-        .then((resumed) => { if (!resumed) deliver(); });
+      // has nothing to report yet. Bounded, so a decision that never comes
+      // still lets the failure through.
+      const decision = hooks.onProviderFailure(record).catch((error: any) => {
+        getLogger().error({ s: "agents", id: record.id, err: error?.message }, "worker failure handling failed");
+        return false;
+      });
+      const timeout = new Promise<boolean>((resolve) => { setTimeout(() => resolve(false), RECOVERY_DECISION_MS).unref?.(); });
+      void Promise.race([decision, timeout]).then((resumed) => { if (!resumed && record.status === "failed") deliver(); });
       break;
     }
     case "question":
@@ -160,7 +163,8 @@ const WORKERS_HANDLE_KEY = Symbol.for("pi-pi:workers");
 
 /**
  * The typed entry point other bundled extensions (pi-tasks) use to run work on
- * pi-pi's workers. Published once; it always reaches the current session's manager.
+ * pi-pi's workers. Republished with each orchestrator instance; it always
+ * reaches the current session's manager.
  */
 export function publishWorkersHandle(orchestrator: Orchestrator, hooks: WorkerHooks): void {
   const listeners = new Set<(settled: Parameters<Parameters<WorkersHandle["onSettled"]>[0]>[0]) => void>();
@@ -207,10 +211,9 @@ export function registerWorkerToolsFor(orchestrator: Orchestrator, hooks: Worker
   registerWorkerTools(orchestrator.pi, {
     manager: () => orchestrator.workers,
     prepareSpawn: (params, toolCallId, ctx) => prepareSpawn(orchestrator, hooks, params, toolCallId, ctx),
-    agentTypesDescription: () => `The type of agent to start. Available: ${listAgentDefinitions().map((definition) => definition.name).join(", ") || "none yet"}.`,
-    consumed: (records) => {
-      orchestrator.workers?.markDelivered(records);
-      orchestrator.workerDelivery?.forget(records.map((record) => record.id));
+    consumed: (records, kind = "settled") => {
+      if (kind === "settled") orchestrator.workers?.markDelivered(records);
+      orchestrator.workerDelivery?.forget(records.map((record) => record.id), kind);
     },
   });
 }

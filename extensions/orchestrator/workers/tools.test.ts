@@ -34,7 +34,6 @@ function setup() {
   registerWorkerTools({ registerTool: (tool: any) => tools.set(tool.name, tool) } as any, {
     manager: () => manager,
     prepareSpawn: (params) => params.subagent_type === "bad" ? "subagent_type must be one of: explore" : { type: params.subagent_type, description: params.description, prompt: params.prompt, model: "p/m", thinking: "high", notify: "wake" },
-    agentTypesDescription: () => "explore",
     consumed: (records) => consumed.push(...records),
   });
   const call = (name: string, params: unknown, signal?: AbortSignal) => tools.get(name).execute("call", params, signal, undefined, {});
@@ -84,6 +83,17 @@ describe("worker tools", () => {
     const result = await call("agent_stop", { id: "explore-1", mode: "kill" });
     expect(result.content[0].text).toBe("explore-1: killed; it left no result.");
     expect(manager.get("explore-1")?.status).toBe("killed");
+    expect(consumed.map((record) => record.id)).toEqual(["explore-1"]);
+  });
+
+  it("marks a question agent_wait returned as seen, so it is not pushed again", async () => {
+    const { call, sessions, consumed } = setup();
+    await call("Agent", { subagent_type: "explore", description: "d", prompt: "p" });
+    await flush();
+    const pending = call("agent_wait", { ids: ["explore-1"] });
+    void sessions[0]!.hooks.askParent("main or dev?", undefined);
+    const result = await pending;
+    expect(result.content[0].text).toContain("asks: main or dev?");
     expect(consumed.map((record) => record.id)).toEqual(["explore-1"]);
   });
 

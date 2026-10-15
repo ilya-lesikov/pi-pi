@@ -248,17 +248,17 @@ export class WorkerViewer implements Component {
       this.openComposer(record.question ? "answer" : "steer");
       return;
     }
-    if (data === "a" && record?.question) {
+    if (matchesKey(data, "a") && record?.question) {
       this.openComposer("answer");
       return;
     }
-    if (data === "i" && active) {
+    if (matchesKey(data, "i") && active) {
       this.notice = this.manager.interruptTool(this.id) ? "Interrupted the current tool call." : "No tool call in progress.";
       this.armed = null;
       this.tui.requestRender();
       return;
     }
-    if (data === "x" && active) {
+    if (matchesKey(data, "x") && active) {
       if (this.armed === "stop") {
         this.manager.stop(this.id);
         this.notice = "Asked to wrap up; killed in a minute if it does not.";
@@ -269,7 +269,7 @@ export class WorkerViewer implements Component {
       this.tui.requestRender();
       return;
     }
-    if (data === "K" && active) {
+    if (matchesKey(data, "shift+k") && active) {
       if (this.armed === "kill") {
         this.manager.kill(this.id);
         this.notice = "Killed.";

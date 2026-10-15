@@ -8,9 +8,8 @@ export interface WorkerToolsHost {
   manager: () => WorkerManager | null;
   /** Validates and resolves a spawn request into a spec; a string is the refusal shown to the model. */
   prepareSpawn(params: { subagent_type: string; description: string; prompt: string; skills?: string[]; timeout_sec?: number; notify?: "wake" | "silent" }, toolCallId: string, ctx: any): WorkerSpawnSpec | string;
-  agentTypesDescription(): string;
-  /** Called when a wait handed settled records to the model, so the push delivery skips them. */
-  consumed(records: WorkerRecord[]): void;
+  /** Called when a tool showed the model these outcomes, so the push delivery skips them. */
+  consumed(records: WorkerRecord[], kind?: "settled" | "question"): void;
 }
 
 const WAIT_MAX_SEC = 600;
@@ -21,7 +20,9 @@ function text(value: string, details?: unknown) {
 }
 
 export function registerWorkerTools(pi: ExtensionAPI, host: WorkerToolsHost): void {
-  const subagentType = Type.String({ description: host.agentTypesDescription() });
+  // The types are known only once the session has registered its agents, and
+  // the delegation roster in the system prompt lists them in full anyway.
+  const subagentType = Type.String({ description: "The type of agent to start, from the roster in your instructions." });
   pi.registerTool({
     name: "Agent",
     label: "Agent",
@@ -66,8 +67,7 @@ export function registerWorkerTools(pi: ExtensionAPI, host: WorkerToolsHost): vo
       if (unknown.length === ids.length) return { ...text(`No such worker: ${unknown.join(", ")}.`), isError: true } as any;
       const timeoutSec = Math.min(WAIT_MAX_SEC, Math.max(1, Number(params.timeout_sec) || WAIT_DEFAULT_SEC));
       const outcome = await manager.wait(ids, timeoutSec * 1000, signal);
-      const settled = outcome.kind === "settled" ? outcome.records : [];
-      if (settled.length) host.consumed(settled);
+      if (outcome.kind === "settled" || outcome.kind === "question") host.consumed(outcome.records, outcome.kind);
       return text(renderWait(outcome, manager, unknown), { kind: outcome.kind, ids: outcome.records.map((record) => record.id) });
     },
   });
@@ -125,7 +125,7 @@ export function registerWorkerTools(pi: ExtensionAPI, host: WorkerToolsHost): vo
       "Stop a worker you started. Returns immediately.",
       "mode \"graceful\" (default): asks it to wrap up and submit what it has; kills it if it does not finish within a minute.",
       "mode \"kill\": ends it now, even if it is stuck in a tool or a model call. Its partial result is kept.",
-      "mode \"tool\": cancels only the tool call it is stuck in; the worker carries on.",
+      "mode \"tool\": cancels the tool calls it is running right now; the worker carries on.",
     ].join("\n"),
     parameters: Type.Object({
       id: Type.String({ description: "Worker id, or \"all\" for every active worker." }),
@@ -138,7 +138,7 @@ export function registerWorkerTools(pi: ExtensionAPI, host: WorkerToolsHost): vo
       const targets = params.id === "all" ? manager.active() : [manager.get(params.id)].filter((record): record is WorkerRecord => !!record);
       if (!targets.length) return { ...text(params.id === "all" ? "No active workers." : `No such worker: ${params.id}.`), isError: params.id !== "all" } as any;
       const lines = targets.map((record) => {
-        if (mode === "tool") return manager.interruptTool(record.id) ? `${record.id}: interrupted its current tool call.` : `${record.id}: no tool call in progress.`;
+        if (mode === "tool") return manager.interruptTool(record.id) ? `${record.id}: interrupted its running tool calls.` : `${record.id}: no tool call in progress.`;
         if (!ACTIVE_STATUSES.has(record.status)) return `${record.id}: already ${record.status}.`;
         if (mode === "kill") {
           manager.kill(record.id);
