@@ -34,7 +34,7 @@ export interface DeliveryHost {
   isStreaming(): boolean;
   /** Whether waking an idle root agent now would collide with the user (dialog open, typing, model switch). */
   canWake(): boolean;
-  /** Whether the session cannot take a message at all right now (compacting): hold and retry. */
+  /** Whether the session can neither take a steer nor start a turn (between turns, compacting): hold and retry. */
   isBusy?(): boolean;
   send(message: { customType: string; content: string; display: boolean; details: WorkerMessageDetails }, options: { deliverAs?: "steer" | "nextTurn"; triggerTurn?: boolean }): void;
   now(): number;

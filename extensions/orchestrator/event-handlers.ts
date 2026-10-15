@@ -583,7 +583,9 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     const message = event?.message;
     if (message?.role === "custom" && message.customType === WORKER_MESSAGE_TYPE) orchestrator.workerDelivery?.confirm(message.details?.deliveryId);
   });
-  pi.on("agent_end", async () => {
+  // Settled, not agent_end: a retry or a queued continuation after agent_end
+  // still injects what is queued, and re-sending it then would duplicate it.
+  pi.on("agent_settled", async () => {
     orchestrator.workerDelivery?.requeueUnseen();
   });
 

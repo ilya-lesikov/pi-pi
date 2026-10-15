@@ -50,8 +50,8 @@ export function createWorkers(orchestrator: Orchestrator, hooks: WorkerHooks, cr
     graceTurns: () => 5,
   });
   const delivery = new WorkerDelivery({
-    // The host's idle check also covers compaction, during which a message
-    // neither steers nor starts a turn; mainTurnInFlight tracks the run alone.
+    // mainTurnInFlight spans one turn; between turns and while compacting the
+    // host is not idle yet cannot take a steer either, so delivery holds.
     isStreaming: () => orchestrator.mainTurnInFlight,
     isBusy: () => !orchestrator.mainTurnInFlight && ctx()?.isIdle?.() === false,
     canWake: () => {

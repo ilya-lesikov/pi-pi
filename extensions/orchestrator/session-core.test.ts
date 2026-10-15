@@ -850,7 +850,7 @@ describe("session-first core", () => {
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(pi.sendMessage).toHaveBeenLastCalledWith(expect.anything(), { deliverAs: "steer" });
     orchestrator.mainTurnInFlight = false;
-    await emit(pi, "agent_end", {}, {});
+    await emit(pi, "agent_settled", {}, {});
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(pi.sendMessage).toHaveBeenCalledTimes(2);
     expect(pi.sendMessage).toHaveBeenLastCalledWith(expect.objectContaining({ customType: "pi-pi-worker" }), { triggerTurn: true });
