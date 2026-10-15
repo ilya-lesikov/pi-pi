@@ -17,8 +17,6 @@
   },
   "files": [
     "extensions/",
-    "3p/pi-tasks/src/",
-    "3p/pi-tasks/package.json",
     "3p/pi-lsp/extensions/",
     "3p/pi-lsp/package.json",
     "3p/pi-ask-user/index.ts",
@@ -37,7 +35,6 @@
   "pi": {
     "extensions": [
       "./extensions/orchestrator",
-      "./3p/pi-tasks/src/index.ts",
       "./3p/pi-lsp/extensions/lsp",
       "./3p/pi-ask-user"
     ]

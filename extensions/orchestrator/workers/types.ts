@@ -92,8 +92,6 @@ export interface WorkerSpawnSpec {
   notify: "wake" | "silent";
   resultSchema?: "findings";
   parentToolCallId?: string;
-  /** Opaque tag for an owner other than the root model, e.g. a pi-tasks task id. */
-  owner?: string;
 }
 
 export type WorkerSessionFactory = (spec: WorkerSpawnSpec, hooks: WorkerSessionHooks) => Promise<WorkerSession>;

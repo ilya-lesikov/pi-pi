@@ -42,8 +42,6 @@ export class Orchestrator {
   /** The root session's workers; replaced with the session, so none outlives it. */
   workers: WorkerManager | null = null;
   workerDelivery: WorkerDelivery | null = null;
-  /** Re-attaches listeners that follow the current session's manager. */
-  onWorkersReplaced: (() => void) | null = null;
   workerWidget: WorkerWidget | null = null;
   /** Replaces how worker sessions are built; for tests that drive workers without a model. */
   workerSessionFactory: WorkerSessionFactory | undefined = undefined;

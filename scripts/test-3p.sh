@@ -29,9 +29,6 @@ run() {
   fi
 }
 
-# vitest packages (use the package's own vitest.config.ts via npx vitest run).
-run "pi-tasks"     "pi-tasks"     npx vitest run
-
 # bun packages. pi-ask-user has no `test` npm script, so invoke `bun test` directly.
 run "pi-lsp"      "pi-lsp"      bun test
 run "pi-ask-user" "pi-ask-user" bun test

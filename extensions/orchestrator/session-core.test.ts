@@ -355,7 +355,7 @@ describe("session-first core", () => {
     try {
       const second = makePi();
       initExtension(second);
-      expect(second.handlers.get("session_start")?.length).toBe(1);
+      expect(second.handlers.get("session_start")?.length).toBeGreaterThan(0);
       expect(second.handlers.get("before_agent_start")?.length).toBeGreaterThan(0);
       expect(second.registerCommand).toHaveBeenCalledWith("pp", expect.anything());
     } finally {

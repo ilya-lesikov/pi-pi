@@ -153,63 +153,6 @@ function systemPromptFor(spec: WorkerSpawnSpec, cwd: string): string {
   ].join("\n");
 }
 
-export interface WorkersHandle {
-  spawn(request: { type: string; description: string; prompt: string; owner: string }): { id: string } | { error: string };
-  /** Graceful stop; the worker is killed if it does not wrap up in time. */
-  stop(id: string): boolean;
-  status(id: string): { status: string; summary?: string; error?: string } | undefined;
-  /** Subscribes to settlements; the listener sees every worker, filtered by owner on its side. */
-  onSettled(listener: (settled: { id: string; owner?: string; status: string; result?: string; error?: string }) => void): () => void;
-}
-
-const WORKERS_HANDLE_KEY = Symbol.for("pi-pi:workers");
-
-/**
- * The typed entry point other bundled extensions (pi-tasks) use to run work on
- * pi-pi's workers. Republished with each orchestrator instance; it always
- * reaches the current session's manager.
- */
-export function publishWorkersHandle(orchestrator: Orchestrator, hooks: WorkerHooks): void {
-  const listeners = new Set<(settled: Parameters<Parameters<WorkersHandle["onSettled"]>[0]>[0]) => void>();
-  let subscribedTo: WorkerManager | null = null;
-  const ensureSubscribed = () => {
-    const manager = orchestrator.workers;
-    if (!manager || manager === subscribedTo) return;
-    subscribedTo = manager;
-    manager.subscribe((event) => {
-      if (event.type !== "settled") return;
-      const { record } = event;
-      const settled = { id: record.id, owner: record.spec.owner, status: record.status, result: record.result?.body || record.result?.summary, error: record.error };
-      for (const listener of listeners) {
-        try { listener(settled); } catch {}
-      }
-    });
-  };
-  const handle: WorkersHandle = {
-    spawn: (request) => {
-      const manager = orchestrator.workers;
-      if (!manager) return { error: "workers are unavailable: the session is not ready" };
-      ensureSubscribed();
-      const spec = prepareSpawn(orchestrator, hooks, { subagent_type: request.type, description: request.description, prompt: request.prompt }, "", undefined);
-      if (typeof spec === "string") return { error: spec };
-      const record = manager.spawn({ ...spec, owner: request.owner });
-      return { id: record.id };
-    },
-    stop: (id) => orchestrator.workers?.stop(id) ?? false,
-    status: (id) => {
-      const record = orchestrator.workers?.get(id);
-      return record ? { status: record.status, summary: record.result?.summary, error: record.error } : undefined;
-    },
-    onSettled: (listener) => {
-      ensureSubscribed();
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-  };
-  (globalThis as any)[WORKERS_HANDLE_KEY] = handle;
-  orchestrator.onWorkersReplaced = ensureSubscribed;
-}
-
 export function registerWorkerToolsFor(orchestrator: Orchestrator, hooks: WorkerHooks): void {
   registerWorkerTools(orchestrator.pi, {
     manager: () => orchestrator.workers,

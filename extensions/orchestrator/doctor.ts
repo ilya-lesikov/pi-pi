@@ -209,8 +209,6 @@ export async function runDoctor(orchestrator: Orchestrator, ctx: any, options: D
   // Extensions couple to each other through globalThis handles rather than
   // imports, so a missing one is invisible to types and to the type checker.
   const handles: Array<[string, string]> = [
-    ["pi-pi workers", "pi-pi:workers"],
-    ["pi-tasks store", "pi-tasks:store"],
     ["pi-lsp API", "pi-lsp:api"],
     ["CBM daemon", "pi-pi:cbm-daemon"],
     ["usage tracker", "pi-pi:usage-tracker"],

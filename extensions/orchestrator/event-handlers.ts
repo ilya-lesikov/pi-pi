@@ -26,7 +26,8 @@ import { ensureProvisionDirOnPath, ensureServerForFile, provisionEagerTools } fr
 import { installConsoleGuard } from "./console-guard.js";
 import { clearAllPauses, demoteUnusableSubscription, handleMainAuthFailure, handleMainRateLimit, handleMainRefusal, handleSubagentAuthFailure, handleSubagentRateLimit, handleSubscriptionRouteOutage, isAuthError, isModelRefusal, isPolicyBlockError, isRateLimitError } from "./rate-limit-fallback.js";
 import { adjudicateCheckIn, adjudicateContinuation } from "./continuation-adjudicator.js";
-import { createWorkers, publishWorkersHandle, registerWorkerToolsFor, resumeOnNewRouting, WORKER_MESSAGE_TYPE, type WorkerHooks } from "./workers/index.js";
+import { registerTasks } from "./tasks/index.js";
+import { createWorkers, registerWorkerToolsFor, resumeOnNewRouting, WORKER_MESSAGE_TYPE, type WorkerHooks } from "./workers/index.js";
 import { registerWorkerUi } from "./workers/ui.js";
 import type { WorkerRecord } from "./workers/types.js";
 import { ensureProviderRetrySettings, patchRetryPredicate } from "./provider-retry.js";
@@ -487,7 +488,6 @@ export function startWorkers(orchestrator: Orchestrator, ctx: any, hooks: Worker
   const workers = createWorkers(orchestrator, hooks, orchestrator.workerSessionFactory);
   orchestrator.workers = workers.manager;
   orchestrator.workerDelivery = workers.delivery;
-  orchestrator.onWorkersReplaced?.();
   orchestrator.workerWidget?.attach(ctx);
 }
 
@@ -577,8 +577,8 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   registerImageShrink(pi, () => orchestrator.config?.images);
   const workerHooks = createWorkerHooks(orchestrator);
   registerWorkerToolsFor(orchestrator, workerHooks);
-  publishWorkersHandle(orchestrator, workerHooks);
   registerWorkerUi(orchestrator);
+  registerTasks(pi);
   pi.on("message_end", async (event: any) => {
     const message = event?.message;
     if (message?.role === "custom" && message.customType === WORKER_MESSAGE_TYPE) orchestrator.workerDelivery?.confirm(message.details?.deliveryId);

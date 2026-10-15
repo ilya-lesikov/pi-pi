@@ -2,8 +2,9 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve, sep } from "node:path";
 import { getLogger } from "./log.js";
 
-// Install issue 8b: pi-pi VENDORS several upstream extensions (pi-lsp,
-// pi-tasks and pi-ask-user) and replaces pi-subagents with its own workers.
+// Install issue 8b: pi-pi VENDORS several upstream extensions (pi-lsp and
+// pi-ask-user) and replaces pi-subagents and pi-tasks with its own workers and
+// task tools.
 // If the user ALSO installs any of them STANDALONE, both copies load
 // and their tools/commands collide — the framework only prints a non-fatal
 // warning ("Tool \"lsp\" conflicts with ..."). This guard HARD-FAILS instead,
@@ -21,7 +22,7 @@ import { getLogger } from "./log.js";
 export const PI_PI_OWNED_TOOL_NAMES: readonly string[] = [
   "lsp", // pi-lsp
   "Agent", // pi-pi's workers
-  "TaskCreate", // pi-tasks
+  "TaskCreate", // pi-pi's task tools
   "ask_user", // pi-ask-user
   "vcc_recall", // pi-pi's own recall tools
   "recall_tool_output",
