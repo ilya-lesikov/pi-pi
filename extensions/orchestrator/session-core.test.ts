@@ -6,13 +6,13 @@ import { getDefaultConfig, normalizeConfigDurations } from "./config.js";
 import { Orchestrator } from "./orchestrator.js";
 import { buildAcpState } from "./acp.js";
 import { clearPauses, forgetLastGood, isPaused, listPauses, pause, setCatalog, unpause } from "./routing.js";
-import { classifyContinuation, isMainTurnStalled, preloadSkillsForSpawn, registerEventHandlers, registerLoadSkill, registerSubagentPromptcap, renderGenericPrompt } from "./event-handlers.js";
+import { classifyContinuation, isMainTurnStalled, preloadSkillsForSpawn, registerEventHandlers, registerLoadSkill, registerSubagentPromptcap, renderGenericPrompt, startWorkers } from "./event-handlers.js";
 import { listLayeredSkills } from "./skills-manifest.js";
 import { createUsageTracker } from "./usage-tracker.js";
 import initExtension from "./index.js";
+import { listAgentDefinitions } from "./agents/registry.js";
 
 const ORCHESTRATOR_KEY = Symbol.for("pi-pi:orchestrator-initialized");
-const SUBAGENT_SESSION_SCOPE_KEY = Symbol.for("pi-pi:subagent-session-scope");
 
 function makePi(): any {
   const handlers = new Map<string, Array<(...args: any[]) => any>>();
@@ -39,6 +39,7 @@ function makePi(): any {
     unregisterProvider: vi.fn(),
     sendUserMessage: vi.fn(),
     sendMessage: vi.fn(),
+    registerMessageRenderer: vi.fn(),
     appendEntry: vi.fn(),
   };
 }
@@ -47,9 +48,51 @@ async function emit(pi: any, name: string, event: any, ctx: any): Promise<void> 
   for (const handler of pi.handlers.get(name) ?? []) await handler(event, ctx);
 }
 
-async function emitBus(pi: any, channel: string, data: any): Promise<void> {
-  for (const handler of pi.busHandlers.get(channel) ?? []) await handler(data);
+/** Runs the registered Agent tool against a manager that records spawns instead of running them. */
+async function spawnThroughTool(pi: any, orchestrator: Orchestrator, params: Record<string, unknown>, ctx: any = {}): Promise<{ result: any; spawned: any[] }> {
+  const spawned: any[] = [];
+  orchestrator.workers = { spawn: (spec: any) => { spawned.push(spec); return { id: `w-${spawned.length}`, status: "running" }; } } as any;
+  const tool = pi.registerTool.mock.calls.map((call: any[]) => call[0]).find((entry: any) => entry.name === "Agent");
+  const result = await tool.execute("call-1", params, undefined, undefined, ctx);
+  return { result, spawned };
 }
+
+/** A root session with event handlers registered and workers backed by scripted sessions. */
+function workerHarness() {
+  const pi = makePi();
+  const orchestrator = new Orchestrator(pi);
+  orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+  const sessions: Array<{ hooks: any; finish(text: string): void; disposed: boolean }> = [];
+  orchestrator.workerSessionFactory = async (_spec, hooks) => {
+    let resolve: () => void = () => {};
+    let text = "";
+    const entry = { hooks, disposed: false, finish(next: string) { text = next; resolve(); } };
+    sessions.push(entry);
+    return {
+      run: () => new Promise<void>((done) => { resolve = done; }),
+      steer() {},
+      interruptTool: () => false,
+      abort() {},
+      dispose() { entry.disposed = true; },
+      setModel: async () => true,
+      lastAssistantText: () => text,
+      lastError: () => undefined,
+      contextPercent: () => undefined,
+      transcript: () => [],
+    };
+  };
+  registerEventHandlers(orchestrator);
+  const ctx: any = { isIdle: () => true, hasPendingMessages: () => false, ui: { getEditorText: () => "", notify: vi.fn() } };
+  orchestrator.lastCtx = ctx;
+  startWorkers(orchestrator, ctx);
+  return { pi, orchestrator, sessions, ctx };
+}
+
+function workerSpec(overrides: Record<string, unknown> = {}): any {
+  return { type: "explore", description: "Worker", prompt: "p", model: "test/model", thinking: "high", notify: "wake", ...overrides };
+}
+
+const flushWorkers = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 /** First handler result for an event; several handlers may listen, only one answers. */
 async function emitForResult(pi: any, name: string, event: any, ctx: any): Promise<any> {
@@ -242,15 +285,13 @@ describe("session-first core", () => {
 
       // An older build named pool members by provider and version; the slot
       // under that name is what the live roster is keyed by now.
-      const stale = { toolName: "Agent", input: { subagent_type: "reviewer_github-copilot-claude-fable-5.1_high", model: "openai/gpt-luna-latest" } };
-      expect(await emitForResult(pi, "tool_call", stale, ctx)).toBeUndefined();
-      expect(stale.input.subagent_type).toBe("reviewer_claude-fable_high");
-      // The registered definition decides the model, so the tool call's own
-      // argument is left alone rather than overwritten with a re-resolved spec.
-      expect(stale.input.model).toBe("openai/gpt-luna-latest");
+      const stale = await spawnThroughTool(pi, orchestrator, { subagent_type: "reviewer_github-copilot-claude-fable-5.1_high", description: "d", prompt: "p" }, ctx);
+      expect(stale.result.isError).toBeUndefined();
+      expect(stale.spawned[0]).toMatchObject({ type: "reviewer_claude-fable_high", model: "pp-flant-anthropic-sub/sub/claude-fable-5-1", resultSchema: "findings" });
 
-      const unknown = { toolName: "Agent", input: { subagent_type: "reviewer_gemini-3-pro_high" } };
-      expect((await emitForResult(pi, "tool_call", unknown, ctx))?.block).toBe(true);
+      const unknown = await spawnThroughTool(pi, orchestrator, { subagent_type: "reviewer_gemini-3-pro_high", description: "d", prompt: "p" }, ctx);
+      expect(unknown.result.isError).toBe(true);
+      expect(unknown.spawned).toEqual([]);
     } finally {
       resetRouting();
     }
@@ -270,23 +311,24 @@ describe("session-first core", () => {
       registerEventHandlers(orchestrator);
       const ctx = { cwd: orchestrator.cwd, model: { provider: "test", id: "model" }, ui: { notify: vi.fn() }, sessionManager: {} };
 
-      const served = { toolName: "Agent", input: { subagent_type: "advisor_claude-fable_high" } };
-      expect(await emitForResult(pi, "tool_call", served, ctx)).toBeUndefined();
+      const served = await spawnThroughTool(pi, orchestrator, { subagent_type: "advisor_claude-fable_high", description: "d", prompt: "p" }, ctx);
+      expect(served.spawned).toHaveLength(1);
 
       // The Claude credential goes away; the definition still names the model
       // it was registered with.
       setCatalog(["openai-codex/gpt-6-astra-pro"]);
-      const orphaned = { toolName: "Agent", input: { subagent_type: "advisor_claude-fable_high" } };
-      const result = await emitForResult(pi, "tool_call", orphaned, ctx);
-      expect(result?.block).toBe(true);
-      expect(result.reason).toContain("advisor_claude-fable_high has no model to run on right now (claude/fable)");
-      expect(result.reason).toContain("✗ Claude subscription: no credentials");
-      expect(result.reason).toContain("✗ ChatGPT subscription: no model for Claude Fable");
-      expect(result.reason).toContain("/pp › Settings › Providers");
+      const orphaned = await spawnThroughTool(pi, orchestrator, { subagent_type: "advisor_claude-fable_high", description: "d", prompt: "p" }, ctx);
+      expect(orphaned.result.isError).toBe(true);
+      const reason = orphaned.result.content[0].text;
+      expect(reason).toContain("advisor_claude-fable_high has no model to run on right now (claude/fable)");
+      expect(reason).toContain("✗ Claude subscription: no credentials");
+      expect(reason).toContain("✗ ChatGPT subscription: no model for Claude Fable");
+      expect(reason).toContain("/pp › Settings › Providers");
+      expect(orphaned.spawned).toEqual([]);
 
       // The other-vendor member is untouched.
-      const other = { toolName: "Agent", input: { subagent_type: "advisor_gpt-astra-pro_high" } };
-      expect(await emitForResult(pi, "tool_call", other, ctx)).toBeUndefined();
+      const other = await spawnThroughTool(pi, orchestrator, { subagent_type: "advisor_gpt-astra-pro_high", description: "d", prompt: "p" }, ctx);
+      expect(other.spawned).toHaveLength(1);
     } finally {
       resetRouting();
     }
@@ -306,10 +348,8 @@ describe("session-first core", () => {
     expect(orchestrator.mainTurnTimer).toBeNull();
   });
 
-  // The host re-instantiates every extension on /new, /resume and fork. Before,
-  // a global "already initialized" flag made the second instantiation take the
-  // subagent branch, so the new root session silently lost its event handlers,
-  // its /pp command, its footer and its configured main model.
+  // The host re-instantiates every extension on /new, /resume and fork; each
+  // instantiation must register the root session's handlers again.
   it("registers root handlers again each time the host re-instantiates the extension", () => {
     (globalThis as any)[ORCHESTRATOR_KEY] = true;
     try {
@@ -319,20 +359,6 @@ describe("session-first core", () => {
       expect(second.handlers.get("before_agent_start")?.length).toBeGreaterThan(0);
       expect(second.registerCommand).toHaveBeenCalledWith("pp", expect.anything());
     } finally {
-      delete (globalThis as any)[ORCHESTRATOR_KEY];
-    }
-  });
-
-  it("takes the subagent branch only inside a subagent-session scope", () => {
-    (globalThis as any)[ORCHESTRATOR_KEY] = true;
-    (globalThis as any)[SUBAGENT_SESSION_SCOPE_KEY] = { getStore: () => ({ depth: 1 }) };
-    try {
-      const child = makePi();
-      initExtension(child);
-      expect(child.handlers.get("session_start")).toBeUndefined();
-      expect(child.registerCommand).not.toHaveBeenCalledWith("pp", expect.anything());
-    } finally {
-      delete (globalThis as any)[SUBAGENT_SESSION_SCOPE_KEY];
       delete (globalThis as any)[ORCHESTRATOR_KEY];
     }
   });
@@ -617,9 +643,9 @@ describe("session-first core", () => {
     orchestrator.interactivePromptOpen = true;
     expect(isMainTurnStalled(orchestrator, 3000)).toBe(false);
     orchestrator.interactivePromptOpen = false;
-    orchestrator.spawnedAgentIds.add("worker");
+    orchestrator.workers = { active: () => [{ id: "worker" }] } as any;
     expect(isMainTurnStalled(orchestrator, 3000)).toBe(false);
-    orchestrator.spawnedAgentIds.clear();
+    orchestrator.workers = null;
     orchestrator.mainTurnToolInFlight = 1;
     expect(isMainTurnStalled(orchestrator, 3000)).toBe(false);
   });
@@ -726,16 +752,15 @@ describe("session-first core", () => {
     const { initTracer, finalizeTracer } = await import("./tracer.js");
     const dir = mkdtempSync(join(tmpdir(), "pp-trace-"));
     try {
-      const pi = makePi();
-      const orchestrator = new Orchestrator(pi);
+      const { pi, orchestrator, sessions } = workerHarness();
       orchestrator.cwd = dir;
-      orchestrator.config = normalizeConfigDurations(getDefaultConfig());
-      registerEventHandlers(orchestrator);
       initTracer(join(dir, ".pp"), "trace-session");
 
       await emit(pi, "tool_execution_start", { toolCallId: "c1", toolName: "read", args: { path: "a.ts" } }, {});
-      await emitBus(pi, "subagents:created", { id: "worker", type: "explore", description: "Worker", toolCallId: "call-7" });
-      await emitBus(pi, "subagents:completed", { id: "worker", status: "completed" });
+      const record = orchestrator.workers!.spawn(workerSpec({ parentToolCallId: "call-7" }));
+      await flushWorkers();
+      sessions[0]!.finish("done");
+      await flushWorkers();
       finalizeTracer();
 
       const main = readFileSync(join(dir, ".pp", "logs", "traces", "trace-session", "main.jsonl"), "utf-8");
@@ -743,69 +768,71 @@ describe("session-first core", () => {
       expect(main).toContain('"kind":"subagent_spawned"');
       // The spawning tool call is what ties a worker trace back to the turn that started it.
       expect(main).toContain('"parentToolCallId":"call-7"');
-      const worker = readFileSync(join(dir, ".pp", "logs", "traces", "trace-session", "worker.jsonl"), "utf-8");
+      const worker = readFileSync(join(dir, ".pp", "logs", "traces", "trace-session", `${record.id}.jsonl`), "utf-8");
       expect(worker).toContain('"kind":"subagent_settled"');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it("leaves the stale-agent watchdog disabled by default", async () => {
-    const pi = makePi();
-    const orchestrator = new Orchestrator(pi);
-    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
-    registerEventHandlers(orchestrator);
-
-    await emitBus(pi, "subagents:created", { id: "worker", description: "Worker" });
-
-    expect(orchestrator.staleAgentTimer).toBeNull();
-    expect(orchestrator.spawnedAgentIds.has("worker")).toBe(true);
-  });
-
-  // pi-subagents publishes on the shared event bus; wiring these to pi.on()
-  // silently detached worker tracking and worker usage accounting.
-  it("records worker usage and clears worker tracking on the completed event", async () => {
-    const pi = makePi();
-    const orchestrator = new Orchestrator(pi);
-    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
-    registerEventHandlers(orchestrator);
+  it("records a finished worker's usage and stops counting it as active", async () => {
+    const { orchestrator, sessions } = workerHarness();
     const usage = createUsageTracker();
     (globalThis as any)[Symbol.for("pi-pi:usage-tracker")] = usage;
     try {
-      await emitBus(pi, "subagents:created", { id: "worker", description: "Worker" });
-      await emitBus(pi, "subagents:completed", {
-        id: "worker",
-        type: "explore",
-        description: "Worker",
-        modelId: "test/model",
-        tokens: { input: 10, output: 4 },
-      });
+      orchestrator.workers!.spawn(workerSpec());
+      await flushWorkers();
+      expect(orchestrator.hasActiveWorkers()).toBe(true);
+      sessions[0]!.hooks.onUsage({ input: 10, output: 4 });
+      sessions[0]!.finish("done");
+      await flushWorkers();
     } finally {
       delete (globalThis as any)[Symbol.for("pi-pi:usage-tracker")];
     }
 
-    expect(orchestrator.spawnedAgentIds.has("worker")).toBe(false);
+    expect(orchestrator.hasActiveWorkers()).toBe(false);
     expect(usage.getSubagentTotals()).toMatchObject({ inputTokens: 10, outputTokens: 4 });
     expect(usage.getSubagentList()[0]).toMatchObject({ agentType: "explore", modelId: "test/model" });
   });
 
-  it("enforces a user-configured stale-agent time limit", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    const pi = makePi();
-    const orchestrator = new Orchestrator(pi);
-    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
-    orchestrator.config.performance.internals.subagentStale = 1000;
-    registerEventHandlers(orchestrator);
+  it("wakes an idle parent with a finished worker's result, and steers a busy one", async () => {
+    const { pi, orchestrator, sessions, ctx } = workerHarness();
+    orchestrator.workers!.spawn(workerSpec());
+    await flushWorkers();
+    sessions[0]!.hooks.submitResult({ status: "done", summary: "found it", body: "a.ts:1" });
+    sessions[0]!.finish("x");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(pi.sendMessage).toHaveBeenCalledWith(expect.objectContaining({ customType: "pi-pi-worker", content: expect.stringContaining("found it") }), { triggerTurn: true });
 
-    await emitBus(pi, "subagents:created", { id: "worker", description: "Worker" });
-    vi.setSystemTime(1001);
-    await vi.advanceTimersByTimeAsync(1000);
+    ctx.isIdle = () => false;
+    orchestrator.workers!.spawn(workerSpec());
+    await flushWorkers();
+    sessions[1]!.finish("second");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(pi.sendMessage).toHaveBeenLastCalledWith(expect.objectContaining({ customType: "pi-pi-worker" }), { deliverAs: "steer" });
+  });
 
-    expect(pi.events.emit).toHaveBeenCalledWith("subagents:rpc:stop", expect.objectContaining({ agentId: "worker" }));
-    expect(pi.sendMessage).toHaveBeenCalledWith(expect.objectContaining({ customType: "pp-agent-stale" }), { deliverAs: "steer" });
-    expect(orchestrator.spawnedAgentIds.has("worker")).toBe(false);
-    vi.useRealTimers();
+  it("holds the wake while a dialog is open", async () => {
+    const { pi, orchestrator, sessions } = workerHarness();
+    orchestrator.interactivePromptOpen = true;
+    orchestrator.workers!.spawn(workerSpec());
+    await flushWorkers();
+    sessions[0]!.finish("x");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(pi.sendMessage).not.toHaveBeenCalled();
+    orchestrator.interactivePromptOpen = false;
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    expect(pi.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("kills the previous session's workers when the session is replaced", async () => {
+    const { pi, orchestrator, sessions, ctx } = workerHarness();
+    const record = orchestrator.workers!.spawn(workerSpec());
+    await flushWorkers();
+    await emit(pi, "session_shutdown", {}, ctx);
+    expect(record.status).toBe("killed");
+    expect(sessions[0]!.disposed).toBe(true);
+    expect(orchestrator.workers).toBeNull();
   });
 
   it("marks ask_user execution as waiting, suppresses recovery, and clears abnormal terminal state", async () => {
@@ -1275,22 +1302,18 @@ describe("session-first core", () => {
       return { project, pi, orchestrator };
     };
 
-    it("prepends a shareable skill to the prompt and strips the parameter", async () => {
+    it("prepends a shareable skill to the spawned prompt and refuses a main-only one", async () => {
       const { project, pi, orchestrator } = setup();
       setCatalog(["openai-codex/gpt-6-astra-pro", "pp-flant-anthropic-sub/sub/claude-fable-5-1"]);
       try {
         orchestrator.registerAgents(true);
         registerEventHandlers(orchestrator);
         const ctx = { cwd: project, model: { provider: "test", id: "model" }, ui: { notify: vi.fn() }, sessionManager: {} };
-        const call = { toolName: "Agent", input: { subagent_type: "advisor_gpt-astra-pro_high", prompt: "Do the slice.", skills: ["shared-rules"] } as Record<string, unknown> };
-        expect(await emitForResult(pi, "tool_call", call, ctx)).toBeUndefined();
-        expect(call.input.skills).toBeUndefined();
-        expect(String(call.input.prompt)).toMatch(/^<skill name="shared-rules" source="project" dir="[^"]+">\nRule for everyone\.\n<\/skill>\n\nDo the slice\.$/);
-        // A resumed agent already holds the skill from its first spawn.
-        const resumed = { toolName: "Agent", input: { subagent_type: "advisor_gpt-astra-pro_high", resume: "abc", prompt: "Continue.", skills: ["shared-rules"] } as Record<string, unknown> };
-        expect(await emitForResult(pi, "tool_call", resumed, ctx)).toBeUndefined();
-        expect(resumed.input.prompt).toBe("Continue.");
-        expect(resumed.input.skills).toBeUndefined();
+        const { spawned } = await spawnThroughTool(pi, orchestrator, { subagent_type: "advisor_gpt-astra-pro_high", description: "d", prompt: "Do the slice.", skills: ["shared-rules"] }, ctx);
+        expect(String(spawned[0].prompt)).toMatch(/^<skill name="shared-rules" source="project" dir="[^"]+">\nRule for everyone\.\n<\/skill>\n\nDo the slice\.$/);
+        const refused = await spawnThroughTool(pi, orchestrator, { subagent_type: "advisor_gpt-astra-pro_high", description: "d", prompt: "p", skills: ["main-flow"] }, ctx);
+        expect(refused.result.isError).toBe(true);
+        expect(refused.spawned).toEqual([]);
       } finally {
         resetRouting();
         rmSync(project, { recursive: true, force: true });
@@ -1378,18 +1401,13 @@ describe("session-first core", () => {
     }
   });
 
-  it("registers workers without context inheritance or worktree isolation", () => {
+  it("registers every worker role with recall into the main session", () => {
     const pi = makePi();
     const orchestrator = new Orchestrator(pi);
     orchestrator.config = normalizeConfigDurations(getDefaultConfig());
     orchestrator.registerAgents();
-    const registration = pi.events.emit.mock.calls.find((call: any[]) => call[0] === "subagents:register-agents");
-    const agents = registration[1].agents as Map<string, any>;
-    expect(agents.size).toBeGreaterThanOrEqual(6);
-    for (const agent of agents.values()) {
-      expect(agent.inheritContext).toBe(false);
-      expect(agent.isolated).toBe(false);
-      expect(agent.builtinToolNames).toContain("vcc_recall");
-    }
+    const definitions = listAgentDefinitions();
+    expect(definitions.length).toBeGreaterThanOrEqual(6);
+    for (const definition of definitions) expect(definition.tools).toContain("vcc_recall");
   });
 });

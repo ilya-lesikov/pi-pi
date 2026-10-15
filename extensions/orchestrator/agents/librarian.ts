@@ -14,7 +14,6 @@ export function createLibrarianAgent(config: PiPiConfig) {
       ref: config.agents.subagents.simple.librarian.model,
       thinking,
       max_turns: config.agents.subagents.simple.librarian.maxTurns,
-      prompt_mode: "replace",
     },
     prompt: [
       identityBlock(description, thinking),

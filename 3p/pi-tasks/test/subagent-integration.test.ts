@@ -86,53 +86,41 @@ function mockCtx() {
   };
 }
 
-// ---- Mock subagents extension (RPC responders) ----
+// ---- Mock pi-pi workers handle ----
 
-/** Simulates the @tintinweb/pi-subagents extension: responds to ping + spawn RPCs and emits ready. */
-function installSubagentsMock(pi: { events: MockEventBus }, opts?: { spawnError?: string }) {
+const WORKERS_KEY = Symbol.for("pi-pi:workers");
+
+/** Stands in for pi-pi's typed workers handle on globalThis. */
+function installSubagentsMock(_pi?: unknown, opts?: { spawnError?: string }) {
   let idCounter = 0;
   const spawned: Array<{ id: string; type: string; prompt: string; options: any }> = [];
   const stopped: string[] = [];
-
-  // Respond to ping — reply on scoped channel
-  const unsubPing = pi.events.on("subagents:rpc:ping", (data: unknown) => {
-    const { requestId } = data as { requestId: string };
-    pi.events.emit(`subagents:rpc:ping:reply:${requestId}`, { success: true, data: { version: 2 } });
-  });
-
-  // Respond to spawn — reply on scoped channel
-  const unsubSpawn = pi.events.on("subagents:rpc:spawn", (data: unknown) => {
-    const { requestId, type, prompt, options } = data as {
-      requestId: string; type: string; prompt: string; options?: any;
-    };
-    if (opts?.spawnError) {
-      pi.events.emit(`subagents:rpc:spawn:reply:${requestId}`, { success: false, error: opts.spawnError });
-      return;
-    }
-    const id = `agent-${++idCounter}`;
-    spawned.push({ id, type, prompt, options });
-    pi.events.emit(`subagents:rpc:spawn:reply:${requestId}`, { success: true, data: { id } });
-  });
-
-  // Respond to stop — reply on scoped channel
-  const unsubStop = pi.events.on("subagents:rpc:stop", (data: unknown) => {
-    const { requestId, agentId } = data as { requestId: string; agentId: string };
-    const known = spawned.some(s => s.id === agentId);
-    if (known) {
-      stopped.push(agentId);
-      pi.events.emit(`subagents:rpc:stop:reply:${requestId}`, { success: true });
-    } else {
-      pi.events.emit(`subagents:rpc:stop:reply:${requestId}`, { success: false, error: "Agent not found" });
-    }
-  });
-
-  // Broadcast readiness
-  pi.events.emit("subagents:ready", {});
-
+  const listeners = new Set<(settled: any) => void>();
+  (globalThis as any)[WORKERS_KEY] = {
+    spawn(request: { type: string; prompt: string; description: string; owner: string; maxTurns?: number }) {
+      if (opts?.spawnError) return { error: opts.spawnError };
+      const id = `agent-${++idCounter}`;
+      spawned.push({ id, type: request.type, prompt: request.prompt, options: { description: request.description, owner: request.owner, maxTurns: request.maxTurns } });
+      return { id };
+    },
+    stop(id: string) {
+      if (!spawned.some((entry) => entry.id === id)) return false;
+      stopped.push(id);
+      return true;
+    },
+    onSettled(listener: (settled: any) => void) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
   return {
     spawned,
     stopped,
-    unsub() { unsubPing(); unsubSpawn(); unsubStop(); },
+    settle(id: string, status: string, extra: { result?: string; error?: string } = {}) {
+      const owner = spawned.find((entry) => entry.id === id)?.options.owner ?? "pi-tasks";
+      for (const listener of [...listeners]) listener({ id, owner, status, ...extra });
+    },
+    unsub() { delete (globalThis as any)[WORKERS_KEY]; },
   };
 }
 
@@ -158,7 +146,8 @@ describe("TaskExecute", () => {
   });
 
   it("returns error when subagent extension is not loaded", async () => {
-    // Re-init without mock to simulate missing extension
+    // Re-init without the handle to simulate missing workers
+    rpc.unsub();
     const freshMock = mockPi();
     initExtension(freshMock.pi as any);
 
@@ -231,7 +220,7 @@ describe("TaskExecute", () => {
     expect(rpc.spawned).toHaveLength(1);
     expect(rpc.spawned[0].type).toBe("general-purpose");
     expect(rpc.spawned[0].prompt).toContain("Run the test suite");
-    expect(rpc.spawned[0].options.isBackground).toBe(true);
+    expect(rpc.spawned[0].options.owner).toBe("pi-tasks");
   });
 
   it("passes additional_context and max_turns to spawned agents", async () => {
@@ -288,13 +277,13 @@ describe("TaskExecute", () => {
   });
 });
 
-describe("TaskExecute via ready broadcast", () => {
-  it("detects subagents when ready fires after tasks init", async () => {
-    // Init tasks WITHOUT the mock — subagents not available yet
+describe("TaskExecute with workers published late", () => {
+  it("finds the handle when it is published after tasks init", async () => {
+    // Init tasks WITHOUT the handle — pi-pi's workers not available yet
     const mock = mockPi();
     initExtension(mock.pi as any);
 
-    // Now install the mock (simulates subagents loading later) and broadcast ready
+    // Now publish the handle (pi-pi loading later)
     const rpc = installSubagentsMock(mock.pi);
 
     // Create a task and execute — should work because ready was received
@@ -335,7 +324,7 @@ describe("Completion listener", () => {
     await mock.executeTool("TaskExecute", { task_ids: ["1"] });
 
     // Simulate agent completion
-    mock.emitEvent("subagents:completed", { id: "agent-1" });
+    rpc.settle("agent-1", "completed");
 
     const result = await mock.executeTool("TaskGet", { taskId: "1" });
     expect(result.content[0].text).toContain("Status: completed");
@@ -350,7 +339,7 @@ describe("Completion listener", () => {
     await mock.executeTool("TaskExecute", { task_ids: ["1"] });
 
     // Simulate agent failure
-    mock.emitEvent("subagents:failed", { id: "agent-1", error: "Out of turns", status: "error" });
+    rpc.settle("agent-1", "failed", { error: "Out of turns" });
 
     const result = await mock.executeTool("TaskGet", { taskId: "1" });
     expect(result.content[0].text).toContain("Status: pending");
@@ -363,8 +352,8 @@ describe("Completion listener", () => {
     });
 
     // Should not throw or modify anything
-    mock.emitEvent("subagents:completed", { id: "unknown-agent" });
-    mock.emitEvent("subagents:failed", { id: "unknown-agent", error: "boom", status: "error" });
+    rpc.settle("unknown-agent", "completed");
+    rpc.settle("unknown-agent", "failed", { error: "boom" });
 
     const result = await mock.executeTool("TaskGet", { taskId: "1" });
     expect(result.content[0].text).toContain("Status: pending");
@@ -404,7 +393,7 @@ describe("Auto-cascade", () => {
     expect(rpc.spawned).toHaveLength(1);
 
     // Complete A
-    mock.emitEvent("subagents:completed", { id: "agent-1" });
+    rpc.settle("agent-1", "completed");
 
     // B should NOT have been auto-started
     expect(rpc.spawned).toHaveLength(1);
@@ -428,7 +417,7 @@ describe("Auto-cascade", () => {
     await mock.executeTool("TaskUpdate", { taskId: "2", addBlockedBy: ["1"] });
 
     await mock.executeTool("TaskExecute", { task_ids: ["1"] });
-    mock.emitEvent("subagents:failed", { id: "agent-1", error: "crashed", status: "error" });
+    rpc.settle("agent-1", "failed", { error: "crashed" });
 
     // B should not start
     expect(rpc.spawned).toHaveLength(1);
@@ -450,7 +439,7 @@ describe("Auto-cascade", () => {
     await mock.executeTool("TaskUpdate", { taskId: "2", addBlockedBy: ["1"] });
 
     await mock.executeTool("TaskExecute", { task_ids: ["1"] });
-    mock.emitEvent("subagents:completed", { id: "agent-1" });
+    rpc.settle("agent-1", "completed");
 
     // Manual task should stay pending
     expect(rpc.spawned).toHaveLength(1);
@@ -513,13 +502,6 @@ describe("Standalone operation (no subagents extension)", () => {
     expect(result.content[0].text).toContain("Subagent execution is currently unavailable");
   });
 
-  it("subagents lifecycle events are silently ignored without mapped agents", () => {
-    // These should not throw even though no subagents extension is loaded
-    mock.emitEvent("subagents:completed", { id: "ghost-agent", result: "done" });
-    mock.emitEvent("subagents:failed", { id: "ghost-agent", error: "boom", status: "error" });
-    // No crash = pass
-  });
-
   it("task dependencies work without subagents", async () => {
     await mock.executeTool("TaskCreate", { subject: "First", description: "desc" });
     await mock.executeTool("TaskCreate", { subject: "Second", description: "desc" });
@@ -531,269 +513,85 @@ describe("Standalone operation (no subagents extension)", () => {
   });
 });
 
-describe("RPC protocol correctness", () => {
-  it("ping uses scoped reply channel (not shared channel)", () => {
-    const mock = mockPi();
-    const emitted: Array<{ channel: string; data: unknown }> = [];
-    const origEmit = mock.pi.events.emit.bind(mock.pi.events);
-    mock.pi.events.emit = (channel: string, data: unknown) => {
-      emitted.push({ channel, data });
-      origEmit(channel, data);
-    };
+describe("Workers handle", () => {
+  afterEach(() => { delete (globalThis as any)[WORKERS_KEY]; });
 
-    initExtension(mock.pi as any);
-
-    // Find the ping emit
-    const pingEmit = emitted.find(e => e.channel === "subagents:rpc:ping");
-    expect(pingEmit).toBeDefined();
-    const pingData = pingEmit!.data as { requestId: string };
-    expect(pingData.requestId).toBeDefined();
-    expect(typeof pingData.requestId).toBe("string");
-  });
-
-  it("spawn reply cleans up listener and timer on success", async () => {
+  it("ignores settlements of workers it did not start", async () => {
     const mock = mockPi();
     const rpc = installSubagentsMock(mock.pi);
     initExtension(mock.pi as any);
-
-    await mock.executeTool("TaskCreate", {
-      subject: "Test",
-      description: "desc",
-      agentType: "general-purpose",
-    });
-
+    await mock.executeTool("TaskCreate", { subject: "Mine", description: "desc", agentType: "general-purpose" });
     await mock.executeTool("TaskExecute", { task_ids: ["1"] });
-    expect(rpc.spawned).toHaveLength(1);
 
-    // Second spawn should get a fresh requestId (not conflict with first)
-    await mock.executeTool("TaskCreate", {
-      subject: "Test 2",
-      description: "desc",
-      agentType: "general-purpose",
-    });
-    await mock.executeTool("TaskExecute", { task_ids: ["2"] });
-    expect(rpc.spawned).toHaveLength(2);
-    expect(rpc.spawned[0].id).not.toBe(rpc.spawned[1].id);
+    rpc.settle("agent-1", "completed");
+    rpc.settle("ghost-agent", "failed", { error: "boom" });
 
-    rpc.unsub();
+    const result = await mock.executeTool("TaskGet", { taskId: "1" });
+    expect(result.content[0].text).toContain("Status: completed");
   });
 
-  it("spawn RPC rejects on timeout when no responder exists", async () => {
-    const mock = mockPi();
-    // Install ping handler (for version check) but no spawn handler
-    installVersionedMock(mock.pi, 2);
-    initExtension(mock.pi as any);
-
-    await mock.executeTool("TaskCreate", {
-      subject: "Timeout test",
-      description: "desc",
-      agentType: "general-purpose",
-    });
-
-    // spawnSubagent has a 30s timeout — we'll advance timers
-    vi.useFakeTimers();
-    const execPromise = mock.executeTool("TaskExecute", { task_ids: ["1"] });
-    await vi.advanceTimersByTimeAsync(31000);
-
-    const result = await execPromise;
-    expect(result.content[0].text).toContain("timeout");
-
-    vi.useRealTimers();
-  });
-
-  it("ready broadcast sets subagentsAvailable even after init", async () => {
+  it("finds the handle when it is published after a refusal", async () => {
     const mock = mockPi();
     initExtension(mock.pi as any);
-
-    // Initially no subagents
-    await mock.executeTool("TaskCreate", {
-      subject: "Test",
-      description: "desc",
-      agentType: "general-purpose",
-    });
+    await mock.executeTool("TaskCreate", { subject: "Test", description: "desc", agentType: "general-purpose" });
     let result = await mock.executeTool("TaskExecute", { task_ids: ["1"] });
     expect(result.content[0].text).toContain("Subagent execution is currently unavailable");
 
-    // Reset task status
-    await mock.executeTool("TaskUpdate", { taskId: "1", status: "pending" });
-
-    // Late subagents extension broadcasts ready
     const rpc = installSubagentsMock(mock.pi);
-
     result = await mock.executeTool("TaskExecute", { task_ids: ["1"] });
     expect(result.content[0].text).toContain("Launched 1 agent");
-
-    rpc.unsub();
+    expect(rpc.spawned).toHaveLength(1);
   });
 
-  it("spawn RPC rejects with error message from server", async () => {
+  it("reports a refused spawn and leaves the task pending", async () => {
     const mock = mockPi();
     installSubagentsMock(mock.pi, { spawnError: "No active session" });
     initExtension(mock.pi as any);
-
-    await mock.executeTool("TaskCreate", {
-      subject: "Err test",
-      description: "desc",
-      agentType: "general-purpose",
-    });
+    await mock.executeTool("TaskCreate", { subject: "Err test", description: "desc", agentType: "general-purpose" });
 
     const result = await mock.executeTool("TaskExecute", { task_ids: ["1"] });
     expect(result.content[0].text).toContain("No active session");
+    expect((await mock.executeTool("TaskGet", { taskId: "1" })).content[0].text).toContain("Status: pending");
   });
 
-  it("stop RPC resolves on success", async () => {
+  it("stops the task's worker", async () => {
     const mock = mockPi();
     const rpc = installSubagentsMock(mock.pi);
     initExtension(mock.pi as any);
-
-    // Spawn a task so we have an agent to stop
-    await mock.executeTool("TaskCreate", {
-      subject: "Stoppable",
-      description: "desc",
-      agentType: "general-purpose",
-    });
+    await mock.executeTool("TaskCreate", { subject: "Stoppable", description: "desc", agentType: "general-purpose" });
     await mock.executeTool("TaskExecute", { task_ids: ["1"] });
-    expect(rpc.spawned).toHaveLength(1);
 
     const result = await mock.executeTool("TaskStop", { task_id: "1" });
     expect(result.content[0].text).toContain("stopped successfully");
     expect(rpc.stopped).toContain("agent-1");
-
-    rpc.unsub();
   });
 
-  it("stop RPC returns false on error (agent not found) without throwing", async () => {
+  it("stops a task whose worker is already gone without throwing", async () => {
+    const mock = mockPi();
+    initExtension(mock.pi as any);
+    await mock.executeTool("TaskCreate", { subject: "Ghost", description: "desc", agentType: "general-purpose" });
+    await mock.executeTool("TaskUpdate", { taskId: "1", status: "in_progress", metadata: { agentType: "general-purpose", agentId: "ghost-agent" } });
+
+    const result = await mock.executeTool("TaskStop", { task_id: "1" });
+    expect(result.content[0].text).toContain("stopped successfully");
+  });
+
+  it("TaskOutput waits for the worker to settle, bounded by its timeout", async () => {
     const mock = mockPi();
     const rpc = installSubagentsMock(mock.pi);
     initExtension(mock.pi as any);
-
-    // Create and execute a task, then simulate agent already gone
-    await mock.executeTool("TaskCreate", {
-      subject: "Ghost",
-      description: "desc",
-      agentType: "general-purpose",
-    });
+    await mock.executeTool("TaskCreate", { subject: "Wait", description: "desc", agentType: "general-purpose" });
     await mock.executeTool("TaskExecute", { task_ids: ["1"] });
 
-    // Clear spawned list so the mock's stop handler won't find the agent
-    rpc.spawned.length = 0;
+    const pending = mock.executeTool("TaskOutput", { task_id: "1", block: true, timeout: 60_000 });
+    rpc.settle("agent-1", "completed", { result: "done" });
+    const result = await pending;
+    expect(result.content[0].text).toContain("[completed]");
 
-    // TaskStop should still succeed (stopSubagent catches the error)
-    const result = await mock.executeTool("TaskStop", { task_id: "1" });
-    expect(result.content[0].text).toContain("stopped successfully");
-
-    rpc.unsub();
-  });
-
-  it("stop RPC returns false on timeout without throwing", async () => {
-    const mock = mockPi();
-    initExtension(mock.pi as any);
-
-    // Mark subagents as available via ready broadcast, but no stop handler installed
-    mock.pi.events.emit("subagents:ready", {});
-
-    await mock.executeTool("TaskCreate", {
-      subject: "Timeout stop",
-      description: "desc",
-      agentType: "general-purpose",
-    });
-    // Manually set task as in_progress with an agentId (no spawn handler)
-    await mock.executeTool("TaskUpdate", {
-      taskId: "1",
-      status: "in_progress",
-      metadata: { agentType: "general-purpose", agentId: "ghost-agent" },
-    });
-
-    vi.useFakeTimers();
-    const stopPromise = mock.executeTool("TaskStop", { task_id: "1" });
-    await vi.advanceTimersByTimeAsync(11000);
-
-    // Should resolve (not throw) — stopSubagent catches timeout
-    const result = await stopPromise;
-    expect(result.content[0].text).toContain("stopped successfully");
-
-    vi.useRealTimers();
-  });
-});
-
-/** Install a ping-only mock with a specific protocol version (or no version for v1). */
-function installVersionedMock(pi: { events: MockEventBus }, version?: number) {
-  const unsubPing = pi.events.on("subagents:rpc:ping", (data: unknown) => {
-    const { requestId } = data as { requestId: string };
-    if (version !== undefined) {
-      pi.events.emit(`subagents:rpc:ping:reply:${requestId}`, { success: true, data: { version } });
-    } else {
-      // v1 handler — no envelope, no version
-      pi.events.emit(`subagents:rpc:ping:reply:${requestId}`, {});
-    }
-  });
-  pi.events.emit("subagents:ready", {});
-  return { unsub() { unsubPing(); } };
-}
-
-describe("Protocol version mismatch", () => {
-  it("matching version — no warning", async () => {
-    const mock = mockPi();
-    installVersionedMock(mock.pi, 2);
-    initExtension(mock.pi as any);
-
-    // No warning on before_agent_start
-    const ctx = mockCtx();
-    await mock.fireLifecycle("before_agent_start", {}, ctx);
-    expect(ctx.ui.notify).not.toHaveBeenCalled();
-  });
-
-  it("old handler (no version) — warns about pi-subagents", async () => {
-    const mock = mockPi();
-    installVersionedMock(mock.pi);  // no version = v1
-    initExtension(mock.pi as any);
-
-    const ctx = mockCtx();
-    await mock.fireLifecycle("before_agent_start", {}, ctx);
-    expect(ctx.ui.notify).toHaveBeenCalledWith(
-      expect.stringContaining("pi-subagents is outdated"),
-      "warning",
-    );
-  });
-
-  it("handler ahead (v3) — warns about pi-tasks", async () => {
-    const mock = mockPi();
-    installVersionedMock(mock.pi, 3);
-    initExtension(mock.pi as any);
-
-    const ctx = mockCtx();
-    await mock.fireLifecycle("before_agent_start", {}, ctx);
-    expect(ctx.ui.notify).toHaveBeenCalledWith(
-      expect.stringContaining("pi-tasks is outdated"),
-      "warning",
-    );
-  });
-
-  it("handler behind (v1) — warns about pi-subagents", async () => {
-    const mock = mockPi();
-    installVersionedMock(mock.pi, 1);
-    initExtension(mock.pi as any);
-
-    const ctx = mockCtx();
-    await mock.fireLifecycle("before_agent_start", {}, ctx);
-    expect(ctx.ui.notify).toHaveBeenCalledWith(
-      expect.stringContaining("pi-subagents is outdated"),
-      "warning",
-    );
-  });
-
-  it("warning shown only once", async () => {
-    const mock = mockPi();
-    installVersionedMock(mock.pi);  // v1 — triggers warning
-    initExtension(mock.pi as any);
-
-    const ctx1 = mockCtx();
-    await mock.fireLifecycle("before_agent_start", {}, ctx1);
-    expect(ctx1.ui.notify).toHaveBeenCalledOnce();
-
-    const ctx2 = mockCtx();
-    await mock.fireLifecycle("before_agent_start", {}, ctx2);
-    expect(ctx2.ui.notify).not.toHaveBeenCalled();
+    await mock.executeTool("TaskCreate", { subject: "Slow", description: "desc", agentType: "general-purpose" });
+    await mock.executeTool("TaskExecute", { task_ids: ["2"] });
+    const timed = await mock.executeTool("TaskOutput", { task_id: "2", block: true, timeout: 10 });
+    expect(timed.content[0].text).toContain("[in_progress]");
   });
 });
 
@@ -935,7 +733,7 @@ describe("Cascade data injection (buildTaskPrompt)", () => {
     await mock.executeTool("TaskExecute", { task_ids: ["1"] });
     expect(rpc.spawned).toHaveLength(1);
 
-    mock.emitEvent("subagents:completed", { id: "agent-1", result: "The answer is 42" });
+    rpc.settle("agent-1", "completed", { result: "The answer is 42" });
 
     await vi.waitFor(() => expect(rpc.spawned).toHaveLength(2), { timeout: 1000 });
 
@@ -961,7 +759,7 @@ describe("Cascade data injection (buildTaskPrompt)", () => {
     await mock.executeTool("TaskExecute", { task_ids: ["1"] });
 
     const longResult = "x".repeat(5000);
-    mock.emitEvent("subagents:completed", { id: "agent-1", result: longResult });
+    rpc.settle("agent-1", "completed", { result: longResult });
 
     await vi.waitFor(() => expect(rpc.spawned).toHaveLength(2), { timeout: 1000 });
 
@@ -986,7 +784,7 @@ describe("Cascade data injection (buildTaskPrompt)", () => {
 
     await mock.executeTool("TaskExecute", { task_ids: ["1"] });
 
-    mock.emitEvent("subagents:completed", { id: "agent-1" });
+    rpc.settle("agent-1", "completed");
 
     await vi.waitFor(() => expect(rpc.spawned).toHaveLength(2), { timeout: 1000 });
 

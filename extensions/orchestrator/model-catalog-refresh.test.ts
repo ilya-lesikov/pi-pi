@@ -28,6 +28,7 @@ function makePi(): any {
     unregisterProvider: vi.fn(),
     sendUserMessage: vi.fn(),
     sendMessage: vi.fn(),
+    registerMessageRenderer: vi.fn(),
     appendEntry: vi.fn(),
   };
 }

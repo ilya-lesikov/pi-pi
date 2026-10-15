@@ -47,6 +47,13 @@ describe("delegationBlock", () => {
     expect(block).toContain("dissenting view");
   });
 
+  // The tools never block, but a model that believes they do waits anyway.
+  it("tells the caller workers report back on their own and how to control them", () => {
+    const block = delegationBlock(OPUS, pools);
+    expect(block).toContain("Workers never block you");
+    for (const tool of ["agent_wait", "agent_send", "agent_status", "agent_stop"]) expect(block).toContain(tool);
+  });
+
   // An override can put a non-Anthropic model in every Claude slot; a rule
   // about "the other family" would then send the caller to itself.
   it("softens the independence rule when no member is confirmed to be another vendor", () => {

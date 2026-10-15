@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { Orchestrator } from "./orchestrator.js";
 import { getLogger } from "./log.js";
+import type { WorkerStatus } from "./workers/types.js";
 
 export const PP_ACP_STATE_TYPE = "pp:state";
 
@@ -22,33 +23,23 @@ export function isAcpMode(): boolean {
   return process.env.PI_ACP === "1";
 }
 
-function toSubagentStatus(status: unknown): AcpSubagentStatus {
+function toSubagentStatus(status: WorkerStatus): AcpSubagentStatus {
   if (status === "queued") return "pending";
   if (status === "running") return "in_progress";
-  // "steered" is the manager's terminal success state for a worker that hit its
-  // soft turn limit and was steered to wrap up; its output is complete.
-  if (status === "completed" || status === "steered") return "completed";
+  if (status === "completed") return "completed";
   return "failed";
 }
 
-function listSubagents(): AcpSubagent[] {
-  const manager = (globalThis as any)[Symbol.for("pi-subagents:manager")];
-  const records: unknown = manager?.listAgents?.();
-  if (!Array.isArray(records)) return [];
-  return records.flatMap((raw: any) => {
-    const id = typeof raw?.id === "string" ? raw.id : "";
-    if (!id) return [];
-    const description = typeof raw.description === "string" ? raw.description : "";
-    const type = typeof raw.type === "string" ? raw.type : "";
-    return [{ id, label: description || type || id, status: toSubagentStatus(raw.status) }];
-  });
+function listSubagents(orchestrator: Orchestrator): AcpSubagent[] {
+  return (orchestrator.workers?.list() ?? []).map((record) => ({ id: record.id, label: record.spec.description || record.spec.type, status: toSubagentStatus(record.status) }));
 }
 
 export function buildAcpState(orchestrator: Orchestrator): AcpState {
-  const subagents = listSubagents();
+  const subagents = listSubagents(orchestrator);
   if (orchestrator.configError || orchestrator.duplicateExtensionError) return { status: "failed", subagents };
   if (orchestrator.interactivePromptOpen) return { status: "waiting", subagents };
-  return { status: orchestrator.mainTurnInFlight ? "running" : "idle", subagents };
+  // Work in flight is not idle, even while the main agent itself has nothing to do.
+  return { status: orchestrator.mainTurnInFlight || orchestrator.hasActiveWorkers() ? "running" : "idle", subagents };
 }
 
 const lastPayloadBySession = new Map<string, string>();

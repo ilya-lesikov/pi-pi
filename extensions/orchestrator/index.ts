@@ -1,52 +1,23 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Orchestrator } from "./orchestrator.js";
 import { registerCommandHandlers } from "./command-handlers.js";
-import { registerEventHandlers, registerLoadSkill, registerSubagentPromptcap } from "./event-handlers.js";
+import { registerEventHandlers } from "./event-handlers.js";
 import { pinnedRoleSpecs } from "./routing.js";
-import { registerCbmTools } from "./cbm.js";
-import { registerExaTools } from "./exa.js";
-import { registerAstSearchTool } from "./ast-search.js";
 import { initFlantSync, legacyCachePolicy, stripLegacyCachePolicy } from "./flant-infra.js";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { GLOBAL_CONFIG_PATH, getDefaultConfig, loadConfig, mergeConfigLayers, migrateConfigFile, normalizeConfigDurations, readRawConfig } from "./config.js";
+import { GLOBAL_CONFIG_PATH, mergeConfigLayers, migrateConfigFile, readRawConfig } from "./config.js";
 import { getLogger } from "./log.js";
-import { registerBillingHook } from "./billing-spoof.js";
 import { suppressPierreThemeSpam } from "./suppress-pierre-theme-spam.js";
-import { registerRecallTools } from "./promptcap/recall.js";
-import { registerImageShrink } from "./image-shrink.js";
 
 const ORCHESTRATOR_KEY = Symbol.for("pi-pi:orchestrator-initialized");
-const ORCHESTRATOR_CWD_KEY = Symbol.for("pi-pi:orchestrator-cwd");
-// Written by 3p/pi-subagents/src/agent-runner.ts for the duration of an
-// in-process subagent session's extension load; see the LOCAL PATCH there.
-// Shared with 3p/pi-tasks and 3p/pi-lsp, which make the same call.
-export function subagentSessionDepth(): number {
-  const scope = (globalThis as Record<symbol, any>)[Symbol.for("pi-pi:subagent-session-scope")];
-  return scope?.getStore?.()?.depth ?? 0;
-}
 
 export default function (pi: ExtensionAPI) {
   suppressPierreThemeSpam();
-  if (subagentSessionDepth() > 0) {
-    // Child sessions inherit the root project cwd (seeded/refreshed on the root
-    // ORCHESTRATOR_CWD_KEY) so project-scoped flant overrides bind; fall back to
-    // global-only when no root cwd is known.
-    const rootCwd = (globalThis as any)[ORCHESTRATOR_CWD_KEY];
-    initFlantSync(pi, rootCwd, rolePinnedSpecs(rootCwd));
-    // Child sessions never run registerEventHandlers, so without this the
-    // root-only billing hook is absent and subagent subscription requests miss
-    // the billing system[0] block — the reason switch-back "works" for the main
-    // model but not for subagents. Gated to Claude/identity payloads internally.
-    registerBillingHook(pi);
-    registerSubagentTools(pi);
-    return;
-  }
   // The host re-runs this factory for every root session (startup and each
   // /new, /resume or fork), so everything below must be safe to repeat.
   const firstActivation = !(globalThis as any)[ORCHESTRATOR_KEY];
   (globalThis as any)[ORCHESTRATOR_KEY] = true;
-  (globalThis as any)[ORCHESTRATOR_CWD_KEY] = process.cwd();
 
   // The global config moves onto the providers/models schema here, once, in
   // the root process only; project configs are read migrated in memory and
@@ -83,28 +54,4 @@ function rolePinnedSpecs(cwd: string | undefined): string[] {
   } catch {
     return [];
   }
-}
-
-function registerSubagentTools(pi: ExtensionAPI): void {
-  const cwd = (globalThis as any)[ORCHESTRATOR_CWD_KEY] ?? process.cwd();
-  let config;
-  try {
-    config = loadConfig(cwd);
-  } catch {
-    config = normalizeConfigDurations(getDefaultConfig());
-  }
-  registerCbmTools(pi, cwd);
-  registerExaTools(pi);
-  registerAstSearchTool(pi, cwd);
-  // Resolved per call: the root session replaces this global on every
-  // session_start, so a value captured here would keep a subagent that outlives
-  // a /new or /resume searching the previous session's history.
-  const rootSession = () => (globalThis as any)[Symbol.for("pi-pi:root-session-source")];
-  registerRecallTools(pi, {
-    getSessionFile: () => rootSession()?.getSessionFile(),
-    getSessionManager: () => rootSession()?.getSessionManager?.(),
-  });
-  registerLoadSkill(pi, cwd, () => config.skills);
-  registerSubagentPromptcap(pi, config);
-  registerImageShrink(pi, () => config.images);
 }

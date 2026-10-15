@@ -14,8 +14,8 @@ import { fileRatioStore } from "./promptcap/ratios.js";
 import { collectContextFiles, renderContextInjection, summarizeContextInjectionSize } from "./context-injection.js";
 import { enabledSkillLayers, listLayeredSkills, loadLayeredSkill } from "./skills-manifest.js";
 import { identityBlock, principlesBlock, toolsBlock, delegationBlock } from "./agents/tool-routing.js";
-import { buildPoolRoster, getAgentConfigSnapshot, registeredAgentNames, remapPoolName, setExtensionOnlyMode } from "./agents/registry.js";
-import { catalogHas, pinnedRoleSpecs, resolveRef, setCatalog } from "./routing.js";
+import { buildPoolRoster } from "./agents/registry.js";
+import { pinnedRoleSpecs, resolveRef, setCatalog } from "./routing.js";
 import { createCustomFooter, setFooterContext, setFooterTracker, setFooterOrchestrator } from "./custom-footer.js";
 import { createUsageTracker, dumpUsageSummary, isSubscriptionRouted, loadUsageSummary, type UsageTracker } from "./usage-tracker.js";
 import { publishAcpState, resetAcpStateCache } from "./acp.js";
@@ -26,7 +26,9 @@ import { ensureProvisionDirOnPath, ensureServerForFile, provisionEagerTools } fr
 import { installConsoleGuard } from "./console-guard.js";
 import { clearAllPauses, demoteUnusableSubscription, handleMainAuthFailure, handleMainRateLimit, handleMainRefusal, handleSubagentAuthFailure, handleSubagentRateLimit, handleSubscriptionRouteOutage, isAuthError, isModelRefusal, isPolicyBlockError, isRateLimitError } from "./rate-limit-fallback.js";
 import { adjudicateCheckIn, adjudicateContinuation } from "./continuation-adjudicator.js";
-import { retrySubagentOnNewRouting } from "./subagent-retry.js";
+import { createWorkers, publishWorkersHandle, registerWorkerToolsFor, resumeOnNewRouting, type WorkerHooks } from "./workers/index.js";
+import { registerWorkerUi } from "./workers/ui.js";
+import type { WorkerRecord } from "./workers/types.js";
 import { ensureProviderRetrySettings, patchRetryPredicate } from "./provider-retry.js";
 import { loadRoutingSettings, noteSubscriptionCredentialAccepted, refreshCodexOAuthToken, refreshCopilotOAuthToken, refreshSubProvider, reviveSubscriptionCredential, setModelRegistry } from "./flant-infra.js";
 import type { Orchestrator } from "./orchestrator.js";
@@ -93,7 +95,7 @@ export function isMainTurnStalled(orchestrator: Orchestrator, now = Date.now()):
     && !orchestrator.mainTurnRecovering
     && orchestrator.mainTurnToolInFlight === 0
     && !orchestrator.interactivePromptOpen
-    && orchestrator.spawnedAgentIds.size === 0
+    && !orchestrator.hasActiveWorkers()
     && now - orchestrator.mainTurnLastActivity >= staleMs;
 }
 
@@ -275,7 +277,6 @@ export function registerFeatureToolsAndAgents(orchestrator: Orchestrator): void 
   registerAstSearchTool(pi, orchestrator.cwd);
   registerRecallTools(pi);
   registerLoadSkill(pi, orchestrator.cwd, () => orchestrator.config?.skills);
-  setExtensionOnlyMode(pi);
   orchestrator.registerAgents();
 }
 
@@ -344,64 +345,6 @@ function registerLazyProvisioning(pi: ExtensionAPI): void {
 
 function registerLifecycle(orchestrator: Orchestrator): void {
   const pi = orchestrator.pi;
-  // pi-subagents publishes its lifecycle on the shared event bus, not as host
-  // lifecycle events, so these must go through pi.events rather than pi.on.
-  pi.events.on("subagents:created", (data: any) => {
-    if (data?.id) {
-      orchestrator.spawnedAgentIds.add(data.id);
-      orchestrator.agentDescriptions.set(data.id, data.description ?? data.type ?? data.id);
-      orchestrator.agentSpawnTimes.set(data.id, Date.now());
-      orchestrator.startStaleAgentWatchdog();
-      getTracer()?.openSubagent({ subagentId: data.id, type: data.type, description: data.description, parentToolCallId: data.toolCallId, depth: 1 });
-    }
-    publishAcpState(orchestrator);
-  });
-  const settle = (data: any) => {
-    if (data?.id) {
-      orchestrator.spawnedAgentIds.delete(data.id);
-      orchestrator.agentSpawnTimes.delete(data.id);
-      orchestrator.agentDescriptions.delete(data.id);
-      getTracer()?.traceSubagent(data.id, "subagent_settled", {
-        status: data.status,
-        error: data.error,
-        result: data.result,
-        tokens: data.tokens,
-        durationMs: data.durationMs,
-        toolUses: data.toolUses,
-        modelId: data.modelId,
-      });
-    }
-    if (orchestrator.agentSpawnTimes.size === 0) orchestrator.stopStaleAgentWatchdog();
-    publishAcpState(orchestrator);
-  };
-  pi.events.on("subagents:completed", (data: any) => {
-    const usage = tracker();
-    if (usage && data?.tokens) {
-      usage.recordSubagentCompletion(data.tokens, undefined, {
-        description: data.description || data.type || data.id || "unknown",
-        agentType: data.type || "unknown",
-        modelId: data.modelId || "unknown",
-        durationMs: data.durationMs,
-        toolUses: data.toolUses,
-      });
-      (orchestrator.lastCtx?.ui as any)?.requestRender?.();
-    }
-    if (data?.tokens && isSubscriptionRouted(data?.modelId)) noteSubscriptionCredentialAccepted();
-    settle(data);
-  });
-  pi.events.on("subagents:failed", (data: any) => {
-    settle(data);
-    if (isRateLimitError(data?.error)) {
-      void handleSubagentRateLimit(orchestrator, orchestrator.lastCtx, data?.modelId, data?.error)
-        .then(() => retrySubagentOnNewRouting(orchestrator, data));
-    } else if (isProviderOutage(data?.error) && data?.modelId) {
-      void handleSubscriptionRouteOutage(orchestrator, orchestrator.lastCtx, data.modelId, "subagent")
-        .then((moved) => moved && retrySubagentOnNewRouting(orchestrator, data));
-    } else if (isAuthError(data?.error)) {
-      void handleSubagentAuthFailure(orchestrator, orchestrator.lastCtx, data?.modelId)
-        .then(() => retrySubagentOnNewRouting(orchestrator, data));
-    }
-  });
   const startMainTurnWatchdog = () => {
     if (orchestrator.mainTurnTimer) return;
     orchestrator.mainTurnTimer = setInterval(() => {
@@ -506,6 +449,94 @@ export function registerSubagentPromptcap(pi: ExtensionAPI, config: Orchestrator
   pi.on("turn_end", (_event: any, ctx: any) => { state.lastCtx = ctx; });
 }
 
+/**
+ * What a worker session gets in place of the extensions the root session
+ * loads: pi-pi's own tools bound to the root session, the request hooks every
+ * provider call needs, and the root's language servers.
+ */
+export function registerWorkerExtension(orchestrator: Orchestrator, pi: ExtensionAPI): void {
+  const cwd = orchestrator.cwd;
+  const config = orchestrator.config;
+  registerBillingHook(pi);
+  registerCbmTools(pi, cwd);
+  registerExaTools(pi);
+  registerAstSearchTool(pi, cwd);
+  const rootSession = () => (globalThis as any)[Symbol.for("pi-pi:root-session-source")];
+  registerRecallTools(pi, {
+    getSessionFile: () => rootSession()?.getSessionFile(),
+    getSessionManager: () => rootSession()?.getSessionManager?.(),
+  });
+  registerLoadSkill(pi, cwd, () => config.skills);
+  registerSubagentPromptcap(pi, config);
+  registerImageShrink(pi, () => config.images);
+  const lsp = (globalThis as any)[Symbol.for("pi-lsp:api")];
+  lsp?.registerTool?.(pi);
+}
+
+/** Gives the root session a fresh worker manager; the previous session's workers are killed. */
+export function startWorkers(orchestrator: Orchestrator, ctx: any): void {
+  orchestrator.workerDelivery?.clear();
+  orchestrator.workers?.shutdown();
+  const workers = createWorkers(orchestrator, createWorkerHooks(orchestrator), orchestrator.workerSessionFactory);
+  orchestrator.workers = workers.manager;
+  orchestrator.workerDelivery = workers.delivery;
+  orchestrator.onWorkersReplaced?.();
+  orchestrator.workerWidget?.attach(ctx);
+}
+
+function createWorkerHooks(orchestrator: Orchestrator): WorkerHooks {
+  return {
+    preloadSkills: (requested) => preloadSkillsForSpawn(orchestrator, requested),
+    refreshDefinitions: (ctx) => {
+      captureAvailableModels(ctx);
+      orchestrator.registerAgents();
+    },
+    childExtension: (pi) => registerWorkerExtension(orchestrator, pi),
+    onSettled: (record) => {
+      const usage = tracker();
+      const tokens = record.runUsage;
+      if (usage && (tokens.input || tokens.output || tokens.cacheRead || tokens.cacheWrite)) {
+        usage.recordSubagentCompletion({ ...tokens, total: tokens.input + tokens.output }, undefined, {
+          description: record.spec.description,
+          agentType: record.spec.type,
+          modelId: record.modelId,
+          durationMs: (record.settledAt ?? Date.now()) - (record.startedAt ?? record.createdAt),
+          toolUses: record.toolUses,
+        });
+        if (isSubscriptionRouted(record.modelId)) noteSubscriptionCredentialAccepted();
+        (orchestrator.lastCtx?.ui as any)?.requestRender?.();
+      }
+    },
+    onProviderFailure: (record) => recoverWorkerFromProvider(orchestrator, record),
+    onChange: () => publishAcpState(orchestrator),
+  };
+}
+
+/**
+ * A worker that died on a refused provider: move routing the way a main-turn
+ * failure would, then put the worker back to work on the new tier in place.
+ */
+async function recoverWorkerFromProvider(orchestrator: Orchestrator, record: WorkerRecord): Promise<boolean> {
+  const error = record.error;
+  const ctx = orchestrator.lastCtx;
+  let moved = false;
+  if (isRateLimitError(error)) {
+    await handleSubagentRateLimit(orchestrator, ctx, record.modelId, error);
+    moved = true;
+  } else if (isProviderOutage(error)) {
+    moved = await handleSubscriptionRouteOutage(orchestrator, ctx, record.modelId, "subagent");
+  } else if (isAuthError(error)) {
+    await handleSubagentAuthFailure(orchestrator, ctx, record.modelId);
+    moved = true;
+  }
+  const workers = orchestrator.workers;
+  if (!moved || !workers) return false;
+  return resumeOnNewRouting(workers, record, orchestrator.retriedSubagentIds, async (_record, spec) => {
+    const session = workers.sessionOf(record.id);
+    return !!session && await session.setModel(spec);
+  });
+}
+
 // Confirm the stored subscription credential still works before the session
 // sends anything real. Deliberately not awaited by session_start: it is a
 // network round trip, and every other startup step (and the user's first
@@ -537,6 +568,10 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   registerLifecycle(orchestrator);
   registerPromptcap(orchestrator);
   registerImageShrink(pi, () => orchestrator.config?.images);
+  const workerHooks = createWorkerHooks(orchestrator);
+  registerWorkerToolsFor(orchestrator, workerHooks);
+  publishWorkersHandle(orchestrator, workerHooks);
+  registerWorkerUi(orchestrator);
 
   pi.on("session_start", async (_event, ctx) => {
     orchestrator.lastCtx = ctx;
@@ -560,7 +595,6 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       getSessionFile: () => ctx.sessionManager?.getSessionFile?.(),
       getSessionManager: () => ctx.sessionManager,
     };
-    (globalThis as any)[Symbol.for("pi-pi:orchestrator-cwd")] = ctx.cwd;
     initSessionLogger(`${ctx.cwd}/.pp`, "info");
     // pi gives up on a turn after a handful of provider retries, and a burst of
     // connection errors outlasts them. The ceiling lives in pi's settings, out
@@ -608,7 +642,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     setFooterTracker(usage);
     setFooterOrchestrator(orchestrator);
     ctx.ui?.setFooter?.(createCustomFooter);
-    orchestrator.applySubagentConcurrency();
+    startWorkers(orchestrator, ctx);
     registerFeatureToolsAndAgents(orchestrator);
     // Never awaited: a first run downloads tens of megabytes, and a session
     // must not wait on a network to become usable. Tools whose registration
@@ -650,40 +684,6 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     const registered = pi.getAllTools().map((tool) => tool.name);
     const names = [...new Set([...HOST_BUILTINS, ...registered])];
     return { systemPrompt: renderGenericPrompt(orchestrator, ctx, names) };
-  });
-
-  pi.on("tool_call", async (event: any, ctx: any) => {
-    if (event.toolName !== "Agent" || !orchestrator.config) return;
-    const input = event.input as Record<string, unknown>;
-    const requested = String(input.subagent_type ?? "").toLowerCase();
-    const valid = registeredAgentNames(orchestrator.config);
-    // The model/thinking a role runs with are NOT forced here: the registered
-    // definition already outranks the tool call's own arguments, and re-resolving
-    // a spec that was resolved at registration can only walk it further DOWN the
-    // provider tiers, never back up to the one it came from.
-    const type = valid.includes(requested) ? requested : remapPoolName(orchestrator.config, requested);
-    if (!type) return { block: true, reason: `subagent_type must be one of: ${valid.join(", ")}` };
-    // The subagent host falls back to the parent's model when a definition's
-    // model is not available, silently: a worker meant to give a second
-    // opinion from another vendor would then just be this session again.
-    let snapshot = getAgentConfigSnapshot(type);
-    if (snapshot?.ref && !catalogHas(snapshot.model)) {
-      // A credential may have arrived since the definitions were built.
-      captureAvailableModels(ctx ?? orchestrator.lastCtx);
-      orchestrator.registerAgents();
-      snapshot = getAgentConfigSnapshot(type);
-    }
-    if (snapshot?.ref && !catalogHas(snapshot.model)) {
-      return { block: true, reason: `${type} has no model to run on right now (${snapshot.ref}):\n${resolveRef(snapshot.ref).steps.join("\n")}\nPick another subagent, or fix routing in /pp › Settings › Providers.` };
-    }
-    // A resumed agent already holds what its first spawn preloaded.
-    const preload = input.resume ? [] : preloadSkillsForSpawn(orchestrator, input.skills);
-    if (typeof preload === "string") return { block: true, reason: preload };
-    if (preload.length > 0) input.prompt = [...preload, String(input.prompt ?? "")].join("\n\n");
-    delete input.skills;
-    input.subagent_type = type;
-    input.inherit_context = false;
-    input.isolation = undefined;
   });
 
   pi.on("tool_result", async (event: any) => {
@@ -781,7 +781,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       orchestrator.queueContinuation(CONTINUE_POLICY_BLOCKED, true);
       return;
     }
-    if (orchestrator.spawnedAgentIds.size > 0) return;
+    if (orchestrator.hasActiveWorkers()) return;
     const decision = classifyContinuation(message, activity);
     if (decision === "none" || orchestrator.continuationHalted) return;
     if (decision === "objective") {
@@ -828,25 +828,23 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       finalizeTracer();
       delete (globalThis as any)[USAGE_TRACKER_KEY];
       if (orchestrator.mainTurnTimer) clearInterval(orchestrator.mainTurnTimer);
-      if (orchestrator.staleAgentTimer) clearInterval(orchestrator.staleAgentTimer);
       clearAllPauses(orchestrator);
       if (orchestrator.idlePollTimer) clearTimeout(orchestrator.idlePollTimer);
       if (orchestrator.tokenRefreshTimer) clearInterval(orchestrator.tokenRefreshTimer);
       if (orchestrator.modelSwitchPollTimer) clearTimeout(orchestrator.modelSwitchPollTimer);
       orchestrator.mainTurnTimer = null;
-      orchestrator.staleAgentTimer = null;
       orchestrator.subSwitchBackTimer = null;
       orchestrator.idlePollTimer = null;
       orchestrator.tokenRefreshTimer = null;
       orchestrator.modelSwitchPollTimer = null;
       orchestrator.routedMainSpec = null;
-      // A worker settles by lifecycle event; one still in flight at shutdown
-      // never sends it, and the watchdog that would have swept it is gone.
-      orchestrator.spawnedAgentIds.clear();
-      orchestrator.agentSpawnTimes.clear();
-      orchestrator.agentDescriptions.clear();
+      // Workers die with the session that spawned them: a replaced session can
+      // no longer receive what they would deliver.
+      orchestrator.workerDelivery?.clear();
+      orchestrator.workers?.shutdown();
+      orchestrator.workers = null;
+      orchestrator.workerDelivery = null;
       orchestrator.retriedSubagentIds.clear();
-      orchestrator.retryingSubagentIds.clear();
       orchestrator.pendingModelSwitches = [];
       orchestrator.modelSwitchInFlight = false;
       orchestrator.resetContinuation();

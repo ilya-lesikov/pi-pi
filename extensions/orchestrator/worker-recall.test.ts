@@ -3,7 +3,9 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { registerRecallTools } from "./promptcap/recall.js";
-import registerOrchestrator from "./index.js";
+import { registerWorkerExtension } from "./event-handlers.js";
+import { Orchestrator } from "./orchestrator.js";
+import { getDefaultConfig, normalizeConfigDurations } from "./config.js";
 
 const dirs: string[] = [];
 
@@ -59,27 +61,21 @@ describe("worker recall source", () => {
     writeFileSync(first, JSON.stringify({ type: "message", id: "a", message: { role: "user", content: [{ type: "text", text: "first-session-detail" }] } }) + "\n");
     writeFileSync(second, JSON.stringify({ type: "message", id: "b", message: { role: "user", content: [{ type: "text", text: "second-session-detail" }] } }) + "\n");
     const sourceKey = Symbol.for("pi-pi:root-session-source");
-    const scopeKey = Symbol.for("pi-pi:subagent-session-scope");
     const makeSource = (file: string) => ({
       getSessionFile: () => file,
       getSessionManager: () => ({ getSessionFile: () => file, getActiveLineage: () => [], getEntries: () => [] }),
     });
 
     (globalThis as any)[sourceKey] = makeSource(first);
-    (globalThis as any)[scopeKey] = { getStore: () => ({ depth: 1 }) };
     const registered: any[] = [];
-    try {
-      registerOrchestrator({
-        registerTool: (tool: any) => registered.push(tool),
-        on: vi.fn(),
-        events: { on: vi.fn(), emit: vi.fn() },
-        registerProvider: vi.fn(),
-        unregisterProvider: vi.fn(),
-        registerCommand: vi.fn(),
-      } as any);
-    } finally {
-      delete (globalThis as any)[scopeKey];
-    }
+    const orchestrator = new Orchestrator({} as any);
+    orchestrator.cwd = dir;
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    registerWorkerExtension(orchestrator, {
+      registerTool: (tool: any) => registered.push(tool),
+      on: vi.fn(),
+      events: { on: vi.fn(), emit: vi.fn() },
+    } as any);
     const tool = registered.find((entry) => entry.name === "vcc_recall");
 
     (globalThis as any)[sourceKey] = makeSource(second);

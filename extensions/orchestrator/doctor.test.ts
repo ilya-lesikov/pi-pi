@@ -104,7 +104,7 @@ describe("runDoctor", () => {
     // being published produces no error, only behavior that quietly stops.
     const text = await report(makeAgentDir([]));
 
-    for (const key of ["pi-subagents:manager", "pi-tasks:store", "pi-lsp:api", "pi-pi:cbm-daemon", "pi-pi:usage-tracker"]) {
+    for (const key of ["pi-pi:workers", "pi-tasks:store", "pi-lsp:api", "pi-pi:cbm-daemon", "pi-pi:usage-tracker"]) {
       expect(text).toContain(key);
     }
   });

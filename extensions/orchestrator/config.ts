@@ -174,8 +174,16 @@ export interface PiPiConfig {
       afterEdit: DurationValue;
     };
     internals: {
-      /** Subagent inactivity limit. 0 disables the limit. */
-      subagentStale: DurationValue;
+      /** Wall-clock limit for one worker run. 0 disables it. */
+      workerTimeout: DurationValue;
+      /** Worker silence before it is flagged. 0 disables. */
+      workerStallWarn: DurationValue;
+      /** Worker silence before it is stopped. 0 disables. */
+      workerStallKill: DurationValue;
+      /** How long a worker's question waits for an answer. */
+      workerQuestionTimeout: DurationValue;
+      /** Timeout a worker's bash call gets when it sets none. 0 disables. */
+      workerBashTimeout: DurationValue;
       mainTurnStale: DurationValue;
     };
   };
@@ -187,7 +195,11 @@ export interface NormalizedPiPiConfig extends PiPiConfig {
       afterEdit: number;
     };
     internals: {
-      subagentStale: number;
+      workerTimeout: number;
+      workerStallWarn: number;
+      workerStallKill: number;
+      workerQuestionTimeout: number;
+      workerBashTimeout: number;
       mainTurnStale: number;
     };
   };
@@ -279,7 +291,11 @@ const DEFAULT_CONFIG: PiPiConfig = {
       afterEdit: "30s",
     },
     internals: {
-      subagentStale: 0,
+      workerTimeout: 0,
+      workerStallWarn: "3m",
+      workerStallKill: "15m",
+      workerQuestionTimeout: "10m",
+      workerBashTimeout: "10m",
       mainTurnStale: "10m",
     },
   },
@@ -598,11 +614,12 @@ export function validateConfig(config: Record<string, any>): void {
     }
     if (performance.internals !== undefined) {
       const internals = requireObject(performance.internals, "config.performance.internals");
-      ensureDuration(internals.subagentStale, "config.performance.internals.subagentStale");
-      ensureDuration(internals.mainTurnStale, "config.performance.internals.mainTurnStale");
+      for (const key of INTERNAL_DURATION_KEYS) ensureDuration(internals[key], `config.performance.internals.${key}`);
     }
   }
 }
+
+const INTERNAL_DURATION_KEYS = ["workerTimeout", "workerStallWarn", "workerStallKill", "workerQuestionTimeout", "workerBashTimeout", "mainTurnStale"] as const;
 
 export const MAX_CONCURRENT_SUBAGENTS_CEILING = 1024;
 
@@ -661,11 +678,10 @@ export function validateMergedConfig(config: Record<string, any>): void {
       throw new Error(`config.commands.afterEdit.${id}.run must be a non-empty string`);
     }
   }
-  if (parseDuration(typed.performance.internals.subagentStale) === null) {
-    throw new Error("config.performance.internals.subagentStale must be a valid duration");
-  }
-  if (parseDuration(typed.performance.internals.mainTurnStale) === null) {
-    throw new Error("config.performance.internals.mainTurnStale must be a valid duration");
+  for (const key of INTERNAL_DURATION_KEYS) {
+    if (parseDuration(typed.performance.internals[key]) === null) {
+      throw new Error(`config.performance.internals.${key} must be a valid duration`);
+    }
   }
 }
 
@@ -673,16 +689,13 @@ export function normalizeConfigDurations(config: PiPiConfig): NormalizedPiPiConf
   const next = structuredClone(config) as NormalizedPiPiConfig;
 
   const afterEdit = parseDuration(next.performance.commands.afterEdit);
-  const subagentStale = parseDuration(next.performance.internals.subagentStale);
-  const mainTurnStale = parseDuration(next.performance.internals.mainTurnStale);
-
-  if (afterEdit === null || subagentStale === null || mainTurnStale === null) {
-    throw new Error("Failed to normalize config durations");
-  }
-
+  if (afterEdit === null) throw new Error("Failed to normalize config durations");
   next.performance.commands.afterEdit = afterEdit;
-  next.performance.internals.subagentStale = subagentStale;
-  next.performance.internals.mainTurnStale = mainTurnStale;
+  for (const key of INTERNAL_DURATION_KEYS) {
+    const value = parseDuration(next.performance.internals[key]);
+    if (value === null) throw new Error("Failed to normalize config durations");
+    next.performance.internals[key] = value;
+  }
   return next;
 }
 
@@ -719,10 +732,20 @@ function completeProviderOrder(merged: Record<string, any>): void {
   merged.providers.order = [...order, ...PROVIDER_NAMES.filter((name) => !order.includes(name))];
 }
 
+// The old subagent limit was a wall-clock cap on a worker run, which is what
+// workerTimeout is now.
+function renameLegacyWorkerKeys(config: Record<string, any>): void {
+  const internals = config.performance?.internals;
+  if (!isObject(internals) || !("subagentStale" in internals)) return;
+  if (!("workerTimeout" in internals)) internals.workerTimeout = internals.subagentStale;
+  delete internals.subagentStale;
+}
+
 function prepareLayer(raw: Record<string, any> | null, name: string): Record<string, any> | null {
   if (!raw) return null;
   const { config, changed } = migrateConfigLayer(raw);
   if (changed) getLogger().debug({ s: "config", layer: name }, "migrated a config layer from the provider-tier schema in memory");
+  renameLegacyWorkerKeys(config);
   validateConfig(config);
   return config;
 }

@@ -3,12 +3,7 @@
  *
  * Tests ONLY what the fork adds on top of vendored upstream:
  *   - the `clearAll` method exposed on the global store API (Symbol.for("pi-tasks:store")),
- *     added so orchestrator's /pp:done can clear the widget (commit 4ba9183);
- *   - the subagent-session hook skip: when the extension is instantiated inside the
- *     globalThis[Symbol.for("pi-pi:subagent-session-scope")] async scope,
- *     lifecycle hooks (turn_start, turn_end, tool_result, before_agent_start, session_switch,
- *     tool_execution_start) become no-ops so child subagent sessions don't mutate parent task
- *     state (commit 50530c0).
+ *     added so orchestrator's /pp:done can clear the widget (commit 4ba9183).
  *
  * Upstream task CRUD, persistence, cadence, and widget behavior are covered by the vendored
  * suites and are intentionally NOT retested here. Kept in a separate file so upstream rebases
@@ -19,17 +14,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import initExtension from "../src/index.js";
 
 const STORE_KEY = Symbol.for("pi-tasks:store");
-const SUBAGENT_SESSION_SCOPE_KEY = Symbol.for("pi-pi:subagent-session-scope");
-
-/** Stands in for the async scope pi-subagents opens around a subagent's extension load. */
-function inSubagentSessionScope<T>(run: () => T): T {
-  (globalThis as any)[SUBAGENT_SESSION_SCOPE_KEY] = { getStore: () => ({ depth: 1 }) };
-  try {
-    return run();
-  } finally {
-    delete (globalThis as any)[SUBAGENT_SESSION_SCOPE_KEY];
-  }
-}
 
 beforeEach(() => {
   process.env.PI_TASKS = "off";
@@ -37,7 +21,6 @@ beforeEach(() => {
 
 afterEach(() => {
   delete process.env.PI_TASKS;
-  delete (globalThis as any)[SUBAGENT_SESSION_SCOPE_KEY];
   delete (globalThis as any)[STORE_KEY];
 });
 
@@ -125,59 +108,3 @@ describe("global store API (local fork)", () => {
   });
 });
 
-describe("subagent-session hook skip (local fork)", () => {
-  it("before_agent_start is a no-op in a subagent session", async () => {
-    const mock = mockPi();
-    inSubagentSessionScope(() => initExtension(mock.pi as any));
-
-    const ctx = mockCtx();
-    await mock.fireLifecycle("before_agent_start", {}, ctx);
-
-    // In a real (non-subagent) session before_agent_start grabs the UI context and updates the
-    // widget; under the subagent flag it must return early before touching the UI.
-    expect(ctx.ui.setWidget).not.toHaveBeenCalled();
-    expect(ctx.ui.setStatus).not.toHaveBeenCalled();
-  });
-
-  it("turn_start is a no-op in a subagent session", async () => {
-    const mock = mockPi();
-    inSubagentSessionScope(() => initExtension(mock.pi as any));
-
-    const ctx = mockCtx();
-    await mock.fireLifecycle("turn_start", {}, ctx);
-
-    expect(ctx.ui.setWidget).not.toHaveBeenCalled();
-  });
-
-  it("session_switch does not clear parent tasks in a subagent session", async () => {
-    const root = mockPi();
-    initExtension(root.pi as any);
-    const api = storeApi();
-    const subagent = mockPi();
-    inSubagentSessionScope(() => initExtension(subagent.pi as any));
-
-    api.create("parent task", "belongs to the parent session");
-    expect(api.list().length).toBe(1);
-
-    await subagent.fireLifecycle("session_switch", { reason: "new" }, mockCtx());
-
-    // Without the guard, a /new session_switch in memory mode would clearAll(); the subagent
-    // guard must short-circuit first and preserve the parent's tasks.
-    expect(api.list().length).toBe(1);
-    expect(storeApi()).toBe(api);
-  });
-
-  it("outside the scope, before_agent_start still runs (guard is opt-in)", async () => {
-    const mock = mockPi();
-    initExtension(mock.pi as any);
-    // Give the widget something to render so the non-subagent path produces an observable
-    // ui.setWidget call (an empty widget renders nothing).
-    storeApi().create("visible task", "so the widget has content");
-
-    const ctx = mockCtx();
-    await mock.fireLifecycle("before_agent_start", {}, ctx);
-
-    // The non-subagent path grabs the UI context via widget.setUICtx → widget.update → setWidget.
-    expect(ctx.ui.setWidget).toHaveBeenCalled();
-  });
-});

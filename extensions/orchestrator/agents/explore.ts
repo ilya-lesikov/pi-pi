@@ -14,7 +14,6 @@ export function createExploreAgent(config: PiPiConfig) {
       ref: config.agents.subagents.simple.explore.model,
       thinking,
       max_turns: config.agents.subagents.simple.explore.maxTurns,
-      prompt_mode: "replace",
     },
     prompt: [
       identityBlock(description, thinking),

@@ -13,7 +13,6 @@ export function createReviewerAgent(entry: PoolEntry) {
       ref: entry.model,
       thinking: entry.thinking,
       max_turns: entry.maxTurns,
-      prompt_mode: "replace",
     },
     prompt: [
       identityBlock(description, entry.thinking),
@@ -54,7 +53,7 @@ export function createReviewerAgent(entry: PoolEntry) {
       "",
       "Make every finding self-contained: its own anchor, its own consequence, intelligible without the others. Your review may be merged with reviews of other scopes by a caller that cannot re-read what you read.",
       "",
-      "Return the full review as your result.",
+      "Deliver it with submit_result: summary = the VERDICT line; body = the full review in the format above; findings = every CRITICAL, MAJOR and MINOR finding as {severity, location, issue}; open_questions = the OPEN QUESTIONS.",
       "</task>",
     ].join("\n"),
   };

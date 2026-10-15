@@ -8,7 +8,11 @@ import { createTaskAgent } from "./agents/task.js";
 import { createAdvisorAgent } from "./agents/advisor.js";
 import { createReviewerAgent } from "./agents/reviewer.js";
 import { createDeepDebuggerAgent } from "./agents/deep-debugger.js";
-import { encodePoolVariant, registerAgentDefinitions, unregisterAgentDefinitions } from "./agents/registry.js";
+import { encodePoolVariant, registerAgentDefinitions } from "./agents/registry.js";
+import type { WorkerDelivery } from "./workers/delivery.js";
+import type { WorkerManager } from "./workers/manager.js";
+import type { WorkerSessionFactory } from "./workers/types.js";
+import type { WorkerWidget } from "./workers/ui.js";
 import { publishAcpState } from "./acp.js";
 import type { PromptGuard } from "./promptcap/guard.js";
 import { getLogger } from "./log.js";
@@ -35,14 +39,16 @@ export class Orchestrator {
   duplicateExtensionError = false;
   cwd = "";
   lastCtx: any = null;
-  spawnedAgentIds = new Set<string>();
+  /** The root session's workers; replaced with the session, so none outlives it. */
+  workers: WorkerManager | null = null;
+  workerDelivery: WorkerDelivery | null = null;
+  /** Re-attaches listeners that follow the current session's manager. */
+  onWorkersReplaced: (() => void) | null = null;
+  workerWidget: WorkerWidget | null = null;
+  /** Replaces how worker sessions are built; for tests that drive workers without a model. */
+  workerSessionFactory: WorkerSessionFactory | undefined = undefined;
   /** Workers already put back to work on a new provider tier, retried at most once. */
   retriedSubagentIds = new Set<string>();
-  /** Retries in flight; they bypass the manager's queue, so they cap themselves. */
-  retryingSubagentIds = new Set<string>();
-  agentDescriptions = new Map<string, string>();
-  agentSpawnTimes = new Map<string, number>();
-  staleAgentTimer: ReturnType<typeof setInterval> | null = null;
   mainTurnTimer: ReturnType<typeof setInterval> | null = null;
   mainTurnLastActivity = 0;
   mainTurnInFlight = false;
@@ -309,66 +315,23 @@ export class Orchestrator {
     ctx?.ui?.requestRender?.();
   }
 
+  /** Whether any worker is still queued or running. */
+  hasActiveWorkers(): boolean {
+    return (this.workers?.active().length ?? 0) > 0;
+  }
+
   abortAllSubagents(): void {
-    const manager = (globalThis as any)[Symbol.for("pi-subagents:manager")];
-    manager?.abortAll?.();
-    this.spawnedAgentIds.clear();
-    this.agentSpawnTimes.clear();
-    this.stopStaleAgentWatchdog();
+    this.workers?.killAll();
     publishAcpState(this);
-  }
-
-  stopStaleAgentWatchdog(): void {
-    if (this.staleAgentTimer) clearInterval(this.staleAgentTimer);
-    this.staleAgentTimer = null;
-  }
-
-  startStaleAgentWatchdog(): void {
-    const staleMs = this.config.performance.internals.subagentStale;
-    if (staleMs <= 0 || this.staleAgentTimer) return;
-    this.staleAgentTimer = setInterval(() => {
-      const currentLimit = this.config.performance.internals.subagentStale;
-      if (currentLimit <= 0 || this.agentSpawnTimes.size === 0) {
-        this.stopStaleAgentWatchdog();
-        return;
-      }
-      const now = Date.now();
-      for (const [id, spawnTime] of this.agentSpawnTimes) {
-        if (now - spawnTime <= currentLimit) continue;
-        const description = this.agentDescriptions.get(id) ?? id;
-        this.pi.events.emit("subagents:rpc:stop", { requestId: crypto.randomUUID(), agentId: id });
-        this.spawnedAgentIds.delete(id);
-        this.agentSpawnTimes.delete(id);
-        this.agentDescriptions.delete(id);
-        this.pi.sendMessage({
-          customType: "pp-agent-stale",
-          content: `Aborted stale agent "${description}" after ${Math.round(currentLimit / 1000)}s.`,
-          display: true,
-        }, { deliverAs: "steer" });
-      }
-      if (this.agentSpawnTimes.size === 0) this.stopStaleAgentWatchdog();
-      publishAcpState(this);
-    }, Math.min(30_000, Math.max(1_000, staleMs)));
-  }
-
-  /** Re-evaluate the watchdog after the stale limit changed at runtime. */
-  restartStaleAgentWatchdog(): void {
-    this.stopStaleAgentWatchdog();
-    if (this.agentSpawnTimes.size > 0) this.startStaleAgentWatchdog();
-  }
-
-  applySubagentConcurrency(): void {
-    this.pi.events.emit("subagents:set-max-concurrent", { maxConcurrent: this.config.agents.maxConcurrentSubagents });
   }
 
   /**
    * (Re)register every agent definition from the current config, so a routing
    * change reaches the NEXT spawn: a definition carries the model it was built
-   * with, and pi-subagents lets that model outrank the spawning tool call's own
-   * argument — a definition left behind by a provider-tier move therefore keeps
-   * sending workers to the tier that just failed.
+   * with, so one left behind by a provider-tier move keeps sending workers to
+   * the tier that just failed.
    *
-   * Idempotent, so routing paths can call it unconditionally; `force` re-emits
+   * Idempotent, so routing paths can call it unconditionally; `force` rebuilds
    * regardless, for a config reload that may have changed a prompt the signature
    * below does not cover.
    */
@@ -396,8 +359,7 @@ export class Orchestrator {
       .join("|");
     if (!force && signature === this.agentRegistrationSignature) return;
     this.agentRegistrationSignature = signature;
-    unregisterAgentDefinitions(this.pi);
-    registerAgentDefinitions(this.pi, definitions);
+    registerAgentDefinitions(definitions);
   }
 
   mainAgentConfig(): { model: string; thinking: string } {

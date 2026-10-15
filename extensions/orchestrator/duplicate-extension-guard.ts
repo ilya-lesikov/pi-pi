@@ -3,8 +3,8 @@ import { dirname, resolve, sep } from "node:path";
 import { getLogger } from "./log.js";
 
 // Install issue 8b: pi-pi VENDORS several upstream extensions (pi-lsp,
-// pi-subagents, pi-lsp, and pi-ask-user.
-// engine). If the user ALSO installs any of them STANDALONE, both copies load
+// pi-tasks and pi-ask-user) and replaces pi-subagents with its own workers.
+// If the user ALSO installs any of them STANDALONE, both copies load
 // and their tools/commands collide — the framework only prints a non-fatal
 // warning ("Tool \"lsp\" conflicts with ..."). This guard HARD-FAILS instead,
 // naming the offending extension and which signal tripped, so the user disables
@@ -20,7 +20,7 @@ import { getLogger } from "./log.js";
 // standalone duplicate (signal A).
 export const PI_PI_OWNED_TOOL_NAMES: readonly string[] = [
   "lsp", // pi-lsp
-  "Agent", // pi-subagents
+  "Agent", // pi-pi's workers
   "TaskCreate", // pi-tasks
   "ask_user", // pi-ask-user
   "vcc_recall", // pi-pi's own recall tools
@@ -29,7 +29,7 @@ export const PI_PI_OWNED_TOOL_NAMES: readonly string[] = [
 
 export const PI_PI_OWNED_COMMAND_NAMES: readonly string[] = [];
 
-// Upstream package ids pi-pi vendors. A loaded extension whose source path
+// Upstream package ids pi-pi vendors or replaces. A loaded extension whose source path
 // contains one of these package ids but lives OUTSIDE pi-pi's tree is a
 // standalone install of something pi-pi already bundles (signal B).
 export const PI_PI_VENDORED_PACKAGE_IDS: readonly string[] = [

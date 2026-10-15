@@ -61,7 +61,6 @@ function makeOrchestrator(cwd: string): Orchestrator {
   orchestrator.cwd = cwd;
   orchestrator.config = normalizeConfigDurations(getDefaultConfig());
   orchestrator.registerAgents = vi.fn() as any;
-  orchestrator.applySubagentConcurrency = vi.fn() as any;
   return orchestrator;
 }
 

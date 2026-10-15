@@ -13,7 +13,6 @@ export function createAdvisorAgent(entry: PoolEntry) {
       ref: entry.model,
       thinking: entry.thinking,
       max_turns: entry.maxTurns,
-      prompt_mode: "replace",
     },
     prompt: [
       identityBlock(description, entry.thinking),

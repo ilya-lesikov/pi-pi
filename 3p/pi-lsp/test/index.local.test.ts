@@ -64,26 +64,13 @@ function createUiRecorder() {
   };
 }
 
-const subagentSessionScopeKey = Symbol.for('pi-pi:subagent-session-scope');
-
-/** Stands in for the async scope pi-subagents opens around a subagent's extension load. */
-function inSubagentSessionScope<T>(run: () => T): T {
-  (globalThis as any)[subagentSessionScopeKey] = { getStore: () => ({ depth: 1 }) };
-  try {
-    return run();
-  } finally {
-    delete (globalThis as any)[subagentSessionScopeKey];
-  }
-}
 const lspApiKey = Symbol.for('pi-lsp:api');
 
 beforeEach(() => {
-  delete (globalThis as any)[subagentSessionScopeKey];
   delete (globalThis as any)[lspApiKey];
 });
 
 afterEach(() => {
-  delete (globalThis as any)[subagentSessionScopeKey];
   delete (globalThis as any)[lspApiKey];
 });
 
@@ -114,31 +101,17 @@ describe('zero-config entrypoint (local fork)', () => {
     expect(ui.statuses.get('lsp')).toMatch(/^LSP: /);
   });
 
-  test('subagent sessions short-circuit lifecycle handlers', async () => {
-    const pi = createFakePi();
-    inSubagentSessionScope(() => lspExtension(pi as any));
-    const ui = createUiRecorder();
-
-    await pi.handlers.get('session_start')?.[0]?.({}, { cwd: process.cwd(), ui: ui.ui });
-    expect(ui.statuses.has('lsp')).toBe(false);
-
-    await pi.handlers.get('session_shutdown')?.[0]?.({}, { cwd: process.cwd(), ui: ui.ui });
-    await pi.handlers
-      .get('tool_execution_end')
-      ?.[0]?.({ toolName: 'lsp' }, { cwd: process.cwd(), ui: ui.ui });
-    expect(ui.notifications).toHaveLength(0);
-  });
-
-  test('a subagent load leaves the root session owning the shared api handle', async () => {
+  test('registers the lsp tool on another session, bound to this one\'s servers', () => {
     const rootPi = createFakePi();
     lspExtension(rootPi as any);
-    const rootApi = (globalThis as any)[lspApiKey];
-    expect(rootApi).toBeTruthy();
+    const api = (globalThis as any)[lspApiKey];
 
-    const subagentPi = createFakePi();
-    inSubagentSessionScope(() => lspExtension(subagentPi as any));
+    const workerPi = createFakePi();
+    api.registerTool(workerPi as any);
 
-    expect((globalThis as any)[lspApiKey]).toBe(rootApi);
+    expect(workerPi.tool?.name).toBe('lsp');
+    expect(workerPi.handlers.size).toBe(0);
+    expect((globalThis as any)[lspApiKey]).toBe(api);
   });
 
   test('lsp command reports auto-detected servers or a no-servers hint', async () => {

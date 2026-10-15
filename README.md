@@ -64,7 +64,13 @@ The main session owns long-running and interactive work. Functional workers are 
 - `reviewer_*` for fresh read-only review;
 - `task` for a self-contained parallel slice.
 
-Workers receive no duplicated task artifact bundle. They can search the owning session with `vcc_recall` when prior decisions or tool results matter. Worker execution has no turn or stale-time limit by default. Users can set `maxTurns` per simple worker or pool entry and `performance.internals.subagentStale` in scoped `.pp/config.json`; `0` means unlimited.
+Workers receive no duplicated task artifact bundle. They can search the owning session with `vcc_recall` when prior decisions or tool results matter.
+
+Workers never block the main session. `Agent` returns a worker id at once, and the result arrives on its own: at the main agent's next tool-call boundary while it is busy, or as a new turn once it is idle and nobody is typing or answering a dialog. The main agent controls what it started with `agent_wait` (bounded, returns on the first result or question), `agent_send` (steer a running worker, answer its question, or give a finished one follow-up work in the same context), `agent_status`, and `agent_stop` (`graceful`, `kill` even when stuck, or `tool` to cancel only the call it is stuck in). A worker can report progress and ask its parent a question, and finishes with a structured result; reviewers return their findings with severity and location.
+
+A worker that stays silent is flagged after `performance.internals.workerStallWarn` (3 minutes) and stopped after `workerStallKill` (15 minutes); `workerTimeout` caps a whole run (`0`, the default, means none), `workerQuestionTimeout` bounds how long a question waits, and `workerBashTimeout` is the default for a worker's shell commands. Users can also set `maxTurns` per simple worker or pool entry. Workers end with the session that started them.
+
+The panel above the editor shows each worker's current tool, silence and pending question; `/pp → Workers` lists them and opens a live transcript where you can steer, answer, interrupt a tool, stop or kill one.
 
 ## ACP clients
 

@@ -17,6 +17,7 @@ import {
   retryHintMs,
 } from "./rate-limit-fallback.js";
 import { clearPauses, forgetLastGood, getPause, isPaused, listPauses, pause, refusalFallbackSpec, resolveSpec, setCatalog } from "./routing.js";
+import { getAgentDefinition } from "./agents/registry.js";
 
 vi.mock("./flant-infra.js", async (original) => ({
   ...(await original<any>()),
@@ -75,7 +76,6 @@ describe("pause-based rate-limit fallback", () => {
       clearAllPauses(orchestrator);
       if (orchestrator.modelSwitchPollTimer) clearTimeout(orchestrator.modelSwitchPollTimer);
       if (orchestrator.idlePollTimer) clearTimeout(orchestrator.idlePollTimer);
-      orchestrator.stopStaleAgentWatchdog();
     }
     clearPauses();
     forgetLastGood();
@@ -215,24 +215,17 @@ describe("pause-based rate-limit fallback", () => {
   });
 
   // The failure this reproduces: a worker definition carries the model it was
-  // built with, and pi-subagents lets that model outrank the spawning tool
-  // call's argument. A definition left behind by the pause therefore sends
-  // every subsequent worker straight back to the provider that just refused them.
+  // built with. A definition left behind by the pause therefore sends every
+  // subsequent worker straight back to the provider that just refused them.
   it("rebuilds worker definitions onto the next provider and back again", async () => {
     setCatalog([SUB, COPILOT_OPUS]);
     const pi = makePi();
     const orchestrator = makeOrchestrator(pi);
     orchestrator.switchModel = vi.fn(async () => true);
-    const taskModel = () => {
-      const calls = pi.events.emit.mock.calls.filter((c: any[]) => c[0] === "subagents:register-agents");
-      return calls.at(-1)?.[1].agents.get("task").model;
-    };
+    const taskModel = () => getAgentDefinition("task")?.model;
 
     orchestrator.registerAgents();
     expect(taskModel()).toBe(SUB);
-    const emitted = pi.events.emit.mock.calls.length;
-    orchestrator.registerAgents();
-    expect(pi.events.emit.mock.calls.length).toBe(emitted);
 
     await handleSubagentRateLimit(orchestrator, ctxOn("pp-flant-openai/gpt-6-luna"), SUB);
     expect(taskModel()).toBe(COPILOT_OPUS);

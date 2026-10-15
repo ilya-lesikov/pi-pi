@@ -58,6 +58,8 @@ import { DEFAULT_KEEP_FRACTION, DEFAULT_HEADROOM_TOKENS, DEFAULT_MAX_PROMPT_TOKE
 import { DEFAULT_IMAGE_TOKENS } from "./promptcap/estimate.js";
 import { finalizeTracer, getTracer, initTracer } from "./tracer.js";
 import type { Orchestrator } from "./orchestrator.js";
+import { openWorkerViewer } from "./workers/ui.js";
+import type { WorkerRecord } from "./workers/types.js";
 
 type Scope = "global" | "project";
 type OptionInput = string | { title: string; description?: string };
@@ -88,7 +90,11 @@ const POOL_ITEMS: Array<{ pool: PoolKey; label: string }> = [
 
 const TIMEOUT_ITEMS: Array<{ path: string[]; label: string }> = [
   { path: ["performance", "commands", "afterEdit"], label: "Command after file edit" },
-  { path: ["performance", "internals", "subagentStale"], label: "Subagent stale" },
+  { path: ["performance", "internals", "workerTimeout"], label: "Worker run limit (0 = none)" },
+  { path: ["performance", "internals", "workerStallWarn"], label: "Worker silent: flag after" },
+  { path: ["performance", "internals", "workerStallKill"], label: "Worker silent: stop after" },
+  { path: ["performance", "internals", "workerQuestionTimeout"], label: "Worker question: wait for answer" },
+  { path: ["performance", "internals", "workerBashTimeout"], label: "Worker bash default timeout" },
   { path: ["performance", "internals", "mainTurnStale"], label: "Main turn stale" },
 ];
 
@@ -278,7 +284,6 @@ function refreshRuntimeAfterConfigChange(orchestrator: Orchestrator, keyPath: st
   }
   if (keyPath[0] === "agents") {
     orchestrator.registerAgents(true);
-    if (keyPath[1] === "maxConcurrentSubagents") orchestrator.applySubagentConcurrency();
     if (keyPath[1] === "main" && orchestrator.lastCtx) {
       void orchestrator.applyMainAgent(orchestrator.lastCtx).then((ok) => {
         if (!ok) orchestrator.lastCtx?.ui?.notify?.(mainUnavailableMessage(orchestrator), "warning");
@@ -286,7 +291,6 @@ function refreshRuntimeAfterConfigChange(orchestrator: Orchestrator, keyPath: st
     }
     return;
   }
-  if (key === "performance.internals.subagentStale") orchestrator.restartStaleAgentWatchdog();
   if (key === "general.tracing") {
     const sessionId = orchestrator.lastCtx?.sessionManager?.getSessionId?.();
     if (orchestrator.config.general.tracing && sessionId && !getTracer()) initTracer(`${orchestrator.cwd}/.pp`, sessionId);
@@ -1688,32 +1692,42 @@ async function showLspSettings(ctx: any): Promise<void> {
   }
 }
 
-function workerRecords(): any[] {
-  const manager = (globalThis as any)[Symbol.for("pi-subagents:manager")];
-  const records = manager?.listAgents?.();
-  return Array.isArray(records) ? records : [];
+function workerRecords(orchestrator: Orchestrator): WorkerRecord[] {
+  return orchestrator.workers?.list() ?? [];
+}
+
+function isActiveWorker(record: WorkerRecord): boolean {
+  return record.status === "running" || record.status === "queued";
 }
 
 async function showWorkers(orchestrator: Orchestrator, ctx: any): Promise<void> {
   for (;;) {
-    const records = workerRecords();
-    const active = records.filter((record) => record.status === "running" || record.status === "queued");
-    const choice = await selectOption(ctx, "Workers", [
-      opt("Open worker dashboard", `${active.length} active, ${records.length} recorded`),
-      ...(active.length ? [opt("Stop all active workers", "Abort bounded background work; the main session continues.")] : []),
-      opt(BACK, "Return to the previous menu"),
-    ]);
+    const records = workerRecords(orchestrator).sort((a, b) => Number(!!b.question) - Number(!!a.question) || Number(isActiveWorker(b)) - Number(isActiveWorker(a)) || b.createdAt - a.createdAt);
+    const active = records.filter(isActiveWorker);
+    const now = Date.now();
+    const byTitle = new Map<string, string>();
+    const options: OptionInput[] = records.map((record) => {
+      const state = record.question ? "? waiting on you" : record.status;
+      const title = `${record.spec.type}: ${record.spec.description} [${state}]`;
+      byTitle.set(title, record.id);
+      const age = formatAge(now - (record.startedAt ?? record.createdAt));
+      const detail = record.question
+        ? `asks: ${record.question.text}`
+        : record.activity
+          ? `${age} · in ${record.activity.toolName} ${record.activity.summary}`
+          : `${age} · ${record.toolUses} tools${record.result?.summary ? ` · ${record.result.summary}` : record.error ? ` · ${record.error}` : ""}`;
+      return opt(title, detail.slice(0, 160));
+    });
+    if (active.length) options.push(opt("Stop all active workers", "Kill every queued and running worker; the main session continues."));
+    options.push(opt(BACK, "Return to the previous menu"));
+    const choice = await selectOption(ctx, records.length ? `Workers (${active.length} active) — pick one to open its live view` : "Workers — none yet", options);
     if (!choice || choice === BACK) return;
-    if (choice === "Open worker dashboard") {
-      const menu = (globalThis as any)[Symbol.for("pi-subagents:menu")] as { showFleet?: (ctx: any) => Promise<void> } | undefined;
-      if (typeof menu?.showFleet === "function") {
-        await menu.showFleet(ctx);
-      } else {
-        ctx.ui?.notify?.(records.length ? records.map((r) => `${r.status}: ${r.description ?? r.type ?? r.id}`).join("\n") : "No workers recorded.", "info");
-      }
+    if (choice === "Stop all active workers") {
+      orchestrator.abortAllSubagents();
       continue;
     }
-    if (choice === "Stop all active workers") orchestrator.abortAllSubagents();
+    const id = byTitle.get(choice);
+    if (id) await openWorkerViewer(orchestrator, ctx, id);
   }
 }
 
@@ -1725,8 +1739,7 @@ function formatAge(ms: number): string {
 
 function sessionStatus(orchestrator: Orchestrator, ctx: any): string {
   const usage = ctx.getContextUsage?.();
-  const records = workerRecords();
-  const active = records.filter((record) => record.status === "running" || record.status === "queued");
+  const active = workerRecords(orchestrator).filter(isActiveWorker);
   const tracker = (globalThis as any)[Symbol.for("pi-pi:usage-tracker")] as { getTotalCost?: () => number } | undefined;
   const cost = tracker?.getTotalCost?.();
   const contextLine = usage && typeof usage.contextWindow === "number" && usage.contextWindow > 0
@@ -1745,8 +1758,7 @@ function sessionStatus(orchestrator: Orchestrator, ctx: any): string {
   if (active.length > 0) {
     lines.push(`Workers (${active.length} active):`);
     for (const record of active.slice(0, 6)) {
-      const age = orchestrator.agentSpawnTimes.get(record.id);
-      lines.push(`  • ${record.status}: ${record.description ?? record.type ?? record.id}${age ? ` (${formatAge(Date.now() - age)})` : ""}`);
+      lines.push(`  • ${record.question ? "waiting on you" : record.status}: ${record.spec.description} (${formatAge(Date.now() - (record.startedAt ?? record.createdAt))})`);
     }
   }
   return lines.join("\n");

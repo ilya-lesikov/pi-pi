@@ -8,13 +8,12 @@
  *   TaskUpdate   — Update task fields, status, dependencies
  *   TaskOutput   — Get output from a background task process
  *   TaskStop     — Stop a running background task process
- *   TaskExecute  — Execute tasks as subagents (requires @tintinweb/pi-subagents)
+ *   TaskExecute  — Execute tasks as subagents (on pi-pi's workers)
  *
  * Commands:
  *   /tasks       — Interactive task management menu
  */
 
-import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -121,11 +120,6 @@ function renderReminder(evidence: ReminderEvidence, tasks: Task[]): string {
 }
 
 export default function (pi: ExtensionAPI) {
-  // LOCAL PATCH (pi-pi): pi-pi's subagent runner opens an async scope around the
-  // extension load of an in-process subagent session; snapshot it at factory time
-  // so only that instance skips its hooks.
-  const isSubagentSession =
-    ((globalThis as Record<symbol, any>)[Symbol.for("pi-pi:subagent-session-scope")]?.getStore?.()?.depth ?? 0) > 0;
   // Initialize store and config
   const cfg = loadTasksConfig();
   const piTasks = process.env.PI_TASKS;
@@ -163,92 +157,52 @@ export default function (pi: ExtensionAPI) {
       widget.update();
     },
   };
-  // LOCAL PATCH (pi-pi): only the root session may publish the shared handle.
-  // A subagent load would otherwise replace it with its own empty in-memory
-  // store, detaching every cross-package reader from the real task list.
-  if (!isSubagentSession) (globalThis as any)[STORE_KEY] = storeApi;
+  (globalThis as any)[STORE_KEY] = storeApi;
 
   // ── Subagent integration state ──
   /** Latest ExtensionContext — refreshed on every tool execution so cascade always has a valid one. */
   let latestCtx: ExtensionContext | undefined;
   /** Cascade config — set by TaskExecute, consumed by completion listener. */
-  let cascadeConfig: { additionalContext?: string; model?: string; maxTurns?: number } | undefined;
+  let cascadeConfig: { additionalContext?: string; maxTurns?: number } | undefined;
   /** Maps agent IDs to task IDs for O(1) completion lookup. */
   const agentTaskMap = new Map<string, string>();
 
-  // ── Subagent RPC helpers ──
+  // ── Subagent integration ──
+  // LOCAL PATCH (pi-pi): task agents run on pi-pi's own workers through a typed
+  // handle, replacing the pi-subagents event-bus RPC. Resolved per call: pi-pi
+  // publishes it after this extension may already have loaded.
+  type WorkersHandle = {
+    spawn(request: { type: string; description: string; prompt: string; owner: string; maxTurns?: number }): { id: string } | { error: string };
+    stop(id: string): boolean;
+    onSettled(listener: (settled: { id: string; owner?: string; status: string; result?: string; error?: string }) => void): () => void;
+  };
+  const workers = (): WorkersHandle | undefined => (globalThis as any)[Symbol.for("pi-pi:workers")];
+  const WORKER_OWNER = "pi-tasks";
 
-  /** RPC reply envelope — matches pi-mono's RpcResponse shape. */
-  type RpcReply<T = void> =
-    | { success: true; data?: T }
-    | { success: false; error: string };
+  function spawnSubagent(type: string, prompt: string, options: { description: string; maxTurns?: number }): string {
+    const handle = workers();
+    if (!handle) throw new Error("pi-pi workers are not available");
+    const spawned = handle.spawn({ type, prompt, description: options.description, owner: WORKER_OWNER, maxTurns: options.maxTurns });
+    if ("error" in spawned) throw new Error(spawned.error);
+    debug("spawn:ok", spawned);
+    return spawned.id;
+  }
 
-  /** Call a subagents RPC method: emit request, wait for scoped reply, unwrap envelope. */
-  function rpcCall<T>(channel: string, params: Record<string, unknown>, timeoutMs: number): Promise<T> {
-    const requestId = randomUUID();
-    debug(`rpc:send ${channel}`, { requestId });
-    return new Promise<T>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        unsub();
-        debug(`rpc:timeout ${channel}`, { requestId });
-        reject(new Error(`${channel} timeout`));
-      }, timeoutMs);
-      const unsub = pi.events.on(`${channel}:reply:${requestId}`, (raw: unknown) => {
-        unsub(); clearTimeout(timer);
-        debug(`rpc:reply ${channel}`, { requestId, raw });
-        const reply = raw as RpcReply<T>;
-        if (reply.success) resolve(reply.data as T);
-        else reject(new Error(reply.error));
-      });
-      pi.events.emit(channel, { requestId, ...params });
-      debug(`rpc:emitted ${channel}`, { requestId });
+  function stopSubagent(agentId: string): void {
+    workers()?.stop(agentId);
+  }
+
+  let unsubscribeSettled: (() => void) | undefined;
+  function listenForSettlements(): void {
+    if (unsubscribeSettled) return;
+    const handle = workers();
+    if (!handle) return;
+    unsubscribeSettled = handle.onSettled((settled) => {
+      if (settled.owner !== WORKER_OWNER) return;
+      if (settled.status === "completed") void onAgentCompleted(settled.id, settled.result);
+      else onAgentFailed(settled.id, settled.status, settled.error, settled.result);
     });
   }
-
-  /** Spawn a subagent via pi.events RPC (requires @tintinweb/pi-subagents extension). */
-  function spawnSubagent(type: string, prompt: string, options?: any): Promise<string> {
-    debug("spawn:call", { type, options: { ...options, prompt: undefined } });
-    return rpcCall<{ id: string }>("subagents:rpc:spawn", { type, prompt, options }, 30_000)
-      .then(d => { debug("spawn:ok", d); return d.id; });
-  }
-
-  /** Stop a subagent via pi.events RPC (requires @tintinweb/pi-subagents extension). */
-  function stopSubagent(agentId: string): Promise<void> {
-    return rpcCall<void>("subagents:rpc:stop", { agentId }, 10_000).catch(() => {});
-  }
-
-  // ── Subagent extension presence & version detection ──
-  const PROTOCOL_VERSION = 2;
-  let subagentsAvailable = false;
-  let pendingWarning: string | undefined;
-
-  /** Ping subagents and check protocol version. Works with any handler version. */
-  function checkSubagentsVersion() {
-    const requestId = randomUUID();
-    const timer = setTimeout(() => { unsub(); }, 5_000);
-    const unsub = pi.events.on(`subagents:rpc:ping:reply:${requestId}`, (raw: unknown) => {
-      unsub(); clearTimeout(timer);
-      const remoteVersion = (raw as any)?.data?.version as number | undefined;
-      if (remoteVersion === undefined) {
-        pendingWarning =
-          "@tintinweb/pi-subagents is outdated — please update for task execution support.";
-      } else if (remoteVersion > PROTOCOL_VERSION) {
-        pendingWarning =
-          `@tintinweb/pi-tasks is outdated (protocol v${PROTOCOL_VERSION}, ` +
-          `pi-subagents has v${remoteVersion}) — please update for task execution support.`;
-      } else if (remoteVersion < PROTOCOL_VERSION) {
-        pendingWarning =
-          `@tintinweb/pi-subagents is outdated (protocol v${remoteVersion}, ` +
-          `pi-tasks has v${PROTOCOL_VERSION}) — please update for task execution support.`;
-      } else {
-        subagentsAvailable = true;
-      }
-    });
-    pi.events.emit("subagents:rpc:ping", { requestId });
-  }
-
-  checkSubagentsVersion();
-  pi.events.on("subagents:ready", () => checkSubagentsVersion());
 
   /** Build a prompt for a task being executed by a subagent.
    *  Injects completed dependency results so cascaded agents have context from prerequisites.
@@ -287,8 +241,7 @@ export default function (pi: ExtensionAPI) {
   // Listens for subagent lifecycle events to update task status and optionally cascade.
 
   // Success → mark task completed, cascade if enabled
-  pi.events.on("subagents:completed", async (data) => {
-    const { id, result } = data as { id: string; result?: string };
+  async function onAgentCompleted(id: string, result?: string): Promise<void> {
     const taskId = agentTaskMap.get(id);
     if (!taskId) return;
     agentTaskMap.delete(id);
@@ -310,11 +263,9 @@ export default function (pi: ExtensionAPI) {
         store.update(next.id, { status: "in_progress" });
         const prompt = buildTaskPrompt(next, cascadeConfig.additionalContext);
         try {
-          const agentId = await spawnSubagent(next.metadata.agentType, prompt, {
+          const agentId = spawnSubagent(next.metadata.agentType, prompt, {
             description: next.subject,
-            isBackground: true,
             maxTurns: cascadeConfig.maxTurns,
-            ...(cascadeConfig.model ? { model: cascadeConfig.model } : {}),
           });
           agentTaskMap.set(agentId, next.id);
           store.update(next.id, { owner: agentId, metadata: { ...next.metadata, agentId } });
@@ -326,12 +277,11 @@ export default function (pi: ExtensionAPI) {
     }
     autoClear.trackCompletion(task.id, cadence.currentTurn);
     widget.update();
-  });
+  }
 
   // Failure → store error, revert to pending, don't cascade (branch stops)
   // Intentional stop (status === "stopped") → mark completed, preserve partial result
-  pi.events.on("subagents:failed", (data) => {
-    const { id, error, result, status } = data as { id: string; error?: string; result?: string; status: string };
+  function onAgentFailed(id: string, status: string, error?: string, result?: string): void {
     const taskId = agentTaskMap.get(id);
     if (!taskId) return;
     agentTaskMap.delete(id);
@@ -349,7 +299,7 @@ export default function (pi: ExtensionAPI) {
     }
     widget.setActiveTask(task.id, false);
     widget.update();
-  });
+  }
 
   // ── Session-scoped store upgrade ──
   // For session scope, the store starts in-memory (no session ID at init time).
@@ -400,7 +350,6 @@ export default function (pi: ExtensionAPI) {
   };
 
   pi.on("turn_start", async (_event, ctx) => {
-    if (isSubagentSession) return;
     onTurnStart(cadence);
     latestCtx = ctx;
     widget.setUICtx(ctx.ui as UICtx);
@@ -411,7 +360,6 @@ export default function (pi: ExtensionAPI) {
   // ── Token usage tracking ──
   // Feed per-turn token counts from assistant messages into the widget.
   pi.on("turn_end", async (event) => {
-    if (isSubagentSession) return;
     const msg = event.message as any;
     if (msg?.role === "assistant" && msg.usage) {
       widget.addTokenUsage(msg.usage.input ?? 0, msg.usage.output ?? 0);
@@ -429,7 +377,6 @@ export default function (pi: ExtensionAPI) {
   // before each LLM call and returns a modified copy of the messages
   // without persisting or polluting any tool output.
   pi.on("tool_result", async (event) => {
-    if (isSubagentSession) return {};
     // LOCAL PATCH (pi-pi): every result is evaluated. The original skipped the
     // call while under the turn threshold, which is no longer safe: the edit
     // and commit counters that drive cadence accumulate here, and a skipped
@@ -455,7 +402,6 @@ export default function (pi: ExtensionAPI) {
   // receive it. It is not persisted in the session store — `context`
   // returns a transformed messages array used only for this one request.
   pi.on("context", async (event) => {
-    if (isSubagentSession) return {};
     const evidence = drainReminderForContext(cadence);
     if (!evidence) return {};
 
@@ -474,22 +420,16 @@ export default function (pi: ExtensionAPI) {
   // Grab UI context early — before_agent_start fires before any tool calls,
   // so persisted tasks show up immediately on session start.
   pi.on("before_agent_start", async (_event, ctx) => {
-    if (isSubagentSession) return;
     latestCtx = ctx;
     widget.setUICtx(ctx.ui as UICtx);
     upgradeStoreIfNeeded(ctx);
     showPersistedTasks();
-    if (pendingWarning) {
-      ctx.ui.notify(pendingWarning, "warning");
-      pendingWarning = undefined;
-    }
   });
 
   // session_switch fires on /new (reason: "new") and /resume (reason: "resume").
   // On /new: reset all session-scoped state so the store switches to the new session file.
   // On resume: reload persisted tasks from the existing session file.
   pi.on("session_switch" as any, async (event: any, ctx: ExtensionContext) => {
-    if (isSubagentSession) return;
     latestCtx = ctx;
     widget.setUICtx(ctx.ui as UICtx);
 
@@ -512,7 +452,6 @@ export default function (pi: ExtensionAPI) {
 
   // Keep latestCtx fresh on every tool execution as well.
   pi.on("tool_execution_start", async (_event, ctx) => {
-    if (isSubagentSession) return;
     latestCtx = ctx;
     widget.setUICtx(ctx.ui as UICtx);
     upgradeStoreIfNeeded(ctx);
@@ -897,18 +836,16 @@ Set up task dependencies:
           // Subagent task — wait for completion if blocking
           if (block && task.status === "in_progress") {
             await new Promise<void>((resolve) => {
-              const timer = setTimeout(() => { unsubOk(); unsubFail(); resolve(); }, timeout ?? 30000);
-              const cleanup = () => { clearTimeout(timer); resolve(); };
-              const unsubOk = pi.events.on("subagents:completed", (d: unknown) => {
-                if ((d as any).id === task.metadata?.agentId) { unsubOk(); unsubFail(); cleanup(); }
-              });
-              const unsubFail = pi.events.on("subagents:failed", (d: unknown) => {
-                if ((d as any).id === task.metadata?.agentId) { unsubOk(); unsubFail(); cleanup(); }
-              });
+              let unsubscribe: () => void = () => {};
+              const cleanup = () => { clearTimeout(timer); unsubscribe(); resolve(); };
+              const timer = setTimeout(cleanup, timeout ?? 30000);
+              unsubscribe = workers()?.onSettled((settled) => {
+                if (settled.id === task.metadata?.agentId) cleanup();
+              }) ?? (() => {});
               // Re-check in case status changed between the outer check and listener registration
               const current = store.get(task_id);
-              if (current && current.status !== "in_progress") { unsubOk(); unsubFail(); cleanup(); }
-              signal?.addEventListener("abort", () => { unsubOk(); unsubFail(); cleanup(); }, { once: true });
+              if (current && current.status !== "in_progress") cleanup();
+              signal?.addEventListener("abort", cleanup, { once: true });
             });
           }
           const updated = store.get(task_id) ?? task;
@@ -967,7 +904,7 @@ Set up task dependencies:
         if (task?.metadata?.agentId && task.status === "in_progress") {
           store.update(taskId, { status: "completed" });
           autoClear.trackCompletion(taskId, cadence.currentTurn);
-          await stopSubagent(task.metadata.agentId);
+          stopSubagent(task.metadata.agentId);
           widget.setActiveTask(taskId, false);
           widget.update();
           return textResult(`Task #${taskId} stopped successfully`);
@@ -1002,7 +939,6 @@ Set up task dependencies:
 
 - **task_ids**: Array of task IDs to execute
 - **additional_context**: Extra context appended to each agent's prompt
-- **model**: Model override for agents (e.g., "sonnet", "haiku")
 - **max_turns**: Maximum turns per agent`,
     promptGuidelines: [
       "Never use the Agent tool for tasks launched via TaskExecute — agents are already running.",
@@ -1010,17 +946,14 @@ Set up task dependencies:
     parameters: Type.Object({
       task_ids: Type.Array(Type.String(), { description: "Task IDs to execute as subagents" }),
       additional_context: Type.Optional(Type.String({ description: "Extra context for agent prompts" })),
-      model: Type.Optional(Type.String({ description: "Model override for agents" })),
       max_turns: Type.Optional(Type.Number({ description: "Max turns per agent", minimum: 1 })),
     }),
 
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      if (!subagentsAvailable) {
-        return textResult(
-          "Subagent execution is currently unavailable. " +
-          "Ensure the @tintinweb/pi-subagents extension is loaded and try again."
-        );
+      if (!workers()) {
+        return textResult("Subagent execution is currently unavailable: pi-pi's workers are not loaded.");
       }
+      listenForSettlements();
 
       const results: string[] = [];
       const launched: string[] = [];
@@ -1054,11 +987,9 @@ Set up task dependencies:
         store.update(taskId, { status: "in_progress" });
         const prompt = buildTaskPrompt(task, params.additional_context);
         try {
-          const agentId = await spawnSubagent(task.metadata.agentType, prompt, {
+          const agentId = spawnSubagent(task.metadata.agentType, prompt, {
             description: task.subject,
-            isBackground: true,
             maxTurns: params.max_turns,
-            ...(params.model ? { model: params.model } : {}),
           });
           agentTaskMap.set(agentId, taskId);
           store.update(taskId, { owner: agentId, metadata: { ...task.metadata, agentId } });
@@ -1074,7 +1005,6 @@ Set up task dependencies:
       // Save cascade config for the completion listener
       cascadeConfig = {
         additionalContext: params.additional_context,
-        model: params.model,
         maxTurns: params.max_turns,
       };
 

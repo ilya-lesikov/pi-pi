@@ -40,7 +40,7 @@ describe("detectDuplicateExtensions", () => {
   it("does NOT flag pi-pi's OWN bundled copy (source under pi-pi root)", () => {
     const tools = [
       tool("lsp", "/opt/pi-pi/3p/pi-lsp/extensions/lsp/index.ts"),
-      tool("Agent", "/opt/pi-pi/3p/pi-subagents/src/index.ts"),
+      tool("Agent", "/opt/pi-pi/extensions/orchestrator/workers/tools.ts"),
       tool("vcc_recall", "/opt/pi-pi/extensions/orchestrator/promptcap/recall.ts"),
     ];
     expect(detectDuplicateExtensions(tools, [], ROOT)).toHaveLength(0);
