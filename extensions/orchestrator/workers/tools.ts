@@ -7,7 +7,7 @@ import { ACTIVE_STATUSES, type WorkerRecord, type WorkerSpawnSpec } from "./type
 export interface WorkerToolsHost {
   manager: () => WorkerManager | null;
   /** Validates and resolves a spawn request into a spec; a string is the refusal shown to the model. */
-  prepareSpawn(params: { subagent_type: string; description: string; prompt: string; skills?: string[]; timeout_sec?: number; notify?: "wake" | "silent" }, toolCallId: string, ctx: any): WorkerSpawnSpec | string;
+  prepareSpawn(params: { subagent_type: string; description: string; prompt: string; skills?: string[]; notify?: "wake" | "silent" }, toolCallId: string, ctx: any): WorkerSpawnSpec | string;
   /** Called when a tool showed the model these outcomes, so the push delivery skips them. */
   consumed(records: WorkerRecord[], kind?: "settled" | "question"): void;
 }
@@ -37,7 +37,6 @@ export function registerWorkerTools(pi: ExtensionAPI, host: WorkerToolsHost): vo
       description: Type.String({ description: "A short (3-5 word) description of the task (shown in UI)." }),
       prompt: Type.String({ description: "The task for the worker. It starts with an empty context: state everything it needs." }),
       skills: Type.Optional(Type.Array(Type.String(), { description: "Skill names to preload into the worker's prompt. Only skills marked as usable by subagents in your skills catalog are accepted." })),
-      timeout_sec: Type.Optional(Type.Number({ description: "Stop the worker after this many seconds (it is asked to wrap up, then killed). Omit for the configured default.", minimum: 30 })),
       notify: Type.Optional(Type.Union([Type.Literal("wake"), Type.Literal("silent")], { description: "\"wake\" (default): its result starts a turn if you are idle. \"silent\": the result waits for your next turn." })),
     }),
     async execute(toolCallId, params: any, _signal, _onUpdate, ctx) {
@@ -101,7 +100,7 @@ export function registerWorkerTools(pi: ExtensionAPI, host: WorkerToolsHost): vo
   pi.registerTool({
     name: "agent_status",
     label: "Agent status",
-    description: "Show workers: with no id, a line per worker; with an id, its state, current activity, pending question, and full result.",
+    description: "Show workers: with no id, a line per worker with its turn, current step and how long it has been at it, and when the model last produced output; with an id, also the tail of what it is writing or thinking, any pending question, and the full result.",
     parameters: Type.Object({ id: Type.Optional(Type.String()) }),
     async execute(_toolCallId, params: any) {
       const manager = host.manager();
@@ -173,8 +172,10 @@ function renderWait(outcome: WaitOutcome, manager: WorkerManager, unknown: strin
 export function statusLine(record: WorkerRecord, now: number): string {
   const elapsed = formatDuration((record.settledAt ?? now) - (record.startedAt ?? record.createdAt));
   const parts = [`${record.id} [${record.status}]`, `${record.spec.type}: ${record.spec.description}`, elapsed, `${record.toolUses} tools`];
+  if (record.status === "running") parts.push(`turn ${record.turns + 1}`);
+  if (record.status === "running" && record.step) parts.push(`${record.step.label} for ${formatDuration(now - record.step.since)}`);
   if (record.question) parts.push(`asks: ${record.question.text}`);
-  else if (record.activity) parts.push(`in ${record.activity.toolName} ${record.activity.summary} for ${formatDuration(now - record.activity.startedAt)}`);
+  if (record.status === "running") parts.push(record.lastOutputAt ? `last output ${formatDuration(now - record.lastOutputAt)} ago` : "no output yet");
   if (record.status === "running" && now - record.lastEventAt > 60_000) parts.push(`silent ${formatDuration(now - record.lastEventAt)}`);
   if (record.result?.summary && !ACTIVE_STATUSES.has(record.status)) parts.push(record.result.summary);
   return parts.join(" · ");
@@ -183,6 +184,7 @@ export function statusLine(record: WorkerRecord, now: number): string {
 export function statusDetail(record: WorkerRecord, now: number): string {
   const lines = [statusLine(record, now)];
   if (record.progress) lines.push(`Progress: ${record.progress}`);
+  if (record.status === "running" && record.outputTail.trim()) lines.push(`Latest output: …${record.outputTail.replace(/\s+/g, " ").trim()}`);
   if (record.error) lines.push(`Error: ${record.error}`);
   const result = record.result;
   if (result && !ACTIVE_STATUSES.has(record.status)) {

@@ -13,7 +13,6 @@ export function createExploreAgent(config: PiPiConfig) {
       model,
       ref: config.agents.subagents.simple.explore.model,
       thinking,
-      max_turns: config.agents.subagents.simple.explore.maxTurns,
     },
     prompt: [
       identityBlock(description, thinking),

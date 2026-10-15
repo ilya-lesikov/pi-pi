@@ -296,7 +296,8 @@ export function delegationBlock(
     "  user can answer, ask them, then send their answer.",
     "- agent_status(id) shows what a worker is doing; agent_stop(id, mode) stops it: \"graceful\"",
     "  (wrap up), \"kill\" (now, even if stuck), \"tool\" (cancel only the call it is stuck in).",
-    "  A worker reported silent is stuck more often than slow: inspect it, then stop it.",
+    "  Workers have no turn or time limit: you decide when one is stuck or done. A worker reported",
+    "  silent is stuck more often than slow: inspect it, then stop it.",
     ...(shareableSkills.includes("code-rules") ? ['Pass skills: ["code-rules"] on every spawn that writes code.'] : []),
     "</delegation>",
   ].join("\n");

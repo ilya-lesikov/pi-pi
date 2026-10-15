@@ -14,6 +14,7 @@ function record(overrides: Partial<WorkerRecord> = {}): WorkerRecord {
     turns: 2,
     toolUses: 3,
     lastText: "",
+    outputTail: "",
     result: { status: "done", summary: "found x", body: "x is at a.ts:1" },
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
     runUsage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },

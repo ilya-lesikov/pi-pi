@@ -97,10 +97,10 @@ function installSubagentsMock(_pi?: unknown, opts?: { spawnError?: string }) {
   const stopped: string[] = [];
   const listeners = new Set<(settled: any) => void>();
   (globalThis as any)[WORKERS_KEY] = {
-    spawn(request: { type: string; prompt: string; description: string; owner: string; maxTurns?: number }) {
+    spawn(request: { type: string; prompt: string; description: string; owner: string }) {
       if (opts?.spawnError) return { error: opts.spawnError };
       const id = `agent-${++idCounter}`;
-      spawned.push({ id, type: request.type, prompt: request.prompt, options: { description: request.description, owner: request.owner, maxTurns: request.maxTurns } });
+      spawned.push({ id, type: request.type, prompt: request.prompt, options: { description: request.description, owner: request.owner } });
       return { id };
     },
     stop(id: string) {
@@ -223,7 +223,7 @@ describe("TaskExecute", () => {
     expect(rpc.spawned[0].options.owner).toBe("pi-tasks");
   });
 
-  it("passes additional_context and max_turns to spawned agents", async () => {
+  it("passes additional_context to spawned agents", async () => {
     await mock.executeTool("TaskCreate", {
       subject: "Explore codebase",
       description: "Find all API endpoints",
@@ -233,11 +233,9 @@ describe("TaskExecute", () => {
     await mock.executeTool("TaskExecute", {
       task_ids: ["1"],
       additional_context: "Focus on REST endpoints only",
-      max_turns: 10,
     });
 
     expect(rpc.spawned[0].prompt).toContain("Focus on REST endpoints only");
-    expect(rpc.spawned[0].options.maxTurns).toBe(10);
   });
 
   it("allows executing tasks whose blockers are all completed", async () => {

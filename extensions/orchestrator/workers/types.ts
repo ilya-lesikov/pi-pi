@@ -1,4 +1,4 @@
-export type WorkerStatus = "queued" | "running" | "idle" | "completed" | "failed" | "stopped" | "killed" | "stalled" | "timed_out";
+export type WorkerStatus = "queued" | "running" | "idle" | "completed" | "failed" | "stopped" | "killed";
 
 export const ACTIVE_STATUSES: ReadonlySet<WorkerStatus> = new Set(["queued", "running"]);
 
@@ -56,7 +56,18 @@ export interface WorkerSession {
   transcript(): unknown[];
 }
 
+export interface WorkerStep {
+  label: string;
+  since: number;
+}
+
 export interface WorkerSessionHooks {
+  /** A step of building or starting the session, before its first event. */
+  onPhase(phase: string): void;
+  /** What the running session is doing now: waiting for the model, thinking, running a tool… */
+  onStep(label: string): void;
+  /** Any token the model streamed; `tail` is the readable part (thinking or reply), if any. */
+  onOutput(tail?: string): void;
   onEvent(): void;
   onToolStart(toolName: string, summary: string): void;
   onToolEnd(): void;
@@ -78,8 +89,6 @@ export interface WorkerSpawnSpec {
   /** Concrete provider/model spec the definition resolved to. */
   model: string;
   thinking: string;
-  maxTurns?: number;
-  timeoutMs?: number;
   notify: "wake" | "silent";
   resultSchema?: "findings";
   parentToolCallId?: string;
@@ -101,6 +110,13 @@ export interface WorkerRecord {
   turns: number;
   toolUses: number;
   activity?: WorkerActivity;
+  /** Set from the start of a run until the session's first event: the step it is in. */
+  startPhase?: string;
+  /** The current step of a running worker and when it began. */
+  step?: WorkerStep;
+  lastOutputAt?: number;
+  /** The last few hundred characters of thinking or reply the model streamed. */
+  outputTail: string;
   lastText: string;
   progress?: string;
   question?: WorkerQuestion;
@@ -126,4 +142,5 @@ export type WorkerEvent =
   | { type: "settled"; record: WorkerRecord }
   | { type: "question"; record: WorkerRecord }
   | { type: "stall_warning"; record: WorkerRecord }
+  | { type: "phase"; record: WorkerRecord; phase: string }
   | { type: "changed"; record: WorkerRecord };

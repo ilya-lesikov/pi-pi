@@ -168,7 +168,7 @@ export function renderForModel(items: DeliveryItem[], now: number): string {
       return `${head} event="question">\n${record.question?.text ?? ""}\nAnswer with agent_send(id: "${record.id}", message: ...). If only the user can answer, ask them, then send their answer. It waits for you, up to its question timeout.\n</worker>`;
     }
     if (kind === "stall") {
-      return `${head} event="silent" silent_for="${formatDuration(now - record.lastEventAt)}">\nNo activity from this worker${record.activity ? ` (in ${record.activity.toolName}: ${record.activity.summary})` : ""}. Inspect it with agent_status, interrupt the tool with agent_stop(mode: "tool"), or stop it. It is ended automatically if it stays silent.\n</worker>`;
+      return `${head} event="silent" silent_for="${formatDuration(now - record.lastEventAt)}">\nNo activity from this worker${record.activity ? ` (in ${record.activity.toolName}: ${record.activity.summary})` : ""}. Inspect it with agent_status, interrupt the tool with agent_stop(mode: "tool"), or stop it. Nothing stops it automatically; deciding is yours.\n</worker>`;
     }
     const result = record.result;
     const lines = [`${head} event="finished" status="${record.status}" duration="${formatDuration((record.settledAt ?? now) - (record.startedAt ?? record.createdAt))}" tool_uses="${record.toolUses}">`];

@@ -53,12 +53,6 @@ describe("validateConfig", () => {
     );
   });
 
-  it("rejects a turn limit on the main agent", () => {
-    expect(() => validateConfig({ agents: { main: { model: "x/y", thinking: "high", maxTurns: 5 } } })).toThrow(
-      "config.agents.main.maxTurns is not supported",
-    );
-  });
-
   it("throws for an invalid logLevel and tracing value", () => {
     expect(() => validateConfig({ general: { logLevel: "loud" } })).toThrow("config.general.logLevel");
     expect(() => validateConfig({ general: { tracing: "yes" } as any })).toThrow("config.general.tracing");
@@ -124,7 +118,7 @@ describe("validateConfig", () => {
       validateConfig({
         general: { logLevel: "debug", tracing: true },
         agents: { main: { model: "provider/model", thinking: "xhigh" } },
-        performance: { internals: { workerTimeout: "30s" } },
+        performance: { internals: { workerStartTimeout: "30s" } },
       }),
     ).not.toThrow();
   });
@@ -340,8 +334,7 @@ describe("loadConfig", () => {
     const cwd = makeTempDir();
     const defaults = loadConfig(cwd, "/nonexistent/global/config.json");
     expect(defaults.performance.internals.mainTurnStale).toBe(600000);
-    expect(defaults.performance.internals.workerTimeout).toBe(0);
-    expect(defaults.performance.internals.workerStallKill).toBe(900000);
+    expect(defaults.performance.internals.workerStartTimeout).toBe(60000);
 
     const cwd2 = makeTempDir();
     const ppDir = join(cwd2, ".pp");
@@ -352,40 +345,46 @@ describe("loadConfig", () => {
     expect(overridden.performance.internals.workerStallWarn).toBe(1234);
   });
 
-  it("reads the old subagent limit as the worker run limit", () => {
+  it("loads a config written with the retired worker limits and drops them", () => {
     const cwd = makeTempDir();
     const ppDir = join(cwd, ".pp");
     mkdirSync(ppDir, { recursive: true });
-    writeFileSync(join(ppDir, "config.json"), JSON.stringify({ performance: { internals: { subagentStale: "20m" } } }), "utf-8");
+    writeFileSync(join(ppDir, "config.json"), JSON.stringify({
+      performance: { internals: { subagentStale: "20m", workerTimeout: "1h", workerStallKill: "15m" } },
+      agents: {
+        main: { maxTurns: 5 },
+        subagents: { simple: { explore: { maxTurns: 12 } }, pools: { reviewers: [{ model: "claude/opus", thinking: "high", maxTurns: 3 }] } },
+      },
+    }), "utf-8");
     const loaded = loadConfig(cwd, "/nonexistent/global/config.json");
-    expect(loaded.performance.internals.workerTimeout).toBe(1_200_000);
-    expect((loaded.performance.internals as any).subagentStale).toBeUndefined();
+    const internals = loaded.performance.internals as any;
+    expect(internals.subagentStale).toBeUndefined();
+    expect(internals.workerTimeout).toBeUndefined();
+    expect(internals.workerStallKill).toBeUndefined();
+    expect((loaded.agents.main as any).maxTurns).toBeUndefined();
+    expect((loaded.agents.subagents.simple.explore as any).maxTurns).toBeUndefined();
+    expect((loaded.agents.subagents.pools.reviewers[0] as any).maxTurns).toBeUndefined();
+  });
+
+  it("drops the retired worker limits from a file the menu writes back", () => {
+    const filePath = join(makeTempDir(), "config.json");
+    writeFileSync(filePath, JSON.stringify({
+      performance: { internals: { workerTimeout: "1h", workerStallKill: "15m" } },
+      agents: { subagents: { simple: { explore: { model: "claude/opus", thinking: "high", maxTurns: 12 } } } },
+    }), "utf-8");
+    writeConfigValue(filePath, ["general", "logLevel"], "debug");
+    const written = readRawConfig(filePath);
+    expect(written.performance.internals).toEqual({});
+    expect(written.agents.subagents.simple.explore).toEqual({ model: "claude/opus", thinking: "high" });
   });
 
   it("rejects invalid internals durations", () => {
     expect(() => validateConfig({ performance: { internals: { mainTurnStale: "soon" } } })).toThrow(
       "config.performance.internals.mainTurnStale",
     );
-    expect(() => validateConfig({ performance: { internals: { workerStallKill: -1 } } })).toThrow(
-      "config.performance.internals.workerStallKill",
+    expect(() => validateConfig({ performance: { internals: { workerStartTimeout: -1 } } })).toThrow(
+      "config.performance.internals.workerStartTimeout",
     );
-  });
-
-  it("accepts optional per-worker turn limits and rejects invalid values", () => {
-    expect(() => validateConfig({
-      agents: {
-        subagents: {
-          simple: { explore: { maxTurns: 12 } },
-          pools: { reviewers: [{ maxTurns: 0 }] },
-        },
-      },
-    })).not.toThrow();
-    expect(() => validateConfig({
-      agents: { subagents: { simple: { task: { maxTurns: -1 } } } },
-    })).toThrow("config.agents.subagents.simple.task.maxTurns");
-    expect(() => validateConfig({
-      agents: { subagents: { pools: { advisors: [{ maxTurns: 1.5 }] } } },
-    })).toThrow("config.agents.subagents.pools.advisors[0].maxTurns");
   });
 
   it("creates no config file when config.json does not exist", () => {
@@ -415,9 +414,9 @@ describe("loadConfig", () => {
     const configPath = join(ppDir, "config.json");
 
     mkdirSync(ppDir, { recursive: true });
-    writeFileSync(configPath, JSON.stringify({ performance: { internals: { workerTimeout: -1 } } }), "utf-8");
+    writeFileSync(configPath, JSON.stringify({ performance: { internals: { workerStallWarn: -1 } } }), "utf-8");
 
-    expect(() => loadConfig(cwd, "/nonexistent/global/config.json")).toThrow("config.performance.internals.workerTimeout");
+    expect(() => loadConfig(cwd, "/nonexistent/global/config.json")).toThrow("config.performance.internals.workerStallWarn");
   });
 
   it("rejects a merged config whose pool entry lost its model", () => {

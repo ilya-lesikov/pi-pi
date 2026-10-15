@@ -45,9 +45,8 @@ export function createWorkers(orchestrator: Orchestrator, hooks: WorkerHooks, cr
     }),
     maxConcurrent: () => config()?.agents?.maxConcurrentSubagents ?? 4,
     stallWarnMs: () => config()?.performance?.internals?.workerStallWarn ?? 0,
-    stallKillMs: () => config()?.performance?.internals?.workerStallKill ?? 0,
+    startTimeoutMs: () => config()?.performance?.internals?.workerStartTimeout ?? 0,
     questionTimeoutMs: () => config()?.performance?.internals?.workerQuestionTimeout ?? 10 * 60_000,
-    graceTurns: () => 5,
   });
   const delivery = new WorkerDelivery({
     // mainTurnInFlight spans one turn; between turns and while compacting the
@@ -102,6 +101,10 @@ function onWorkerEvent(event: WorkerEvent, hooks: WorkerHooks, delivery: WorkerD
       void Promise.race([decision, timeout]).then((resumed) => { if (!resumed && record.status === "failed") deliver(); });
       break;
     }
+    case "phase":
+      getTracer()?.traceSubagent(record.id, "subagent_phase", { phase: event.phase, modelId: record.modelId });
+      getLogger().debug({ s: "agents", id: record.id, model: record.modelId, phase: event.phase }, "worker start phase");
+      return;
     case "question":
       delivery.enqueue({ kind: "question", record });
       break;
@@ -151,7 +154,7 @@ function systemPromptFor(spec: WorkerSpawnSpec, cwd: string): string {
 }
 
 export interface WorkersHandle {
-  spawn(request: { type: string; description: string; prompt: string; owner: string; maxTurns?: number }): { id: string } | { error: string };
+  spawn(request: { type: string; description: string; prompt: string; owner: string }): { id: string } | { error: string };
   /** Graceful stop; the worker is killed if it does not wrap up in time. */
   stop(id: string): boolean;
   status(id: string): { status: string; summary?: string; error?: string } | undefined;
@@ -189,7 +192,7 @@ export function publishWorkersHandle(orchestrator: Orchestrator, hooks: WorkerHo
       ensureSubscribed();
       const spec = prepareSpawn(orchestrator, hooks, { subagent_type: request.type, description: request.description, prompt: request.prompt }, "", undefined);
       if (typeof spec === "string") return { error: spec };
-      const record = manager.spawn({ ...spec, owner: request.owner, ...(request.maxTurns ? { maxTurns: request.maxTurns } : {}) });
+      const record = manager.spawn({ ...spec, owner: request.owner });
       return { id: record.id };
     },
     stop: (id) => orchestrator.workers?.stop(id) ?? false,
@@ -218,7 +221,7 @@ export function registerWorkerToolsFor(orchestrator: Orchestrator, hooks: Worker
   });
 }
 
-function prepareSpawn(orchestrator: Orchestrator, hooks: WorkerHooks, params: { subagent_type: string; description: string; prompt: string; skills?: string[]; timeout_sec?: number; notify?: "wake" | "silent" }, toolCallId: string, ctx: any): WorkerSpawnSpec | string {
+function prepareSpawn(orchestrator: Orchestrator, hooks: WorkerHooks, params: { subagent_type: string; description: string; prompt: string; skills?: string[]; notify?: "wake" | "silent" }, toolCallId: string, ctx: any): WorkerSpawnSpec | string {
   if (!orchestrator.config) return "Workers are unavailable: the configuration did not load.";
   const requested = String(params.subagent_type ?? "").toLowerCase();
   const valid = registeredAgentNames(orchestrator.config);
@@ -236,16 +239,12 @@ function prepareSpawn(orchestrator: Orchestrator, hooks: WorkerHooks, params: { 
   const preload = hooks.preloadSkills(params.skills);
   if (typeof preload === "string") return preload;
   const prompt = [...preload, String(params.prompt ?? "")].join("\n\n");
-  const defaultTimeout = orchestrator.config.performance.internals.workerTimeout;
-  const timeoutMs = typeof params.timeout_sec === "number" && params.timeout_sec > 0 ? params.timeout_sec * 1000 : defaultTimeout > 0 ? defaultTimeout : undefined;
   return {
     type,
     description: String(params.description ?? type).slice(0, 120),
     prompt,
     model: definition.model,
     thinking: definition.thinking,
-    maxTurns: definition.maxTurns,
-    timeoutMs,
     notify: params.notify === "silent" ? "silent" : "wake",
     ...(type.startsWith("reviewer_") ? { resultSchema: "findings" as const } : {}),
     parentToolCallId: toolCallId,

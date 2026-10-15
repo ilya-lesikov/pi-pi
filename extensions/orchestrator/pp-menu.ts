@@ -90,9 +90,8 @@ const POOL_ITEMS: Array<{ pool: PoolKey; label: string }> = [
 
 const TIMEOUT_ITEMS: Array<{ path: string[]; label: string }> = [
   { path: ["performance", "commands", "afterEdit"], label: "Command after file edit" },
-  { path: ["performance", "internals", "workerTimeout"], label: "Worker run limit (0 = none)" },
   { path: ["performance", "internals", "workerStallWarn"], label: "Worker silent: flag after" },
-  { path: ["performance", "internals", "workerStallKill"], label: "Worker silent: stop after" },
+  { path: ["performance", "internals", "workerStartTimeout"], label: "Worker start: fail after" },
   { path: ["performance", "internals", "workerQuestionTimeout"], label: "Worker question: wait for answer" },
   { path: ["performance", "internals", "workerBashTimeout"], label: "Worker bash default timeout" },
   { path: ["performance", "internals", "mainTurnStale"], label: "Main turn stale" },
@@ -647,27 +646,12 @@ async function showGeneralSettings(orchestrator: Orchestrator, ctx: any): Promis
   }
 }
 
-function turnLimitLabel(maxTurns: number | undefined): string {
-  return maxTurns ? String(maxTurns) : "Unlimited";
-}
-
-async function promptTurnLimit(ctx: any, current: number | undefined): Promise<number | null> {
-  const input = await promptRequiredInput(ctx, `Turn limit [${turnLimitLabel(current)}] (0 = unlimited)`);
-  if (!input) return null;
-  if (!/^\d+$/.test(input)) {
-    ctx.ui?.notify?.("Enter a non-negative integer (0 means unlimited).", "warning");
-    return null;
-  }
-  return Number.parseInt(input, 10);
-}
-
-async function showAgentEditor(orchestrator: Orchestrator, ctx: any, basePath: string[], label: string, getCurrent: () => { model: string; thinking: string; maxTurns?: number }, allowTurnLimit = false): Promise<void> {
+async function showAgentEditor(orchestrator: Orchestrator, ctx: any, basePath: string[], label: string, getCurrent: () => { model: string; thinking: string }): Promise<void> {
   for (;;) {
     const current = getCurrent();
     const choice = await selectOption(ctx, label, [
       opt(`Model: ${refLabel(current.model)}`, routeSummary(current.model)),
       opt(`Thinking: ${thinkingLabel(current.thinking)}`, "Choose how much this agent thinks before acting"),
-      ...(allowTurnLimit ? [opt(`Turn limit: ${turnLimitLabel(current.maxTurns)}`, "Limit agentic turns; unlimited by default")] : []),
       ...buildResetOptions(orchestrator, basePath),
       opt(BACK, "Return to the previous menu"),
     ]);
@@ -682,14 +666,6 @@ async function showAgentEditor(orchestrator: Orchestrator, ctx: any, basePath: s
       const thinking = await pickThinking(ctx, orchestrator, [...basePath, "thinking"]);
       if (!thinking) continue;
       applyScopeChoice(orchestrator, [...basePath, "thinking"], thinking, await pickScope(ctx, orchestrator));
-      continue;
-    }
-    if (choice.startsWith("Turn limit:")) {
-      const maxTurns = await promptTurnLimit(ctx, current.maxTurns);
-      if (maxTurns === null) continue;
-      const scope = await pickScope(ctx, orchestrator);
-      if (!scope) continue;
-      applyScopeChoice(orchestrator, [...basePath, "maxTurns"], maxTurns, scope);
       continue;
     }
     await maybeHandleResetChoice(orchestrator, ctx, choice, basePath);
@@ -720,7 +696,6 @@ async function showPoolEntryEditor(orchestrator: Orchestrator, ctx: any, pool: P
       opt(`Enabled: ${entry.enabled === false ? "No" : "Yes"}`, "Toggle whether this model registers as a subagent"),
       opt(`Model: ${refLabel(entry.model)}`, routeSummary(entry.model)),
       opt(`Thinking: ${thinkingLabel(entry.thinking)}`, "Choose how much this agent thinks before acting"),
-      opt(`Turn limit: ${turnLimitLabel(entry.maxTurns)}`, "Limit agentic turns; unlimited by default"),
       opt("Delete", "Remove this entry from the pool"),
       opt(BACK, "Return to the previous menu"),
     ]);
@@ -744,14 +719,6 @@ async function showPoolEntryEditor(orchestrator: Orchestrator, ctx: any, pool: P
     if (choice.startsWith("Enabled:")) {
       const next = structuredClone(entries);
       next[index] = { ...next[index], enabled: entry.enabled === false };
-      await writePool(orchestrator, ctx, pool, next);
-      continue;
-    }
-    if (choice.startsWith("Turn limit:")) {
-      const maxTurns = await promptTurnLimit(ctx, entry.maxTurns);
-      if (maxTurns === null) continue;
-      const next = structuredClone(entries);
-      next[index] = { ...next[index], maxTurns };
       await writePool(orchestrator, ctx, pool, next);
       continue;
     }
@@ -857,7 +824,7 @@ async function showAgentsSettings(orchestrator: Orchestrator, ctx: any): Promise
     }
     const simple = SIMPLE_ROLES.find((item) => item.label === choice);
     if (simple) {
-      await showAgentEditor(orchestrator, ctx, ["agents", "subagents", "simple", simple.role], simple.label, () => orchestrator.config.agents.subagents.simple[simple.role], true);
+      await showAgentEditor(orchestrator, ctx, ["agents", "subagents", "simple", simple.role], simple.label, () => orchestrator.config.agents.subagents.simple[simple.role]);
       continue;
     }
     const pool = POOL_ITEMS.find((item) => item.label === choice);
@@ -1713,9 +1680,9 @@ async function showWorkers(orchestrator: Orchestrator, ctx: any): Promise<void> 
       byTitle.set(title, record.id);
       const age = formatAge(now - (record.startedAt ?? record.createdAt));
       const detail = record.question
-        ? `asks: ${record.question.text}`
-        : record.activity
-          ? `${age} · in ${record.activity.toolName} ${record.activity.summary}`
+        ? `${record.step ? `${formatAge(now - record.step.since)} · ` : ""}asks: ${record.question.text}`
+        : record.status === "running" && record.step
+          ? `${age} · ${record.step.label}`
           : `${age} · ${record.toolUses} tools${record.result?.summary ? ` · ${record.result.summary}` : record.error ? ` · ${record.error}` : ""}`;
       return opt(title, detail.slice(0, 160));
     });
@@ -1809,7 +1776,7 @@ async function showSettings(orchestrator: Orchestrator, ctx: any): Promise<void>
       opt("Prompt size", "How much of the conversation reaches the model, and when old tool calls fold away"),
       opt("Commands", "Shell commands to run after file edits (formatters, linters)"),
       opt("General", "Log level and tracing"),
-      opt("Performance", "Stale-turn and stale-worker time limits"),
+      opt("Performance", "Main-turn stall recovery, worker silence warning and startup, question and bash timeouts"),
       opt("LSP", "Language server controls"),
       opt(BACK, "Return to the previous menu"),
     ]);

@@ -163,26 +163,27 @@ export default function (pi: ExtensionAPI) {
   /** Latest ExtensionContext — refreshed on every tool execution so cascade always has a valid one. */
   let latestCtx: ExtensionContext | undefined;
   /** Cascade config — set by TaskExecute, consumed by completion listener. */
-  let cascadeConfig: { additionalContext?: string; maxTurns?: number } | undefined;
+  let cascadeConfig: { additionalContext?: string } | undefined;
   /** Maps agent IDs to task IDs for O(1) completion lookup. */
   const agentTaskMap = new Map<string, string>();
 
   // ── Subagent integration ──
   // LOCAL PATCH (pi-pi): task agents run on pi-pi's own workers through a typed
   // handle, replacing the pi-subagents event-bus RPC. Resolved per call: pi-pi
-  // publishes it after this extension may already have loaded.
+  // publishes it after this extension may already have loaded. pi-pi workers
+  // carry no turn limit, so max_turns is gone from TaskExecute.
   type WorkersHandle = {
-    spawn(request: { type: string; description: string; prompt: string; owner: string; maxTurns?: number }): { id: string } | { error: string };
+    spawn(request: { type: string; description: string; prompt: string; owner: string }): { id: string } | { error: string };
     stop(id: string): boolean;
     onSettled(listener: (settled: { id: string; owner?: string; status: string; result?: string; error?: string }) => void): () => void;
   };
   const workers = (): WorkersHandle | undefined => (globalThis as any)[Symbol.for("pi-pi:workers")];
   const WORKER_OWNER = "pi-tasks";
 
-  function spawnSubagent(type: string, prompt: string, options: { description: string; maxTurns?: number }): string {
+  function spawnSubagent(type: string, prompt: string, options: { description: string }): string {
     const handle = workers();
     if (!handle) throw new Error("pi-pi workers are not available");
-    const spawned = handle.spawn({ type, prompt, description: options.description, owner: WORKER_OWNER, maxTurns: options.maxTurns });
+    const spawned = handle.spawn({ type, prompt, description: options.description, owner: WORKER_OWNER });
     if ("error" in spawned) throw new Error(spawned.error);
     debug("spawn:ok", spawned);
     return spawned.id;
@@ -265,7 +266,6 @@ export default function (pi: ExtensionAPI) {
         try {
           const agentId = spawnSubagent(next.metadata.agentType, prompt, {
             description: next.subject,
-            maxTurns: cascadeConfig.maxTurns,
           });
           agentTaskMap.set(agentId, next.id);
           store.update(next.id, { owner: agentId, metadata: { ...next.metadata, agentId } });
@@ -938,15 +938,13 @@ Set up task dependencies:
 ## Parameters
 
 - **task_ids**: Array of task IDs to execute
-- **additional_context**: Extra context appended to each agent's prompt
-- **max_turns**: Maximum turns per agent`,
+- **additional_context**: Extra context appended to each agent's prompt`,
     promptGuidelines: [
       "Never use the Agent tool for tasks launched via TaskExecute — agents are already running.",
     ],
     parameters: Type.Object({
       task_ids: Type.Array(Type.String(), { description: "Task IDs to execute as subagents" }),
       additional_context: Type.Optional(Type.String({ description: "Extra context for agent prompts" })),
-      max_turns: Type.Optional(Type.Number({ description: "Max turns per agent", minimum: 1 })),
     }),
 
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
@@ -989,7 +987,6 @@ Set up task dependencies:
         try {
           const agentId = spawnSubagent(task.metadata.agentType, prompt, {
             description: task.subject,
-            maxTurns: params.max_turns,
           });
           agentTaskMap.set(agentId, taskId);
           store.update(taskId, { owner: agentId, metadata: { ...task.metadata, agentId } });
@@ -1005,7 +1002,6 @@ Set up task dependencies:
       // Save cascade config for the completion listener
       cascadeConfig = {
         additionalContext: params.additional_context,
-        maxTurns: params.max_turns,
       };
 
       widget.update();

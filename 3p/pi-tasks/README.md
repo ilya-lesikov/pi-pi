@@ -168,7 +168,6 @@ Execute one or more tasks as background subagents. Requires [@tintinweb/pi-subag
 | `task_ids` | string[] | Task IDs to execute (required) |
 | `additional_context` | string | Extra context appended to each agent's prompt |
 | `model` | string | Model override (e.g., `"sonnet"`, `"haiku"`) |
-| `max_turns` | number | Max turns per agent |
 
 Tasks must be `pending`, have `agentType` set, and all `blockedBy` dependencies `completed`. Each task spawns as an independent background subagent.
 

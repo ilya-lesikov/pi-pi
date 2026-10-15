@@ -67,7 +67,6 @@ function manager(factory: WorkerManagerOptions["createSession"], overrides: Part
     createSession: factory,
     maxConcurrent: () => 2,
     stallWarnMs: () => 0,
-    stallKillMs: () => 0,
     stopGraceMs: 50,
     tickMs: 10_000,
     ...overrides,
@@ -155,43 +154,83 @@ describe("WorkerManager — never holding the parent", () => {
     expect(sessions[0]!.disposed).toBe(1);
   });
 
-  it("stops and then kills a silent worker as stalled", async () => {
+  it("flags a silent worker once and leaves stopping it to the parent", async () => {
     let now = 1_000;
     const { factory } = fakeFactory({ hangAbort: true });
-    const workers = manager(factory, { now: () => now, stallWarnMs: () => 100, stallKillMs: () => 500, stopGraceMs: 10 });
+    const workers = manager(factory, { now: () => now, stallWarnMs: () => 100, stopGraceMs: 10 });
     const events: string[] = [];
     workers.subscribe((event) => events.push(event.type));
     const record = workers.spawn(spec());
     await flush();
     now += 150;
     workers.tick();
-    expect(events).toContain("stall_warning");
-    expect(record.status).toBe("running");
-    now += 400;
+    expect(events.filter((type) => type === "stall_warning")).toHaveLength(1);
+    now += 24 * 60 * 60_000;
     workers.tick();
     await new Promise((resolve) => setTimeout(resolve, 30));
-    expect(record.status).toBe("stalled");
+    expect(events.filter((type) => type === "stall_warning")).toHaveLength(1);
+    expect(record.status).toBe("running");
   });
 
   it("does not count a worker waiting on its parent's answer as stalled", async () => {
     let now = 1_000;
     const { factory, sessions } = fakeFactory();
-    const workers = manager(factory, { now: () => now, stallWarnMs: () => 0, stallKillMs: () => 100, stopGraceMs: 10 });
+    const workers = manager(factory, { now: () => now, stallWarnMs: () => 100, stopGraceMs: 10 });
+    const events: string[] = [];
+    workers.subscribe((event) => events.push(event.type));
     const record = workers.spawn(spec());
     await flush();
     void sessions[0]!.hooks.askParent("ok?", undefined);
     now += 1_000;
     workers.tick();
+    expect(events).not.toContain("stall_warning");
     expect(record.status).toBe("running");
   });
 
-  it("stops a worker at its timeout", async () => {
-    const { factory } = fakeFactory({ hangAbort: true });
-    const workers = manager(factory, { stopGraceMs: 10 });
-    const record = workers.spawn(spec({ timeoutMs: 20 }));
-    await flush();
+  it("fails a worker whose session never finishes building, naming the step", async () => {
+    const factory = vi.fn((_spec: WorkerSpawnSpec, hooks: WorkerSessionHooks) => {
+      hooks.onPhase("binding extensions");
+      return new Promise<WorkerSession>(() => {});
+    });
+    const workers = manager(factory, { startTimeoutMs: () => 20 });
+    const phases: string[] = [];
+    workers.subscribe((event) => { if (event.type === "phase") phases.push(event.phase); });
+    const record = workers.spawn(spec());
     await new Promise((resolve) => setTimeout(resolve, 60));
-    expect(record.status).toBe("timed_out");
+    expect(record.status).toBe("failed");
+    expect(record.error).toContain("binding extensions");
+    expect(phases).toEqual(["building the session", "binding extensions"]);
+  });
+
+  it("fails a worker whose run never produces an event", async () => {
+    const { factory, sessions } = fakeFactory({ hangAbort: true });
+    const workers = manager(factory, { startTimeoutMs: () => 20 });
+    const record = workers.spawn(spec());
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(record.status).toBe("failed");
+    expect(record.error).toContain("sending the prompt");
+    expect(sessions[0]!.disposed).toBe(1);
+  });
+
+  it("lets a graceful stop of a worker stuck starting settle as stopped", async () => {
+    const factory = vi.fn(() => new Promise<WorkerSession>(() => {}));
+    const workers = manager(factory, { startTimeoutMs: () => 20, stopGraceMs: 40 });
+    const record = workers.spawn(spec());
+    await flush();
+    workers.stop(record.id);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(record.status).toBe("stopped");
+  });
+
+  it("leaves a worker running once its session has produced an event", async () => {
+    const { factory, sessions } = fakeFactory();
+    const workers = manager(factory, { startTimeoutMs: () => 20 });
+    const record = workers.spawn(spec());
+    await flush();
+    sessions[0]!.hooks.onEvent();
+    expect(record.startPhase).toBeUndefined();
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(record.status).toBe("running");
   });
 
   it("unblocks a pending question when the worker is killed", async () => {
@@ -256,6 +295,74 @@ function fakeSessionStub(): WorkerSession {
     transcript: () => [],
   };
 }
+
+describe("WorkerManager — current step", () => {
+  it("tracks the step, when it began, and the last output", async () => {
+    let now = 1_000;
+    const { factory, sessions } = fakeFactory();
+    const workers = manager(factory, { now: () => now });
+    const record = workers.spawn(spec());
+    await flush();
+    const hooks = sessions[0]!.hooks;
+    hooks.onEvent();
+    hooks.onStep("thinking");
+    expect(record.step).toEqual({ label: "thinking", since: 1_000 });
+    now += 500;
+    hooks.onStep("thinking");
+    expect(record.step?.since).toBe(1_000);
+    hooks.onOutput("tail");
+    expect(record.lastOutputAt).toBe(1_500);
+    expect(record.outputTail).toBe("tail");
+    hooks.onToolStart("bash", "ls");
+    expect(record.step).toEqual({ label: "running bash ls", since: 1_500 });
+    void hooks.askParent("which?", undefined);
+    expect(record.step?.label).toBe("waiting for the parent's answer");
+  });
+
+  it("starts a new thinking or reply segment with an empty tail", async () => {
+    const { factory, sessions } = fakeFactory();
+    const workers = manager(factory);
+    const record = workers.spawn(spec());
+    await flush();
+    sessions[0]!.hooks.onOutput("old thoughts");
+    sessions[0]!.hooks.onStep("writing its reply");
+    expect(record.outputTail).toBe("");
+  });
+
+  it("clears the silence flag when the model produces output again, so a later silence warns again", async () => {
+    let now = 1_000;
+    const { factory, sessions } = fakeFactory();
+    const workers = manager(factory, { now: () => now, stallWarnMs: () => 100 });
+    const warnings: string[] = [];
+    workers.subscribe((event) => { if (event.type === "stall_warning") warnings.push(event.record.id); });
+    const record = workers.spawn(spec());
+    await flush();
+    now += 150;
+    workers.tick();
+    expect(record.stallWarned).toBe(true);
+    sessions[0]!.hooks.onOutput("back");
+    expect(record.stallWarned).toBe(false);
+    now += 150;
+    workers.tick();
+    expect(warnings).toHaveLength(2);
+  });
+
+  it("clears the step and output tail when a worker settles and when it resumes", async () => {
+    const { factory, sessions } = fakeFactory();
+    const workers = manager(factory);
+    const record = workers.spawn(spec());
+    await flush();
+    sessions[0]!.hooks.onEvent();
+    sessions[0]!.hooks.onStep("writing its reply");
+    sessions[0]!.hooks.onOutput("partial");
+    sessions[0]!.finishRun("answer");
+    await flush();
+    expect(record.step).toBeUndefined();
+    workers.send(record.id, "more");
+    expect(record.outputTail).toBe("");
+    expect(record.lastOutputAt).toBeUndefined();
+  });
+});
 
 describe("WorkerManager — lifecycle", () => {
   it("queues beyond the concurrency limit and starts the next on settle", async () => {
@@ -359,19 +466,6 @@ describe("WorkerManager — lifecycle", () => {
     expect(record.status).toBe("running");
   });
 
-  it("steers at the turn limit and stops after the grace turns", async () => {
-    const { factory, sessions } = fakeFactory({ hangAbort: true });
-    const workers = manager(factory, { graceTurns: () => 1, stopGraceMs: 10 });
-    const record = workers.spawn(spec({ maxTurns: 2 }));
-    await flush();
-    sessions[0]!.hooks.onTurnEnd();
-    sessions[0]!.hooks.onTurnEnd();
-    expect(sessions[0]!.steers.at(-1)).toContain("turn limit");
-    sessions[0]!.hooks.onTurnEnd();
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    expect(record.status).toBe("completed");
-  });
-
   it("resolves ids by unique prefix", async () => {
     const { factory } = fakeFactory();
     const workers = manager(factory);
@@ -404,8 +498,8 @@ describe("WorkerManager — lifecycle", () => {
 
   it("starts a resumed run with its own text and turn count", async () => {
     const { factory, sessions } = fakeFactory();
-    const workers = manager(factory, { graceTurns: () => 1 });
-    const record = workers.spawn(spec({ maxTurns: 2 }));
+    const workers = manager(factory);
+    const record = workers.spawn(spec());
     await flush();
     sessions[0]!.hooks.onTurnEnd();
     sessions[0]!.finishRun("first answer");
@@ -414,8 +508,6 @@ describe("WorkerManager — lifecycle", () => {
     await flush();
     expect(record.turns).toBe(0);
     expect(record.lastText).toBe("");
-    sessions[0]!.hooks.onTurnEnd();
-    expect(sessions[0]!.steers.some((steer) => steer.includes("turn limit"))).toBe(false);
   });
 
   it("emits nothing while shutting down", async () => {

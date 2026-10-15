@@ -8,7 +8,6 @@ function fm(overrides: Partial<any> = {}) {
     tools: "read, grep",
     model: "m",
     thinking: "low",
-    max_turns: 5,
     ...overrides,
   };
 }
@@ -32,7 +31,7 @@ describe("registerAgentDefinitions", () => {
     expect(getAgentDefinition("a")?.tools).toEqual(["read", "grep", "bash"]);
   });
 
-  it("keeps the registered model, thinking, turn limit and prompt", () => {
+  it("keeps the registered model, thinking and prompt", () => {
     registerAgentDefinitions([{ type: "planner", variant: null, frontmatter: fm({ ref: "claude/opus" }), prompt: "SYS" }]);
     expect(getAgentDefinition("planner")).toEqual({
       name: "planner",
@@ -41,7 +40,6 @@ describe("registerAgentDefinitions", () => {
       model: "m",
       ref: "claude/opus",
       thinking: "low",
-      maxTurns: 5,
       systemPrompt: "SYS",
     });
   });

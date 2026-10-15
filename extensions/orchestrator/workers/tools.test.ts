@@ -27,7 +27,6 @@ function setup() {
     },
     maxConcurrent: () => 4,
     stallWarnMs: () => 0,
-    stallKillMs: () => 0,
   });
   const tools = new Map<string, any>();
   const consumed: WorkerRecord[] = [];
@@ -43,6 +42,32 @@ function setup() {
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe("worker tools", () => {
+  it("shows a running worker's turn, current step, last output and the tail of what it is writing", async () => {
+    const { call, sessions } = setup();
+    await call("Agent", { subagent_type: "explore", description: "d", prompt: "p" });
+    await flush();
+    const hooks = sessions[0]!.hooks;
+    hooks.onEvent();
+    hooks.onTurnEnd();
+    hooks.onStep("thinking");
+    hooks.onOutput("weighing the auth hypothesis");
+    const line = (await call("agent_status", {})).content[0].text;
+    expect(line).toContain("turn 2");
+    expect(line).toMatch(/thinking for \d+s/);
+    expect(line).toMatch(/last output \d+s ago/);
+    const detail = (await call("agent_status", { id: "explore-1" })).content[0].text;
+    expect(detail).toContain("Latest output: …weighing the auth hypothesis");
+  });
+
+  it("shows a worker stuck before it reached the model", async () => {
+    const { call } = setup();
+    await call("Agent", { subagent_type: "explore", description: "d", prompt: "p" });
+    await flush();
+    const line = (await call("agent_status", {})).content[0].text;
+    expect(line).toMatch(/starting: sending the prompt for \d+s/);
+    expect(line).toContain("no output yet");
+  });
+
   it("spawns without waiting and refuses an invalid type", async () => {
     const { call, manager } = setup();
     const started = await call("Agent", { subagent_type: "explore", description: "d", prompt: "p" });

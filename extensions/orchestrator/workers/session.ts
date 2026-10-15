@@ -49,9 +49,11 @@ export function createChildSessionFactory(env: ChildSessionEnv) {
       systemPromptOverride: () => env.systemPrompt(spec),
       appendSystemPromptOverride: () => [],
     });
+    hooks.onPhase("loading worker tools");
     await loader.reload();
     const loadErrors = loader.getExtensions().errors;
     if (loadErrors.length) throw new Error(`worker tools failed to load: ${loadErrors.map((entry: any) => entry.error).join("; ")}`);
+    hooks.onPhase("creating the agent session");
     const { session } = await createAgentSession({
       cwd: env.cwd,
       agentDir,
@@ -65,6 +67,7 @@ export function createChildSessionFactory(env: ChildSessionEnv) {
     });
     session.setSessionName(`${spec.type}: ${spec.description}`);
     interrupt.install(session);
+    hooks.onPhase("binding extensions");
     await session.bindExtensions({});
     return new ChildSession(session, hooks, interrupt, registry);
   };
@@ -133,8 +136,11 @@ class ToolInterrupt {
   }
 }
 
+const OUTPUT_TAIL_CHARS = 300;
+
 class ChildSession implements WorkerSession {
   private text = "";
+  private tail = "";
   private runStart = 0;
   private readonly unsubscribe: () => void;
 
@@ -145,14 +151,20 @@ class ChildSession implements WorkerSession {
   private onEvent(event: AgentSessionEvent): void {
     this.hooks.onEvent();
     switch (event.type) {
+      case "turn_start":
+        this.hooks.onStep("waiting for the model");
+        break;
       case "message_start":
         this.text = "";
         break;
       case "message_update":
-        if (event.assistantMessageEvent?.type === "text_delta") {
-          this.text += event.assistantMessageEvent.delta;
-          this.hooks.onText(this.text);
-        }
+        this.onStream(event.assistantMessageEvent);
+        break;
+      case "auto_retry_start":
+        this.hooks.onStep(`retrying after a provider error (attempt ${event.attempt}/${event.maxAttempts}): ${event.errorMessage.replace(/\s+/g, " ").slice(0, 120)}`);
+        break;
+      case "compaction_start":
+        this.hooks.onStep("compacting its context");
         break;
       case "message_end": {
         const message: any = event.message;
@@ -175,6 +187,33 @@ class ChildSession implements WorkerSession {
         break;
       case "turn_end":
         this.hooks.onTurnEnd();
+        break;
+    }
+  }
+
+  private onStream(update: any): void {
+    switch (update?.type) {
+      case "thinking_start":
+      case "text_start":
+        this.tail = "";
+        this.hooks.onStep(update.type === "thinking_start" ? "thinking" : "writing its reply");
+        break;
+      case "toolcall_start": {
+        const name = update.partial?.content?.[update.contentIndex]?.name;
+        this.hooks.onStep(`writing a ${name ?? "tool"} call`);
+        break;
+      }
+      case "thinking_delta":
+      case "text_delta":
+        this.tail = (this.tail + update.delta).slice(-OUTPUT_TAIL_CHARS);
+        this.hooks.onOutput(this.tail);
+        if (update.type === "text_delta") {
+          this.text += update.delta;
+          this.hooks.onText(this.text);
+        }
+        break;
+      case "toolcall_delta":
+        this.hooks.onOutput();
         break;
     }
   }

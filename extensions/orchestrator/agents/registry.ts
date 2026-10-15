@@ -7,7 +7,6 @@ interface AgentFrontmatter {
   tools: string;
   model: string;
   thinking: string;
-  max_turns?: number;
 }
 
 export interface AgentConfigSnapshot {
@@ -159,7 +158,6 @@ export interface AgentDefinition {
   model: string;
   ref?: string;
   thinking: string;
-  maxTurns?: number;
   systemPrompt: string;
 }
 
@@ -190,7 +188,6 @@ export function registerAgentDefinitions(
       model: agent.frontmatter.model,
       ref: agent.frontmatter.ref,
       thinking: agent.frontmatter.thinking,
-      maxTurns: agent.frontmatter.max_turns,
       systemPrompt: agent.prompt,
     });
   }

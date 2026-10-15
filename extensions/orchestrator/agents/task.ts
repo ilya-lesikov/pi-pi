@@ -13,7 +13,6 @@ export function createTaskAgent(config: PiPiConfig) {
       model,
       ref: config.agents.subagents.simple.task.model,
       thinking,
-      max_turns: config.agents.subagents.simple.task.maxTurns,
     },
     prompt: [
       identityBlock(description, thinking),

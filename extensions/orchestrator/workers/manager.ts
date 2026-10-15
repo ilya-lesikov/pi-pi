@@ -5,14 +5,12 @@ export interface WorkerManagerOptions {
   maxConcurrent: () => number;
   /** Silence before the worker is flagged in the UI and the parent is told once. 0 disables. */
   stallWarnMs: () => number;
-  /** Silence after which the worker is stopped and then killed. 0 disables. */
-  stallKillMs: () => number;
+  /** How long a run may go without its session's first event before the worker fails. 0 disables. */
+  startTimeoutMs?: () => number;
   /** How long a graceful stop waits for the worker to finish before killing it. */
   stopGraceMs?: number;
   /** How long an ask_parent question waits for an answer. */
   questionTimeoutMs?: () => number;
-  /** Turns past maxTurns before the worker is stopped. */
-  graceTurns?: () => number;
   tickMs?: number;
   /** Finished records kept for inspection and resume. */
   retainMs?: number;
@@ -27,7 +25,6 @@ export type WaitOutcome =
   | { kind: "interrupted"; records: WorkerRecord[] };
 
 const WRAP_UP = "[PI-PI] Your parent asked you to stop. Finish now: call submit_result with what you have (status \"partial\" if the work is incomplete) and end your turn.";
-const TURN_LIMIT = "[PI-PI] You have reached your turn limit. Wrap up now: call submit_result with what you have and end your turn.";
 const SUBMIT_REMINDER = "[PI-PI] You ended without calling submit_result. Call it now with your final summary and body; do not redo any work.";
 
 interface Live {
@@ -40,8 +37,7 @@ interface Live {
   questionResolve?: (answer: string | undefined) => void;
   questionTimer?: ReturnType<typeof setTimeout>;
   stopTimer?: ReturnType<typeof setTimeout>;
-  timeoutTimer?: ReturnType<typeof setTimeout>;
-  softLimitHit: boolean;
+  startTimer?: ReturnType<typeof setTimeout>;
   pendingPrompt?: string;
   settledStatus?: WorkerStatus;
 }
@@ -109,6 +105,7 @@ export class WorkerManager {
       turns: 0,
       toolUses: 0,
       lastText: "",
+      outputTail: "",
       usage: emptyUsage(),
       runUsage: emptyUsage(),
       modelId: spec.model,
@@ -118,7 +115,7 @@ export class WorkerManager {
       stallWarned: false,
     };
     this.records.set(id, record);
-    this.live.set(id, { epoch: 0, softLimitHit: false, pendingPrompt: spec.prompt });
+    this.live.set(id, { epoch: 0, pendingPrompt: spec.prompt });
     this.queue.push(id);
     this.emit({ type: "created", record });
     this.drain();
@@ -156,12 +153,13 @@ export class WorkerManager {
     const live = this.live.get(id);
     if (!record || !live?.session || ACTIVE_STATUSES.has(record.status)) return false;
     live.pendingPrompt = prompt;
-    live.softLimitHit = false;
     live.settledStatus = undefined;
     record.status = "queued";
     record.result = undefined;
     record.error = undefined;
     record.lastText = "";
+    record.outputTail = "";
+    record.lastOutputAt = undefined;
     record.progress = undefined;
     record.turns = 0;
     record.undelivered = false;
@@ -341,13 +339,16 @@ export class WorkerManager {
     record.runUsage = emptyUsage();
     this.ensureTicker();
     this.emit({ type: "started", record });
-    if (record.spec.timeoutMs && record.spec.timeoutMs > 0) {
-      if (live.timeoutTimer) clearTimeout(live.timeoutTimer);
-      live.timeoutTimer = setTimeout(() => {
-        live.timeoutTimer = undefined;
-        if (live.epoch === epoch && record.status === "running") this.stop(record.id, "timed_out");
-      }, record.spec.timeoutMs);
-      live.timeoutTimer.unref?.();
+    this.setPhase(record, live.session ? "sending the prompt" : "building the session");
+    const startMs = this.options.startTimeoutMs?.() ?? 0;
+    if (startMs > 0) {
+      if (live.startTimer) clearTimeout(live.startTimer);
+      live.startTimer = setTimeout(() => {
+        live.startTimer = undefined;
+        if (live.epoch !== epoch || record.status !== "running" || record.startPhase === undefined || live.stopTimer) return;
+        this.kill(record.id, "failed", `The worker did not start within ${Math.round(startMs / 1000)}s: it was stuck ${record.startPhase} and never reached the model.`);
+      }, startMs);
+      live.startTimer.unref?.();
     }
     const prompt = live.pendingPrompt ?? record.spec.prompt;
     live.pendingPrompt = undefined;
@@ -362,6 +363,7 @@ export class WorkerManager {
           return;
         }
         live.session = session;
+        if (record.startPhase !== undefined) this.setPhase(record, "sending the prompt");
       }
       await session.run(prompt);
       if (live.epoch !== epoch || record.status !== "running") return;
@@ -390,23 +392,45 @@ export class WorkerManager {
   private hooks(record: WorkerRecord, epoch: number): WorkerSessionHooks {
     const current = () => this.live.get(record.id)?.epoch === epoch && record.status === "running";
     return {
-      onEvent: () => { if (current()) record.lastEventAt = this.now(); },
+      onPhase: (phase) => { if (current() && record.startPhase !== undefined) this.setPhase(record, phase); },
+      onEvent: () => {
+        if (!current()) return;
+        record.lastEventAt = this.now();
+        if (record.startPhase === undefined) return;
+        record.startPhase = undefined;
+        const live = this.live.get(record.id);
+        if (live?.startTimer) clearTimeout(live.startTimer);
+        if (live) live.startTimer = undefined;
+        this.emit({ type: "phase", record, phase: "first event" });
+      },
+      onStep: (label) => {
+        if (!current()) return;
+        if (label === "thinking" || label === "writing its reply") record.outputTail = "";
+        this.setStep(record, label);
+      },
+      onOutput: (tail) => {
+        if (!current()) return;
+        record.lastOutputAt = record.lastEventAt = this.now();
+        record.stallWarned = false;
+        if (tail !== undefined) record.outputTail = tail;
+      },
       onToolStart: (toolName, summary) => {
         if (!current()) return;
         record.toolUses++;
         record.activity = { toolName, summary, startedAt: this.now() };
+        this.setStep(record, `running ${toolName}${summary ? ` ${summary}` : ""}`);
         this.touch(record);
       },
       onToolEnd: () => {
         if (!current()) return;
         record.activity = undefined;
+        this.setStep(record, "finishing its tool calls");
         this.touch(record);
       },
       onTurnEnd: () => {
         if (!current()) return;
         record.turns++;
         this.touch(record);
-        this.enforceTurnLimit(record);
       },
       onUsage: (usage) => {
         if (!current()) return;
@@ -458,6 +482,7 @@ export class WorkerManager {
       };
       live.questionResolve = done;
       record.question = { id: `${record.id}/q${record.turns}`, text, askedAt: this.now() };
+      this.setStep(record, "waiting for the parent's answer");
       record.undelivered = true;
       const timeoutMs = this.options.questionTimeoutMs?.() ?? 10 * 60_000;
       // 0 means the question waits until it is answered or the worker is stopped.
@@ -477,24 +502,23 @@ export class WorkerManager {
     });
   }
 
+  private setPhase(record: WorkerRecord, phase: string): void {
+    record.startPhase = phase;
+    this.setStep(record, `starting: ${phase}`);
+    this.emit({ type: "phase", record, phase });
+  }
+
+  private setStep(record: WorkerRecord, label: string): void {
+    if (record.step?.label === label) return;
+    record.step = { label, since: this.now() };
+  }
+
   private clearQuestion(record: WorkerRecord, live: Live): void {
     if (live.questionTimer) clearTimeout(live.questionTimer);
     live.questionTimer = undefined;
     live.questionResolve = undefined;
     record.question = undefined;
     record.lastEventAt = this.now();
-  }
-
-  private enforceTurnLimit(record: WorkerRecord): void {
-    const max = record.spec.maxTurns;
-    const live = this.live.get(record.id);
-    if (!max || max <= 0 || !live?.session) return;
-    if (!live.softLimitHit && record.turns >= max) {
-      live.softLimitHit = true;
-      live.session.steer(TURN_LIMIT);
-      return;
-    }
-    if (live.softLimitHit && record.turns >= max + (this.options.graceTurns?.() ?? 5)) this.stop(record.id, "completed");
   }
 
   private settle(record: WorkerRecord, status: WorkerStatus, error?: string): void {
@@ -513,6 +537,8 @@ export class WorkerManager {
     record.settledAt = now;
     record.lastEventAt = now;
     record.activity = undefined;
+    record.startPhase = undefined;
+    record.step = undefined;
     if (error) record.error = error;
     if (!record.result && record.lastText.trim()) {
       record.result = { status: status === "completed" ? "unstructured" : "partial", summary: firstLine(record.lastText), body: record.lastText.trim() };
@@ -526,9 +552,9 @@ export class WorkerManager {
 
   private clearTimers(live: Live): void {
     if (live.stopTimer) clearTimeout(live.stopTimer);
-    if (live.timeoutTimer) clearTimeout(live.timeoutTimer);
     if (live.questionTimer) clearTimeout(live.questionTimer);
-    live.stopTimer = live.timeoutTimer = live.questionTimer = undefined;
+    if (live.startTimer) clearTimeout(live.startTimer);
+    live.stopTimer = live.questionTimer = live.startTimer = undefined;
   }
 
   private ensureTicker(): void {
@@ -537,20 +563,13 @@ export class WorkerManager {
     this.ticker.unref?.();
   }
 
-  /** Liveness: flags and then ends workers that have produced nothing for too long. */
+  /** Liveness: flags workers that have produced nothing for too long; the parent decides what to do. */
   tick(): void {
     const now = this.now();
     const warnMs = this.options.stallWarnMs();
-    const killMs = this.options.stallKillMs();
     for (const record of this.list()) {
       if (record.status !== "running" || record.question) continue;
       const silent = now - record.lastEventAt;
-      if (killMs > 0 && silent >= killMs) {
-        const live = this.live.get(record.id);
-        if (live?.stopTimer) continue;
-        this.stop(record.id, "stalled");
-        continue;
-      }
       if (warnMs > 0 && silent >= warnMs && !record.stallWarned) {
         record.stallWarned = true;
         this.emit({ type: "stall_warning", record });

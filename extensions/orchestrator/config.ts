@@ -50,16 +50,12 @@ export type ModelsConfig = Record<FamilyName, FamilyModelsConfig>;
 export interface AgentConfig {
   model: string;
   thinking: string;
-  /** Optional worker turn limit. Omitted or 0 = unlimited. */
-  maxTurns?: number;
 }
 
 export interface PoolEntry {
   model: string;
   thinking: string;
   enabled?: boolean;
-  /** Optional worker turn limit. Omitted or 0 = unlimited. */
-  maxTurns?: number;
 }
 
 export interface PromptcapModelConfig {
@@ -174,12 +170,10 @@ export interface PiPiConfig {
       afterEdit: DurationValue;
     };
     internals: {
-      /** Wall-clock limit for one worker run. 0 disables it. */
-      workerTimeout: DurationValue;
       /** Worker silence before it is flagged. 0 disables. */
       workerStallWarn: DurationValue;
-      /** Worker silence before it is stopped. 0 disables. */
-      workerStallKill: DurationValue;
+      /** How long a worker run may take to produce its first event before it fails. 0 disables. */
+      workerStartTimeout: DurationValue;
       /** How long a worker's question waits for an answer. */
       workerQuestionTimeout: DurationValue;
       /** Timeout a worker's bash call gets when it sets none. 0 disables. */
@@ -195,9 +189,8 @@ export interface NormalizedPiPiConfig extends PiPiConfig {
       afterEdit: number;
     };
     internals: {
-      workerTimeout: number;
       workerStallWarn: number;
-      workerStallKill: number;
+      workerStartTimeout: number;
       workerQuestionTimeout: number;
       workerBashTimeout: number;
       mainTurnStale: number;
@@ -291,9 +284,8 @@ const DEFAULT_CONFIG: PiPiConfig = {
       afterEdit: "30s",
     },
     internals: {
-      workerTimeout: 0,
       workerStallWarn: "3m",
-      workerStallKill: "15m",
+      workerStartTimeout: "1m",
       workerQuestionTimeout: "10m",
       workerBashTimeout: "10m",
       mainTurnStale: "10m",
@@ -491,18 +483,10 @@ export function deepMerge(target: Record<string, any>, source: Record<string, an
   return result;
 }
 
-function ensureOptionalMaxTurns(value: unknown, path: string): void {
-  if (value === undefined) return;
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
-    throw new Error(`${path} must be a non-negative integer (0 means unlimited)`);
-  }
-}
-
 function validateAgentPartial(value: unknown, path: string): void {
   const agent = requireObject(value, path);
   ensureString(agent.model, `${path}.model`);
   ensureString(agent.thinking, `${path}.thinking`);
-  ensureOptionalMaxTurns(agent.maxTurns, `${path}.maxTurns`);
 }
 
 function validatePoolEntryPartial(value: unknown, path: string): void {
@@ -510,7 +494,6 @@ function validatePoolEntryPartial(value: unknown, path: string): void {
   ensureBool(entry.enabled, `${path}.enabled`);
   ensureString(entry.model, `${path}.model`);
   ensureString(entry.thinking, `${path}.thinking`);
-  ensureOptionalMaxTurns(entry.maxTurns, `${path}.maxTurns`);
 }
 
 export function validateConfig(config: Record<string, any>): void {
@@ -571,11 +554,6 @@ export function validateConfig(config: Record<string, any>): void {
 
     if (agents.main !== undefined) {
       validateAgentPartial(agents.main, "config.agents.main");
-      // The root session has no turn limit; a stray maxTurns here would be
-      // silently ignored, so reject it instead.
-      if ((agents.main as Record<string, unknown>).maxTurns !== undefined) {
-        throw new Error("config.agents.main.maxTurns is not supported (the main session is unlimited)");
-      }
     }
 
     if (agents.subagents !== undefined) {
@@ -619,7 +597,7 @@ export function validateConfig(config: Record<string, any>): void {
   }
 }
 
-const INTERNAL_DURATION_KEYS = ["workerTimeout", "workerStallWarn", "workerStallKill", "workerQuestionTimeout", "workerBashTimeout", "mainTurnStale"] as const;
+const INTERNAL_DURATION_KEYS = ["workerStallWarn", "workerStartTimeout", "workerQuestionTimeout", "workerBashTimeout", "mainTurnStale"] as const;
 
 export const MAX_CONCURRENT_SUBAGENTS_CEILING = 1024;
 
@@ -644,7 +622,6 @@ function ensureMergedAgent(agent: AgentConfig, path: string): void {
   if (typeof agent.thinking !== "string" || agent.thinking.length === 0) {
     throw new Error(`${path}.thinking must be a non-empty string`);
   }
-  ensureOptionalMaxTurns(agent.maxTurns, `${path}.maxTurns`);
 }
 
 export function validateMergedConfig(config: Record<string, any>): void {
@@ -732,20 +709,29 @@ function completeProviderOrder(merged: Record<string, any>): void {
   merged.providers.order = [...order, ...PROVIDER_NAMES.filter((name) => !order.includes(name))];
 }
 
-// The old subagent limit was a wall-clock cap on a worker run, which is what
-// workerTimeout is now.
-function renameLegacyWorkerKeys(config: Record<string, any>): void {
+// Workers no longer carry run, turn or silence limits: the parent watches them
+// and decides. A layer written for an older version may still set them.
+function dropRetiredWorkerLimits(config: Record<string, any>): void {
   const internals = config.performance?.internals;
-  if (!isObject(internals) || !("subagentStale" in internals)) return;
-  if (!("workerTimeout" in internals)) internals.workerTimeout = internals.subagentStale;
-  delete internals.subagentStale;
+  if (isObject(internals)) {
+    for (const key of ["subagentStale", "workerTimeout", "workerStallKill"]) delete internals[key];
+  }
+  const agents = config.agents;
+  if (!isObject(agents)) return;
+  const entries: unknown[] = [agents.main];
+  const subagents = isObject(agents.subagents) ? agents.subagents : {};
+  if (isObject(subagents.simple)) entries.push(...Object.values(subagents.simple));
+  if (isObject(subagents.pools)) {
+    for (const pool of Object.values(subagents.pools)) if (Array.isArray(pool)) entries.push(...pool);
+  }
+  for (const entry of entries) if (isObject(entry)) delete entry.maxTurns;
 }
 
 function prepareLayer(raw: Record<string, any> | null, name: string): Record<string, any> | null {
   if (!raw) return null;
   const { config, changed } = migrateConfigLayer(raw);
   if (changed) getLogger().debug({ s: "config", layer: name }, "migrated a config layer from the provider-tier schema in memory");
-  renameLegacyWorkerKeys(config);
+  dropRetiredWorkerLimits(config);
   validateConfig(config);
   return config;
 }
@@ -848,6 +834,7 @@ function readForWrite(configPath: string): Record<string, any> {
     const backup = `${configPath}.pre-routing.bak`;
     if (!existsSync(backup)) copyFileSync(configPath, backup);
   }
+  dropRetiredWorkerLimits(config);
   config.schema = CONFIG_SCHEMA;
   return config;
 }

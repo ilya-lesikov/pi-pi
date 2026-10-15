@@ -355,7 +355,7 @@ export class Orchestrator {
       }
     }
     const signature = definitions
-      .map((d) => `${d.type}_${d.variant ?? ""}:${d.frontmatter.model}:${d.frontmatter.thinking}:${d.frontmatter.max_turns ?? ""}`)
+      .map((d) => `${d.type}_${d.variant ?? ""}:${d.frontmatter.model}:${d.frontmatter.thinking}`)
       .join("|");
     if (!force && signature === this.agentRegistrationSignature) return;
     this.agentRegistrationSignature = signature;

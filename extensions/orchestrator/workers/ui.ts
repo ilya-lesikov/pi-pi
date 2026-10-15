@@ -191,10 +191,14 @@ function recordLines(record: WorkerRecord, now: number, frame: number, theme: Th
   const stalled = record.stallWarned && !record.question;
   const icon = stalled ? theme.fg("warning", "…") : theme.fg("accent", SPINNER[frame % SPINNER.length]!);
   const first = `${icon} ${name} ${stats}${stalled ? ` ${theme.fg("warning", `silent ${formatDuration(silentMs)}`)}` : ""}`;
-  if (record.question) return [first, `  ${theme.fg("warning", `? asks: ${record.question.text.replace(/\s+/g, " ")}`)}`];
-  const activity = record.activity
-    ? `${record.activity.toolName}${record.activity.summary ? ` ${record.activity.summary}` : ""} (${formatDuration(now - record.activity.startedAt)})`
-    : record.progress ?? (record.lastText ? lastLine(record.lastText) : "thinking…");
+  if (record.question) {
+    const waited = record.step ? ` (${formatDuration(now - record.step.since)})` : "";
+    return [first, `  ${theme.fg("warning", `? asks${waited}: ${record.question.text.replace(/\s+/g, " ")}`)}`];
+  }
+  const step = record.step
+    ? `${record.step.label} (${formatDuration(now - record.step.since)})${record.lastOutputAt ? ` · last output ${formatDuration(now - record.lastOutputAt)} ago` : ""}`
+    : undefined;
+  const activity = [record.progress, step].filter(Boolean).join(" · ") || (record.lastText ? lastLine(record.lastText) : "thinking…");
   return [first, `  ${theme.fg("dim", `⎿  ${activity}`)}`];
 }
 
@@ -388,7 +392,7 @@ export class WorkerViewer implements Component {
       }
     }
     if (!messages.length) out.push(th.fg("dim", record.status === "queued" ? "(queued)" : "(no transcript retained)"));
-    if (record.status === "running" && record.activity) out.push("", th.fg("accent", `▍ ${record.activity.toolName} ${record.activity.summary} (${formatDuration(Date.now() - record.activity.startedAt)})`));
+    if (record.status === "running" && record.step) out.push("", th.fg("accent", `▍ ${record.step.label} (${formatDuration(Date.now() - record.step.since)})`));
     if (record.result && !ACTIVE_STATUSES.has(record.status)) push(th.fg("success", `[Result: ${record.result.status}]`), [record.result.summary, record.result.body !== record.result.summary ? record.result.body : ""].filter(Boolean).join("\n\n"));
     if (record.error) push(th.fg("error", "[Error]"), record.error, "error");
     return out.map((line) => truncateToWidth(line, width));
