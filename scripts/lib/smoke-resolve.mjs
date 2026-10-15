@@ -62,17 +62,17 @@ function collectTsFiles(dir) {
     const full = join(dir, name);
     const st = statSync(full);
     if (st.isDirectory()) out.push(...collectTsFiles(full));
-    else if (name.endsWith(".ts")) out.push(full);
+    else if (name.endsWith(".ts") && !name.endsWith(".test.ts") && name !== "test-helpers.ts") out.push(full);
   }
   return out;
 }
 
-// Scope the scan to the pi-subagents source only. Other shipped 3p sources reference SDK
+// Scope the scan to pi-pi's own extension source. The shipped 3p sources reference SDK
 // specifiers behind lazy `await import()` guards that are intentionally NOT root dependencies;
 // scanning them would produce a permanently failing test.
-const SCAN_DIR = join(PKG_DIR, "3p", "pi-subagents", "src");
+const SCAN_DIR = join(PKG_DIR, "extensions", "orchestrator");
 if (!existsSync(SCAN_DIR)) {
-  fail(`expected shipped source dir missing: 3p/pi-subagents/src`);
+  fail(`expected shipped source dir missing: extensions/orchestrator`);
   process.exit(process.exitCode ?? 1);
 }
 
@@ -93,11 +93,6 @@ function addSpec(spec) {
   if (peerSupplied.has(name)) return;
   required.add(name);
 }
-
-// Floor: these two are the runtime imports that broke consumer installs; assert them explicitly
-// even if the extractor's shape ever changes.
-required.add("croner");
-required.add("nanoid");
 
 const specs = [...required].sort();
 console.log(`  runtime specifiers to resolve: ${specs.join(", ")}`);

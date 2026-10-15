@@ -4,63 +4,16 @@
 patches** that upstream does not have. `git subtree` updates overwrite the
 vendored tree wholesale, so **every update silently reverts these patches.**
 
-Silently is the operative word. The orchestrator couples to `3p/pi-subagents`
-entirely at runtime — events on a shared bus, and spawn options forwarded across
-an `options?: any` RPC boundary. A reverted patch therefore produces no type
-error, no runtime error, and no log line. It just stops working.
-
-This has already happened twice, undetected for months each time. The v0.13.0
-update (`5e1f882`) reverted:
-
-- **`validateCompletion`** (added in `0f029ef`) — the post-run hook that
-  re-prompts a planner/reviewer that finished without writing a valid output
-  file. All four callsites kept passing the callback into a manager that no
-  longer read it, so reviewers that wrote only a `REVIEW_STATUS: INCOMPLETE`
-  stub were recorded as completed and never retried. Restored in `cfd6f35`.
-- **`first_tool` / `first_turn` emission** (added in `db7b21f`) — moved into
-  `AgentManager.startAgent` so every spawn path reports first progress, RPC
-  reviewer panels included. `event-handlers.ts` kept subscribing to events
-  nothing emitted, losing the signal that distinguishes a reviewer that actually
-  investigated from one that wrote from context alone. Restored in `11eca17`.
-
-Two other commits (`e0cdffd`, `db88556`) exist purely to repair widget, menu,
-and agent-registration wiring the same update clobbered.
+`pi-subagents` used to be vendored here as well; pi-pi now runs its own workers
+(`extensions/orchestrator/workers/`), so it is gone, and with it the
+`pi-pi:subagent-session-scope` patches pi-lsp and pi-tasks carried. Worker
+sessions load no extensions at all; what they need from these packages reaches
+them through the shared handles listed below.
 
 ## After updating a subtree
 
-Run the contract test first — it machine-checks the couplings that types cannot:
-
-```
-npx vitest run extensions/orchestrator/vendored-contract.test.ts
-```
-
-It fails, naming the specific event or option, when the vendored code stops
-emitting a `subagents:*` event the orchestrator subscribes to, stops handling an
-RPC the orchestrator sends, stops reading a forwarded spawn option, or drops a
-manager-handle method. Then run the guard tests that assert the patched
-behavior actually executes rather than merely being accepted. These must run
-from the package directory so they pick up its own vitest config — it dedupes
-`@earendil-works/pi-ai`, and the root config does not (that is what `npm run
-test:3p` does, and why root `npm test` excludes `3p/**`):
-
-```
-cd 3p/pi-subagents
-npx vitest run test/agent-runner.test.ts -t validateCompletion
-npx vitest run test/agent-runner.test.ts -t "compaction resume"
-npx vitest run test/agent-manager.test.ts -t first_tool
-npx vitest run test/agent-manager.test.ts -t "resumed run"
-npx vitest run test/tool-description-mode.test.ts
-npx vitest run test/blocked-call-rendering.test.ts
-```
-
-To review every local divergence from pristine upstream, diff against the
-upstream side of the subtree merge (`git log --merges -- 3p/pi-subagents/`
-finds it; for v0.13.0 it is `3e55067`):
-
-```
-git diff 3e55067:src HEAD:3p/pi-subagents/src
-```
-
+Run that package's own suite from its directory (`npm run test:3p` runs all of
+them), and `extensions/orchestrator/host-contract.test.ts` after a pi upgrade.
 Patched regions are marked `LOCAL PATCH (pi-pi)` in the vendored source. Keep
 that marker on anything you add, and list it here.
 
@@ -68,36 +21,14 @@ that marker on anything you add, and list it here.
 
 | Extension | What | Where |
 |---|---|---|
-| pi-subagents | `validateCompletion` / `maxValidationRetries` — re-prompt an agent that finished without a valid output file | `src/agent-runner.ts` (`RunOptions`, `runAgent`), `src/agent-manager.ts` (`SpawnOptions`, `startAgent`) |
-| pi-subagents | `first_tool` / `first_turn` emitted at the manager choke point so all spawn paths report first progress | `src/agent-manager.ts` (`startAgent`), `src/types.ts` (`AgentRecord`) |
-| pi-subagents | `graceTurns` default raised 5 → 10 so a reviewer that trips the soft turn limit still has room to write its output file | `src/agent-runner.ts` (`graceTurns`) |
-| pi-subagents | Guard the `onStart`/`onComplete` side-effect callbacks and restore the concurrency slot when a queued start throws, so one failing callback cannot wedge the background queue or reject an unawaited run promise | `src/agent-manager.ts` (`startAgent`, `drainQueue`) |
-| pi-subagents | Opens the `pi-pi:subagent-session-scope` async scope around a subagent's extension load, so pi-pi's extensions can tell an in-process subagent session apart from a root session the host re-instantiated on /new, /resume or fork | `src/agent-runner.ts` (`subagentSessionScope`, `runAgent`) |
-| pi-subagents | Waits out a compaction started from an extension and re-prompts the run it aborted, so a worker compacted mid tool loop finishes its task instead of answering with the narration it had streamed before the cut | `src/agent-runner.ts` (`watchCompactionCuts`, `promptWithEmptyRetry`), guarded by `test/agent-runner.test.ts` "compaction resume" |
-| pi-subagents | Finished agents linger in the widget by wall time (1 h) instead of one main-session turn, the record retention window matches it (1 h, capped at 20 finished records so retained sessions cannot pile up), and the repaint timer idles to 1 s when nothing is running | `src/ui/agent-widget.ts` (`shouldShowFinished`, `ensureTimer`, `update`), `src/agent-manager.ts` (`cleanup`, `MAX_RETAINED_FINISHED`) |
-| pi-subagents | `subagents:created` carries the spawning `toolCallId`, so a subscriber can correlate a worker with the turn that spawned it | `src/index.ts` (background Agent-tool spawn) |
-| pi-subagents | The conversation viewer is full-screen (100% width/height, no margin) and the agents widget is parked while it is open — pi-tui composites overlays into the same line buffer it diffs, so a partial-height overlay tears whenever the content behind it changes | `src/index.ts` (`viewAgentConversation`), `src/ui/conversation-viewer.ts` (`VIEWPORT_HEIGHT_PCT`), `src/ui/agent-widget.ts` (`suspend`, `resume`) |
-| pi-subagents | The completion notification renders a failed agent's error text instead of the "No output." placeholder — a failure's reason was otherwise reachable only through `get_subagent_result` | `src/index.ts` (`subagent-notification` renderer), guarded by `test/notification-error-rendering.test.ts` |
-| pi-subagents | The Agent tool accepts a `skills` list. pi validates tool arguments against the schema before any hook runs, so without it pi-pi's `tool_call` hook, which resolves the names and preloads the skills into the prompt, would never see them | `src/index.ts` (Agent tool `parameters.skills`), guarded by `test/tool-description-mode.test.ts` and `extensions/orchestrator/vendored-contract.test.ts` |
-| pi-subagents | Extension-only mode also drops the `inherit_context` and `isolation` guidance, because pi-pi forces a fresh context and no worktree on every spawn | `src/index.ts` (`ISOLATION_GUIDELINES`, `applyExtensionOnlyToolSurface`), guarded by `test/tool-description-mode.test.ts` |
 | pi-lsp | Server detection looks commands up with `where` on win32 and `which` elsewhere, through `execFileSync` argv rather than a shell string, and keeps the resolved path on `ResolvedServerConfig`. cmd.exe has no `which`, so every built-in failed detection on native Windows and no language server was ever registered | `extensions/lsp/config.ts` (`resolveCommandPath`, `resolveServer`), `extensions/lsp/types.ts` (`ResolvedServerConfig.resolvedPath`), guarded by `test/config.which.local.test.ts` |
 | pi-lsp | `inspectBuiltinServers` reports every built-in with its detection verdict, so the doctor can name a language whose server is missing and the binary it wanted instead of silently omitting it | `extensions/lsp/config.ts`, guarded by `test/config.which.local.test.ts` |
 | pi-tasks | Reminder cadence is driven by observed work (edits, commits) since the last task *mutation* rather than by turns since any task-tool call, never latches after an ignored reminder, escalates instead of repeating, and fires on sustained work with an empty task list. The original fired at most once per session, treated a read-only `TaskList` as maintenance, and was structurally silent when no task had ever been created | `src/reminder-cadence.ts` (whole module), `src/index.ts` (`MUTATING_TASK_TOOLS`, `READ_ONLY_TASK_TOOLS`, `EDITING_TOOLS`, `isCommitCall`, `renderReminder`, `tool_result`/`context` hooks), guarded by `test/reminder-cadence.test.ts` |
 | pi-lsp | `describe()` on the shared API handle reports root path, each server's resolved binary, command line, extensions and running state, optionally spawning each one to prove it runs rather than merely resolves, plus the built-ins that matched nothing. `status` formats prose for a notification, which the doctor cannot judge an install from | `extensions/lsp/index.ts`, consumed by `extensions/orchestrator/doctor.ts` |
 | pi-lsp | `LspClient.recentStderr()` exposes the tail of the server's stderr. A server that dies on spawn explains itself there and nowhere else — a rustup proxy's "Unknown binary" reached the user as "Server process exited" | `extensions/lsp/client.ts` |
 | pi-tasks | The reminder names the drift it observed — which task is still `in_progress`, how many edits and commits have happened since task state last changed — instead of asking the agent to consider whether tracking might be useful | `src/index.ts` (`renderReminder`) |
-| pi-subagents | The Agent result renderer shows the text of a call the host rejected before the tool ran (pi-pi blocks a spawn naming an unregistered agent — the reason arrives with an empty but truthy `details`, which fell through to the abort branch), and it names the turn limit only when the run actually had one | `src/index.ts` (Agent `renderResult`), guarded by `test/blocked-call-rendering.test.ts` |
-| pi-subagents | Extension-only mode drops the `model`/`thinking` guidance from the Agent tool description and marks both parameters inert — the host extension pins them per agent type, and an agent config's model outranks the tool call's argument, so advertising them describes a choice the caller does not have | `src/index.ts` (`MODEL_CHOICE_GUIDELINES`, `applyExtensionOnlyToolSurface`), guarded by `test/tool-description-mode.test.ts` "drops the model and thinking guidance" |
-| pi-subagents | `resume` takes an `emitLifecycle` option and is exposed on the published manager handle, so pi-pi can re-point a worker that died on a rate-limited provider and resume it in place — keeping the transcript it had already built — with the resumed run reporting completion the way a spawned one does. It also installs its own promise and abort controller, since the ones left by the finished run are already settled and no longer reach the session | `src/agent-manager.ts` (`resume`, `runResume`), `src/index.ts` (manager handle), guarded by `test/agent-manager.test.ts` "reports a resumed run through onComplete" and "its own promise and a live abort" |
-| pi-subagents | `listAgents`/`abortAll` on the published manager handle — pi-pi's fleet view, ACP state feed and "stop all workers" call them there, and without them they see no agents and stop nothing | `src/index.ts` (manager handle) |
-| pi-subagents | The agents widget keeps to a share of the terminal's rows, not just its own 12-line cap — a callback widget is composited whole, so an unbounded one scrolls the editor and footer out of the area pi-tui renders differentially against | `src/ui/agent-widget.ts` (`widgetLineBudget`), guarded by `test/agent-widget.test.ts` "share of a short terminal" |
-| pi-tasks | The task widget keeps to a share of the terminal's rows, for the same reason (`showAll` too: a widget taller than the screen is what scrolls the prompt away) | `src/ui/task-widget.ts` (`rowBudget`), guarded by `test/task-widget.test.ts` "share of a short terminal" |
-| pi-tasks | `clearAll` on the global store API; skip lifecycle hooks and shared-handle publication in in-process subagent sessions, snapshotting the `pi-pi:subagent-session-scope` scope at factory time | `src/index.ts` (`isSubagentSession`, store API) |
+| pi-tasks | The task widget keeps to a share of the terminal's rows — a callback widget is composited whole, so an unbounded one (`showAll` too) scrolls the editor and footer out of the area pi-tui renders differentially against | `src/ui/task-widget.ts` (`rowBudget`), guarded by `test/task-widget.test.ts` "share of a short terminal" |
+| pi-tasks | `clearAll` on the global store API | `src/index.ts` (store API) |
+| pi-tasks | `TaskExecute`/`TaskOutput`/`TaskStop` run task agents on pi-pi's workers through the typed `pi-pi:workers` handle (spawn, stop, settlement listener) instead of the pi-subagents event-bus RPC; the `model` parameter is gone because each agent type pins its own model | `src/index.ts` (`workers`, `spawnSubagent`, `stopSubagent`, `listenForSettlements`), guarded by `test/subagent-integration.test.ts` |
 | pi-ask-user | `questions` sequences show a `Question N/M` title and can be walked with alt+←/alt+→ (`AskNavigate` sentinel from the UI layer, index-driven loop in `execute`, revisited answers preselected — cursor row for single-select, ticked rows for multi — and overwritten in place) | `index.ts` (`AskNavigate`/`isNavigate`, `NAV_PREV_KEY`/`NAV_NEXT_KEY`, `previousAnswerIndex`/`previousCheckedIndices`, `MultiSelectList` `checked` argument, `AskComponent` title/help/`handleInput`, `askUser` `navigation`/`checkedIndices` options, `execute` multi-question loop), guarded by `index.test.ts` "multi-question navigation (local patch)" |
-| pi-lsp | Skip session/tool hooks and shared-handle publication in in-process subagent sessions, snapshotting the `pi-pi:subagent-session-scope` scope at factory time (reading it per event would also silence the root session, which never runs inside the scope). A subagent's `lsp` tool borrows the root session's server manager, since nothing disposes a subagent session and its own language servers would leak | `extensions/lsp/index.ts` (`isSubagentSession`, `rootServerManager`) |
-
-Other files also diverge from upstream (`src/index.ts`, `src/agent-types.ts`,
-`src/cross-extension-rpc.ts`, `src/settings.ts`, `src/ui/*`) for widget/menu
-wiring, extension-only mode, event-based agent registration, and RPC
-normalization. Those are large and structural rather than a single hook, so the
-contract test covers their observable couplings instead of enumerating lines.
+| pi-lsp | `registerTool(pi)` on the shared API handle registers the `lsp` tool on another session bound to this one's server manager — pi-pi's worker sessions load no extensions, and their own language servers would leak since nothing would shut them down | `extensions/lsp/index.ts` (API handle), guarded by `test/index.local.test.ts` |
