@@ -119,14 +119,17 @@ export class Connection {
   }
 
   kill(signal: NodeJS.Signals = "SIGTERM"): void {
+    const direct = () => { try { this.child.kill(signal); } catch {} };
     // A .cmd server runs under a shell, and killing the shell leaves the server.
     if (process.platform === "win32" && this.child.pid) {
       try {
-        spawn("taskkill", ["/pid", String(this.child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true }).on("error", () => {});
+        const killer = spawn("taskkill", ["/pid", String(this.child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+        killer.on("error", direct);
+        killer.on("exit", (code) => { if (code !== 0) direct(); });
         return;
       } catch {}
     }
-    try { this.child.kill(signal); } catch {}
+    direct();
   }
 
   /** Resolves once the process has exited, or after `timeoutMs`. */

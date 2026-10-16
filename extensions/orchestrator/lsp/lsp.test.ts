@@ -240,7 +240,20 @@ describe("lsp tool against a live server", () => {
     expect(result.items).toHaveLength(1);
   }, 15_000);
 
-  it("forgets a closed document's diagnostics so a reopen cannot be answered from them", async () => {
+  it("ends a diagnostics wait cleanly when the file is evicted while it settles", async () => {
+    write("a.mock", "fine\n");
+    for (let i = 0; i < 64; i++) write(`f${i}.mock`, "x\n");
+    const current = manager({ mock: mockServer() });
+    await toolFor(current)({ operation: "documentSymbol", filePath: "a.mock" });
+    const client = current.running()[0]!;
+    write("a.mock", "ERROR\n");
+    const pending = client.diagnostics(join(dir, "a.mock"), 2_000);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    for (let i = 0; i < 64; i++) client.sync(join(dir, `f${i}.mock`));
+    await expect(pending).resolves.toMatchObject({ reported: false, items: [] });
+  });
+
+  it("forgets a closed document's diagnostics and gives a reopened one a newer version", async () => {
     write("a.mock", "ERROR\n");
     for (let i = 0; i < 64; i++) write(`f${i}.mock`, "x\n");
     const current = manager({ mock: mockServer() });
@@ -253,6 +266,11 @@ describe("lsp tool against a live server", () => {
     expect(client.knownDiagnostics(join(dir, "a.mock"))).toEqual([]);
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(serverLog().some((message) => message.method === "textDocument/didClose" && message.params.textDocument.uri.endsWith("/a.mock"))).toBe(true);
+    client.sync(join(dir, "a.mock"));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const opens = serverLog().filter((message) => message.method === "textDocument/didOpen" && message.params.textDocument.uri.endsWith("/a.mock"));
+    expect(opens).toHaveLength(2);
+    expect(opens[1].params.textDocument.version).toBeGreaterThan(opens[0].params.textDocument.version);
   });
 
   it("waits out a clearing empty push for the real diagnostics", async () => {

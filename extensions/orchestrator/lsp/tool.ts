@@ -132,8 +132,8 @@ function position(params: LspParams): { line: number; character: number } {
   return { line: Math.max(0, Math.floor(params.line) - 1), character: Math.max(0, Math.floor(params.character) - 1) };
 }
 
-async function prepare(client: LspClient, operation: LspOperation, signal?: AbortSignal): Promise<string> {
-  client.refreshOpenDocuments();
+async function prepare(client: LspClient, operation: LspOperation, signal?: AbortSignal, syncedUri?: string): Promise<string> {
+  client.refreshOpenDocuments(syncedUri);
   if (!PROJECT_WIDE.has(operation)) return "";
   return await client.waitForIndexing(signal) ? `\n\n(${client.def.name} is still indexing the project; results may be incomplete.)` : "";
 }
@@ -232,7 +232,7 @@ async function run(manager: LspManager, params: LspParams, signal?: AbortSignal)
   const pos = POSITION_OPERATIONS.has(operation) ? position(params) : { line: 0, character: 0 };
   const client = await capableClient(manager, absolute, operation, signal);
   const uri = client.sync(absolute);
-  const note = await prepare(client, operation, signal);
+  const note = await prepare(client, operation, signal, uri);
   const shown = displayPath(manager, absolute);
   const root = manager.cwd;
   const at = { textDocument: { uri }, position: pos };

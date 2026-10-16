@@ -300,9 +300,11 @@ export class LspClient {
     return this.documents.size;
   }
 
-  /** Re-sends every open document that changed on disk since it was last sent. */
-  refreshOpenDocuments(): void {
+  /** Re-sends every open document that changed on disk since it was last sent, except one just synced. */
+  refreshOpenDocuments(skipUri?: string): void {
+    const skip = skipUri ? normalizeUri(skipUri) : undefined;
     for (const key of [...this.documents.keys()]) {
+      if (key === skip) continue;
       try {
         this.sync(fileURLToPath(key));
       } catch {
@@ -348,14 +350,19 @@ export class LspClient {
     };
     const deadline = Date.now() + waitMs;
     if (!await this.until(fresh, waitMs, signal)) return { items: this.published.get(key)?.items ?? [], reported: false };
+    // The file can be closed while this waits (another caller opened enough
+    // others to evict it), which drops its publication; that ends the wait.
+    const at = () => this.published.get(key)?.at;
     for (;;) {
-      const seen = this.published.get(key)!.at;
+      const seen = at();
+      if (seen === undefined) break;
       const quiet = Math.min(DIAGNOSTICS_SETTLE_MS - (Date.now() - seen), deadline - Date.now());
       if (quiet <= 0) break;
-      await this.until(() => this.published.get(key)!.at !== seen, quiet, signal);
-      if (this.published.get(key)!.at === seen || signal?.aborted) break;
+      await this.until(() => at() !== seen, quiet, signal);
+      if (at() === seen || signal?.aborted) break;
     }
-    return { items: this.published.get(key)!.items, reported: true };
+    const published = this.published.get(key);
+    return published ? { items: published.items, reported: true } : { items: [], reported: false };
   }
 
   /** The diagnostics already known for a file, without waiting. */
