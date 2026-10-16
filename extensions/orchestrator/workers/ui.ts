@@ -159,11 +159,12 @@ export class WorkerWidget {
     const done = records.length - running - queued;
     const head = [`${running} running`, ...(queued ? [`${queued} queued`] : []), ...(asking ? [theme.fg("warning", `${asking} waiting on you`)] : []), ...(done ? [`${done} done`] : [])];
     const lines = [truncateToWidth(`${theme.fg("accent", "Workers")} ${theme.fg("dim", "·")} ${head.join(theme.fg("dim", " · "))} ${theme.fg("dim", "· /pp › Workers")}`, width)];
-    for (const record of records) {
+    for (const [index, record] of records.entries()) {
       const block = recordLines(record, now, this.frame, theme);
-      if (lines.length + block.length > budget) {
-        const hidden = records.length - records.indexOf(record);
-        lines.push(theme.fg("dim", `  … ${hidden} more`));
+      // Leaves a row for the overflow marker unless this is the last record.
+      if (lines.length + block.length + (index < records.length - 1 ? 1 : 0) > budget) {
+        const hidden = records.length - index;
+        lines.push(truncateToWidth(theme.fg("dim", `  … ${hidden} more`), width));
         break;
       }
       lines.push(...block.map((line) => truncateToWidth(line, width)));
@@ -204,7 +205,7 @@ function recordLines(record: WorkerRecord, now: number, frame: number, theme: Th
 
 function lastLine(text: string): string {
   const lines = text.trim().split("\n").filter((line) => line.trim());
-  return (lines.at(-1) ?? "").replace(/\s+/g, " ");
+  return (lines.at(-1) ?? "").replace(/\s+/g, " ").trim();
 }
 
 /**
