@@ -17,28 +17,23 @@
   },
   "files": [
     "extensions/",
-    "3p/pi-lsp/extensions/",
-    "3p/pi-lsp/package.json",
     "scripts/lib/"
   ],
   "scripts": {
-    "test": "vitest run --exclude '3p/**'",
-    "test:watch": "vitest --exclude '3p/**'",
-    "test:3p": "bash scripts/test-3p.sh",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "test:package": "bash scripts/test-package.sh",
-    "test:all": "vitest run --exclude '3p/**' && bash scripts/test-3p.sh && bash scripts/test-package.sh",
-    "coverage": "vitest run --exclude '3p/**' --coverage"
+    "test:all": "vitest run && bash scripts/test-package.sh",
+    "coverage": "vitest run --coverage"
   },
   "pi": {
     "extensions": [
-      "./extensions/orchestrator",
-      "./3p/pi-lsp/extensions/lsp"
+      "./extensions/orchestrator"
     ]
   },
   "dependencies": {
     "@joplin/turndown-plugin-gfm": "^1.0.64",
     "@pierre/diffs": "^1.2.0",
-    "effect": "^3.0.0",
     "minimatch": "^10.0.0",
     "pino": "^10.3.1",
     "proper-lockfile": "^4.1.2",

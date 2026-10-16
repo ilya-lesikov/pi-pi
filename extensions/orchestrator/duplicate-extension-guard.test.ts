@@ -39,7 +39,7 @@ describe("detectDuplicateExtensions", () => {
 
   it("does NOT flag pi-pi's OWN bundled copy (source under pi-pi root)", () => {
     const tools = [
-      tool("lsp", "/opt/pi-pi/3p/pi-lsp/extensions/lsp/index.ts"),
+      tool("lsp", "/opt/pi-pi/extensions/orchestrator/lsp/tool.ts"),
       tool("Agent", "/opt/pi-pi/extensions/orchestrator/workers/tools.ts"),
       tool("vcc_recall", "/opt/pi-pi/extensions/orchestrator/promptcap/recall.ts"),
     ];
@@ -66,7 +66,7 @@ describe("detectDuplicateExtensions", () => {
 
   it("returns no findings for a clean install (only pi-pi's own tools)", () => {
     const tools = [
-      tool("lsp", "/opt/pi-pi/3p/pi-lsp/extensions/lsp/index.ts"),
+      tool("lsp", "/opt/pi-pi/extensions/orchestrator/lsp/tool.ts"),
       tool("pp_phase_complete", "/opt/pi-pi/extensions/orchestrator/index.ts"),
       tool("web_search", "/opt/pi-pi/extensions/orchestrator/exa.ts"),
     ];
@@ -108,7 +108,7 @@ describe("checkDuplicateExtensions (gate)", () => {
   it("returns false for a clean install and does not notify", () => {
     const notify = vi.fn();
     const pi = {
-      getAllTools: () => [tool("lsp", "/opt/pi-pi/3p/pi-lsp/extensions/lsp/index.ts")],
+      getAllTools: () => [tool("lsp", "/opt/pi-pi/extensions/orchestrator/lsp/tool.ts")],
       getCommands: () => [],
     };
     const gated = checkDuplicateExtensions(pi, { ui: { notify } }, ROOT);

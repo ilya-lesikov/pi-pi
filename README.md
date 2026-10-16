@@ -39,6 +39,28 @@ The tools the agent is told to prefer are installed rather than assumed. ripgrep
 
 Downloads verify what the publisher actually offers — a published digest where there is one, npm's own integrity check for npm packages, a toolchain's own verification for toolchain components — and `/pp → Doctor` reports which of those applied per tool rather than implying a uniform guarantee. A session that cannot reach the network starts anyway, degraded exactly as it would have been before.
 
+## Language servers
+
+The `lsp` tool gives the agent and its workers definitions, references, hover, diagnostics, symbols, call hierarchy and code actions from real language servers. Fourteen are built in (TypeScript/JavaScript, Go, Rust, Python, C/C++, Bash, Lua, Zig, Kotlin, Ruby, C#, Swift, Elixir, Java); five of them are installed on demand, the rest are used when found on `PATH`. A server starts on first use, once per project root — the nearest directory with one of its markers (`go.mod`, `Cargo.toml`, `tsconfig.json`, …) — so a monorepo gets one server per project. Queries that span the project wait for the server to finish indexing; a server that keeps failing to start is retried with a growing delay rather than on every call.
+
+After each successful edit or write, the errors and warnings the file's already-running servers report are appended to the result, at most 20, inside `<diagnostics file="…">`. It never starts a server or waits more than a moment for one; reading a file starts its servers in the background so the next edit finds them ready. Turn it off with `lsp.diagnosticsAfterEdit: false` or `/pp → Settings → LSP`.
+
+`lsp.servers` in the global or project config overrides a built-in field by field or adds a server:
+
+```json
+{
+  "lsp": {
+    "servers": {
+      "typescript": { "command": ["/opt/tsls/bin/typescript-language-server", "--stdio"] },
+      "go": { "enabled": false },
+      "nix": { "command": ["nil"], "extensions": [".nix"], "rootMarkers": ["flake.nix"], "settings": { "nil": { "formatting": { "command": ["nixfmt"] } } } }
+    }
+  }
+}
+```
+
+`settings` answers the server's `workspace/configuration` requests; `initializationOptions` and `env` are passed as given. A project config can only choose the `command` and `env` a server runs once pi trusts the project; until then they are ignored and `/pp → Doctor` says so.
+
 ## Skills
 
 The main prompt contains a compact catalog. Full skill guidance is loaded through `load_skill` and appears as a tagged tool result, so it remains searchable and can be loaded again when no longer salient.

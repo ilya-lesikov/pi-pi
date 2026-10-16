@@ -3,7 +3,7 @@
  *
  * Everything pi-pi installs lands in one directory that is not on the user's
  * PATH, so the directory is prepended to this process's PATH. Every existing
- * lookup — cbm's findCbmBin, pi-lsp's server detection, a plain `which` from a
+ * lookup — cbm's findCbmBin, the lsp tool's server detection, a plain `which` from a
  * tool — then finds an installed binary without knowing provisioning exists.
  * Prepending affects this process and its children only; the user's shell
  * environment is untouched.

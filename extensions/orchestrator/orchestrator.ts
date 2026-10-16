@@ -15,6 +15,7 @@ import type { WorkerSessionFactory } from "./workers/types.js";
 import type { WorkerWidget } from "./workers/ui.js";
 import { publishAcpState } from "./acp.js";
 import type { PromptGuard } from "./promptcap/guard.js";
+import type { LspManager } from "./lsp/manager.js";
 import { getLogger } from "./log.js";
 
 function isEnabled(value: { enabled?: boolean } | undefined): boolean {
@@ -43,6 +44,8 @@ export class Orchestrator {
   workers: WorkerManager | null = null;
   workerDelivery: WorkerDelivery | null = null;
   workerWidget: WorkerWidget | null = null;
+  /** The root session's language servers, shared with its workers; replaced with the session. */
+  lsp: LspManager | null = null;
   /** Replaces how worker sessions are built; for tests that drive workers without a model. */
   workerSessionFactory: WorkerSessionFactory | undefined = undefined;
   /** Workers already put back to work on a new provider tier, retried at most once. */

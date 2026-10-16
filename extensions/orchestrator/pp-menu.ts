@@ -1641,20 +1641,27 @@ export function showUsage(ctx: any): void {
   ctx.ui?.notify?.(lines.join("\n"), "info");
 }
 
-async function showLspSettings(ctx: any): Promise<void> {
+async function showLspSettings(orchestrator: Orchestrator, ctx: any): Promise<void> {
+  const label = "Diagnostics after edits";
+  const desc = "Append what running language servers report to each edit and write";
   for (;;) {
     const choice = await selectOption(ctx, "LSP", [
+      opt(`${label}: ${orchestrator.config.lsp.diagnosticsAfterEdit ? "ON" : "OFF"}`, desc),
       opt("Restart all servers", "Stop all servers. They reinitialize on next use"),
       opt(BACK, "Return to the previous menu"),
     ]);
     if (!choice || choice === BACK) return;
-    const api = (globalThis as any)[Symbol.for("pi-lsp:api")] as { restart?: (menuCtx: any) => Promise<void> } | undefined;
-    if (!api?.restart) {
-      ctx.ui?.notify?.("LSP API is not available.", "warning");
+    if (choice.startsWith(`${label}:`)) {
+      await showBooleanSetting(orchestrator, ctx, label, ["lsp", "diagnosticsAfterEdit"], desc, "Leave edit results as they are");
+      continue;
+    }
+    if (!orchestrator.lsp) {
+      ctx.ui?.notify?.("Language servers are not available in this session.", "warning");
       continue;
     }
     try {
-      await api.restart(ctx);
+      await orchestrator.lsp.restart();
+      ctx.ui?.notify?.("Language servers stopped; they start again on next use.", "info");
     } catch (error: any) {
       ctx.ui?.notify?.(`Failed to restart LSP servers: ${error instanceof Error ? error.message : String(error)}`, "error");
     }
@@ -1778,7 +1785,7 @@ async function showSettings(orchestrator: Orchestrator, ctx: any): Promise<void>
       opt("Commands", "Shell commands to run after file edits (formatters, linters)"),
       opt("General", "Log level and tracing"),
       opt("Performance", "Main-turn stall recovery, worker silence warning and startup, question and bash timeouts"),
-      opt("LSP", "Language server controls"),
+      opt("LSP", "Diagnostics after edits, restart language servers"),
       opt(BACK, "Return to the previous menu"),
     ]);
     if (!choice || choice === BACK) return;
@@ -1791,7 +1798,7 @@ async function showSettings(orchestrator: Orchestrator, ctx: any): Promise<void>
     else if (choice === "Commands") await showCommandsSettings(orchestrator, ctx);
     else if (choice === "General") await showGeneralSettings(orchestrator, ctx);
     else if (choice === "Performance") await showTimeoutsSettings(orchestrator, ctx);
-    else if (choice === "LSP") await showLspSettings(ctx);
+    else if (choice === "LSP") await showLspSettings(orchestrator, ctx);
   }
 }
 

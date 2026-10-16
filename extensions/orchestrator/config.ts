@@ -128,6 +128,23 @@ export interface AfterEditCommandConfig {
   enabled?: boolean;
 }
 
+export interface LspServerConfig {
+  command?: string[];
+  extensions?: string[];
+  rootMarkers?: string[];
+  enabled?: boolean;
+  env?: Record<string, string>;
+  initializationOptions?: Record<string, unknown>;
+  settings?: Record<string, unknown>;
+}
+
+export interface LspConfig {
+  /** Append what running language servers report for a file to each edit and write result. */
+  diagnosticsAfterEdit: boolean;
+  /** Overrides of the built-in servers by name, and additional servers. */
+  servers: Record<string, LspServerConfig>;
+}
+
 export interface PiPiConfig {
   general: {
     logLevel: LogLevel;
@@ -136,6 +153,7 @@ export interface PiPiConfig {
   commands: {
     afterEdit: Record<string, AfterEditCommandConfig>;
   };
+  lsp: LspConfig;
   // Global/ancestor/project AGENTS.md + CLAUDE.md injection. Six independent
   // toggles = 3 scopes × 2 file types.
   contextInjection: {
@@ -212,6 +230,10 @@ const DEFAULT_CONFIG: PiPiConfig = {
   },
   commands: {
     afterEdit: {},
+  },
+  lsp: {
+    diagnosticsAfterEdit: true,
+    servers: {},
   },
   contextInjection: {
     // All scopes/types ON by default, matching the framework's default breadth
@@ -551,6 +573,8 @@ export function validateConfig(config: Record<string, any>): void {
     }
   }
 
+  if (config.lsp !== undefined) validateLsp(config.lsp);
+
   if (config.agents !== undefined) {
     const agents = requireObject(config.agents, "config.agents");
 
@@ -598,6 +622,37 @@ export function validateConfig(config: Record<string, any>): void {
       const internals = requireObject(performance.internals, "config.performance.internals");
       for (const key of INTERNAL_DURATION_KEYS) ensureDuration(internals[key], `config.performance.internals.${key}`);
     }
+  }
+}
+
+function ensureStringList(value: unknown, path: string): void {
+  if (value !== undefined && (!Array.isArray(value) || value.some((entry) => typeof entry !== "string" || entry.length === 0))) {
+    throw new Error(`${path} must be an array of non-empty strings`);
+  }
+}
+
+// Partial per layer, like afterEdit: a project may set only `enabled` on a
+// server the built-ins or the global layer define. Completeness is checked
+// once the layers are resolved, where a server missing its command is reported.
+function validateLsp(value: unknown): void {
+  const lsp = requireObject(value, "config.lsp");
+  ensureBool(lsp.diagnosticsAfterEdit, "config.lsp.diagnosticsAfterEdit");
+  if (lsp.servers === undefined) return;
+  const servers = requireObject(lsp.servers, "config.lsp.servers");
+  for (const [name, entry] of Object.entries(servers)) {
+    const path = `config.lsp.servers.${name}`;
+    const server = requireObject(entry, path);
+    ensureStringList(server.command, `${path}.command`);
+    if (Array.isArray(server.command) && server.command.length === 0) throw new Error(`${path}.command must not be empty`);
+    ensureStringList(server.extensions, `${path}.extensions`);
+    ensureStringList(server.rootMarkers, `${path}.rootMarkers`);
+    ensureBool(server.enabled, `${path}.enabled`);
+    if (server.env !== undefined) {
+      const env = requireObject(server.env, `${path}.env`);
+      for (const [key, val] of Object.entries(env)) if (typeof val !== "string") throw new Error(`${path}.env.${key} must be a string`);
+    }
+    if (server.initializationOptions !== undefined) requireObject(server.initializationOptions, `${path}.initializationOptions`);
+    if (server.settings !== undefined) requireObject(server.settings, `${path}.settings`);
   }
 }
 
@@ -923,6 +978,23 @@ export function removeConfigValue(configPath: string, keyPath: string[]): void {
   } finally {
     release();
   }
+}
+
+/**
+ * `lsp.servers` per layer, unmerged: whether a project may choose the command
+ * a server runs depends on whether pi trusts the project, which the merged
+ * config no longer shows.
+ */
+export function readLspServerLayers(cwd: string, globalConfigPath = GLOBAL_CONFIG_PATH): { global?: Record<string, LspServerConfig>; project?: Record<string, LspServerConfig> } {
+  const servers = (path: string) => {
+    try {
+      const value = loadJsonFile(path)?.lsp?.servers;
+      return isObject(value) ? (value as Record<string, LspServerConfig>) : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  return { global: servers(globalConfigPath), project: servers(join(cwd, ".pp", "config.json")) };
 }
 
 export function loadConfig(cwd: string, globalConfigPath = GLOBAL_CONFIG_PATH): NormalizedPiPiConfig {

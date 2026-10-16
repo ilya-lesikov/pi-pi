@@ -3,9 +3,8 @@
 # directory OUTSIDE this checkout, and verify the shipped extension artifact resolves its
 # runtime imports from the installed tree alone.
 #
-# Why this exists: the root `npm test` excludes 3p/** and the vendored suites run inside
-# 3p/*/node_modules, so a bare import that a vendored extension needs but the root package
-# forgets to declare is invisible in the dev checkout (its node_modules still has the package).
+# Why this exists: a bare import the package needs but forgets to declare is invisible in
+# the dev checkout (its node_modules still has the package).
 # It only surfaces after a clean `npm install` by a consumer — exactly the croner/nanoid
 # regression this guards against. Resolving bare specifiers from the installed package tree is
 # the only shape that reproduces that failure.

@@ -16,9 +16,9 @@ function makeAgentDir(packages: unknown): string {
 }
 
 /** Run the doctor against a throwaway agent dir and return everything it reported. */
-async function report(agentDir: string, modelRegistry?: unknown): Promise<string> {
+async function report(agentDir: string, modelRegistry?: unknown, lsp?: unknown): Promise<string> {
   process.env.PI_CODING_AGENT_DIR = agentDir;
-  const orchestrator: any = { cwd: agentDir, config: normalizeConfigDurations(getDefaultConfig()) };
+  const orchestrator: any = { cwd: agentDir, config: normalizeConfigDurations(getDefaultConfig()), lsp: lsp ?? null };
   let text = "";
   await runDoctor(orchestrator, { modelRegistry, ui: { notify: (message: string) => { text = message; } } }, { probes: false, probeServers: false });
   return text;
@@ -104,7 +104,7 @@ describe("runDoctor", () => {
     // being published produces no error, only behavior that quietly stops.
     const text = await report(makeAgentDir([]));
 
-    for (const key of ["pi-lsp:api", "pi-pi:cbm-daemon", "pi-pi:usage-tracker"]) {
+    for (const key of ["pi-pi:cbm-daemon", "pi-pi:usage-tracker"]) {
       expect(text).toContain(key);
     }
   });
@@ -128,7 +128,7 @@ describe("runDoctor", () => {
   it("surfaces a language server that resolves but does not run, with its stderr", async () => {
     // The rustup-proxy shape: detection passes, the process dies on spawn, and
     // the reason exists only in stderr the user never sees.
-    (globalThis as any)[Symbol.for("pi-lsp:api")] = {
+    const lsp = {
       describe: async () => ({
         rootPath: "/repo",
         servers: [{
@@ -142,19 +142,17 @@ describe("runDoctor", () => {
           stderr: ["error: Unknown binary 'rust-analyzer' in official toolchain"],
         }],
         missing: [{ name: "go", command: ["gopls"], extensions: [".go"] }],
-        errors: [],
-        globalDisabled: false,
+        errors: ["zig: needs a non-empty command"],
+        untrusted: ["python"],
       }),
     };
-    try {
-      const text = await report(makeAgentDir([]));
-      expect(text).toContain("rust: rust-analyzer resolves but does not run");
-      expect(text).toContain("Unknown binary 'rust-analyzer' in official toolchain");
-      // A language with no server at all must be named, not silently omitted.
-      expect(text).toContain("go: no server for .go — wants gopls");
-    } finally {
-      delete (globalThis as any)[Symbol.for("pi-lsp:api")];
-    }
+    const text = await report(makeAgentDir([]), undefined, lsp);
+    expect(text).toContain("rust: rust-analyzer resolves but does not run");
+    expect(text).toContain("Unknown binary 'rust-analyzer' in official toolchain");
+    // A language with no server at all must be named, not silently omitted.
+    expect(text).toContain("go: no server for .go — wants gopls");
+    expect(text).toContain("LSP config error: zig: needs a non-empty command");
+    expect(text).toContain("python: the project's command and env for this server are ignored");
   });
 
   it("skips network probes when asked, so it works offline", async () => {

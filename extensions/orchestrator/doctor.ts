@@ -209,7 +209,6 @@ export async function runDoctor(orchestrator: Orchestrator, ctx: any, options: D
   // Extensions couple to each other through globalThis handles rather than
   // imports, so a missing one is invisible to types and to the type checker.
   const handles: Array<[string, string]> = [
-    ["pi-lsp API", "pi-lsp:api"],
     ["CBM daemon", "pi-pi:cbm-daemon"],
     ["usage tracker", "pi-pi:usage-tracker"],
     ["root session source", "pi-pi:root-session-source"],
@@ -250,16 +249,11 @@ export async function runDoctor(orchestrator: Orchestrator, ctx: any, options: D
 
   category("LSP");
   await guard("LSP check failed", async () => {
-    const api = (globalThis as any)[Symbol.for("pi-lsp:api")] as { describe?: (cwd: string, probe?: boolean) => Promise<any> } | undefined;
-    if (!api?.describe) {
-      add("warning", "LSP API not available — cannot report server state");
+    if (!orchestrator.lsp) {
+      add("warning", "Language servers are not set up for this session");
       return;
     }
-    const state = await api.describe(orchestrator.cwd, probeServers);
-    if (state.globalDisabled) {
-      add("warning", "All LSP servers are disabled by config");
-      return;
-    }
+    const state = await orchestrator.lsp.describe(probeServers);
     if (state.servers.length === 0) add("warning", "No language server detected for this machine");
     for (const server of state.servers) {
       if (server.probe === "failed") {
@@ -267,16 +261,20 @@ export async function runDoctor(orchestrator: Orchestrator, ctx: any, options: D
         detail(`path: ${server.resolvedPath ?? "unknown"}`);
         if (server.error) detail(`error: ${server.error}`);
         // Where a shim reports why it cannot run, and the only place it does.
-        for (const line of server.stderr ?? []) detail(`stderr: ${line}`);
+        for (const line of server.stderr) detail(`stderr: ${line}`);
         continue;
       }
-      add("pass", `${server.name}: ${server.running ? "running" : "starts"} — handles ${server.extensions.join(", ")}`);
+      add("pass", `${server.name}: ${server.running ? "running" : server.probe === "ok" ? "starts" : "installed"} — handles ${server.extensions.join(", ")}`);
       detail(`path: ${server.resolvedPath ?? "unknown"}`);
     }
     for (const absent of state.missing) {
       add("warning", `${absent.name}: no server for ${absent.extensions.join(", ")} — wants ${absent.command.join(" ")}`);
     }
-    for (const error of state.errors ?? []) add("failure", `LSP config error: ${error}`);
+    for (const error of state.errors) add("failure", `LSP config error: ${error}`);
+    for (const name of state.untrusted) {
+      add("warning", `${name}: the project's command and env for this server are ignored until pi trusts the project`);
+    }
+    add("pass", `Diagnostics after edits: ${orchestrator.config.lsp.diagnosticsAfterEdit ? "on" : "off"}`);
   });
 
   category("Skills");

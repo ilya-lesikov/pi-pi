@@ -1,7 +1,7 @@
 import { isAbsolute, relative, resolve, sep } from "path";
 import { Type } from "@sinclair/typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { loadConfig, getDefaultConfig, normalizeConfigDurations } from "./config.js";
+import { loadConfig, getDefaultConfig, normalizeConfigDurations, readLspServerLayers } from "./config.js";
 import { getLogger, initSessionLogger, setLogLevel, flushLogs } from "./log.js";
 import { initTracer, finalizeTracer, getTracer } from "./tracer.js";
 import { forgetMissingCbmBin, registerCbmTools } from "./cbm.js";
@@ -28,6 +28,8 @@ import { clearAllPauses, demoteUnusableSubscription, handleMainAuthFailure, hand
 import { adjudicateCheckIn, adjudicateContinuation } from "./continuation-adjudicator.js";
 import { registerTasks } from "./tasks/index.js";
 import { registerAskUser } from "./ask/index.js";
+import { LspManager } from "./lsp/manager.js";
+import { editDiagnostics, registerLspTool, registerLspWarmup } from "./lsp/tool.js";
 import { createWorkers, registerWorkerToolsFor, resumeOnNewRouting, WORKER_MESSAGE_TYPE, type WorkerHooks } from "./workers/index.js";
 import { registerWorkerUi } from "./workers/ui.js";
 import type { WorkerRecord } from "./workers/types.js";
@@ -470,8 +472,14 @@ export function registerWorkerExtension(orchestrator: Orchestrator, pi: Extensio
   registerLoadSkill(pi, cwd, () => config.skills);
   registerSubagentPromptcap(pi, config);
   registerImageShrink(pi, () => config.images);
-  const lsp = (globalThis as any)[Symbol.for("pi-lsp:api")];
-  lsp?.registerTool?.(pi);
+  registerLspTool(pi, () => orchestrator.lsp);
+  const diagnosticsAfterEdit = () => orchestrator.config?.lsp.diagnosticsAfterEdit ?? false;
+  registerLspWarmup(pi, () => orchestrator.lsp, diagnosticsAfterEdit);
+  pi.on("tool_result", async (event: any, ctx: any) => {
+    if (!diagnosticsAfterEdit()) return;
+    const diagnostics = await editDiagnostics(orchestrator.lsp, event, ctx?.signal);
+    if (diagnostics) return { content: [...event.content, { type: "text" as const, text: `\n\n${diagnostics}` }] };
+  });
 }
 
 /** Ends the root session's workers; nothing they would still report has a session to go to. */
@@ -580,6 +588,8 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   registerWorkerUi(orchestrator);
   registerTasks(pi);
   registerAskUser(pi);
+  registerLspTool(pi, () => orchestrator.lsp);
+  registerLspWarmup(pi, () => orchestrator.lsp, () => orchestrator.config?.lsp.diagnosticsAfterEdit ?? false);
   pi.on("message_end", async (event: any) => {
     const message = event?.message;
     if (message?.role === "custom" && message.customType === WORKER_MESSAGE_TYPE) orchestrator.workerDelivery?.confirm(message.details?.deliveryId);
@@ -630,6 +640,8 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       return;
     }
     setLogLevel(orchestrator.config.general.logLevel);
+    void orchestrator.lsp?.shutdown();
+    orchestrator.lsp = new LspManager(ctx.cwd, () => ({ ...readLspServerLayers(ctx.cwd), trusted: ctx.isProjectTrusted?.() ?? true }));
     // Only once the log has somewhere to go, and only when a TUI owns the
     // terminal: in print and RPC mode console output IS the interface.
     if (ctx.hasUI) installConsoleGuard();
@@ -703,21 +715,32 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     return { systemPrompt: renderGenericPrompt(orchestrator, ctx, names) };
   });
 
-  pi.on("tool_result", async (event: any) => {
+  // The afterEdit commands run first: a formatter they include rewrites the
+  // file, and diagnostics taken before it would describe a version that is gone.
+  pi.on("tool_result", async (event: any, ctx: any) => {
     if (!orchestrator.config) return;
     if ((event.toolName !== "edit" && event.toolName !== "write") || event.isError) return;
+    const sections: string[] = [];
     const commands = orchestrator.config.commands.afterEdit;
-    if (Object.keys(commands).length === 0) return;
     const input = event.input as { file_path?: string; filePath?: string; path?: string };
     const filePath = input?.file_path || input?.filePath || input?.path;
     if (!filePath) return;
     const fileInProject = relative(orchestrator.cwd, resolve(orchestrator.cwd, filePath));
-    if (fileInProject === ".." || fileInProject.startsWith(`..${sep}`) || isAbsolute(fileInProject)) return;
-    const results = runAfterEdit(fileInProject, commands, orchestrator.config.performance.commands.afterEdit, orchestrator.cwd);
-    const failures = results.filter((result) => !result.ok);
-    if (failures.length === 0) return;
-    const failureText = failures.map((failure) => `afterEdit command failed: ${failure.command}\n${failure.output}`).join("\n\n");
-    return { content: [...event.content, { type: "text" as const, text: `\n\n<afterEdit>\n${failureText}\n</afterEdit>` }] };
+    const inProject = !(fileInProject === ".." || fileInProject.startsWith(`..${sep}`) || isAbsolute(fileInProject));
+    if (inProject && Object.keys(commands).length > 0) {
+      const results = runAfterEdit(fileInProject, commands, orchestrator.config.performance.commands.afterEdit, orchestrator.cwd);
+      const failures = results.filter((result) => !result.ok);
+      if (failures.length > 0) {
+        const failureText = failures.map((failure) => `afterEdit command failed: ${failure.command}\n${failure.output}`).join("\n\n");
+        sections.push(`<afterEdit>\n${failureText}\n</afterEdit>`);
+      }
+    }
+    if (orchestrator.config.lsp.diagnosticsAfterEdit) {
+      const diagnostics = await editDiagnostics(orchestrator.lsp, event, ctx?.signal);
+      if (diagnostics) sections.unshift(diagnostics);
+    }
+    if (sections.length === 0) return;
+    return { content: [...event.content, { type: "text" as const, text: `\n\n${sections.join("\n\n")}` }] };
   });
 
   pi.on("turn_end", async (event: any, ctx) => {
@@ -843,6 +866,8 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     } finally {
       flushLogs();
       finalizeTracer();
+      void orchestrator.lsp?.shutdown();
+      orchestrator.lsp = null;
       delete (globalThis as any)[USAGE_TRACKER_KEY];
       if (orchestrator.mainTurnTimer) clearInterval(orchestrator.mainTurnTimer);
       clearAllPauses(orchestrator);
