@@ -148,7 +148,7 @@ async function diagnostics(manager: LspManager, absolute: string, signal?: Abort
     try {
       const client = await manager.client(def, absolute);
       const result = await client.diagnostics(absolute, DIAGNOSTICS_WAIT_MS, signal);
-      if (!result.reported) notes.push(`${def.name} reported nothing for this file within ${DIAGNOSTICS_WAIT_MS / 1000}s`);
+      if (!result.reported) notes.push(`${def.name} did not report on the current content within ${DIAGNOSTICS_WAIT_MS / 1000}s; these may be out of date`);
       groups.push({ source: def.name, diagnostics: result.items });
     } catch (error: any) {
       notes.push(error?.message ?? String(error));
@@ -201,7 +201,7 @@ async function workspaceSymbol(manager: LspManager, params: LspParams, signal?: 
     let found: LspClient | undefined;
     for (const def of candidates) {
       try {
-        const candidate = await manager.client(def, manager.cwd);
+        const candidate = await manager.workspaceClient(def);
         if (candidate.hasCapability("workspaceSymbolProvider")) {
           found = candidate;
           break;

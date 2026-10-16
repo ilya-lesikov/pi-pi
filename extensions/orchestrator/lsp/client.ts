@@ -24,7 +24,6 @@ export type ClientState = "starting" | "running" | "stopped" | "failed";
 interface OpenDocument {
   version: number;
   text: string;
-  mtimeMs: number;
   /** When the server was last sent new content for it. */
   changedAt: number;
 }
@@ -37,7 +36,7 @@ interface Published {
 
 export interface DiagnosticsResult {
   items: Diagnostic[];
-  /** False when the server reported nothing for the file within the wait. */
+  /** False when the server said nothing about the file's current content within the wait; `items` may then be older. */
   reported: boolean;
 }
 
@@ -82,6 +81,10 @@ export class LspClient {
   private readonly listeners = new Set<() => void>();
   private readonly progress = new Set<string | number>();
   private sawProgress = false;
+  private readyAt = 0;
+  // One counter for every document, so a reopened file never reuses a version
+  // an older publication for it might still carry.
+  private nextVersion = 1;
 
   constructor(
     readonly def: ServerDef,
@@ -172,6 +175,7 @@ export class LspClient {
     this.capabilities = result?.capabilities ?? {};
     connection.notify("initialized", {});
     if (this.def.settings) connection.notify("workspace/didChangeConfiguration", { settings: this.def.settings });
+    this.readyAt = Date.now();
     this.state = "running";
   }
 
@@ -248,8 +252,8 @@ export class LspClient {
   async waitForIndexing(signal?: AbortSignal): Promise<boolean> {
     // A server announces indexing only after it has initialized; give a fresh
     // one a moment to start reporting before taking silence for idleness.
-    if (!this.sawProgress && Date.now() - this.startedAt < 3_000) {
-      await this.until(() => this.sawProgress, 3_000 - (Date.now() - this.startedAt), signal);
+    if (!this.sawProgress && Date.now() - this.readyAt < 3_000) {
+      await this.until(() => this.sawProgress, 3_000 - (Date.now() - this.readyAt), signal);
     }
     return !await this.until(() => this.progress.size === 0, this.timeouts.indexing, signal);
   }
@@ -264,32 +268,30 @@ export class LspClient {
     const path = resolve(filePath);
     const uri = fileUri(path);
     const key = normalizeUri(uri);
-    const stat = statSync(path);
+    // Content, not mtime, decides: two edits inside one timestamp tick, or a
+    // tool that preserves timestamps, would otherwise leave the server behind.
+    const text = readFileSync(path, "utf8");
     const open = this.documents.get(key);
-    if (open && open.mtimeMs === stat.mtimeMs) {
+    if (open) {
       this.documents.delete(key);
       this.documents.set(key, open);
-      return uri;
-    }
-    const text = readFileSync(path, "utf8");
-    if (!open) {
-      connection.notify("textDocument/didOpen", { textDocument: { uri, languageId: languageIdFor(path), version: 1, text } });
-      this.documents.set(key, { version: 1, text, mtimeMs: stat.mtimeMs, changedAt: Date.now() });
+      if (open.text === text) return uri;
+      open.version = this.nextVersion++;
+      open.text = text;
+      open.changedAt = Date.now();
+      this.pulled.delete(key);
+      connection.notify("textDocument/didChange", { textDocument: { uri, version: open.version }, contentChanges: [{ text }] });
+    } else {
+      const version = this.nextVersion++;
+      connection.notify("textDocument/didOpen", { textDocument: { uri, languageId: languageIdFor(path), version, text } });
+      this.documents.set(key, { version, text, changedAt: Date.now() });
       this.closeOldest();
-      return uri;
     }
-    open.mtimeMs = stat.mtimeMs;
-    if (open.text === text) return uri;
-    open.version++;
-    open.text = text;
-    open.changedAt = Date.now();
-    this.documents.delete(key);
-    this.documents.set(key, open);
-    this.pulled.delete(key);
-    connection.notify("textDocument/didChange", { textDocument: { uri, version: open.version }, contentChanges: [{ text }] });
+    // Some servers only check a file when it is saved, and every sync here
+    // follows a write to disk or a first look at one.
     const sync = this.capabilities.textDocumentSync;
     if (sync && typeof sync === "object" && sync.save) {
-      connection.notify("textDocument/didSave", { textDocument: { uri }, ...(sync.save.includeText ? { text } : {}) });
+      connection.notify("textDocument/didSave", { textDocument: { uri }, ...(typeof sync.save === "object" && sync.save.includeText ? { text } : {}) });
     }
     return uri;
   }
@@ -311,6 +313,8 @@ export class LspClient {
 
   private closeDocument(key: string): void {
     if (!this.documents.delete(key)) return;
+    this.published.delete(key);
+    this.pulled.delete(key);
     this.connection?.notify("textDocument/didClose", { textDocument: { uri: key } });
   }
 
@@ -343,7 +347,7 @@ export class LspClient {
       return published.version !== undefined ? published.version >= document.version : published.at >= document.changedAt;
     };
     const deadline = Date.now() + waitMs;
-    if (!await this.until(fresh, waitMs, signal)) return { items: this.published.get(key)?.items ?? [], reported: this.published.has(key) };
+    if (!await this.until(fresh, waitMs, signal)) return { items: this.published.get(key)?.items ?? [], reported: false };
     for (;;) {
       const seen = this.published.get(key)!.at;
       const quiet = Math.min(DIAGNOSTICS_SETTLE_MS - (Date.now() - seen), deadline - Date.now());

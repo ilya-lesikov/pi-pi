@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -119,7 +119,7 @@ describe("server definitions", () => {
     write("bin/fake-ls", "#!/bin/sh\n");
     write("bin/not-exec", "");
     if (process.platform !== "win32") {
-      require("node:fs").chmodSync(join(bin, "fake-ls"), 0o755);
+      chmodSync(join(bin, "fake-ls"), 0o755);
       expect(which("fake-ls", { PATH: bin })).toBe(join(bin, "fake-ls"));
       expect(which("not-exec", { PATH: bin })).toBeNull();
     }
@@ -154,6 +154,17 @@ describe("lsp tool against a live server", () => {
     const opened = serverLog().filter((message) => message.method === "textDocument/didOpen").map((message) => message.params.textDocument.uri);
     expect(opened).toHaveLength(1);
     expect(opened[0]).toMatch(/src\/a\.mock$/);
+  });
+
+  it("roots a fileless workspace search at the workspace even when an ancestor has the marker", async () => {
+    write("proj.marker", "");
+    write("pkg/proj.marker", "");
+    write("pkg/src/a.mock", "x\n");
+    const current = new LspManager(join(dir, "pkg"), () => ({ global: { mock: mockServer([], { rootMarkers: ["proj.marker"] }) }, trusted: true }), FAST);
+    managers.push(current);
+    expect(await toolFor(current)({ operation: "workspaceSymbol", query: "foo" })).toContain("sym_foo");
+    const roots = serverLog().filter((message) => message.method === "initialize").map((message) => fileURLToPath(message.params.rootUri));
+    expect(roots).toEqual([join(dir, "pkg")]);
   });
 
   it("keeps only the first lines of a server error", async () => {
@@ -197,6 +208,51 @@ describe("lsp tool against a live server", () => {
     const changes = serverLog().filter((message) => message.method === "textDocument/didChange");
     expect(changes).toHaveLength(1);
     expect(changes[0].params.textDocument.version).toBe(2);
+  });
+
+  it("sends an edit the server has not seen even when the file kept its timestamp", async () => {
+    const path = write("a.mock", "fine\n");
+    utimesSync(path, 1_000, 1_000);
+    const lsp = toolFor(manager({ mock: mockServer() }));
+    await lsp({ operation: "diagnostics", filePath: "a.mock" });
+    write("a.mock", "ERROR\n");
+    utimesSync(path, 1_000, 1_000);
+    expect(await lsp({ operation: "diagnostics", filePath: "a.mock" })).toContain("bad thing on line 1");
+  });
+
+  it("saves the file on first open as well as on change, for servers that check on save", async () => {
+    write("a.mock", "x\n");
+    const lsp = toolFor(manager({ mock: mockServer() }));
+    await lsp({ operation: "documentSymbol", filePath: "a.mock" });
+    expect(serverLog().filter((message) => message.method === "textDocument/didSave")).toHaveLength(1);
+  });
+
+  it("does not pass off diagnostics for older content as current when the server is slow", async () => {
+    write("a.mock", "ERROR\n");
+    // Every report arrives 2s after the change: longer than an edit waits, shorter than the tool does.
+    const current = manager({ mock: mockServer(["versioned"], { env: { MOCK_LSP_MODE: "versioned", MOCK_LSP_PUBLISH_DELAY: "2000", MOCK_LSP_LOG: join(dir, "server.log") } }) });
+    const lsp = toolFor(current);
+    expect(await lsp({ operation: "diagnostics", filePath: "a.mock" })).toContain("bad thing");
+    write("a.mock", "fine\n");
+    expect(await editDiagnostics(current, { toolName: "edit", input: { path: "a.mock" } })).toBeNull();
+    const result = await current.running()[0]!.diagnostics(join(dir, "a.mock"), 100);
+    expect(result.reported).toBe(false);
+    expect(result.items).toHaveLength(1);
+  }, 15_000);
+
+  it("forgets a closed document's diagnostics so a reopen cannot be answered from them", async () => {
+    write("a.mock", "ERROR\n");
+    for (let i = 0; i < 64; i++) write(`f${i}.mock`, "x\n");
+    const current = manager({ mock: mockServer() });
+    const lsp = toolFor(current);
+    await lsp({ operation: "diagnostics", filePath: "a.mock" });
+    const client = current.running()[0]!;
+    expect(client.knownDiagnostics(join(dir, "a.mock"))).toHaveLength(1);
+    for (let i = 0; i < 64; i++) client.sync(join(dir, `f${i}.mock`));
+    expect(client.openDocuments).toBe(64);
+    expect(client.knownDiagnostics(join(dir, "a.mock"))).toEqual([]);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(serverLog().some((message) => message.method === "textDocument/didClose" && message.params.textDocument.uri.endsWith("/a.mock"))).toBe(true);
   });
 
   it("waits out a clearing empty push for the real diagnostics", async () => {

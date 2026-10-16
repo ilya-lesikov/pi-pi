@@ -160,7 +160,9 @@ export function findRoot(filePath: string, cwd: string, markers: string[]): stri
 /** Looks a command up on PATH without spawning anything; an absolute or relative path is checked as given. */
 export function which(command: string, env: NodeJS.ProcessEnv = process.env): string | null {
   const windows = process.platform === "win32";
-  const extensions = windows ? ["", ...(env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").map((ext) => ext.toLowerCase())] : [""];
+  // npm puts an extensionless POSIX shell script beside each .cmd shim; on
+  // Windows that script cannot be spawned, so the executable extensions win.
+  const extensions = windows ? [...(env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean).map((ext) => ext.toLowerCase()), ""] : [""];
   const runnable = (candidate: string) => {
     try {
       if (!statSync(candidate).isFile()) return false;

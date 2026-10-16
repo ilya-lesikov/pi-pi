@@ -96,6 +96,12 @@ export class LspManager {
     return this.clientAt(def, findRoot(this.absolute(filePath), this.cwd, def.rootMarkers));
   }
 
+  /** The started client for a server rooted at the workspace itself, for questions about no file in particular. */
+  async workspaceClient(def: ServerDef): Promise<LspClient> {
+    const running = this.running().find((client) => client.def.name === def.name && client.root === resolve(this.cwd));
+    return running ?? this.clientAt(def, resolve(this.cwd));
+  }
+
   /** The client for a server and root, if one is already running; never starts anything. */
   runningClient(def: ServerDef, filePath: string): LspClient | undefined {
     const client = this.clients.get(clientKey(def, findRoot(this.absolute(filePath), this.cwd, def.rootMarkers)));
