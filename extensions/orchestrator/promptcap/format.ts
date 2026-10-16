@@ -38,6 +38,8 @@ const groupSegments = (entries: SearchHit[], hasQuery: boolean): RecallSegment[]
   // If none do but we have a query, treat the entire set as matched.
   const anySnippet = entries.some((e) => e.snippet !== undefined);
   const assumeAllMatched = hasQuery && !anySnippet;
+  // A hit matched only on its role or files has no line to snippet, but it is still a hit.
+  const isMatch = (e: SearchHit) => assumeAllMatched || !!e.snippet || (e.matchCount ?? 0) > 0;
 
   const segments: RecallSegment[] = [];
   let start = 0;
@@ -48,7 +50,7 @@ const groupSegments = (entries: SearchHit[], hasQuery: boolean): RecallSegment[]
       const slice = entries.slice(start, i);
       const matched = new Set<number>();
       for (let j = 0; j < slice.length; j++) {
-        if (assumeAllMatched || slice[j].snippet) matched.add(j);
+        if (isMatch(slice[j])) matched.add(j);
       }
       segments.push({
         range: `#${slice[0].index}` +
@@ -65,7 +67,7 @@ const groupSegments = (entries: SearchHit[], hasQuery: boolean): RecallSegment[]
   if (slice.length > 0) {
     const matched = new Set<number>();
     for (let j = 0; j < slice.length; j++) {
-      if (assumeAllMatched || slice[j].snippet) matched.add(j);
+      if (isMatch(slice[j])) matched.add(j);
     }
     segments.push({
       range: `#${slice[0].index}` +
