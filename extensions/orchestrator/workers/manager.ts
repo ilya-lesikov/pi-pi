@@ -7,6 +7,8 @@ export interface WorkerManagerOptions {
   stallWarnMs: () => number;
   /** How long a run may go without its session's first event before the worker fails. 0 disables. */
   startTimeoutMs?: () => number;
+  /** Silence from the model, with no tool or question in flight, before the request is abandoned and retried. 0 disables. */
+  modelStaleMs?: () => number;
   /** How long a graceful stop waits for the worker to finish before killing it. */
   stopGraceMs?: number;
   /** How long an ask_parent question waits for an answer. */
@@ -26,6 +28,9 @@ export type WaitOutcome =
 
 const WRAP_UP = "[PI-PI] Your parent asked you to stop. Finish now: call submit_result with what you have (status \"partial\" if the work is incomplete) and end your turn.";
 const SUBMIT_REMINDER = "[PI-PI] You ended without calling submit_result. Call it now with your final summary and body; do not redo any work.";
+const CONTINUE_STALLED = "[PI-PI] Your last model request hung without a response and was abandoned. Continue exactly where you left off; do not redo finished work.";
+// A provider that hangs every request is not going to answer the third one either.
+const MAX_STALE_RETRIES = 2;
 
 interface Live {
   session?: WorkerSession;
@@ -40,6 +45,9 @@ interface Live {
   startTimer?: ReturnType<typeof setTimeout>;
   pendingPrompt?: string;
   settledStatus?: WorkerStatus;
+  /** Set when a hung request was aborted, so the run that ends because of it is continued rather than settled. */
+  staleRetry?: boolean;
+  staleRetries?: number;
 }
 
 /**
@@ -337,6 +345,8 @@ export class WorkerManager {
     record.lastEventAt = now;
     record.runs++;
     record.runUsage = emptyUsage();
+    live.staleRetries = 0;
+    live.staleRetry = false;
     this.ensureTicker();
     this.emit({ type: "started", record });
     this.setPhase(record, live.session ? "sending the prompt" : "building the session");
@@ -367,6 +377,12 @@ export class WorkerManager {
       }
       await session.run(prompt);
       if (live.epoch !== epoch || record.status !== "running") return;
+      while (live.staleRetry) {
+        live.staleRetry = false;
+        record.lastEventAt = this.now();
+        await session.run(CONTINUE_STALLED);
+        if (live.epoch !== epoch || record.status !== "running") return;
+      }
       const error = session.lastError();
       if (error && !live.settledStatus) {
         this.settle(record, "failed", error);
@@ -563,13 +579,23 @@ export class WorkerManager {
     this.ticker.unref?.();
   }
 
-  /** Liveness: flags workers that have produced nothing for too long; the parent decides what to do. */
+  /**
+   * Liveness: flags workers that have produced nothing for too long, and the
+   * parent decides what to do. The one exception is a model request that has
+   * gone silent: a connection that hangs without failing is retried by
+   * nothing, and the parent may be waiting on the same provider.
+   */
   tick(): void {
     const now = this.now();
     const warnMs = this.options.stallWarnMs();
+    const staleMs = this.options.modelStaleMs?.() ?? 0;
     for (const record of this.list()) {
       if (record.status !== "running" || record.question) continue;
       const silent = now - record.lastEventAt;
+      if (staleMs > 0 && silent >= staleMs && !record.activity && record.startPhase === undefined) {
+        this.abandonStaleRequest(record, silent);
+        continue;
+      }
       if (warnMs > 0 && silent >= warnMs && !record.stallWarned) {
         record.stallWarned = true;
         this.emit({ type: "stall_warning", record });
@@ -579,6 +605,22 @@ export class WorkerManager {
       clearInterval(this.ticker);
       this.ticker = null;
     }
+  }
+
+  private abandonStaleRequest(record: WorkerRecord, silentMs: number): void {
+    const live = this.live.get(record.id);
+    if (!live?.session || live.stopTimer) return;
+    const minutes = Math.round(silentMs / 60_000);
+    if ((live.staleRetries ?? 0) >= MAX_STALE_RETRIES) {
+      this.kill(record.id, "failed", `The model stopped responding: ${MAX_STALE_RETRIES + 1} requests in a row went ${minutes}m without a response.`);
+      return;
+    }
+    live.staleRetries = (live.staleRetries ?? 0) + 1;
+    live.staleRetry = true;
+    record.lastEventAt = this.now();
+    this.setStep(record, `retrying a model request that hung for ${minutes}m`);
+    live.session.abort();
+    this.emit({ type: "changed", record });
   }
 
   private touch(record: WorkerRecord): void {

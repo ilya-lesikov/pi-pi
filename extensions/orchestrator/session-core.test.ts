@@ -643,8 +643,10 @@ describe("session-first core", () => {
     orchestrator.interactivePromptOpen = true;
     expect(isMainTurnStalled(orchestrator, 3000)).toBe(false);
     orchestrator.interactivePromptOpen = false;
+    // Workers run beside the main turn; one in flight says nothing about whether
+    // the main request itself is still being answered.
     orchestrator.workers = { active: () => [{ id: "worker" }] } as any;
-    expect(isMainTurnStalled(orchestrator, 3000)).toBe(false);
+    expect(isMainTurnStalled(orchestrator, 3000)).toBe(true);
     orchestrator.workers = null;
     orchestrator.mainTurnToolInFlight = 1;
     expect(isMainTurnStalled(orchestrator, 3000)).toBe(false);

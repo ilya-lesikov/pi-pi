@@ -335,6 +335,7 @@ describe("loadConfig", () => {
     const defaults = loadConfig(cwd, "/nonexistent/global/config.json");
     expect(defaults.performance.internals.mainTurnStale).toBe(600000);
     expect(defaults.performance.internals.workerStartTimeout).toBe(60000);
+    expect(defaults.performance.internals.workerModelStale).toBe(600000);
 
     const cwd2 = makeTempDir();
     const ppDir = join(cwd2, ".pp");

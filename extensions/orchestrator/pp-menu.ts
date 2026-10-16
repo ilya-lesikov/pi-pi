@@ -92,6 +92,7 @@ const TIMEOUT_ITEMS: Array<{ path: string[]; label: string }> = [
   { path: ["performance", "commands", "afterEdit"], label: "Command after file edit" },
   { path: ["performance", "internals", "workerStallWarn"], label: "Worker silent: flag after" },
   { path: ["performance", "internals", "workerStartTimeout"], label: "Worker start: fail after" },
+  { path: ["performance", "internals", "workerModelStale"], label: "Worker model request: retry after" },
   { path: ["performance", "internals", "workerQuestionTimeout"], label: "Worker question: wait for answer" },
   { path: ["performance", "internals", "workerBashTimeout"], label: "Worker bash default timeout" },
   { path: ["performance", "internals", "mainTurnStale"], label: "Main turn stale" },

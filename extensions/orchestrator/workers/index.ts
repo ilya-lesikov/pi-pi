@@ -46,6 +46,7 @@ export function createWorkers(orchestrator: Orchestrator, hooks: WorkerHooks, cr
     maxConcurrent: () => config()?.agents?.maxConcurrentSubagents ?? 4,
     stallWarnMs: () => config()?.performance?.internals?.workerStallWarn ?? 0,
     startTimeoutMs: () => config()?.performance?.internals?.workerStartTimeout ?? 0,
+    modelStaleMs: () => config()?.performance?.internals?.workerModelStale ?? 0,
     questionTimeoutMs: () => config()?.performance?.internals?.workerQuestionTimeout ?? 10 * 60_000,
   });
   const delivery = new WorkerDelivery({

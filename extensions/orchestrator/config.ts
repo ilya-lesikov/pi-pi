@@ -174,6 +174,8 @@ export interface PiPiConfig {
       workerStallWarn: DurationValue;
       /** How long a worker run may take to produce its first event before it fails. 0 disables. */
       workerStartTimeout: DurationValue;
+      /** Silence from the model on one request before a worker abandons and retries it. 0 disables. */
+      workerModelStale: DurationValue;
       /** How long a worker's question waits for an answer. */
       workerQuestionTimeout: DurationValue;
       /** Timeout a worker's bash call gets when it sets none. 0 disables. */
@@ -191,6 +193,7 @@ export interface NormalizedPiPiConfig extends PiPiConfig {
     internals: {
       workerStallWarn: number;
       workerStartTimeout: number;
+      workerModelStale: number;
       workerQuestionTimeout: number;
       workerBashTimeout: number;
       mainTurnStale: number;
@@ -286,6 +289,7 @@ const DEFAULT_CONFIG: PiPiConfig = {
     internals: {
       workerStallWarn: "3m",
       workerStartTimeout: "1m",
+      workerModelStale: "10m",
       workerQuestionTimeout: "10m",
       workerBashTimeout: "10m",
       mainTurnStale: "10m",
@@ -597,7 +601,7 @@ export function validateConfig(config: Record<string, any>): void {
   }
 }
 
-const INTERNAL_DURATION_KEYS = ["workerStallWarn", "workerStartTimeout", "workerQuestionTimeout", "workerBashTimeout", "mainTurnStale"] as const;
+const INTERNAL_DURATION_KEYS = ["workerStallWarn", "workerStartTimeout", "workerModelStale", "workerQuestionTimeout", "workerBashTimeout", "mainTurnStale"] as const;
 
 export const MAX_CONCURRENT_SUBAGENTS_CEILING = 1024;
 

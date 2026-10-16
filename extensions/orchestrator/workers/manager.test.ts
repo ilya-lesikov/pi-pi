@@ -172,6 +172,46 @@ describe("WorkerManager — never holding the parent", () => {
     expect(record.status).toBe("running");
   });
 
+  it("abandons a model request that hangs, continues the worker in place, and fails it after repeated hangs", async () => {
+    let now = 1_000;
+    const { factory, sessions } = fakeFactory();
+    const workers = manager(factory, { now: () => now, modelStaleMs: () => 100 });
+    const record = workers.spawn(spec());
+    await flush();
+    sessions[0]!.hooks.onEvent();
+    now += 150;
+    workers.tick();
+    expect(sessions[0]!.aborted).toBe(1);
+    await flush();
+    expect(sessions[0]!.runs).toHaveLength(2);
+    expect(sessions[0]!.runs[1]).toContain("hung");
+    expect(record.status).toBe("running");
+    now += 150;
+    workers.tick();
+    await flush();
+    expect(sessions[0]!.runs).toHaveLength(3);
+    now += 150;
+    workers.tick();
+    expect(record.status).toBe("failed");
+    expect(record.error).toContain("stopped responding");
+  });
+
+  it("does not abandon a request while a tool runs or the session is still starting", async () => {
+    let now = 1_000;
+    const { factory, sessions } = fakeFactory();
+    const workers = manager(factory, { now: () => now, modelStaleMs: () => 100 });
+    workers.spawn(spec());
+    await flush();
+    now += 150;
+    workers.tick();
+    expect(sessions[0]!.aborted).toBe(0);
+    sessions[0]!.hooks.onEvent();
+    sessions[0]!.hooks.onToolStart("bash", "sleep 999");
+    now += 150;
+    workers.tick();
+    expect(sessions[0]!.aborted).toBe(0);
+  });
+
   it("does not count a worker waiting on its parent's answer as stalled", async () => {
     let now = 1_000;
     const { factory, sessions } = fakeFactory();

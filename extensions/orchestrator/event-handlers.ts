@@ -96,7 +96,6 @@ export function isMainTurnStalled(orchestrator: Orchestrator, now = Date.now()):
     && !orchestrator.mainTurnRecovering
     && orchestrator.mainTurnToolInFlight === 0
     && !orchestrator.interactivePromptOpen
-    && !orchestrator.hasActiveWorkers()
     && now - orchestrator.mainTurnLastActivity >= staleMs;
 }
 
