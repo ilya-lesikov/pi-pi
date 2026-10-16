@@ -74,9 +74,9 @@ export const nodeProvisionEffects: ProvisionEffects = {
     // and neither the archive nor the unpacked tree should outlive that.
     stagingDirs.add(staging);
 
-    if (kind === "gz") {
+    if (kind === "gz" || kind === "raw") {
       const target = join(staging, exe);
-      writeFileSync(target, gunzipSync(archive));
+      writeFileSync(target, kind === "gz" ? gunzipSync(archive) : archive);
       return target;
     }
 
@@ -101,7 +101,7 @@ export const nodeProvisionEffects: ProvisionEffects = {
       } else {
         execFileSync("tar", ["-xf", archivePath, "-C", staging], { stdio: "pipe", timeout: 120_000 });
       }
-    } else if (kind !== "raw") {
+    } else {
       throw new Error(`unsupported archive kind: ${kind}`);
     }
 
