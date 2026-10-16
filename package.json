@@ -19,9 +19,6 @@
     "extensions/",
     "3p/pi-lsp/extensions/",
     "3p/pi-lsp/package.json",
-    "3p/pi-ask-user/index.ts",
-    "3p/pi-ask-user/single-select-layout.ts",
-    "3p/pi-ask-user/package.json",
     "scripts/lib/"
   ],
   "scripts": {
@@ -35,8 +32,7 @@
   "pi": {
     "extensions": [
       "./extensions/orchestrator",
-      "./3p/pi-lsp/extensions/lsp",
-      "./3p/pi-ask-user"
+      "./3p/pi-lsp/extensions/lsp"
     ]
   },
   "dependencies": {

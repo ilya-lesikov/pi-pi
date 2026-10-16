@@ -4,9 +4,10 @@
 patches** that upstream does not have. `git subtree` updates overwrite the
 vendored tree wholesale, so **every update silently reverts these patches.**
 
-`pi-subagents` and `pi-tasks` used to be vendored here as well; pi-pi now runs
-its own workers (`extensions/orchestrator/workers/`) and task tools
-(`extensions/orchestrator/tasks/`), so both are gone, and with them the
+`pi-subagents`, `pi-tasks` and `pi-ask-user` used to be vendored here as well;
+pi-pi now runs its own workers (`extensions/orchestrator/workers/`), task tools
+(`extensions/orchestrator/tasks/`) and `ask_user` (`extensions/orchestrator/ask/`),
+so all three are gone, and with them the
 `pi-pi:subagent-session-scope` patches pi-lsp and pi-tasks carried. Worker
 sessions load no extensions at all; what they need from these packages reaches
 them through the shared handles listed below.
@@ -26,5 +27,4 @@ that marker on anything you add, and list it here.
 | pi-lsp | `inspectBuiltinServers` reports every built-in with its detection verdict, so the doctor can name a language whose server is missing and the binary it wanted instead of silently omitting it | `extensions/lsp/config.ts`, guarded by `test/config.which.local.test.ts` |
 | pi-lsp | `describe()` on the shared API handle reports root path, each server's resolved binary, command line, extensions and running state, optionally spawning each one to prove it runs rather than merely resolves, plus the built-ins that matched nothing. `status` formats prose for a notification, which the doctor cannot judge an install from | `extensions/lsp/index.ts`, consumed by `extensions/orchestrator/doctor.ts` |
 | pi-lsp | `LspClient.recentStderr()` exposes the tail of the server's stderr. A server that dies on spawn explains itself there and nowhere else — a rustup proxy's "Unknown binary" reached the user as "Server process exited" | `extensions/lsp/client.ts` |
-| pi-ask-user | `questions` sequences show a `Question N/M` title and can be walked with alt+←/alt+→ (`AskNavigate` sentinel from the UI layer, index-driven loop in `execute`, revisited answers preselected — cursor row for single-select, ticked rows for multi — and overwritten in place) | `index.ts` (`AskNavigate`/`isNavigate`, `NAV_PREV_KEY`/`NAV_NEXT_KEY`, `previousAnswerIndex`/`previousCheckedIndices`, `MultiSelectList` `checked` argument, `AskComponent` title/help/`handleInput`, `askUser` `navigation`/`checkedIndices` options, `execute` multi-question loop), guarded by `index.test.ts` "multi-question navigation (local patch)" |
 | pi-lsp | `registerTool(pi)` on the shared API handle registers the `lsp` tool on another session bound to this one's server manager — pi-pi's worker sessions load no extensions, and their own language servers would leak since nothing would shut them down | `extensions/lsp/index.ts` (API handle), guarded by `test/index.local.test.ts` |

@@ -76,6 +76,10 @@ The panel above the editor shows each worker's current step (waiting for the mod
 
 The main agent keeps a checklist with `TaskCreate`, `TaskUpdate`, `TaskList` and `TaskGet`, shown above the editor. The list lives in the session itself: every task tool result carries it, so `/resume`, forks and `/tree` restore the list as it stood at that point, and it survives compaction. Once every task is completed, the next one starts a fresh list. When edits, commits or turns pile up without the list changing, the agent gets a reminder that names what has gone stale. Workers have no task tools.
 
+## Asking the user
+
+`ask_user` asks one short question inline, above the editor: a list of options with optional descriptions, multi-select, a "Type something." row for a free answer, and ctrl+e to attach a comment to a choice. Several decisions go in one call as `questions`, shown one at a time as `Question N/M`; alt+← and alt+→ move between them, a revisited question keeps its earlier answer selected, and Esc cancels the whole call. Without the terminal UI (RPC) it falls back to the host's select and input dialogs.
+
 ## ACP clients
 
 The pi-acp fork can expose `/pp`, usage, workers, elicitation, and session status in clients such as Zed. pi-pi no longer publishes a phase pipeline because there is none.

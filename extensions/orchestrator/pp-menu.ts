@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "util";
 import { join } from "path";
-import { askUser, isCancel } from "../../3p/pi-ask-user/index.js";
+import { askUser, isCancel } from "./ask/index.js";
 import { migrateConfigLayer } from "./config-migration.js";
 import {
   GLOBAL_CONFIG_PATH,

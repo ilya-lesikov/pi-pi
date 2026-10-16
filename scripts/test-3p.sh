@@ -9,7 +9,7 @@ cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
 
 if ! command -v bun >/dev/null 2>&1; then
-  echo "ERROR: 'bun' is not on PATH — pi-lsp and pi-ask-user gate on it." >&2
+  echo "ERROR: 'bun' is not on PATH — pi-lsp gates on it." >&2
   echo "Install bun (https://bun.sh) and re-run, or run the vitest 3p suites individually." >&2
   exit 127
 fi
@@ -29,9 +29,7 @@ run() {
   fi
 }
 
-# bun packages. pi-ask-user has no `test` npm script, so invoke `bun test` directly.
-run "pi-lsp"      "pi-lsp"      bun test
-run "pi-ask-user" "pi-ask-user" bun test
+run "pi-lsp" "pi-lsp" bun test
 
 echo ""
 echo "──────────────────────────────────────────────"

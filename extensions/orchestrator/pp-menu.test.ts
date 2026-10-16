@@ -17,7 +17,7 @@ import { Orchestrator } from "./orchestrator.js";
 import { setCatalog } from "./routing.js";
 
 const askUser = vi.fn();
-vi.mock("../../3p/pi-ask-user/index.js", () => ({
+vi.mock("./ask/index.js", () => ({
   askUser: (...args: any[]) => askUser(...args),
   isCancel: (result: any) => !!result?.__cancel,
 }));

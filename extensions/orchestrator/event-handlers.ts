@@ -27,6 +27,7 @@ import { installConsoleGuard } from "./console-guard.js";
 import { clearAllPauses, demoteUnusableSubscription, handleMainAuthFailure, handleMainRateLimit, handleMainRefusal, handleSubagentAuthFailure, handleSubagentRateLimit, handleSubscriptionRouteOutage, isAuthError, isModelRefusal, isPolicyBlockError, isRateLimitError } from "./rate-limit-fallback.js";
 import { adjudicateCheckIn, adjudicateContinuation } from "./continuation-adjudicator.js";
 import { registerTasks } from "./tasks/index.js";
+import { registerAskUser } from "./ask/index.js";
 import { createWorkers, registerWorkerToolsFor, resumeOnNewRouting, WORKER_MESSAGE_TYPE, type WorkerHooks } from "./workers/index.js";
 import { registerWorkerUi } from "./workers/ui.js";
 import type { WorkerRecord } from "./workers/types.js";
@@ -578,6 +579,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   registerWorkerToolsFor(orchestrator, workerHooks);
   registerWorkerUi(orchestrator);
   registerTasks(pi);
+  registerAskUser(pi);
   pi.on("message_end", async (event: any) => {
     const message = event?.message;
     if (message?.role === "custom" && message.customType === WORKER_MESSAGE_TYPE) orchestrator.workerDelivery?.confirm(message.details?.deliveryId);
