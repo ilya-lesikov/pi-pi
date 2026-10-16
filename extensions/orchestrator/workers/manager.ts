@@ -48,6 +48,8 @@ interface Live {
   /** Set when a hung request was aborted, so the run that ends because of it is continued rather than settled. */
   staleRetry?: boolean;
   staleRetries?: number;
+  /** Tools run in parallel, so one finishing says nothing about the others. */
+  toolsRunning?: number;
 }
 
 /**
@@ -347,6 +349,7 @@ export class WorkerManager {
     record.runUsage = emptyUsage();
     live.staleRetries = 0;
     live.staleRetry = false;
+    live.toolsRunning = 0;
     this.ensureTicker();
     this.emit({ type: "started", record });
     this.setPhase(record, live.session ? "sending the prompt" : "building the session");
@@ -375,14 +378,16 @@ export class WorkerManager {
         live.session = session;
         if (record.startPhase !== undefined) this.setPhase(record, "sending the prompt");
       }
-      await session.run(prompt);
-      if (live.epoch !== epoch || record.status !== "running") return;
-      while (live.staleRetry) {
-        live.staleRetry = false;
-        record.lastEventAt = this.now();
-        await session.run(CONTINUE_STALLED);
-        if (live.epoch !== epoch || record.status !== "running") return;
-      }
+      const run = async (text: string): Promise<boolean> => {
+        await session.run(text);
+        while (live.epoch === epoch && record.status === "running" && live.staleRetry) {
+          live.staleRetry = false;
+          record.lastEventAt = this.now();
+          await session.run(CONTINUE_STALLED);
+        }
+        return live.epoch === epoch && record.status === "running";
+      };
+      if (!await run(prompt)) return;
       const error = session.lastError();
       if (error && !live.settledStatus) {
         this.settle(record, "failed", error);
@@ -391,8 +396,7 @@ export class WorkerManager {
       // Only a schema the parent consumes, or an answer with no text at all, is
       // worth another turn; otherwise the final text stands in for the result.
       if (!record.result && !live.settledStatus && (record.spec.resultSchema || !session.lastAssistantText().trim())) {
-        await session.run(SUBMIT_REMINDER);
-        if (live.epoch !== epoch || record.status !== "running") return;
+        if (!await run(SUBMIT_REMINDER)) return;
       }
       if (!record.result) {
         const text = session.lastAssistantText().trim() || record.lastText.trim();
@@ -407,6 +411,7 @@ export class WorkerManager {
 
   private hooks(record: WorkerRecord, epoch: number): WorkerSessionHooks {
     const current = () => this.live.get(record.id)?.epoch === epoch && record.status === "running";
+    const live = () => this.live.get(record.id)!;
     return {
       onPhase: (phase) => { if (current() && record.startPhase !== undefined) this.setPhase(record, phase); },
       onEvent: () => {
@@ -433,12 +438,14 @@ export class WorkerManager {
       onToolStart: (toolName, summary) => {
         if (!current()) return;
         record.toolUses++;
+        live().toolsRunning = (live().toolsRunning ?? 0) + 1;
         record.activity = { toolName, summary, startedAt: this.now() };
         this.setStep(record, `running ${toolName}${summary ? ` ${summary}` : ""}`);
         this.touch(record);
       },
       onToolEnd: () => {
         if (!current()) return;
+        live().toolsRunning = Math.max(0, (live().toolsRunning ?? 0) - 1);
         record.activity = undefined;
         this.setStep(record, "finishing its tool calls");
         this.touch(record);
@@ -592,7 +599,7 @@ export class WorkerManager {
     for (const record of this.list()) {
       if (record.status !== "running" || record.question) continue;
       const silent = now - record.lastEventAt;
-      if (staleMs > 0 && silent >= staleMs && !record.activity && record.startPhase === undefined) {
+      if (staleMs > 0 && silent >= staleMs && !this.live.get(record.id)?.toolsRunning && record.startPhase === undefined) {
         this.abandonStaleRequest(record, silent);
         continue;
       }

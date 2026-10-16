@@ -196,6 +196,38 @@ describe("WorkerManager — never holding the parent", () => {
     expect(record.error).toContain("stopped responding");
   });
 
+  it("keeps a long tool running when a parallel one finishes", async () => {
+    let now = 1_000;
+    const { factory, sessions } = fakeFactory();
+    const workers = manager(factory, { now: () => now, modelStaleMs: () => 100 });
+    workers.spawn(spec());
+    await flush();
+    sessions[0]!.hooks.onEvent();
+    sessions[0]!.hooks.onToolStart("bash", "sleep 999");
+    sessions[0]!.hooks.onToolStart("read", "a.ts");
+    sessions[0]!.hooks.onToolEnd();
+    now += 150;
+    workers.tick();
+    expect(sessions[0]!.aborted).toBe(0);
+  });
+
+  it("retries a hung submit reminder instead of settling the worker as completed", async () => {
+    let now = 1_000;
+    const { factory, sessions } = fakeFactory();
+    const workers = manager(factory, { now: () => now, modelStaleMs: () => 100 });
+    const record = workers.spawn(spec({ resultSchema: "findings" }));
+    await flush();
+    sessions[0]!.finishRun("no result yet");
+    await flush();
+    expect(sessions[0]!.runs[1]).toContain("submit_result");
+    sessions[0]!.hooks.onEvent();
+    now += 150;
+    workers.tick();
+    await flush();
+    expect(sessions[0]!.runs[2]).toContain("hung");
+    expect(record.status).toBe("running");
+  });
+
   it("does not abandon a request while a tool runs or the session is still starting", async () => {
     let now = 1_000;
     const { factory, sessions } = fakeFactory();
