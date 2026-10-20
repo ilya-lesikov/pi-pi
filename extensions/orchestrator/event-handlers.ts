@@ -873,7 +873,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       return;
     }
     const terminal = ctx?.mode === undefined || ctx?.mode === "tui";
-    if (orchestrator.hasActiveWorkers() || (!terminal && (orchestrator.workerDelivery?.pending() ?? 0) > 0)) {
+    if (orchestrator.hasActiveWorkers() || (!terminal && ((orchestrator.workerDelivery?.pending() ?? 0) > 0 || recoveringWorkers() > 0))) {
       if (!await holdForWorkers(orchestrator, ctx, message)) return;
     }
     const decision = classifyContinuation(message, activity);

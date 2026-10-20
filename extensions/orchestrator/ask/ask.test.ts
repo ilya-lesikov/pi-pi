@@ -447,6 +447,8 @@ describe("askUser for pi-pi's own menus", () => {
     registerConfirm({ registerTool: (t: any) => (tool = t) } as any);
     const confirm = vi.fn(async (_title: string, _message: string) => false);
     await tool.execute("id", { question: "Drop db?", danger: true }, undefined, undefined, { hasUI: true, mode: "rpc", ui: { confirm } });
-    expect(confirm.mock.calls[0]![1]).toMatch(/^⚠ Destructive · asked \d\d:\d\d:\d\d$/);
+    await tool.execute("id", { question: "Drop db?", danger: true }, undefined, undefined, { hasUI: true, mode: "rpc", ui: { confirm } });
+    expect(confirm.mock.calls[0]![1]).toMatch(/^⚠ Destructive · request [0-9a-f]{8}$/);
+    expect(confirm.mock.calls[1]![1]).not.toBe(confirm.mock.calls[0]![1]);
   });
 });

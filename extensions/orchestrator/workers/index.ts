@@ -67,7 +67,10 @@ export function createWorkers(orchestrator: Orchestrator, hooks: WorkerHooks, cr
     // mainTurnInFlight spans one turn; between turns and while compacting the
     // host is not idle yet cannot take a steer either, so delivery holds.
     isStreaming: () => orchestrator.mainTurnInFlight || orchestrator.holdingRun,
-    isHolding: () => orchestrator.holdingRun,
+    // A silent result normally waits for the next prompt, which a run
+    // without a UI never gets and an app turn ends before: outside the
+    // terminal it goes into the run like any other.
+    isHolding: () => orchestrator.holdingRun || (ctx()?.mode !== undefined && ctx()?.mode !== "tui"),
     isBusy: () => !orchestrator.mainTurnInFlight && !orchestrator.holdingRun && ctx()?.isIdle?.() === false,
     canWake: () => {
       const current = ctx();
@@ -129,7 +132,10 @@ function onWorkerEvent(event: WorkerEvent, hooks: WorkerHooks, delivery: WorkerD
       getTracer()?.openSubagent({ subagentId: record.id, type: record.spec.type, description: record.spec.description, parentToolCallId: record.spec.parentToolCallId, depth: 1 });
       break;
     case "started":
-      if (record.runs > 1) paseoUpdate(record, transcripts, hooks.sendMessage ?? (() => {}));
+      if (record.runs > 1) {
+        transcripts?.rotate(record.id);
+        paseoUpdate(record, transcripts, hooks.sendMessage ?? (() => {}));
+      }
       break;
     case "settled": {
       paseoUpdate(record, transcripts, hooks.sendMessage ?? (() => {}));

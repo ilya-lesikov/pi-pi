@@ -114,6 +114,10 @@ describe("TranscriptStore, round two", () => {
     const store = new TranscriptStore(cwd, "s", vi.fn(), cache);
     store.open("w-1");
     expect(store.fileFor("w-1")!.startsWith(cache)).toBe(true);
+    writeFileSync(join(cwd, ".pp", ".gitignore"), "workers/**\n!w*/**\n");
+    const unclear = new TranscriptStore(cwd, "s3", vi.fn(), cache);
+    unclear.open("w-1");
+    expect(unclear.fileFor("w-1")!.startsWith(cache)).toBe(true);
     writeFileSync(join(cwd, ".pp", ".gitignore"), "!workers/\nworkers/**\n");
     const again = new TranscriptStore(cwd, "s2", vi.fn(), cache);
     again.open("w-1");
@@ -131,5 +135,18 @@ describe("TranscriptStore, round two", () => {
     await store.drain("w-1");
     expect(readFileSync(file, "utf8")).toBe("theirs\n");
     expect(store.fileFor("w-1")).toBeUndefined();
+  });
+
+  it("continues a resumed worker in a new file", async () => {
+    const store = new TranscriptStore(cwd, "s", vi.fn(), cache);
+    store.append("w-1", { role: "user", content: "first run" });
+    const first = store.fileFor("w-1")!;
+    store.rotate("w-1");
+    store.append("w-1", { role: "user", content: "second run" });
+    await store.drain("w-1");
+    const second = store.fileFor("w-1")!;
+    expect(second).not.toBe(first);
+    expect(lines(first).at(-1).message.content).toBe("first run");
+    expect(lines(second).at(-1).message.content).toBe("second run");
   });
 });

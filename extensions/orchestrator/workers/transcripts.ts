@@ -59,6 +59,22 @@ export class TranscriptStore {
     this.writerFor(id);
   }
 
+  /**
+   * Continues a resumed worker in a new file. Paseo stops following a file
+   * once the worker it belongs to finished, and never follows a path twice;
+   * the earlier runs stay in their own files.
+   */
+  rotate(id: string): void {
+    const previous = this.writers.get(id);
+    if (!previous) return this.open(id);
+    this.writers.delete(id);
+    const next = this.writerFor(id);
+    if (!next) return;
+    // Starts after the earlier file's last write, so a run's lines never interleave.
+    const creating = next.queue;
+    next.queue = previous.queue.then(() => creating);
+  }
+
   /** Where this worker's transcript is, unless transcripts are off for it. */
   fileFor(id: string): string | undefined {
     const writer = this.writers.get(id);
@@ -154,8 +170,10 @@ function ensureIgnored(ppDir: string): boolean {
     for (const raw of readFileSync(file, "utf8").split(/\r?\n/)) {
       const line = raw.trim();
       if (!line || line.startsWith("#")) continue;
+      // Any negation might re-include the folder or its files; matching git's
+      // rules exactly is not worth the risk of getting it wrong.
       if (line.startsWith("!")) {
-        if (/^!\/?workers(\/|$)|^!\*/.test(line)) ignored = false;
+        ignored = false;
         continue;
       }
       if (IGNORING_LINES.has(line)) ignored = true;
