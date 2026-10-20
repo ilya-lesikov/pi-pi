@@ -11,6 +11,7 @@ import { createDeepDebuggerAgent } from "./agents/deep-debugger.js";
 import { encodePoolVariant, registerAgentDefinitions } from "./agents/registry.js";
 import type { WorkerDelivery } from "./workers/delivery.js";
 import type { TranscriptStore } from "./workers/transcripts.js";
+import { WorkerHold } from "./workers/hold.js";
 import type { WorkerManager } from "./workers/manager.js";
 import type { WorkerSessionFactory } from "./workers/types.js";
 import type { WorkerWidget } from "./workers/ui.js";
@@ -44,6 +45,10 @@ export class Orchestrator {
   /** The root session's workers; replaced with the session, so none outlives it. */
   workers: WorkerManager | null = null;
   workerDelivery: WorkerDelivery | null = null;
+  /** Set while turn_end keeps the run open for active workers; delivery steers into it. */
+  holdingRun = false;
+  /** The idle clock of that hold, shared across the turns of a session. */
+  workerHold = new WorkerHold();
   /** Where the root session's workers write their transcripts; null without a session id. */
   workerTranscripts: TranscriptStore | null = null;
   workerWidget: WorkerWidget | null = null;
@@ -181,6 +186,33 @@ export class Orchestrator {
     const tagged = invisible ? text : `${text}\n[continuation:${this.continuationGeneration}]`;
     this.pendingContinuations.set(tagged, { invisible });
     this.sendUserMessageWhenIdle(tagged, this.continuationGeneration);
+  }
+
+  /**
+   * Outside the terminal, from a turn_end handler of a run that is still
+   * live: queues the continuation as a follow-up of this run, so pi continues
+   * it instead of the host seeing the turn end and an unprompted run start.
+   * The terminal keeps the idle pause before continuing, where the user can
+   * step in. Returns false when it did not apply and the caller should queue
+   * the continuation the usual way.
+   */
+  continueInRun(ctx: any, text: string, invisible = false): boolean {
+    if (ctx?.mode === undefined || ctx?.mode === "tui") return false;
+    const signal = ctx?.signal as AbortSignal | undefined;
+    if (!signal || signal.aborted) return false;
+    const tagged = invisible ? text : `${text}\n[continuation:${this.continuationGeneration}]`;
+    // The entry is the claim the idle poller and redelivery check; taking it
+    // here means neither sends this text again.
+    this.pendingContinuations.delete(tagged);
+    try {
+      if (invisible) this.pi.sendMessage({ customType: "pp-continuation", content: text, display: false }, { deliverAs: "followUp", triggerTurn: true });
+      else this.pi.sendUserMessage(tagged, { deliverAs: "followUp" });
+      getLogger().debug({ s: "continuation" }, "continued inside the ending run");
+      return true;
+    } catch (error: any) {
+      getLogger().debug({ s: "continuation", err: error?.message }, "in-run continuation refused; queueing for idle");
+      return false;
+    }
   }
 
   private deliverContinuation(text: string, invisible: boolean): boolean {

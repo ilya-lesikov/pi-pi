@@ -804,6 +804,87 @@ describe("session-first core", () => {
     expect(pi.sendMessage).toHaveBeenLastCalledWith(expect.objectContaining({ customType: "pi-pi-worker" }), { deliverAs: "steer" });
   });
 
+  it("outside the terminal, keeps a run that stopped open for a busy worker and hands its result into that run", async () => {
+    const { pi, orchestrator, sessions, ctx } = workerHarness();
+    ctx.mode = "rpc";
+    ctx.signal = new AbortController().signal;
+    orchestrator.workers!.spawn(workerSpec());
+    await flushWorkers();
+    await emit(pi, "turn_start", {}, ctx);
+    const ended = emit(pi, "turn_end", { message: { stopReason: "stop", content: [{ type: "text", text: "Waiting on the worker." }] } }, ctx);
+    let done = false;
+    void ended.then(() => { done = true; });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(done).toBe(false);
+    expect(orchestrator.holdingRun).toBe(true);
+    sessions[0]!.hooks.submitResult({ status: "done", summary: "found it", body: "a.ts:1" });
+    sessions[0]!.finish("x");
+    await ended;
+    expect(orchestrator.holdingRun).toBe(false);
+    expect(pi.sendMessage).toHaveBeenCalledWith(expect.objectContaining({ customType: "pi-pi-worker", content: expect.stringContaining("found it") }), { deliverAs: "steer" });
+    await emit(pi, "session_shutdown", {}, ctx);
+  });
+
+  it("never holds in the terminal, and outside it never wakes an idle session with a result", async () => {
+    const terminal = workerHarness();
+    terminal.orchestrator.workers!.spawn(workerSpec());
+    await flushWorkers();
+    await emit(terminal.pi, "turn_start", {}, terminal.ctx);
+    await emit(terminal.pi, "turn_end", { message: { stopReason: "stop", content: [{ type: "text", text: "ok" }] } }, terminal.ctx);
+    expect(terminal.orchestrator.holdingRun).toBe(false);
+    await emit(terminal.pi, "session_shutdown", {}, terminal.ctx);
+
+    const rpc = workerHarness();
+    rpc.ctx.mode = "rpc";
+    rpc.orchestrator.workers!.spawn(workerSpec());
+    await flushWorkers();
+    rpc.sessions[0]!.finish("x");
+    await new Promise((resolve) => setTimeout(resolve, 1300));
+    expect(rpc.pi.sendMessage).not.toHaveBeenCalledWith(expect.objectContaining({ customType: "pi-pi-worker" }), { triggerTurn: true });
+    await emit(rpc.pi, "session_shutdown", {}, rpc.ctx);
+  });
+
+  it("does not hold a turn that ended in an error or with tool calls", async () => {
+    const { pi, orchestrator, ctx } = workerHarness();
+    ctx.mode = "rpc";
+    ctx.signal = new AbortController().signal;
+    orchestrator.workers!.spawn(workerSpec());
+    await flushWorkers();
+    await emit(pi, "turn_start", {}, ctx);
+    await emit(pi, "turn_end", { message: { stopReason: "error", errorMessage: "boom", content: [] } }, ctx);
+    await emit(pi, "turn_start", {}, ctx);
+    await emit(pi, "turn_end", { message: { stopReason: "toolUse", content: [{ type: "toolCall", name: "read" }] } }, ctx);
+    expect(orchestrator.holdingRun).toBe(false);
+    await emit(pi, "session_shutdown", {}, ctx);
+  });
+
+  it("without a UI, stops silent workers after the idle limit and asks for a final answer that says so", async () => {
+    vi.useFakeTimers();
+    try {
+      const { pi, orchestrator, ctx } = workerHarness();
+      // A worker that started and then went silent, not one that never started.
+      orchestrator.config.performance.internals.workerStartTimeout = 0;
+      orchestrator.config.performance.internals.workerModelStale = 0;
+      orchestrator.config.performance.internals.workerStallWarn = 0;
+      ctx.mode = "print";
+      ctx.signal = new AbortController().signal;
+      const record = orchestrator.workers!.spawn(workerSpec());
+      await vi.advanceTimersByTimeAsync(0);
+      await emit(pi, "turn_start", {}, ctx);
+      const ended = emit(pi, "turn_end", { message: { stopReason: "stop", content: [{ type: "text", text: "Waiting." }] } }, ctx);
+      await vi.advanceTimersByTimeAsync(2 * 60 * 60_000 + 1000);
+      await ended;
+      expect(record.status).toBe("killed");
+      const summary = pi.sendMessage.mock.calls.find((call: any[]) => call[0].customType === "pp-continuation");
+      expect(summary![0].content).toContain("did not finish");
+      expect(summary![1]).toEqual({ deliverAs: "followUp", triggerTurn: true });
+      expect(pi.sendMessage.mock.calls.some((call: any[]) => call[0].customType === "pi-pi-worker")).toBe(false);
+      await emit(pi, "session_shutdown", {}, ctx);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("holds the wake while a dialog is open", async () => {
     const { pi, orchestrator, sessions } = workerHarness();
     orchestrator.interactivePromptOpen = true;
@@ -1016,6 +1097,26 @@ describe("session-first core", () => {
     expect(orchestrator.subProbeSpec).toBeNull();
     expect(orchestrator.pausedMainRoutes.size).toBe(0);
     expect(orchestrator.routedMainSpec).toBeNull();
+  });
+
+  it("outside the terminal, continues inside the ending run instead of after it", async () => {
+    const pi = makePi();
+    const orchestrator = new Orchestrator(pi);
+    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
+    registerEventHandlers(orchestrator);
+    const live = new AbortController();
+    const ctx: any = { mode: "rpc", signal: live.signal, isIdle: () => false, getContextUsage: () => null, ui: { notify: vi.fn() } };
+    await emit(pi, "turn_start", {}, ctx);
+    await emit(pi, "turn_end", { message: { stopReason: "length", content: [{ type: "text", text: "cut" }] } }, ctx);
+    expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(pi.sendUserMessage.mock.calls[0][1]).toEqual({ deliverAs: "followUp" });
+    expect(orchestrator.pendingContinuations.size).toBe(0);
+    // Aborted: nothing is pushed into a run that is going away; it waits for idle as before.
+    live.abort();
+    await emit(pi, "turn_start", {}, ctx);
+    await emit(pi, "turn_end", { message: { stopReason: "length", content: [{ type: "text", text: "cut" }] } }, ctx);
+    expect(orchestrator.pendingContinuations.size).toBe(1);
+    await emit(pi, "session_shutdown", {}, ctx);
   });
 
   it("does not nudge a pure prose answer", async () => {

@@ -32,6 +32,7 @@ import { LspManager } from "./lsp/manager.js";
 import { editDiagnostics, registerLspTool, registerLspWarmup } from "./lsp/tool.js";
 import { createWorkers, registerWorkerToolsFor, resumeOnNewRouting, WORKER_MESSAGE_TYPE, type WorkerHooks } from "./workers/index.js";
 import { pruneTranscripts, transcriptRoots } from "./workers/transcripts.js";
+import { HOLD_IDLE_MS, unfinishedSummary, type HoldOutcome } from "./workers/hold.js";
 import { registerWorkerUi } from "./workers/ui.js";
 import type { WorkerRecord } from "./workers/types.js";
 import { ensureProviderRetrySettings, patchRetryPredicate } from "./provider-retry.js";
@@ -482,6 +483,52 @@ export function registerWorkerExtension(orchestrator: Orchestrator, pi: Extensio
 }
 
 /** Ends the root session's workers; nothing they would still report has a session to go to. */
+/**
+ * Outside the terminal, keeps a run that ended while workers are busy open
+ * until their results are in it, so the host sees one turn and a run without
+ * a UI does not exit and kill them. Resolves whether the caller should go on
+ * to its continuation check (true: nothing left to hold for).
+ */
+async function holdForWorkers(orchestrator: Orchestrator, ctx: any, message: any): Promise<boolean> {
+  const manager = orchestrator.workers;
+  const delivery = orchestrator.workerDelivery;
+  const mode = ctx?.mode;
+  if (!manager || !delivery || mode === undefined || mode === "tui") return false;
+  const toolCalls = Array.isArray(message?.content) && message.content.some((part: any) => part?.type === "toolCall");
+  if (message?.stopReason !== "stop" || toolCalls) return false;
+  const headless = mode === "json" || mode === "print";
+  orchestrator.holdingRun = true;
+  let outcome: HoldOutcome;
+  try {
+    outcome = await orchestrator.workerHold.wait({
+      manager,
+      delivery,
+      signal: ctx.signal,
+      hasPendingMessages: () => ctx.hasPendingMessages?.() ?? false,
+      idleMs: headless ? HOLD_IDLE_MS.headless : HOLD_IDLE_MS.rpc,
+    });
+  } finally {
+    orchestrator.holdingRun = false;
+  }
+  getLogger().debug({ s: "workers", outcome }, "held the run for workers");
+  if (outcome === "settled") return true;
+  if (outcome !== "idle") return false;
+  if (!headless) {
+    notice(ctx, "Stopped waiting for workers after 30 minutes without activity; their results will arrive with your next message.", "warning");
+    return false;
+  }
+  const unfinished = manager.active();
+  manager.killAll();
+  // The summary below says what they did not finish; their kill notices would only cost another turn.
+  manager.markDelivered(unfinished);
+  delivery.forget(unfinished.map((record) => record.id), "settled");
+  await orchestrator.workerTranscripts?.drainAll().catch(() => {});
+  try {
+    orchestrator.pi.sendMessage({ customType: "pp-continuation", content: unfinishedSummary(unfinished), display: false }, { deliverAs: "followUp", triggerTurn: true });
+  } catch {}
+  return false;
+}
+
 function stopWorkers(orchestrator: Orchestrator): void {
   orchestrator.workers?.shutdown();
   orchestrator.workerDelivery?.close();
@@ -823,7 +870,10 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       orchestrator.queueContinuation(CONTINUE_POLICY_BLOCKED, true);
       return;
     }
-    if (orchestrator.hasActiveWorkers()) return;
+    const terminal = ctx?.mode === undefined || ctx?.mode === "tui";
+    if (orchestrator.hasActiveWorkers() || (!terminal && (orchestrator.workerDelivery?.pending() ?? 0) > 0)) {
+      if (!await holdForWorkers(orchestrator, ctx, message)) return;
+    }
     const decision = classifyContinuation(message, activity);
     if (decision === "none" || orchestrator.continuationHalted) return;
     if (decision === "objective") {
@@ -833,7 +883,8 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
         return;
       }
       orchestrator.objectiveContinuationCount++;
-      orchestrator.queueContinuation(message?.stopReason === "length" ? CONTINUE_TRUNCATED : CONTINUE_EMPTY);
+      const text = message?.stopReason === "length" ? CONTINUE_TRUNCATED : CONTINUE_EMPTY;
+      if (!orchestrator.continueInRun(ctx, text)) orchestrator.queueContinuation(text);
       return;
     }
     if (orchestrator.continuationCount >= MAX_CONTINUATIONS) {
@@ -852,7 +903,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (!nudge || generation !== orchestrator.continuationGeneration || orchestrator.continuationHalted) return;
     orchestrator.continuationCount++;
     resetRequestActivity(orchestrator);
-    orchestrator.queueContinuation(nudge, true);
+    if (!orchestrator.continueInRun(ctx, nudge, true)) orchestrator.queueContinuation(nudge, true);
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {

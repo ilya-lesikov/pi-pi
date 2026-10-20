@@ -59,11 +59,14 @@ export function createWorkers(orchestrator: Orchestrator, hooks: WorkerHooks, cr
   const delivery = new WorkerDelivery({
     // mainTurnInFlight spans one turn; between turns and while compacting the
     // host is not idle yet cannot take a steer either, so delivery holds.
-    isStreaming: () => orchestrator.mainTurnInFlight,
-    isBusy: () => !orchestrator.mainTurnInFlight && ctx()?.isIdle?.() === false,
+    isStreaming: () => orchestrator.mainTurnInFlight || orchestrator.holdingRun,
+    isBusy: () => !orchestrator.mainTurnInFlight && !orchestrator.holdingRun && ctx()?.isIdle?.() === false,
     canWake: () => {
       const current = ctx();
       if (!current || orchestrator.modelSwitchInFlight || orchestrator.interactivePromptOpen) return false;
+      // Outside the terminal a run nobody prompted reaches the host outside
+      // any turn: results wait inside a held run, or for the next prompt.
+      if (current.mode !== undefined && current.mode !== "tui") return false;
       if (typeof current.isIdle === "function" && !current.isIdle()) return false;
       if (current.hasPendingMessages?.()) return false;
       const draft = current.ui?.getEditorText?.();

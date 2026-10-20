@@ -77,6 +77,19 @@ export class WorkerDelivery {
     return this.outbox.length;
   }
 
+  /** Updates steered into the run that it has not taken in yet. */
+  inFlightCount(): number {
+    return this.inFlight.size;
+  }
+
+  /** Delivers what is ready now instead of after the coalescing delay; whether anything went into the run. */
+  flushNow(): "queued" | "none" {
+    if (!this.outbox.length) return "none";
+    const before = this.inFlight.size;
+    this.flush();
+    return this.inFlight.size > before ? "queued" : "none";
+  }
+
   /** Stops delivering for good: the session it delivers to is going away. */
   close(): void {
     this.closed = true;
