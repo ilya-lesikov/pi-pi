@@ -27,6 +27,8 @@ Start Pi and talk to it normally. The initial Pi session owns all work; pi-pi do
 - providers, model slots and family overrides;
 - main and worker models.
 
+Reports (Status, Usage, Diagnostics, Explain routing) open as a scrollable view in the terminal. Elsewhere they go wherever the host shows pi-pi's messages: its notifications, a chat message the model never sees, or stderr in a run without a UI, where `/pp` prints the status and exits. The worker viewer becomes the transcript as text with Refresh, Send and Stop. Some apps (bb, and possibly ACP adapters) wait for a model run after every prompt and `/pp` starts none; there `/pp` warns first that the app may stay busy afterwards.
+
 ## Memory
 
 The prompt is kept inside the model's window by folding old tool traffic out of the copy on its way to the provider: a result becomes an `[omitted: <size>B]` notice, and the call that asked for it, along with everything the user and the model said, is never touched. Arguments are left exactly as they were written, so a folded call still states what it ran and on what; only the answer goes. Folding is oldest-first and never reversed, so the prompt's prefix stays stable between requests and the provider's cache survives. Calls old enough to be finished with are removed outright rather than left as husks.
@@ -37,7 +39,7 @@ The session itself is never cut. `recall_tool_output` hands back a folded result
 
 The tools the agent is told to prefer are installed rather than assumed. ripgrep and the code graph are fetched at session start; a language server is fetched the first time a file of its language is touched. Everything lands in one directory that is prepended to the session's `PATH`, so ordinary `which` lookups find it and the user's shell environment is untouched.
 
-Downloads verify what the publisher actually offers — a published digest where there is one, npm's own integrity check for npm packages, a toolchain's own verification for toolchain components — and `/pp → Doctor` reports which of those applied per tool rather than implying a uniform guarantee. A session that cannot reach the network starts anyway, degraded exactly as it would have been before.
+Downloads verify what the publisher actually offers — a published digest where there is one, npm's own integrity check for npm packages, a toolchain's own verification for toolchain components — and `/pp → Diagnostics` reports which of those applied per tool rather than implying a uniform guarantee. A session that cannot reach the network starts anyway, degraded exactly as it would have been before.
 
 ## Language servers
 
@@ -59,7 +61,7 @@ After each successful edit or write, the errors and warnings the file's already-
 }
 ```
 
-`settings` answers the server's `workspace/configuration` requests; `initializationOptions` and `env` are passed as given. A project config can only choose the `command` and `env` a server runs once pi trusts the project; until then they are ignored and `/pp → Doctor` says so.
+`settings` answers the server's `workspace/configuration` requests; `initializationOptions` and `env` are passed as given. A project config can only choose the `command` and `env` a server runs once pi trusts the project; until then they are ignored and `/pp → Diagnostics` says so.
 
 ## Skills
 

@@ -12,6 +12,7 @@ import { provisionResults } from "./provision/session.js";
 import { listLayeredSkills } from "./skills-manifest.js";
 import { readProviderRetry } from "./provider-retry.js";
 import type { Orchestrator } from "./orchestrator.js";
+import { showReport } from "./report-view.js";
 
 type Severity = "pass" | "warning" | "failure";
 
@@ -96,7 +97,7 @@ export interface DoctorOptions {
 
 export async function runDoctor(orchestrator: Orchestrator, ctx: any, options: DoctorOptions = {}): Promise<void> {
   const { probes = true, probeServers = true } = options;
-  const lines: string[] = ["Doctor Results"];
+  const lines: string[] = ["pi-pi · diagnostics"];
   let pass = 0;
   let warn = 0;
   let fail = 0;
@@ -405,5 +406,5 @@ export async function runDoctor(orchestrator: Orchestrator, ctx: any, options: D
   );
 
   lines.push("", `Summary: ${pass} passed, ${warn} warnings, ${fail} failures`);
-  ctx.ui?.notify?.(lines.join("\n"), fail > 0 ? "error" : warn > 0 ? "warning" : "info");
+  await showReport(ctx, lines[0]!, lines.slice(1).join("\n").trimStart(), fail > 0 ? "error" : warn > 0 ? "warning" : "info");
 }

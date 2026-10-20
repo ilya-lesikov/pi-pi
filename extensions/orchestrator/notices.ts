@@ -54,14 +54,14 @@ class HostChannel {
   }
 
   /** A report the user asked for: shown now, on every surface the host may show. */
-  report(ctx: any, title: string, text: string): void {
+  report(ctx: any, title: string, text: string, level: NoticeLevel): void {
     const current = ctx ?? this.lastCtx;
     if (this.host.headless) {
       process.stderr.write(`${title}\n${text}\n`);
       return;
     }
     try {
-      current?.ui?.notify?.(`${title}\n${text}`, "info");
+      current?.ui?.notify?.(`${title}\n${text}`, level);
     } catch {}
     if (this.host.customMessagesVisible !== false && (this.needsChatCopy() || !this.host.notifyVisible)) {
       this.chat("pp-report", `${title}\n\n${text}`, { title });
@@ -132,11 +132,13 @@ export function currentHost(): HostProfile {
 /** Tells the user something that matters, wherever pi is hosted. */
 export function notice(ctx: any, message: string, level: NoticeLevel = "info"): void {
   if (channel) channel.notice(ctx, message, level);
+  else if (host.headless) process.stderr.write(`pi-pi: ${message}\n`);
   else ctx?.ui?.notify?.(message, level);
 }
 
 /** Shows a report the user asked for. */
-export function report(ctx: any, title: string, text: string): void {
-  if (channel) channel.report(ctx, title, text);
-  else ctx?.ui?.notify?.(`${title}\n${text}`, "info");
+export function report(ctx: any, title: string, text: string, level: NoticeLevel = "info"): void {
+  if (channel) channel.report(ctx, title, text, level);
+  else if (host.headless) process.stderr.write(`${title}\n${text}\n`);
+  else ctx?.ui?.notify?.(`${title}\n${text}`, level);
 }

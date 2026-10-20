@@ -154,7 +154,7 @@ describe("/pp top level", () => {
   });
 
   it("writes a report bundle from a typed note, and refuses an empty one", async () => {
-    script("Report", { freeform: "  " }, "Report", { freeform: "menu broke" }, "Write report", "Close");
+    script("Create support bundle…", { freeform: "  " }, "Create support bundle…", { freeform: "menu broke" }, "Write report", "Close");
     await run();
     expect(notify.mock.calls[0]).toEqual(["Report cancelled — a note is required.", "info"]);
     expect(notify.mock.calls[1]![0]).toMatch(/^Report written to .*\(1 files\)/);
@@ -164,7 +164,7 @@ describe("/pp top level", () => {
   });
 
   it("runs the doctor and returns to the panel", async () => {
-    script("Doctor", "Close");
+    script("Diagnostics", "Close");
     const orchestrator = makeOrchestrator(cwd);
     const runDoctor = vi.fn(async () => {});
     vi.doMock("./doctor.js", () => ({ runDoctor }));
@@ -413,7 +413,7 @@ describe("/pp › Settings › Providers", () => {
       "Back", "Back", "Close",
     );
     await run();
-    expect(notify.mock.calls[0]![0]).toMatch(/^Priority: Claude subscription › ChatGPT subscription/);
+    expect(notify.mock.calls[0]![0]).toMatch(/^pi-pi · routing\nPriority: Claude subscription › ChatGPT subscription/);
     expect(notify.mock.calls[0]![0]).toContain("Paused:");
     expect(project().providers.fallback.retryAfterMinutes).toBe(30);
     expect(notify).toHaveBeenCalledWith("Cleared 1 pause(s).", "info");

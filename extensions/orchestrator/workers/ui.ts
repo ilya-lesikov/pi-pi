@@ -419,6 +419,30 @@ function summarize(args: any): string {
   return text.replace(/\s+/g, " ").slice(0, 120);
 }
 
+/** A worker's transcript as plain text, for hosts without the live viewer; the newest part when long. */
+export function workerTranscriptText(manager: WorkerManager, id: string, maxChars = 6000): string {
+  const record = manager.get(id);
+  if (!record) return "This worker is no longer retained.";
+  const now = Date.now();
+  const head = `${record.spec.type} · ${record.spec.description} · ${record.status} · ${formatDuration((record.settledAt ?? now) - (record.startedAt ?? record.createdAt))} · ${record.toolUses} tools`;
+  const out: string[] = [];
+  for (const message of (manager.sessionOf(id)?.transcript() ?? []) as any[]) {
+    if (message.role === "user") out.push(`[Task] ${textOf(message.content).trim()}`);
+    else if (message.role === "assistant") {
+      const text = textOf(message.content).trim();
+      if (text) out.push(text);
+      for (const part of message.content ?? []) if (part?.type === "toolCall") out.push(`  ▸ ${part.name} ${summarize(part.arguments)}`);
+    }
+  }
+  if (record.question) out.push(`? waiting on you: ${record.question.text}`);
+  if (record.status === "running" && record.step) out.push(`▍ ${record.step.label} (${formatDuration(now - record.step.since)})`);
+  if (record.result && !ACTIVE_STATUSES.has(record.status)) out.push(`[Result: ${record.result.status}] ${record.result.summary}`);
+  if (record.error) out.push(`[Error] ${record.error}`);
+  let body = out.join("\n") || (record.status === "queued" ? "(queued)" : "(no transcript retained)");
+  if (body.length > maxChars) body = `… earlier messages omitted\n${body.slice(body.length - maxChars)}`;
+  return `${head}\n\n${body}`;
+}
+
 /** Opens the full-screen viewer for one worker; the panel is parked meanwhile so the overlay does not tear. */
 export async function openWorkerViewer(orchestrator: Orchestrator, ctx: any, id: string): Promise<void> {
   const manager = orchestrator.workers;

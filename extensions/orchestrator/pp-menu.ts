@@ -58,7 +58,9 @@ import { DEFAULT_KEEP_FRACTION, DEFAULT_HEADROOM_TOKENS, DEFAULT_MAX_PROMPT_TOKE
 import { DEFAULT_IMAGE_TOKENS } from "./promptcap/estimate.js";
 import { finalizeTracer, getTracer, initTracer } from "./tracer.js";
 import type { Orchestrator } from "./orchestrator.js";
-import { openWorkerViewer } from "./workers/ui.js";
+import { openWorkerViewer, workerTranscriptText } from "./workers/ui.js";
+import { currentHost, notice } from "./notices.js";
+import { showReport } from "./report-view.js";
 import type { WorkerRecord } from "./workers/types.js";
 
 type Scope = "global" | "project";
@@ -67,6 +69,8 @@ type SimpleRole = keyof PiPiConfig["agents"]["subagents"]["simple"];
 
 const BACK = "Back";
 const CLOSE = "Close";
+const SUPPORT_BUNDLE = "Create support bundle…";
+const DIAGNOSTICS = "Diagnostics";
 
 interface ConfigSourceInfo {
   activeValue: any;
@@ -287,7 +291,7 @@ function refreshRuntimeAfterConfigChange(orchestrator: Orchestrator, keyPath: st
     if (keyPath[1] === "maxConcurrentSubagents") orchestrator.workers?.poke();
     if (keyPath[1] === "main" && orchestrator.lastCtx) {
       void orchestrator.applyMainAgent(orchestrator.lastCtx).then((ok) => {
-        if (!ok) orchestrator.lastCtx?.ui?.notify?.(mainUnavailableMessage(orchestrator), "warning");
+        if (!ok) notice(orchestrator.lastCtx, mainUnavailableMessage(orchestrator), "warning");
       });
     }
     return;
@@ -307,21 +311,21 @@ function refreshRuntimeAfterConfigChange(orchestrator: Orchestrator, keyPath: st
 async function reconcileRouting(orchestrator: Orchestrator, ctx: any, reregister: boolean): Promise<void> {
   if (reregister) {
     const result = await updateFlantInfra(orchestrator.pi, { cwd: orchestrator.cwd, pinnedSpecs: pinnedRoleSpecs(orchestrator.config) });
-    if (!result.ok && readGatewayApiKey()) ctx?.ui?.notify?.(`LLM API update failed: ${result.error ?? "unknown error"}`, "warning");
+    if (!result.ok && readGatewayApiKey()) notice(ctx, `LLM API update failed: ${result.error ?? "unknown error"}`, "warning");
   }
   captureAvailableModels(ctx);
   orchestrator.registerAgents(true);
   if (!ctx) return;
   await orchestrator.runModelSwitchBetweenTurns(async () => {
     if (orchestrator.routedMainSpec) await orchestrator.restoreMainRouting(ctx);
-    else if (!await orchestrator.applyMainAgent(ctx)) ctx.ui?.notify?.(mainUnavailableMessage(orchestrator), "warning");
+    else if (!await orchestrator.applyMainAgent(ctx)) notice(ctx, mainUnavailableMessage(orchestrator), "warning");
   });
 }
 
 function applyConfigChange(orchestrator: Orchestrator, scope: Scope, keyPath: string[], value: any): void {
   const result = tryApplyConfigChange(orchestrator, scope, keyPath, value);
   if (!result.ok) {
-    orchestrator.lastCtx?.ui?.notify?.(`Config update rejected: ${result.error}`, "error");
+    notice(orchestrator.lastCtx, `Config update rejected: ${result.error}`, "error");
     return;
   }
   refreshRuntimeAfterConfigChange(orchestrator, keyPath);
@@ -330,7 +334,7 @@ function applyConfigChange(orchestrator: Orchestrator, scope: Scope, keyPath: st
 function clearConfigOverride(orchestrator: Orchestrator, scope: Scope, keyPath: string[]): void {
   const result = tryClearConfigOverride(orchestrator, scope, keyPath);
   if (!result.ok) {
-    orchestrator.lastCtx?.ui?.notify?.(`Config update rejected: ${result.error}`, "error");
+    notice(orchestrator.lastCtx, `Config update rejected: ${result.error}`, "error");
     return;
   }
   refreshRuntimeAfterConfigChange(orchestrator, keyPath);
@@ -681,7 +685,7 @@ async function writePool(orchestrator: Orchestrator, ctx: any, pool: PoolKey, ne
   const scope = await pickScope(ctx, orchestrator);
   if (!scope) return false;
   if (scope === "global" && hasLayerOverride(orchestrator, "project", keyPath)) {
-    ctx.ui?.notify?.(`A project override for this pool exists and would mask the global edit. Edit the project scope instead, or reset the project override first.`, "warning");
+    notice(ctx, `A project override for this pool exists and would mask the global edit. Edit the project scope instead, or reset the project override first.`, "warning");
     return false;
   }
   applyConfigChange(orchestrator, scope, keyPath, next);
@@ -785,12 +789,12 @@ async function showMaxConcurrentSetting(orchestrator: Orchestrator, ctx: any): P
       const input = await promptRequiredInput(ctx, `Max concurrent subagents (1-${MAX_CONCURRENT_SUBAGENTS_CEILING}) [${current}]`);
       if (!input) continue;
       if (!/^\d+$/.test(input)) {
-        ctx.ui?.notify?.(`Enter a positive integer between 1 and ${MAX_CONCURRENT_SUBAGENTS_CEILING}.`, "warning");
+        notice(ctx, `Enter a positive integer between 1 and ${MAX_CONCURRENT_SUBAGENTS_CEILING}.`, "warning");
         continue;
       }
       const parsed = Number.parseInt(input, 10);
       if (parsed < 1 || parsed > MAX_CONCURRENT_SUBAGENTS_CEILING) {
-        ctx.ui?.notify?.(`Enter a positive integer between 1 and ${MAX_CONCURRENT_SUBAGENTS_CEILING}.`, "warning");
+        notice(ctx, `Enter a positive integer between 1 and ${MAX_CONCURRENT_SUBAGENTS_CEILING}.`, "warning");
         continue;
       }
       applyScopeChoice(orchestrator, keyPath, parsed, await pickScope(ctx, orchestrator));
@@ -879,7 +883,7 @@ async function showSkillsSettings(orchestrator: Orchestrator, ctx: any): Promise
       continue;
     }
     if (choice === "List skills") {
-      ctx.ui?.notify?.(skills.map((skill) => `${skill.name} (${skill.layer}): ${skill.description}${skill.shadows.length ? ` — shadows ${skill.shadows.join(", ")}` : ""}`).join("\n") || "No skills available.", "info");
+      await showReport(ctx, "pi-pi · skills", skills.map((skill) => `${skill.name} (${skill.layer}): ${skill.description}${skill.shadows.length ? ` — shadows ${skill.shadows.join(", ")}` : ""}`).join("\n") || "No skills available.");
     }
   }
 }
@@ -1044,7 +1048,7 @@ function providerServes(provider: ProviderName): string {
 
 function warnIfMasked(ctx: any, orchestrator: Orchestrator, keyPath: string[], scope: Scope): void {
   if (scope === "global" && hasLayerOverride(orchestrator, "project", keyPath)) {
-    ctx.ui?.notify?.("A project setting still governs this; the global change has no effect here until the project one is reset.", "warning");
+    notice(ctx, "A project setting still governs this; the global change has no effect here until the project one is reset.", "warning");
   }
 }
 
@@ -1114,7 +1118,7 @@ async function showProvider(orchestrator: Orchestrator, ctx: any, provider: Prov
     const choice = await selectOption(ctx, PROVIDER_LABEL[provider], options);
     if (!choice || choice === BACK) return;
     if (choice.startsWith("Status:")) {
-      ctx.ui?.notify?.(`${PROVIDER_LABEL[provider]}: ${status}${detail ? ` — ${detail}` : ""}`, "info");
+      notice(ctx, `${PROVIDER_LABEL[provider]}: ${status}${detail ? ` — ${detail}` : ""}`, "info");
     } else if (choice.startsWith("Enabled:")) {
       await writeRoutingValue(orchestrator, ctx, enabledPath, !config[provider].enabled);
     } else if (choice === "Move up") {
@@ -1134,7 +1138,7 @@ async function showProvider(orchestrator: Orchestrator, ctx: any, provider: Prov
     } else if (choice === "Update now") {
       const result = await updateFlantInfra(orchestrator.pi, { force: true, cwd: orchestrator.cwd, pinnedSpecs: pinnedRoleSpecs(orchestrator.config) });
       await reconcileRouting(orchestrator, ctx, false);
-      ctx.ui?.notify?.(result.ok ? `LLM API: ${result.models?.length ?? 0} models.` : `LLM API update failed: ${result.error ?? "unknown error"}`, result.ok ? "info" : "error");
+      notice(ctx, result.ok ? `LLM API: ${result.models?.length ?? 0} models.` : `LLM API update failed: ${result.error ?? "unknown error"}`, result.ok ? "info" : "error");
     }
   }
 }
@@ -1192,11 +1196,11 @@ async function showProvidersSettings(orchestrator: Orchestrator, ctx: any): Prom
     } else if (choice.startsWith("Clear pauses")) {
       const cleared = clearAllPauses(orchestrator);
       await reconcileRouting(orchestrator, ctx, false);
-      ctx.ui?.notify?.(`Cleared ${cleared.length} pause(s).`, "info");
+      notice(ctx, `Cleared ${cleared.length} pause(s).`, "info");
     } else if (choice === "Reset global priority order" || choice === "Reset project priority order") {
       await maybeHandleResetChoice(orchestrator, ctx, choice.replace("priority order", "setting"), ["providers", "order"]);
     } else if (choice === "Explain routing") {
-      ctx.ui?.notify?.(explainRouting(orchestrator), "info");
+      await showReport(ctx, "pi-pi · routing", explainRouting(orchestrator));
     }
   }
 }
@@ -1395,7 +1399,7 @@ async function showCommandEditor(orchestrator: Orchestrator, ctx: any, id: strin
       if (!globInput) continue;
       const patterns = parseCommaSeparated(globInput);
       if (patterns.length === 0) {
-        ctx.ui?.notify?.("At least one file pattern is required.", "warning");
+        notice(ctx, "At least one file pattern is required.", "warning");
         continue;
       }
       applyScopeChoice(orchestrator, [...commandPath, "globs"], patterns, await pickScope(ctx, orchestrator));
@@ -1409,7 +1413,7 @@ async function showCommandEditor(orchestrator: Orchestrator, ctx: any, id: strin
     if (confirm !== "Yes, delete") continue;
     const scope = await pickScopeFromOwned(ctx, orchestrator, commandPath);
     if (!scope) {
-      ctx.ui?.notify?.("This command has no removable override in your config scopes.", "info");
+      notice(ctx, "This command has no removable override in your config scopes.", "info");
       continue;
     }
     clearConfigOverride(orchestrator, scope, commandPath);
@@ -1439,12 +1443,12 @@ async function showCommandsSettings(orchestrator: Orchestrator, ctx: any): Promi
       if (!run) continue;
       const globInput = await promptRequiredInput(ctx, "Glob patterns (comma-separated, e.g. *.ts,src/**)");
       if (!globInput) {
-        ctx.ui?.notify?.("At least one file pattern is required.", "warning");
+        notice(ctx, "At least one file pattern is required.", "warning");
         continue;
       }
       const patterns = parseCommaSeparated(globInput);
       if (patterns.length === 0) {
-        ctx.ui?.notify?.("At least one file pattern is required.", "warning");
+        notice(ctx, "At least one file pattern is required.", "warning");
         continue;
       }
       const scope = await pickScope(ctx, orchestrator);
@@ -1483,7 +1487,7 @@ async function showTimeoutsSettings(orchestrator: Orchestrator, ctx: any): Promi
         if (!input) continue;
         const parsed = parseDuration(input);
         if (parsed === null) {
-          ctx.ui?.notify?.("Invalid duration format.", "warning");
+          notice(ctx, "Invalid duration format.", "warning");
           continue;
         }
         applyScopeChoice(orchestrator, item.path, parsed, await pickScope(ctx, orchestrator));
@@ -1494,7 +1498,13 @@ async function showTimeoutsSettings(orchestrator: Orchestrator, ctx: any): Promi
   }
 }
 
-export function showUsage(ctx: any): void {
+export async function showUsage(ctx: any): Promise<void> {
+  const text = usageReport();
+  if (text) await showReport(ctx, "pi-pi · usage", text);
+  else notice(ctx, "No usage data available.", "info");
+}
+
+function usageReport(): string | null {
   const tracker = (globalThis as any)[Symbol.for("pi-pi:usage-tracker")] as
     | {
         getTotalInputTokens(): number; getTotalOutputTokens(): number;
@@ -1509,10 +1519,7 @@ export function showUsage(ctx: any): void {
       }
     | undefined;
 
-  if (!tracker) {
-    ctx.ui?.notify?.("No usage data available.", "info");
-    return;
-  }
+  if (!tracker) return null;
 
   const hitRate = (uncached: number, cacheRead: number, cacheWrite: number): number => {
     const processed = uncached + cacheRead + cacheWrite;
@@ -1638,7 +1645,7 @@ export function showUsage(ctx: any): void {
     lines.push(`  ${agentType}${countSuffix}: ${parts.join("  ")}`);
   }
 
-  ctx.ui?.notify?.(lines.join("\n"), "info");
+  return lines.join("\n");
 }
 
 async function showLspSettings(orchestrator: Orchestrator, ctx: any): Promise<void> {
@@ -1656,14 +1663,14 @@ async function showLspSettings(orchestrator: Orchestrator, ctx: any): Promise<vo
       continue;
     }
     if (!orchestrator.lsp) {
-      ctx.ui?.notify?.("Language servers are not available in this session.", "warning");
+      notice(ctx, "Language servers are not available in this session.", "warning");
       continue;
     }
     try {
       await orchestrator.lsp.restart();
-      ctx.ui?.notify?.("Language servers stopped; they start again on next use.", "info");
+      notice(ctx, "Language servers stopped; they start again on next use.", "info");
     } catch (error: any) {
-      ctx.ui?.notify?.(`Failed to restart LSP servers: ${error instanceof Error ? error.message : String(error)}`, "error");
+      notice(ctx, `Failed to restart LSP servers: ${error instanceof Error ? error.message : String(error)}`, "error");
     }
   }
 }
@@ -1703,7 +1710,40 @@ async function showWorkers(orchestrator: Orchestrator, ctx: any): Promise<void> 
       continue;
     }
     const id = byTitle.get(choice);
-    if (id) await openWorkerViewer(orchestrator, ctx, id);
+    if (!id) continue;
+    if (ctx?.mode === undefined || ctx?.mode === "tui") await openWorkerViewer(orchestrator, ctx, id);
+    else await showWorkerText(orchestrator, ctx, id);
+  }
+}
+
+function workersSummary(orchestrator: Orchestrator): string {
+  const records = workerRecords(orchestrator);
+  const active = records.filter(isActiveWorker).length;
+  const asking = records.filter((record) => record.question).length;
+  if (!records.length) return "Background workers: none yet";
+  return [`${active} active`, asking && `${asking} waiting on you`, `${records.length - active} finished`].filter(Boolean).join(" · ");
+}
+
+// Outside the terminal the live viewer is unavailable: the transcript as a
+// report, and its controls as a menu.
+async function showWorkerText(orchestrator: Orchestrator, ctx: any, id: string): Promise<void> {
+  for (;;) {
+    const manager = orchestrator.workers;
+    const record = manager?.get(id);
+    if (!manager || !record) return;
+    await showReport(ctx, `pi-pi · worker ${record.id}`, workerTranscriptText(manager, id));
+    const active = isActiveWorker(record);
+    const options: OptionInput[] = [opt("Refresh", "Show the transcript again")];
+    if (currentHost().offersText) options.push(opt(record.question ? "Answer" : active ? "Send a message" : "Send a follow-up", record.question ? record.question.text : "Steer it, or give it more work"));
+    if (active) options.push(opt("Stop", "Ask it to wrap up; killed in a minute if it does not"));
+    options.push(opt(BACK, "Return to the worker list"));
+    const choice = await selectOption(ctx, `${record.spec.type}: ${record.spec.description} [${record.status}]`, options);
+    if (!choice || choice === BACK) return;
+    if (choice === "Stop") manager.stop(id);
+    else if (choice !== "Refresh") {
+      const message = await promptRequiredInput(ctx, record.question ? `Answer ${record.id}` : `Message to ${record.id}`);
+      if (message) notice(ctx, `${record.id}: ${manager.send(id, message)}`, "info");
+    }
   }
 }
 
@@ -1757,7 +1797,7 @@ async function showReportMenu(orchestrator: Orchestrator, ctx: any): Promise<voi
     orchestrator.interactivePromptOpen = false;
   }
   if (!note || !note.trim()) {
-    ctx.ui?.notify?.("Report cancelled — a note is required.", "info");
+    notice(ctx, "Report cancelled — a note is required.", "info");
     return;
   }
   const files = collectReportFiles(orchestrator.cwd);
@@ -1767,7 +1807,7 @@ async function showReportMenu(orchestrator: Orchestrator, ctx: any): Promise<voi
   ]);
   if (confirm !== "Write report") return;
   const written = writeReportBundle(orchestrator.cwd, note, files);
-  ctx.ui?.notify?.(`Report written to ${written.reportDir} (${written.captured.length} files). Nothing was sent anywhere.`, "info");
+  notice(ctx, `Report written to ${written.reportDir} (${written.captured.length} files). Nothing was sent anywhere.`, "info");
 }
 
 async function showSettings(orchestrator: Orchestrator, ctx: any): Promise<void> {
@@ -1804,23 +1844,33 @@ async function showSettings(orchestrator: Orchestrator, ctx: any): Promise<void>
 
 export async function showPpMenu(orchestrator: Orchestrator, ctx: any): Promise<void> {
   OrchestratorRef.current = orchestrator;
+  // No menu to pick from without a UI: the status is the useful answer.
+  if (!ctx?.hasUI && ctx?.mode !== undefined && ctx?.mode !== "tui") {
+    await showReport(ctx, "pi-pi · status", sessionStatus(orchestrator, ctx));
+    return;
+  }
+  // bb waits for a model run after every prompt, and /pp starts none; on a
+  // host pi-pi cannot identify it may be the same. Said before the menu opens.
+  if (ctx?.mode === "rpc" && currentHost().settlesCommandOnlyPrompt !== true) {
+    notice(ctx, "/pp: this app may stay busy after the menu closes; press Stop if it does.", "warning");
+  }
   for (;;) {
     const choice = await selectOption(ctx, "/pp · session control panel", [
       opt("Status", "Model, context, providers, workers, and warnings"),
-      opt("Workers", "Inspect or stop bounded background workers"),
+      opt("Workers", workersSummary(orchestrator)),
       opt("Usage", "Session token usage and cost breakdown"),
       opt("Settings", "Providers, models, agents, and everything else"),
-      opt("Report", "Bundle a local feedback report (note + logs)"),
-      opt("Doctor", "Run diagnostic checks"),
+      opt(SUPPORT_BUNDLE, "Write a note and the logs to a local folder; nothing is sent"),
+      opt(DIAGNOSTICS, "Check credentials, providers, tools and config"),
       opt(CLOSE, "Return to the prompt"),
     ]);
     if (!choice || choice === CLOSE) return;
-    if (choice === "Status") ctx.ui?.notify?.(sessionStatus(orchestrator, ctx), "info");
+    if (choice === "Status") await showReport(ctx, "pi-pi · status", sessionStatus(orchestrator, ctx));
     else if (choice === "Workers") await showWorkers(orchestrator, ctx);
-    else if (choice === "Usage") showUsage(ctx);
+    else if (choice === "Usage") await showUsage(ctx);
     else if (choice === "Settings") await showSettings(orchestrator, ctx);
-    else if (choice === "Report") await showReportMenu(orchestrator, ctx);
-    else if (choice === "Doctor") {
+    else if (choice === SUPPORT_BUNDLE) await showReportMenu(orchestrator, ctx);
+    else if (choice === DIAGNOSTICS) {
       const { runDoctor } = await import("./doctor.js");
       await runDoctor(orchestrator, ctx);
     }

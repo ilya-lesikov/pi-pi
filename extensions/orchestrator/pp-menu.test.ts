@@ -84,7 +84,7 @@ describe("/pp session control panel", () => {
     const { showPpMenu } = await import("./pp-menu.js");
     await showPpMenu(orchestrator, { model: null, sessionManager: {}, ui: {} });
     const options = askUser.mock.calls[0][1].options.map((option: any) => option.title);
-    expect(options).toEqual(["Status", "Workers", "Usage", "Settings", "Report", "Doctor", "Close"]);
+    expect(options).toEqual(["Status", "Workers", "Usage", "Settings", "Create support bundle…", "Diagnostics", "Close"]);
     expect(options).not.toContain("Task");
     expect(options).not.toContain("Next");
     const settings = askUser.mock.calls[1][1].options.map((option: any) => option.title);
@@ -277,5 +277,66 @@ describe("/pp session control panel", () => {
     const providers = askUser.mock.calls[4][1].options.map((option: any) => option.title);
     expect(providers).toContain("zai");
     expect(providers).toContain("ChatGPT subscription (openai-codex)");
+  });
+
+  it("prints the status instead of a menu without a UI", async () => {
+    const orchestrator = makeOrchestrator(cwd);
+    const { attachHost } = await import("./notices.js");
+    const ctx = { mode: "print", hasUI: false, model: null, sessionManager: {}, ui: {} };
+    attachHost(ctx);
+    const written: string[] = [];
+    const write = vi.spyOn(process.stderr, "write").mockImplementation((chunk: any) => (written.push(String(chunk)), true));
+    try {
+      const { showPpMenu } = await import("./pp-menu.js");
+      await showPpMenu(orchestrator, ctx);
+    } finally {
+      write.mockRestore();
+      attachHost({ mode: "tui" });
+    }
+    expect(askUser).not.toHaveBeenCalled();
+    expect(written[0]).toMatch(/^pi-pi · status\nModel: none/);
+  });
+
+  it("warns before opening on a host that may stay busy, and not on one that settles", async () => {
+    const { attachHost } = await import("./notices.js");
+    const { showPpMenu } = await import("./pp-menu.js");
+    for (const [env, warned] of [[{ BB_THREAD_ID: "t" }, true], [{}, true], [{ PASEO_AGENT_ID: "a" }, false]] as const) {
+      Object.assign(process.env, env);
+      const notify = vi.fn();
+      const ctx = { mode: "rpc", hasUI: true, isIdle: () => true, model: null, sessionManager: {}, ui: { notify } };
+      attachHost(ctx);
+      select("Close");
+      await showPpMenu(makeOrchestrator(cwd), ctx);
+      expect(notify.mock.calls.some((call) => /may stay busy/.test(call[0]))).toBe(warned);
+      for (const key of Object.keys(env)) delete process.env[key];
+    }
+    attachHost({ mode: "tui" });
+  });
+
+  it("shows a worker as text with its controls outside the terminal", async () => {
+    const { attachHost } = await import("./notices.js");
+    const orchestrator = makeOrchestrator(cwd);
+    const record: any = { id: "explore-1", spec: { type: "explore", description: "map repo" }, status: "running", createdAt: Date.now(), toolUses: 2 };
+    const stop = vi.fn();
+    const send = vi.fn(() => "steered");
+    orchestrator.workers = { list: () => [record], get: () => record, sessionOf: () => ({ transcript: () => [{ role: "assistant", content: [{ type: "text", text: "reading files" }, { type: "toolCall", name: "read", arguments: { path: "a.ts" } }] }] }), stop, send } as any;
+    const notify = vi.fn();
+    const ctx = { mode: "rpc", hasUI: true, isIdle: () => true, model: null, sessionManager: {}, ui: { notify, input: vi.fn(async () => "focus on tests") } };
+    attachHost(ctx);
+    select("Workers");
+    selectMatching(/explore-1/);
+    select("Send a message");
+    select("Stop");
+    select("Back");
+    select("Back");
+    select("Close");
+    const { showPpMenu } = await import("./pp-menu.js");
+    await showPpMenu(orchestrator, ctx);
+    attachHost({ mode: "tui" });
+    const shown = notify.mock.calls.map((call) => call[0]).find((text: string) => text.startsWith("pi-pi · worker explore-1"));
+    expect(shown).toContain("reading files");
+    expect(shown).toContain("▸ read a.ts");
+    expect(send).toHaveBeenCalledWith("explore-1", "focus on tests");
+    expect(stop).toHaveBeenCalledWith("explore-1");
   });
 });
