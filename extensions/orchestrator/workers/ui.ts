@@ -29,33 +29,30 @@ export function registerWorkerUi(orchestrator: Orchestrator): void {
   });
   const widget = new WorkerWidget(orchestrator);
   orchestrator.workerWidget = widget;
-  pi.on("session_shutdown", async () => widget.detach());
+  pi.on("session_shutdown", async () => {
+    widget.detach();
+    resetScreens();
+  });
   // A question from the agent or another extension: worker screens step
-  // aside while it is open. pi reports a dialog opened through a command or
-  // tool context; a worker screen opened that way (the /pp viewer) reports
-  // itself too, and is not a question.
+  // aside while it is open.
   const on = pi.on.bind(pi) as (event: string, handler: (event: any) => void) => void;
-  on("ui_prompt_start", (event) => {
-    const own = event?.kind === "custom" ? ownScreens.find((token) => !token.taken) : undefined;
-    if (own) own.taken = true;
-    reported.push(!!own);
-    if (!own) questionOpened();
-  });
-  on("ui_prompt_end", () => {
-    const own = reported.pop();
-    if (own === false) questionClosed();
-  });
-  // Inside another dialog (a /pp screen) pi reports nothing for a nested one,
-  // so the agent's own questions are caught when the tool starts.
-  const questionTools = new Set<string>();
+  // pi reports one top-level dialog at a time, start and end each in a
+  // microtask of their own, so they can arrive swapped; a balance settles
+  // either way. The /pp viewer is such a dialog itself (and nothing else is
+  // reported while it is open), so only screens opened with ctrl+n follow it.
+  on("ui_prompt_start", () => setPromptBalance(promptBalance + 1));
+  on("ui_prompt_end", () => setPromptBalance(promptBalance - 1));
+  // A dialog nested inside another (the agent asking while /pp is open) is
+  // not reported at all: the agent's own questions are caught by their tools.
   on("tool_execution_start", (event) => {
     if (event?.toolName !== "ask_user" && event?.toolName !== "confirm") return;
     questionTools.add(String(event.toolCallId));
-    questionOpened();
+    refreshScreens();
   });
   on("tool_execution_end", (event) => {
-    if (questionTools.delete(String(event?.toolCallId))) questionClosed();
+    if (questionTools.delete(String(event?.toolCallId))) refreshScreens();
   });
+  on("session_start", () => resetScreens());
   pi.registerShortcut?.("ctrl+n", {
     description: "Select a worker: see its output, message, interrupt, stop or kill it",
     handler: async (ctx: any) => {
@@ -563,20 +560,16 @@ export async function openWorkerViewer(orchestrator: Orchestrator, ctx: any, id:
   // From the picker the panel is already suspended, and the picker resumes it.
   if (!fromPicker) orchestrator.workerWidget?.suspend();
   let untrack = () => {};
-  // Opened through a command, pi reports this as a dialog: not a question.
-  const token = fromPicker ? null : { taken: false };
-  if (token) ownScreens.push(token);
   try {
     await ctx.ui.custom((tui: TUI, theme: Theme, _keys: unknown, done: (value: undefined) => void) =>
       new WorkerViewer(tui, theme, manager, id, () => done(undefined)), {
       overlay: true,
       overlayOptions: { anchor: "center", width: "100%", maxHeight: "100%", margin: 0 },
       // Full screen, it would hide a question: it steps aside while one is open.
-      onHandle: (handle: any) => { untrack = trackScreen(handle); },
+      onHandle: (handle: any) => { untrack = trackScreen(handle, fromPicker); },
     });
   } finally {
     untrack();
-    if (token && ownScreens.includes(token)) ownScreens.splice(ownScreens.indexOf(token), 1);
     // It may have failed while the transcript was open: that failure was seen.
     orchestrator.workerWidget?.markSeen(id);
     if (!fromPicker) orchestrator.workerWidget?.resume();
@@ -757,30 +750,41 @@ function rowsOf(tui: TUI | null): number {
  * aside until it is answered. Hiding goes by handle: pi closes overlays by
  * removing the topmost one, which by then may be the question itself.
  */
-const screens = new Set<{ setHidden(hidden: boolean): void }>();
-let questionsOpen = 0;
-/**
- * A worker viewer opened through a command context: pi reports it as a dialog
- * of kind "custom", which must not count as a question. Each token is taken
- * by the first such report; one left untaken is dropped when the viewer closes.
- */
-const ownScreens: Array<{ taken: boolean }> = [];
-/** pi pairs every reported dialog's start with its end; whether each was a worker screen. */
-const reported: boolean[] = [];
+type OverlayHandle = { setHidden(hidden: boolean): void };
+/** Screen → whether reported dialogs hide it (only those opened with ctrl+n). */
+const screens = new Map<OverlayHandle, { followsPrompts: boolean; hidden: boolean }>();
+let promptBalance = 0;
+const questionTools = new Set<string>();
 
-function trackScreen(handle: { setHidden(hidden: boolean): void }): () => void {
-  screens.add(handle);
-  if (questionsOpen > 0) handle.setHidden(true);
+function shouldHide(followsPrompts: boolean): boolean {
+  return questionTools.size > 0 || (followsPrompts && promptBalance > 0);
+}
+
+function refreshScreens(): void {
+  for (const [handle, state] of screens) {
+    const hide = shouldHide(state.followsPrompts);
+    if (hide === state.hidden) continue;
+    state.hidden = hide;
+    handle.setHidden(hide);
+  }
+}
+
+function setPromptBalance(next: number): void {
+  promptBalance = next;
+  refreshScreens();
+}
+
+function resetScreens(): void {
+  promptBalance = 0;
+  questionTools.clear();
+  refreshScreens();
+}
+
+function trackScreen(handle: OverlayHandle, followsPrompts: boolean): () => void {
+  const state = { followsPrompts, hidden: false };
+  screens.set(handle, state);
+  refreshScreens();
   return () => screens.delete(handle);
-}
-
-function questionOpened(): void {
-  if (questionsOpen++ === 0) for (const handle of screens) handle.setHidden(true);
-}
-
-function questionClosed(): void {
-  if (questionsOpen === 0) return;
-  if (--questionsOpen === 0) for (const handle of screens) handle.setHidden(false);
 }
 
 /** Opens the picker over the bottom of the screen; its Enter opens the full viewer. */
@@ -805,7 +809,7 @@ export async function openWorkerPicker(orchestrator: Orchestrator, ctx: any): Pr
         // No height cap here: pi fixes it when the overlay opens, while the
         // picker sizes itself to the terminal it is drawn on.
         overlayOptions: { anchor: "bottom-center", width: "100%", margin: 0 },
-        onHandle: (handle: any) => { untrack = trackScreen(handle); },
+        onHandle: (handle: any) => { untrack = trackScreen(handle, true); },
       });
     } finally {
       untrack();

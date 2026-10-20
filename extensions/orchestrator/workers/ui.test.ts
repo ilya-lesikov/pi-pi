@@ -170,23 +170,35 @@ describe("worker update renderer", () => {
     await viewing;
   });
 
-  it("does not hide the /pp viewer for the dialog event its own opening reports", async () => {
+  it("does not hide the /pp viewer for the dialog pi reports it as", async () => {
     const { orchestrator, custom, shown, emit } = screens();
     const viewing = openWorkerViewer(orchestrator, { ui: { custom } }, orchestrator.workers.list()[0]!.id);
-    // pi reports a command's custom() as a dialog, some microtasks later.
     await flush();
     emit("ui_prompt_start", { kind: "custom" });
-    await flush();
     expect(shown[0]!.hidden).toBe(false);
-    // A real question afterwards still hides it.
-    emit("ui_prompt_start", { kind: "select" });
-    expect(shown[0]!.hidden).toBe(true);
-    emit("ui_prompt_end", { kind: "select" });
     shown[0]!.done();
     emit("ui_prompt_end", { kind: "custom" });
     await viewing;
+  });
+
+  it("settles whichever order pi delivers a dialog's end and the next one's start", async () => {
+    const { shortcuts, custom, shown, emit } = screens();
+    const picking = shortcuts.get("ctrl+n").handler({ ui: { custom } });
+    await flush();
+    // A menu closes and a question opens; the two reports arrive swapped.
+    emit("ui_prompt_start", { kind: "custom" });
     emit("ui_prompt_start", { kind: "select" });
+    emit("ui_prompt_end", { kind: "custom" });
+    expect(shown[0]!.hidden).toBe(true);
     emit("ui_prompt_end", { kind: "select" });
+    expect(shown[0]!.hidden).toBe(false);
+    // An end with no start seen (a dialog from before) does not leave it hidden later.
+    emit("ui_prompt_end", { kind: "select" });
+    emit("ui_prompt_start", { kind: "select" });
+    emit("session_start");
+    expect(shown[0]!.hidden).toBe(false);
+    shown[0]!.done();
+    await picking;
   });
 
   it("binds ctrl+n to the worker picker, in the terminal only", async () => {
