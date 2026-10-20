@@ -100,28 +100,36 @@ export function paseoCards(): boolean {
  * so far is on disk: Paseo reads the file once more when a card turns final
  * and then stops following it. Hidden from the transcript and from the model.
  */
+// Per worker, so a resumed run's update never overtakes the previous run's final one.
+const paseoQueues = new Map<string, Promise<void>>();
+
 function paseoUpdate(record: WorkerRecord, transcripts: TranscriptStore | null, sendMessage: (message: any) => void): void {
   if (!paseoCards()) return;
-  const send = () => {
-    const status = paseoStatus(record.status);
-    const outputFile = transcripts?.fileFor(record.id);
+  // Taken now: by the time the transcript is drained the worker may already be on its next run.
+  const status = paseoStatus(record.status);
+  const outputFile = transcripts?.fileFor(record.id);
+  const send = (file: string | undefined) => {
     try {
       sendMessage({
         customType: status === "running" ? "subagent-update" : "subagent-notification",
         content: "",
         display: false,
-        details: { id: record.id, status, description: record.spec.description, ...(outputFile ? { outputFile } : {}) },
+        details: { id: record.id, status, description: record.spec.description, ...(file ? { outputFile: file } : {}) },
       });
     } catch {}
   };
-  if (!transcripts) send();
+  if (!transcripts) return send(outputFile);
   // Paseo reads the file once more on a final status and then stops following
   // it; a drain that timed out sends the status anyway, with the file left out
   // so the card does not claim a complete transcript.
-  else void transcripts.drain(record.id).then((complete) => {
+  const previous = paseoQueues.get(record.id) ?? Promise.resolve();
+  const next = previous.then(async () => {
+    const complete = await transcripts.drain(record.id);
     if (!complete) transcripts.abandon(record.id);
-    send();
+    send(complete ? outputFile : undefined);
   });
+  paseoQueues.set(record.id, next);
+  void next.finally(() => { if (paseoQueues.get(record.id) === next) paseoQueues.delete(record.id); });
 }
 
 function onWorkerEvent(event: WorkerEvent, hooks: WorkerHooks, delivery: WorkerDelivery, transcripts: TranscriptStore | null): void {

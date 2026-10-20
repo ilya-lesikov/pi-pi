@@ -479,4 +479,36 @@ describe("Paseo sub-agent cards", () => {
       if (paseo) expect(sendMessage.mock.calls[0]![0]).toEqual({ customType: "subagent-notification", content: "", display: false, details: { id: "explore-1", status: "completed", description: "look" } });
     }
   });
+
+  it("sends a run's final status with its own file before a resumed run's update", async () => {
+    process.env.PASEO_AGENT_ID = "a";
+    const { mkdtempSync, mkdirSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const cwd = mkdtempSync(join(tmpdir(), "pp-paseo-"));
+    mkdirSync(join(cwd, ".pp"));
+    try {
+      const { factory, sessions } = fakeFactory();
+      const sendMessage = vi.fn();
+      const { orchestrator: orch } = orchestrator();
+      orch.cwd = cwd;
+      orch.lastCtx.sessionManager = { getSessionId: () => "s" };
+      const { manager } = createWorkers(orch, workerHooks({ sendMessage }), factory);
+      const record = manager.spawn(spec());
+      await flush();
+      sessions[0]!.hooks.onMessage?.({ role: "assistant", content: [{ type: "text", text: "first run" }] });
+      sessions[0]!.finish();
+      await flush();
+      // Resumed before the first run's transcript has necessarily drained.
+      manager.send(record.id, "more");
+      // Real fs writes underneath: wait on real time, not the file's fake timers.
+      vi.useRealTimers();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const details = sendMessage.mock.calls.map((call) => call[0].details);
+      expect(details[0]).toMatchObject({ status: "completed", outputFile: join(cwd, ".pp", "workers", "s", "explore-1.jsonl") });
+      expect(details[1]).toMatchObject({ status: "running", outputFile: join(cwd, ".pp", "workers", "s", "explore-1-2.jsonl") });
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
 });
