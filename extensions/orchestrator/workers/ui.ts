@@ -720,8 +720,11 @@ export class WorkerPicker implements Component {
       return lines.map((line, i) => truncateToWidth(`${i === 0 || record === selected ? mark : " "}${line.slice(1)}`, width));
     });
     const total = blocks.reduce((sum, block) => sum + block.length, 0);
-    let room = Math.max(2, pickerHeight(rowsOf(this.tui)) - 1 - footer.length);
-    if (total > room) room = Math.max(2, room - 2);
+    const height = pickerHeight(rowsOf(this.tui));
+    let room = Math.max(2, height - 1 - footer.length);
+    // The "N more" markers only when there is a row for them beside the selection.
+    const markers = total > room && room - 2 >= 2;
+    if (markers) room -= 2;
     const at = records.indexOf(selected);
     let first = at;
     let used = blocks[at]!.length;
@@ -729,9 +732,11 @@ export class WorkerPicker implements Component {
     let last = at;
     while (last < blocks.length - 1 && used + blocks[last + 1]!.length <= room) used += blocks[++last]!.length;
     const body = blocks.slice(first, last + 1).flat();
-    if (first > 0) body.unshift(truncateToWidth(th.fg("dim", `  ↑ ${first} more`), width));
-    if (last < blocks.length - 1) body.push(truncateToWidth(th.fg("dim", `  ↓ ${blocks.length - 1 - last} more`), width));
-    return [header, ...body, ...footer];
+    if (markers && first > 0) body.unshift(truncateToWidth(th.fg("dim", `  ↑ ${first} more`), width));
+    if (markers && last < blocks.length - 1) body.push(truncateToWidth(th.fg("dim", `  ↓ ${blocks.length - 1 - last} more`), width));
+    // On a terminal too short for all of it, the header goes first: the keys stay.
+    const lines = [header, ...body, ...footer];
+    return lines.length > height ? lines.slice(lines.length - height) : lines;
   }
 
   invalidate(): void {}
@@ -739,7 +744,7 @@ export class WorkerPicker implements Component {
 
 /** Rows the picker may take. */
 function pickerHeight(rows: number): number {
-  return Math.max(8, Math.floor(rows * 0.6));
+  return Math.min(rows, Math.max(8, Math.floor(rows * 0.6)));
 }
 
 function rowsOf(tui: TUI | null): number {

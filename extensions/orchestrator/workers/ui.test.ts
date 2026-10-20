@@ -122,10 +122,13 @@ describe("worker update renderer", () => {
     orchestrator.workerWidget.attach({ ui: { setWidget: vi.fn(), setStatus: vi.fn() } });
     orchestrator.workers.spawn(spec());
     const shown: Array<{ name: string; hidden: boolean; done: () => void; component: any }> = [];
+    // Like pi: done() pops the TOPMOST overlay and settles the caller's promise;
+    // a screen that closed something other than itself fails the test.
     const custom = vi.fn((factory: any, options: any) => new Promise<void>((resolve) => {
       const entry: any = { hidden: false };
       entry.component = factory({ terminal: { rows: 30 }, requestRender: vi.fn() }, theme, undefined, () => {
-        shown.splice(shown.indexOf(entry), 1);
+        const top = shown.pop();
+        expect(top).toBe(entry);
         resolve();
       });
       entry.name = entry.component.constructor.name;
@@ -751,9 +754,11 @@ describe("WorkerPicker (ctrl+n)", () => {
     tui.terminal.rows = 40;
     expect(picker.render(120).length).toBeLessThanOrEqual(24);
     expect(picker.render(120).length).toBeGreaterThan(9);
-    // On a tiny terminal everything still fits its minimum of eight rows.
+    // Never taller than the terminal; the message box stays the last lines.
     tui.terminal.rows = 6;
-    expect(picker.render(120).length).toBeLessThanOrEqual(8);
+    const tiny = picker.render(120).map(plain);
+    expect(tiny.length).toBeLessThanOrEqual(6);
+    expect(tiny.at(-2)).toMatch(/^Message explore: /);
   });
 
   it("scrolls a long list to keep the selected worker on screen", async () => {

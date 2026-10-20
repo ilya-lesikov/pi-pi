@@ -147,6 +147,8 @@ export class MainStatusTracker {
         // still open keeps the status on the user.
         const asking = [...this.tools.values()].some((name) => name === "ask_user" || name === "confirm");
         if (asking) return;
+        // A dialog another tool opened is still up.
+        if (this.state.kind === "waiting_user" && this.underneath) return;
         if (this.state.kind === "tool" || this.state.kind === "waiting_user") {
           const since = this.state.kind === "tool" ? this.state.since : this.now();
           this.set({ kind: "tool", since, label: this.tools.size === 1 ? [...this.tools.values()][0]! : `${this.tools.size} tools` });
