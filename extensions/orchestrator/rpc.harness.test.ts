@@ -134,7 +134,8 @@ describe.skipIf(!existsSync(PI))("pi-pi over pi's RPC mode", { timeout: 60_000 }
     run.send({ type: "prompt", message: "go" });
     const end = await toolResult(run, "confirm");
     expect(resultText(end)).toBe("User confirmed: yes.");
-    expect(run.dialogs[0]).toMatchObject({ method: "confirm", title: "Delete 3 stale namespaces?", message: "recreated on next PR" });
+    expect(run.dialogs[0]).toMatchObject({ method: "confirm", title: "Delete 3 stale namespaces?" });
+    expect(run.dialogs[0]!.message).toMatch(/^recreated on next PR\n⚠ Destructive · asked /);
     await settled(run);
     await run.close();
   });

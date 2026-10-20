@@ -59,7 +59,9 @@ export class WorkerHold {
     if (!manager.active().length && !recovering() && delivery.pending() === 0) return "settled";
     if (manager.active().some((record) => record.question)) return "released";
     if (signal?.aborted || host.hasPendingMessages()) return "released";
-    this.touch();
+    // Not touched here: after a hold timed out, the next turn of the same run
+    // must not wait the whole limit again for the same silent worker. A
+    // message from the user, or worker activity, is what restarts the clock.
     return new Promise<HoldOutcome>((resolve) => {
       let finished = false;
       const finish = (outcome: HoldOutcome) => {

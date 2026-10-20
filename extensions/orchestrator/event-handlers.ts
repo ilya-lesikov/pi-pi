@@ -760,6 +760,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     } else {
       orchestrator.resetContinuation();
       resetRequestActivity(orchestrator);
+      orchestrator.workerHold.touch();
     }
     const registered = pi.getAllTools().map((tool) => tool.name);
     const names = [...new Set([...HOST_BUILTINS, ...registered])];

@@ -441,4 +441,12 @@ describe("askUser for pi-pi's own menus", () => {
     expect(isCancel(await askUser({ hasUI: true, ui: esc.ui }, { question: "Menu", options: ["One", "Two"], allowFreeform: false }))).toBe(true);
     expect(await askQuestion({ hasUI: false, ui: null }, { question: "x" })).toBeNull();
   });
+
+  it("makes every dangerous confirm distinct, so no host answers it from an earlier approval", async () => {
+    let tool: any;
+    registerConfirm({ registerTool: (t: any) => (tool = t) } as any);
+    const confirm = vi.fn(async (_title: string, _message: string) => false);
+    await tool.execute("id", { question: "Drop db?", danger: true }, undefined, undefined, { hasUI: true, mode: "rpc", ui: { confirm } });
+    expect(confirm.mock.calls[0]![1]).toMatch(/^⚠ Destructive · asked \d\d:\d\d:\d\d$/);
+  });
 });

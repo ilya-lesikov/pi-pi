@@ -162,3 +162,25 @@ describe("WorkerHold, round two", () => {
     expect(outcome).toBe("idle");
   });
 });
+
+describe("WorkerHold idle clock", () => {
+  it("does not wait the whole limit again on the next turn after timing out", async () => {
+    const { manager, delivery, spawn } = setup();
+    spawn();
+    await vi.advanceTimersByTimeAsync(0);
+    const hold = new WorkerHold();
+    const host = { manager, delivery, signal: undefined, hasPendingMessages: () => false, idleMs: 10_000 };
+    const first = hold.wait(host);
+    await vi.advanceTimersByTimeAsync(11_000);
+    expect(await first).toBe("idle");
+    let second: string | undefined;
+    void hold.wait(host).then((value) => { second = value; });
+    await vi.advanceTimersByTimeAsync(600);
+    expect(second).toBe("idle");
+    hold.touch();
+    let third: string | undefined;
+    void hold.wait(host).then((value) => { third = value; });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(third).toBeUndefined();
+  });
+});

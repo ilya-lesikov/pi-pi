@@ -79,7 +79,10 @@ export function registerConfirm(pi: ExtensionAPI): void {
         // Hosts render confirm as their native approval: Yes and No, with a
         // dismissal that comes back as No. The question goes in the title,
         // which every host shows.
-        const yes = await ctx.ui.confirm(fitLine(question, 160), params.detail?.trim() ?? "", { signal });
+        // T3 answers a confirm it has seen approved "always" by itself; a
+        // dangerous one carries the time it was asked, so it is always new.
+        const detail = [params.detail?.trim(), params.danger ? `⚠ Destructive · asked ${new Date().toISOString().slice(11, 19)}` : ""].filter(Boolean).join("\n");
+        const yes = await ctx.ui.confirm(fitLine(question, 160), detail, { signal });
         details = { ...base, decision: signal?.aborted ? "dismissed" : yes ? "yes" : "no" };
       }
       return { content: text(resultFor(details)), details };
