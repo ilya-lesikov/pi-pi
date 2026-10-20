@@ -112,6 +112,16 @@ describe("MainStatusTracker", () => {
     expect(tracker.current().text).toBe("Waiting for claude-opus-4-5");
   });
 
+  it("keeps waiting while a second dialog is open after the first one's end arrives late", () => {
+    const { tracker, fire } = tracked();
+    fire("ui_prompt_start", { kind: "custom" });
+    fire("ui_prompt_start", { kind: "select" });
+    fire("ui_prompt_end", { kind: "custom" });
+    expect(tracker.current().text).toBe("Waiting for your answer");
+    fire("ui_prompt_end", { kind: "select" });
+    expect(tracker.current()).toMatchObject({ level: "idle" });
+  });
+
   it("ends a /compact typed while idle as idle, and one that failed too", () => {
     const { tracker, fire } = tracked();
     fire("session_before_compact", { reason: "manual" });

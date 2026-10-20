@@ -36,6 +36,7 @@ export class MainStatusTracker {
   private state: State = { kind: "idle", since: Date.now() };
   /** What a dialog or a compaction interrupted, to go back to when it ends. */
   private underneath: State | null = null;
+  private dialogs = 0;
   private readonly tools = new Map<string, string>();
   private modelLabel = "the model";
   private lastActivity = Date.now();
@@ -169,14 +170,17 @@ export class MainStatusTracker {
     });
     // A dialog can open while idle (a /pp menu) or in the middle of a tool;
     // when it closes the agent is back to whatever it was doing before.
+    // pi reports each dialog's start and end in microtasks of their own, so
+    // one dialog's end can arrive after the next one's start: count them.
     on("ui_prompt_start", () => {
-      if (this.state.kind === "waiting_user") return;
+      if (this.dialogs++ > 0 || this.state.kind === "waiting_user") return;
       this.underneath = this.state;
       this.set({ kind: "waiting_user", since: this.now() });
     });
     on("ui_prompt_end", () => {
       this.activity();
-      if (this.state.kind !== "waiting_user") return;
+      this.dialogs = Math.max(0, this.dialogs - 1);
+      if (this.dialogs > 0 || this.state.kind !== "waiting_user") return;
       const back = this.underneath;
       this.underneath = null;
       if (back) this.set(back.kind === "idle" ? back : { ...back, since: this.now() } as State);
@@ -197,8 +201,18 @@ export class MainStatusTracker {
     on("session_compact_failed", compacted);
     on("agent_settled", () => {
       this.tools.clear();
+      const idle: State = { kind: "idle", since: this.now(), settledAt: this.now() };
+      // A dialog still open (a /pp menu) stays the status; idle is what it covers.
+      if (this.dialogs > 0 && this.state.kind === "waiting_user") {
+        this.underneath = idle;
+        return;
+      }
       this.underneath = null;
-      this.set({ kind: "idle", since: this.now(), settledAt: this.now() });
+      this.set(idle);
+    });
+    on("session_start", () => {
+      this.dialogs = 0;
+      this.underneath = null;
     });
   }
 }
