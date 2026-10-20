@@ -23,7 +23,6 @@ export const PI_PI_OWNED_TOOL_NAMES: readonly string[] = [
   "lsp", // pi-pi's lsp tool
   "Agent", // pi-pi's workers
   "TaskCreate", // pi-pi's task tools
-  "todo", // the same, under Paseo
   "ask_user", // pi-pi's ask_user
   "vcc_recall", // pi-pi's own recall tools
   "recall_tool_output",
@@ -79,7 +78,8 @@ export function detectDuplicateExtensions(
   const findings: DuplicateFinding[] = [];
   const seen = new Set<string>();
 
-  const ownedTools = new Set(PI_PI_OWNED_TOOL_NAMES);
+  // Under Paseo pi-pi's task tools are one tool named "todo".
+  const ownedTools = new Set([...PI_PI_OWNED_TOOL_NAMES, ...(process.env.PASEO_AGENT_ID ? ["todo"] : [])]);
   const ownedCommands = new Set(PI_PI_OWNED_COMMAND_NAMES);
 
   const record = (f: DuplicateFinding) => {

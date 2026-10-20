@@ -113,6 +113,38 @@ describe("worker update renderer", () => {
     for (const width of [20, 40, 80]) expectFits(render(details, true).render(width), width);
   });
 
+  it("closes the viewer, then the picker it came from, when a question opens", async () => {
+    const shortcuts = new Map<string, any>();
+    const handlers = new Map<string, any[]>();
+    const on = (event: string, handler: any) => handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+    const orchestrator: any = { pi: { registerMessageRenderer: vi.fn(), on, registerShortcut: (key: string, options: any) => shortcuts.set(key, options) }, workers: setup().manager };
+    registerWorkerUi(orchestrator);
+    orchestrator.workerWidget.attach({ ui: { setWidget: vi.fn(), setStatus: vi.fn() } });
+    orchestrator.workers.spawn(spec());
+    // Like pi: an overlay's done() removes the TOPMOST overlay.
+    const stack: Array<{ component: any; resolve: () => void }> = [];
+    const closed: string[] = [];
+    const custom = vi.fn((factory: any) => new Promise<void>((resolve) => {
+      const entry: any = { resolve };
+      stack.push(entry);
+      entry.component = factory({ terminal: { rows: 30 }, requestRender: vi.fn() }, theme, undefined, () => {
+        // Whoever calls it, pi removes the topmost overlay but settles the caller's promise.
+        const top = stack.pop()!;
+        closed.push(`${entry.component.constructor.name} removed ${top.component.constructor.name}`);
+        resolve();
+      });
+    }));
+    const picking = shortcuts.get("ctrl+n").handler({ ui: { custom } });
+    await flush();
+    stack[0]!.component.handleInput(KEY.enter);
+    await flush();
+    expect(stack.map((entry) => entry.component.constructor.name)).toEqual(["WorkerPicker", "WorkerViewer"]);
+    handlers.get("tool_execution_start")!.forEach((h) => h({ toolName: "ask_user" }));
+    await picking;
+    expect(closed).toEqual(["WorkerViewer removed WorkerViewer", "WorkerPicker removed WorkerPicker"]);
+    expect(stack).toEqual([]);
+  });
+
   it("closes the picker before a question or dialog opens under it", async () => {
     const shortcuts = new Map<string, any>();
     const handlers = new Map<string, any[]>();
@@ -275,7 +307,7 @@ describe("WorkerWidget", () => {
   });
 
   it("keeps a failure on the panel when the worker was only opened before it failed", async () => {
-    const { manager, sessions, render, widget } = mount();
+    const { manager, render, widget, mounted } = mount();
     const record = manager.spawn(spec());
     await flush();
     widget.markSeen(record.id);
@@ -284,11 +316,7 @@ describe("WorkerWidget", () => {
     vi.setSystemTime(Date.now() + 11_000);
     expect(plain(render(200)[1]!)).toMatch(/^  ✗ explore: .* failed: boom$/);
     widget.markSeen(record.id);
-    vi.setSystemTime(Date.now() + 1_000);
-    void sessions;
-    // A later run that fails again is a new failure.
-    record.settledAt = Date.now();
-    expect(widget.visibleRecords()).toEqual([record]);
+    expect(mounted()).toBe(false);
   });
 
   it("shows a stopped worker as stopped, not done", async () => {

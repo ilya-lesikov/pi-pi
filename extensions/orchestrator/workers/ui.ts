@@ -34,9 +34,9 @@ export function registerWorkerUi(orchestrator: Orchestrator): void {
   // still covers it: close the picker first. Both events come before the
   // question is put on screen.
   const on = pi.on.bind(pi) as (event: string, handler: (event: any) => void) => void;
-  on("ui_prompt_start", () => closeOpenPicker?.());
+  on("ui_prompt_start", () => closeWorkerScreens());
   on("tool_execution_start", (event) => {
-    if (event?.toolName === "ask_user" || event?.toolName === "confirm") closeOpenPicker?.();
+    if (event?.toolName === "ask_user" || event?.toolName === "confirm") closeWorkerScreens();
   });
   pi.registerShortcut?.("ctrl+n", {
     description: "Select a worker: see its output, message, interrupt, stop or kill it",
@@ -330,6 +330,12 @@ export class WorkerViewer implements Component {
     return this.manager.get(this.id);
   }
 
+  /** Closed from outside, as Esc would. */
+  dismiss(): void {
+    this.dispose();
+    this.done();
+  }
+
   handleInput(data: string): void {
     if (this.composer) {
       this.composer.input.handleInput(data);
@@ -538,20 +544,31 @@ export function workerTranscriptText(manager: WorkerManager, id: string, maxChar
 }
 
 /** Opens the full-screen viewer for one worker; the panel is parked meanwhile so the overlay does not tear. */
-export async function openWorkerViewer(orchestrator: Orchestrator, ctx: any, id: string): Promise<void> {
+export async function openWorkerViewer(orchestrator: Orchestrator, ctx: any, id: string, fromPicker = false): Promise<void> {
   const manager = orchestrator.workers;
   if (!manager?.get(id) || typeof ctx?.ui?.custom !== "function") return;
   orchestrator.workerWidget?.markSeen(id);
-  orchestrator.workerWidget?.suspend();
+  // From the picker the panel is already suspended, and the picker resumes it.
+  if (!fromPicker) orchestrator.workerWidget?.suspend();
+  let untrack = () => {};
   try {
-    await ctx.ui.custom((tui: TUI, theme: Theme, _keys: unknown, done: (value: undefined) => void) => new WorkerViewer(tui, theme, manager, id, () => done(undefined)), {
+    await ctx.ui.custom((tui: TUI, theme: Theme, _keys: unknown, done: (value: undefined) => void) => {
+      const viewer = new WorkerViewer(tui, theme, manager, id, () => {
+        untrack();
+        done(undefined);
+      });
+      // A question from the agent closes it: full screen, it would hide the question.
+      untrack = trackScreen(() => viewer.dismiss());
+      return viewer;
+    }, {
       overlay: true,
       overlayOptions: { anchor: "center", width: "100%", maxHeight: "100%", margin: 0 },
     });
   } finally {
+    untrack();
     // It may have failed while the transcript was open: that failure was seen.
     orchestrator.workerWidget?.markSeen(id);
-    orchestrator.workerWidget?.resume();
+    if (!fromPicker) orchestrator.workerWidget?.resume();
   }
 }
 
@@ -568,6 +585,7 @@ export class WorkerPicker implements Component {
   private notice = "";
   private readonly timer: ReturnType<typeof setInterval>;
   private frame = 0;
+  private viewing = false;
 
   constructor(
     private readonly tui: TUI,
@@ -599,9 +617,18 @@ export class WorkerPicker implements Component {
     this.done();
   }
 
-  /** Closed from outside: something else needs the user's attention now. */
+  /**
+   * Closed from outside: something else needs the user's attention now. Its
+   * viewer, when open, sits on top and is closed first by the same call; the
+   * picker then closes when the viewer returns.
+   */
   dismiss(): void {
+    if (this.viewing) return;
     this.close();
+  }
+
+  dispose(): void {
+    clearInterval(this.timer);
   }
 
   handleInput(data: string): void {
@@ -624,7 +651,11 @@ export class WorkerPicker implements Component {
     else if (matchesKey(data, "down")) this.selectedId = records[Math.min(records.length - 1, at + 1)]!.id;
     else if (matchesKey(data, "enter")) {
       clearInterval(this.timer);
-      void this.open(record.id).finally(() => this.done());
+      this.viewing = true;
+      void this.open(record.id).finally(() => {
+        this.viewing = false;
+        this.done();
+      });
       return;
     } else if (matchesKey(data, "m")) {
       this.openComposer(record);
@@ -720,8 +751,25 @@ function rowsOf(tui: TUI | null): number {
   return tui?.terminal?.rows ?? process.stdout.rows ?? 30;
 }
 
-/** Closes the open picker, if any: a question is about to take the screen. */
-let closeOpenPicker: (() => void) | null = null;
+/**
+ * Worker screens open now, the topmost last. pi closes an overlay by removing
+ * the topmost one, so they must close from the top: the viewer before the
+ * picker it was opened from.
+ */
+const openScreens: Array<() => void> = [];
+
+function trackScreen(close: () => void): () => void {
+  openScreens.push(close);
+  return () => {
+    const at = openScreens.lastIndexOf(close);
+    if (at >= 0) openScreens.splice(at, 1);
+  };
+}
+
+/** Closes the topmost worker screen: a question is about to take the screen. */
+function closeWorkerScreens(): void {
+  openScreens.at(-1)?.();
+}
 
 /** Opens the picker over the bottom of the screen; its Enter opens the full viewer. */
 export async function openWorkerPicker(orchestrator: Orchestrator, ctx: any): Promise<void> {
@@ -738,14 +786,14 @@ export async function openWorkerPicker(orchestrator: Orchestrator, ctx: any): Pr
     // meanwhile takes the editor's place, and would otherwise drop the picker
     // with its promise never settling.
     let tuiRef: TUI | null = null;
+    let untrack = () => {};
     await ctx.ui.custom((tui: TUI, theme: Theme, _keys: unknown, done: (value: undefined) => void) => {
       tuiRef = tui;
-      const picker = new WorkerPicker(tui, theme, widget, manager, (id) => openWorkerViewer(orchestrator, ctx, id), () => {
-        if (closeOpenPicker === close) closeOpenPicker = null;
+      const picker = new WorkerPicker(tui, theme, widget, manager, (id) => openWorkerViewer(orchestrator, ctx, id, true), () => {
+        untrack();
         done(undefined);
       });
-      const close = () => picker.dismiss();
-      closeOpenPicker = close;
+      untrack = trackScreen(() => picker.dismiss());
       return picker;
     }, {
       overlay: true,

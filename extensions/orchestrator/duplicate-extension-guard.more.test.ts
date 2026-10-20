@@ -18,6 +18,17 @@ describe("duplicate detection against the real install root", () => {
     expect(detectDuplicateExtensions([{ name: "Agent" }], [])[0]!.offender).toBe("unknown");
   });
 
+  it("treats another extension's todo tool as a clash only under Paseo, where pi-pi registers one", () => {
+    const todo = [{ name: "todo", sourceInfo: { path: "/home/u/node_modules/rpiv-todo/index.ts" } }];
+    expect(detectDuplicateExtensions(todo, [])).toEqual([]);
+    process.env.PASEO_AGENT_ID = "a";
+    try {
+      expect(detectDuplicateExtensions(todo, [])[0]).toMatchObject({ signal: "tool-name-collision", detail: "tool \"todo\"" });
+    } finally {
+      delete process.env.PASEO_AGENT_ID;
+    }
+  });
+
   it("flags a command shipped from a vendored package outside pi-pi", () => {
     const findings = detectDuplicateExtensions([], [{ name: "tasks", sourceInfo: { path: "/home/u/node_modules/pi-tasks/index.ts" } }]);
     expect(findings).toEqual([{ offender: "/home/u/node_modules/pi-tasks/index.ts", signal: "vendored-package-path", detail: "vendored package \"pi-tasks\"" }]);
