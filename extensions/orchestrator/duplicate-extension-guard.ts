@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { dirname, resolve, sep } from "node:path";
 import { getLogger } from "./log.js";
+import { notice } from "./notices.js";
 
 // Install issue 8b: pi-pi replaces pi-lsp, pi-subagents, pi-tasks and
 // pi-ask-user with its own lsp tool, workers, task tools and ask_user.
@@ -152,7 +153,7 @@ export function checkDuplicateExtensions(pi: any, ctx: any, rootOverride?: strin
   const message = formatDuplicateFailure(findings);
   getLogger().error({ s: "duplicate-extension", findings }, "standalone duplicate of a bundled extension detected; refusing to operate");
   try {
-    ctx?.ui?.notify?.(message, "error");
+    notice(ctx, message, "error");
   } catch {}
   return true;
 }

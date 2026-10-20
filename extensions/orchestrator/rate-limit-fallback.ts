@@ -3,6 +3,7 @@ import { isClaudeSubInUse, loadRoutingSettings, probeSubscriptionCleared, revive
 import { LLM_API_PROVIDER, clearPauses, describePauseKey, pinnedRoleSpecs, getPause, isPaused, nextPauseMs, pause, pauseKeyForSpec, refusalFallbackSpec, resolveSpec, routeOfConcrete, routePauseKey, splitSpec, unpause, slotRefOfSpec, type Pause } from "./routing.js";
 import { isSubscriptionRouted } from "./usage-tracker.js";
 import { getLogger } from "./log.js";
+import { notice } from "./notices.js";
 
 // `usage limit` and `usage_not_included` are the ChatGPT subscription's own
 // wording: pi's openai-codex provider replaces the HTTP status with a friendly
@@ -117,7 +118,7 @@ async function pauseAndReroute(
       ? `${what} is failing`
       : `Rate limit on ${what}`;
   if (!fallback.auto) {
-    ctx?.ui?.notify?.(`${trigger}. Automatic fallback is off (Settings › Providers).`, "warning");
+    notice(ctx, `${trigger}. Automatic fallback is off (Settings › Providers).`, "warning");
     return;
   }
   const probed = key === "claude-sub";
@@ -130,7 +131,7 @@ async function pauseAndReroute(
   const live = liveSpec(ctx);
   const mainAffected = origin === "main" || (!!live && isPausedFor(live));
   if (!mainAffected) {
-    ctx?.ui?.notify?.(`${trigger} on a worker; paused until ${formatUntil(entry)}.${recovery}`, "warning");
+    notice(ctx, `${trigger} on a worker; paused until ${formatUntil(entry)}.${recovery}`, "warning");
     return;
   }
   // Decided when the switch runs, not now: a worker's failure lands mid-request,
@@ -148,23 +149,23 @@ async function pauseAndReroute(
     const ref = owned ? orchestrator.config.agents.main.model : slotRefOfSpec(current);
     const next = ref ? resolveSpec(ref) : null;
     if (!next || next === current) {
-      switchCtx?.ui?.notify?.(`${trigger}; nothing else serves ${current}. Waiting until ${formatUntil(entry)}; the request resumes then.${recovery}`, "warning");
+      notice(switchCtx, `${trigger}; nothing else serves ${current}. Waiting until ${formatUntil(entry)}; the request resumes then.${recovery}`, "warning");
       if (resumeRequest) orchestrator.pausedMainRoutes.set(key, { from: current, to: current, owned, resume: true, generation: orchestrator.continuationGeneration });
       return;
     }
     try {
       if (!await orchestrator.switchModel(switchCtx, next, thinking(orchestrator))) {
-        switchCtx?.ui?.notify?.(`${trigger}, but ${next} is unavailable; waiting until ${formatUntil(entry)}.${recovery}`, "error");
+        notice(switchCtx, `${trigger}, but ${next} is unavailable; waiting until ${formatUntil(entry)}.${recovery}`, "error");
         return;
       }
     } catch {
-      switchCtx?.ui?.notify?.(`${trigger}, but switching to ${next} failed; waiting until ${formatUntil(entry)}.${recovery}`, "error");
+      notice(switchCtx, `${trigger}, but switching to ${next} failed; waiting until ${formatUntil(entry)}.${recovery}`, "error");
       return;
     }
     if (owned) orchestrator.routedMainSpec = next;
     orchestrator.pausedMainRoutes.set(key, { from: current, to: next, owned, resume: false, generation: orchestrator.continuationGeneration });
     const paid = splitSpec(next)?.provider === LLM_API_PROVIDER ? " (paid)" : "";
-    switchCtx?.ui?.notify?.(`${trigger}; switched to ${next}${paid} until ${formatUntil(entry)}.${recovery}`, "warning");
+    notice(switchCtx, `${trigger}; switched to ${next}${paid} until ${formatUntil(entry)}.${recovery}`, "warning");
     if (resumeRequest) orchestrator.queueContinuation("[PI-PI] Provider routing changed after a provider failure. Continue the current request.");
   });
 }
@@ -241,7 +242,7 @@ async function restoreMovedMain(orchestrator: Orchestrator, key: string, why: st
         return;
       }
       restored = true;
-      ctx?.ui?.notify?.(`${why}; resuming.`, "info");
+      notice(ctx, `${why}; resuming.`, "info");
       orchestrator.queueContinuation("[PI-PI] The provider limit cleared. Continue the current request.");
       return;
     }
@@ -253,7 +254,7 @@ async function restoreMovedMain(orchestrator: Orchestrator, key: string, why: st
     try {
       if (await orchestrator.switchModel(ctx, target, thinking(orchestrator))) {
         if (moved.owned) orchestrator.routedMainSpec = target;
-        ctx?.ui?.notify?.(`${why}; switched back to ${target}.`, "info");
+        notice(ctx, `${why}; switched back to ${target}.`, "info");
       }
       restored = true;
     } catch {}
@@ -281,7 +282,7 @@ export async function handleMainRefusal(orchestrator: Orchestrator, ctx: any): P
   getLogger().warn({ s: "refusal", attempt }, "the model refused the request outright");
   if (orchestrator.continuationHalted) return;
   if (attempt === 1) {
-    ctx?.ui?.notify?.("The model refused that request outright. Sending it again — this refusal is probabilistic.", "warning");
+    notice(ctx, "The model refused that request outright. Sending it again — this refusal is probabilistic.", "warning");
     orchestrator.queueContinuation(RESEND_REFUSED, true);
     return;
   }
@@ -290,7 +291,7 @@ export async function handleMainRefusal(orchestrator: Orchestrator, ctx: any): P
   const next = refusalFallbackSpec(mainSpec);
   if (!next || next === mainSpec) {
     orchestrator.continuationHalted = true;
-    ctx?.ui?.notify?.("The model keeps refusing this conversation and there is nowhere left to move it. Stopping; start a new session, or remove the history it objects to — most often captured model reasoning in a tool result.", "error");
+    notice(ctx, "The model keeps refusing this conversation and there is nowhere left to move it. Stopping; start a new session, or remove the history it objects to — most often captured model reasoning in a tool result.", "error");
     return;
   }
   let switched = false;
@@ -299,10 +300,10 @@ export async function handleMainRefusal(orchestrator: Orchestrator, ctx: any): P
   } catch {}
   if (!switched) {
     orchestrator.continuationHalted = true;
-    ctx?.ui?.notify?.(`The model kept refusing this conversation and switching to ${next} failed. Stopping.`, "error");
+    notice(ctx, `The model kept refusing this conversation and switching to ${next} failed. Stopping.`, "error");
     return;
   }
-  ctx?.ui?.notify?.(`Refused again; switched to ${next} for the rest of this session. The content it objected to stays in the conversation, so switching back would be refused too.`, "warning");
+  notice(ctx, `Refused again; switched to ${next} for the rest of this session. The content it objected to stays in the conversation, so switching back would be refused too.`, "warning");
   orchestrator.queueContinuation(CONTINUE_AFTER_REROUTE, true);
 }
 
@@ -362,11 +363,11 @@ async function recoverOrDemote(orchestrator: Orchestrator, ctx: any, spec: strin
     const why = outcome === "throttled"
       ? "was rejected moments after a renewal"
       : "was rejected, and the check that would renew it could not reach the provider";
-    ctx?.ui?.notify?.(`The subscription credential ${why}; not retrying automatically. Send a message to try again.`, "warning");
+    notice(ctx, `The subscription credential ${why}; not retrying automatically. Send a message to try again.`, "warning");
     return;
   }
   if (outcome === "rotated") {
-    ctx?.ui?.notify?.("The subscription credential was rejected and has been renewed; continuing.", "info");
+    notice(ctx, "The subscription credential was rejected and has been renewed; continuing.", "info");
   }
   if (origin === "main") {
     orchestrator.queueContinuation("[PI-PI] The subscription credential was renewed after a rejected request. Continue the current request.");
@@ -431,7 +432,7 @@ export function armSwitchBackProbe(orchestrator: Orchestrator, probeSpec: string
     if (!await restoreMovedMain(orchestrator, "claude-sub", "Subscription limit cleared")) {
       getLogger().warn({ s: "routing" }, "the subscription cleared but switching the session back failed");
     }
-    orchestrator.lastCtx?.ui?.notify?.("Claude subscription limit cleared; routing through it again.", "info");
+    notice(orchestrator.lastCtx, "Claude subscription limit cleared; routing through it again.", "info");
   }, delay);
   orchestrator.subSwitchBackTimer.unref?.();
 }

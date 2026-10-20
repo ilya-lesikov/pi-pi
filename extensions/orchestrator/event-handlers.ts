@@ -3,6 +3,7 @@ import { Type } from "@sinclair/typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { loadConfig, getDefaultConfig, normalizeConfigDurations, readLspServerLayers } from "./config.js";
 import { getLogger, initSessionLogger, setLogLevel, flushLogs } from "./log.js";
+import { attachHost, notice, registerNotices } from "./notices.js";
 import { initTracer, finalizeTracer, getTracer } from "./tracer.js";
 import { forgetMissingCbmBin, registerCbmTools } from "./cbm.js";
 import { registerExaTools } from "./exa.js";
@@ -205,7 +206,7 @@ export function renderGenericPrompt(orchestrator: Orchestrator, ctx: any, toolNa
   const info = orchestrator.mainModelInfo(ctx);
   const contextFiles = collectContextFiles(orchestrator.cwd, orchestrator.config.contextInjection);
   const contextSize = summarizeContextInjectionSize(contextFiles);
-  if (contextSize.warning) ctx.ui?.notify?.(contextSize.warning, "warning");
+  if (contextSize.warning) notice(ctx, contextSize.warning, "warning");
   const projectContext = renderContextInjection(contextFiles);
   const skills = selectedSkills(orchestrator);
   const skillManifest = skills.length === 0 ? "" : [
@@ -353,12 +354,12 @@ function registerLifecycle(orchestrator: Orchestrator): void {
       if (!isMainTurnStalled(orchestrator)) return;
       if (orchestrator.objectiveContinuationCount >= MAX_OBJECTIVE_CONTINUATIONS) {
         orchestrator.continuationHalted = true;
-        orchestrator.lastCtx?.ui?.notify?.("Automatic continuation paused after repeated stalled turns.", "warning");
+        notice(orchestrator.lastCtx, "Automatic continuation paused after repeated stalled turns.", "warning");
         return;
       }
       orchestrator.objectiveContinuationCount++;
       orchestrator.mainTurnRecovering = true;
-      orchestrator.lastCtx?.ui?.notify?.("Main turn stalled with no activity; recovering.", "warning");
+      notice(orchestrator.lastCtx, "Main turn stalled with no activity; recovering.", "warning");
       try { orchestrator.lastCtx?.abort?.(); } catch {}
       orchestrator.mainTurnInFlight = false;
       orchestrator.queueContinuation(CONTINUE_STALLED);
@@ -435,7 +436,7 @@ async function drainPendingModelSwitch(orchestrator: Orchestrator): Promise<void
 function registerPromptcap(orchestrator: PromptcapState): void {
   const guard = new PromptGuard({
     settings: () => orchestrator.config.promptcap,
-    notify: (message, level) => orchestrator.lastCtx?.ui?.notify?.(message, level),
+    notify: (message, level) => notice(orchestrator.lastCtx, message, level),
     log: (event, message) => getLogger().debug(event, message),
     ratios: fileRatioStore(),
   });
@@ -574,6 +575,7 @@ async function verifySubscriptionCredential(orchestrator: Orchestrator, ctx: any
 
 export function registerEventHandlers(orchestrator: Orchestrator): void {
   const pi = orchestrator.pi;
+  registerNotices(pi);
   registerTracing(pi);
   registerBillingHook(pi);
   registerLazyProvisioning(pi);
@@ -600,6 +602,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   pi.on("session_start", async (_event, ctx) => {
     orchestrator.lastCtx = ctx;
     orchestrator.cwd = ctx.cwd;
+    attachHost(ctx);
     orchestrator.interactivePromptOpen = false;
     // Before anything resolves a binary: a previous session's downloads are
     // already on disk, and this is what makes them visible to `which`.
@@ -632,7 +635,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     } catch (error: any) {
       orchestrator.config = normalizeConfigDurations(getDefaultConfig());
       orchestrator.configError = error?.message ?? String(error);
-      ctx.ui?.notify?.(`Config error: ${orchestrator.configError}`, "error");
+      notice(ctx, `Config error: ${orchestrator.configError}`, "error");
       return;
     }
     setLogLevel(orchestrator.config.general.logLevel);
@@ -677,7 +680,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       registerFeatureToolsAndAgents(orchestrator);
     });
     if (!await orchestrator.applyMainAgent(ctx)) {
-      ctx.ui?.notify?.(mainUnavailableMessage(orchestrator), "warning");
+      notice(ctx, mainUnavailableMessage(orchestrator), "warning");
     }
     // The Claude OAuth token expires within hours. Turn-start refreshes cover
     // active work; this timer keeps the sub provider fresh through long idle
@@ -806,10 +809,10 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       const canRetry = !orchestrator.continuationHalted && orchestrator.objectiveContinuationCount < MAX_OBJECTIVE_CONTINUATIONS;
       if (!canRetry) {
         orchestrator.continuationHalted = true;
-        ctx.ui?.notify?.("The provider keeps refusing this request under its usage policy, and going round it is not working. Stopping; rephrase the task or start a new session.", "error");
+        notice(ctx, "The provider keeps refusing this request under its usage policy, and going round it is not working. Stopping; rephrase the task or start a new session.", "error");
         return;
       }
-      ctx.ui?.notify?.("The provider refused that request under its usage policy. Continuing without the content it objected to.", "warning");
+      notice(ctx, "The provider refused that request under its usage policy. Continuing without the content it objected to.", "warning");
       orchestrator.objectiveContinuationCount++;
       orchestrator.queueContinuation(CONTINUE_POLICY_BLOCKED, true);
       return;
@@ -820,7 +823,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (decision === "objective") {
       if (orchestrator.objectiveContinuationCount >= MAX_OBJECTIVE_CONTINUATIONS) {
         orchestrator.continuationHalted = true;
-        ctx.ui?.notify?.("Automatic continuation paused after repeated empty or truncated turns.", "warning");
+        notice(ctx, "Automatic continuation paused after repeated empty or truncated turns.", "warning");
         return;
       }
       orchestrator.objectiveContinuationCount++;
@@ -829,7 +832,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     }
     if (orchestrator.continuationCount >= MAX_CONTINUATIONS) {
       orchestrator.continuationHalted = true;
-      ctx.ui?.notify?.("Automatic continuation paused after repeated automatic resumes.", "warning");
+      notice(ctx, "Automatic continuation paused after repeated automatic resumes.", "warning");
       return;
     }
     // Both stops are replayed to their own model rather than nudged on

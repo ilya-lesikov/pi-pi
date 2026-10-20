@@ -16,6 +16,7 @@ import type { WorkerWidget } from "./workers/ui.js";
 import type { PromptGuard } from "./promptcap/guard.js";
 import type { LspManager } from "./lsp/manager.js";
 import { getLogger } from "./log.js";
+import { notice } from "./notices.js";
 
 function isEnabled(value: { enabled?: boolean } | undefined): boolean {
   return value?.enabled !== false;
@@ -302,7 +303,7 @@ export class Orchestrator {
         this.routedMainSpec = target;
         for (const [key, moved] of this.pausedMainRoutes) if (moved.to === live) this.pausedMainRoutes.delete(key);
         getLogger().info({ s: "model", from: live, to: target }, "re-routed the main model");
-        (ctx as any).ui?.notify?.(`Routing changed; switched to ${target}.`, "info");
+        notice(ctx, `Routing changed; switched to ${target}.`, "info");
       }
     } catch {}
   }
