@@ -199,9 +199,8 @@ describe("ask_user validation", () => {
     expect((await run({ questions: [{ question: "One", options: ["A", "B"] }, { question: "Two", options: ["X"] }] })).isError).toBe(true);
   });
 
-  it("allows a decline option next to two real ones", async () => {
-    const { run: go } = harness((c) => c.press(ENTER));
-    expect(text(await go({ question: "Pick", options: ["A", "B", "Skip"] }))).toBe("User answered: A");
+  it("rejects a decline option even next to real ones", async () => {
+    expect(text(await run({ question: "Pick", options: ["A", "B", "Skip"] }))).toMatch(/"Skip", which only declines/);
   });
 });
 
@@ -326,19 +325,34 @@ describe("ask_user over host dialogs", () => {
     expect(text(typed)).toMatch(/cannot collect typed answers/);
   });
 
-  it("walks a sequence with Back and a final review", async () => {
-    const { calls, run } = dialogHost(["A", "← Back", "B", "D", "Change 2: Two: D", "C", "Submit"]);
-    const result = await run({ questions: [{ question: "One", options: ["A", "B"] }, { question: "Two", options: ["C", "D"] }] });
-    expect(text(result)).toBe("User answered:\n1. One: B\n2. Two: C");
-    expect(calls[0]!.title).toBe("(1/2) One");
+  it("walks a sequence with Back and a final review, and changing one answer returns straight to the review", async () => {
+    const { calls, run } = dialogHost(["A", "← Back", "B", "D", "E", "Change 1: One: B", "A", "Submit"]);
+    const result = await run({ questions: [{ question: "One", options: ["A", "B"] }, { question: "Two", options: ["C", "D"] }, { question: "Three", options: ["E", "F"] }] });
+    expect(text(result)).toBe("User answered:\n1. One: A\n2. Two: D\n3. Three: E");
+    expect(calls[0]!.title).toBe("(1/3) One");
     expect(calls[1]!.options).toContain("← Back");
-    expect(calls[4]!.title).toBe("Submit these answers?");
+    expect(calls[5]!.title).toBe("Submit these answers?");
+    expect(calls[6]!.title).toBe("(1/3) One");
+    expect(calls[7]!.title).toBe("Submit these answers?");
+  });
+
+  it("reports every answer as unsubmitted when the review is dismissed", async () => {
+    const { run } = dialogHost(["A", "C", undefined]);
+    const result = await run({ questions: [{ question: "One", options: ["A", "B"] }, { question: "Two", options: ["C", "D"] }] });
+    expect(text(result)).toMatch(/^User dismissed the final review; the answers were not submitted\..*\n1\. One: A\n2\. Two: C$/s);
   });
 
   it("reports earlier answers as not submitted when a sequence is cancelled", async () => {
     const { run } = dialogHost(["A", undefined]);
     const result = await run({ questions: [{ question: "One", options: ["A", "B"] }, { question: "Two", options: ["C", "D"] }] });
     expect(text(result)).toMatch(/^Stopped at question 2\/2: \(cancelled\)\..*Answered before stopping \(not submitted as a batch\):\n1\. One: A/s);
+  });
+
+  it("keeps the comment Paseo's form took with a custom answer", async () => {
+    process.env.PASEO_AGENT_ID = "a";
+    const { calls, run } = dialogHost(["✏️ Type custom response...", "use argo", "only on staging"]);
+    expect(text(await run({ question: "Pick", options: ["A", "B"], allowComment: true }))).toBe("User answered: use argo\n\nComment: only on staging");
+    expect(calls[2]).toMatchObject({ method: "input", placeholder: "Optional comment — leave empty to skip" });
   });
 
   it("lets Paseo's own form collect the comment, and leaves Other… to it", async () => {

@@ -30,7 +30,7 @@ import { registerTasks } from "./tasks/index.js";
 import { registerAskUser, registerConfirm } from "./ask/index.js";
 import { LspManager } from "./lsp/manager.js";
 import { editDiagnostics, registerLspTool, registerLspWarmup } from "./lsp/tool.js";
-import { createWorkers, registerWorkerToolsFor, resumeOnNewRouting, WORKER_MESSAGE_TYPE, type WorkerHooks } from "./workers/index.js";
+import { createWorkers, registerWorkerToolsFor, resumeOnNewRouting, WORKER_MESSAGE_TYPE, type WorkerHooks, recoveringWorkers } from "./workers/index.js";
 import { pruneTranscripts, transcriptRoots } from "./workers/transcripts.js";
 import { HOLD_IDLE_MS, unfinishedSummary, type HoldOutcome } from "./workers/hold.js";
 import { registerWorkerUi } from "./workers/ui.js";
@@ -505,6 +505,7 @@ async function holdForWorkers(orchestrator: Orchestrator, ctx: any, message: any
       delivery,
       signal: ctx.signal,
       hasPendingMessages: () => ctx.hasPendingMessages?.() ?? false,
+      recovering: recoveringWorkers,
       idleMs: headless ? HOLD_IDLE_MS.headless : HOLD_IDLE_MS.rpc,
     });
   } finally {
@@ -518,7 +519,7 @@ async function holdForWorkers(orchestrator: Orchestrator, ctx: any, message: any
     return false;
   }
   const unfinished = manager.active();
-  manager.killAll();
+  for (const record of unfinished) manager.kill(record.id, "killed", "stopped after two hours without activity in a run with no user");
   // The summary below says what they did not finish; their kill notices would only cost another turn.
   manager.markDelivered(unfinished);
   delivery.forget(unfinished.map((record) => record.id), "settled");
@@ -544,7 +545,7 @@ export function startWorkers(orchestrator: Orchestrator, ctx: any, hooks: Worker
   orchestrator.workers = workers.manager;
   orchestrator.workerDelivery = workers.delivery;
   orchestrator.workerTranscripts = workers.transcripts;
-  void pruneTranscripts(transcriptRoots(orchestrator.cwd));
+  if (orchestrator.cwd) void pruneTranscripts(transcriptRoots(orchestrator.cwd));
   orchestrator.workerWidget?.attach(ctx);
 }
 

@@ -105,10 +105,8 @@ function problemWith(item: AskItem, label: string): string | undefined {
     if (seen.has(key)) return `${label} offers "${option.title}" twice; make every option distinct.`;
     seen.add(key);
   }
-  const declines = options.filter((option) => DECLINE_ONLY.test(option.title.trim()));
-  if (declines.length && options.length - declines.length < 2) {
-    return `${label} offers "${declines[0]!.title}", which only declines; every dialog has its own Cancel. For a yes/no decision use confirm.`;
-  }
+  const decline = options.find((option) => DECLINE_ONLY.test(option.title.trim()));
+  if (decline) return `${label} offers "${decline.title}", which only declines; every dialog has its own Cancel. For a yes/no decision use confirm.`;
   if (item.recommended && !options.some((option) => option.title === item.recommended)) return `${label}'s recommended "${item.recommended}" is not one of its options.`;
   return undefined;
 }
@@ -175,16 +173,20 @@ export function registerAskUser(pi: ExtensionAPI): void {
 
       const answers: AskToolDetails[] = [];
       let index = 0;
+      // Set while one answer is being changed from the review: back to the review after it.
+      let revising = false;
       while (index <= items.length) {
         if (index === items.length) {
           if (!multi || terminal) break;
           const verdict = await reviewAnswers(ctx as any, answers.map((answer) => `${fitLine(answer.question, 60)}: ${outcomeText(answer)}`), signal);
           if (signal?.aborted || verdict === undefined) {
-            const last = answers[answers.length - 1]!;
-            return cancelledResult({ ...last, response: null, cancelled: true, cancelReason: signal?.aborted ? "signal" : "user", status: "cancelled" }, true, answers, items.length - 1, items.length);
+            const summary = answers.map((answer, i) => `${i + 1}. ${answer.question}: ${outcomeText(answer)}`).join("\n");
+            const details: AskToolDetails = { ...answers[answers.length - 1]!, response: null, cancelled: true, cancelReason: signal?.aborted ? "signal" : "user", status: "cancelled", answers };
+            return { content: text(`User dismissed the final review; the answers were not submitted. ${CANCELLED_GUIDANCE}\nAnswers given before that:\n${summary}`), details };
           }
           if (verdict === "submit") break;
           index = verdict;
+          revising = true;
           continue;
         }
         const item = items[index]!;
@@ -209,6 +211,7 @@ export function registerAskUser(pi: ExtensionAPI): void {
         });
         if (isNavigate(result)) {
           index += result.__navigate === "prev" ? -1 : 1;
+          revising = false;
           continue;
         }
         if (result === null || isCancel(result)) {
@@ -219,7 +222,8 @@ export function registerAskUser(pi: ExtensionAPI): void {
           return cancelledResult(cancelled, !!multi, answers, index, items.length);
         }
         answers[index] = { ...shown, response: result, cancelled: false, status: "answered" };
-        index++;
+        index = revising ? items.length : index + 1;
+        revising = false;
       }
       if (!multi) return { content: text(`User answered: ${formatResponse(answers[0]!.response!)}`), details: answers[0]! };
       const summary = answers.map((answer, i) => `${i + 1}. ${answer.question}: ${formatResponse(answer.response!)}`).join("\n");

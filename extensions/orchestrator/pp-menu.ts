@@ -59,7 +59,7 @@ import { DEFAULT_IMAGE_TOKENS } from "./promptcap/estimate.js";
 import { finalizeTracer, getTracer, initTracer } from "./tracer.js";
 import type { Orchestrator } from "./orchestrator.js";
 import { openWorkerViewer, workerTranscriptText } from "./workers/ui.js";
-import { currentHost, notice } from "./notices.js";
+import { commandNotice, currentHost, notice } from "./notices.js";
 import { showReport } from "./report-view.js";
 import type { WorkerRecord } from "./workers/types.js";
 
@@ -1851,11 +1851,10 @@ export async function showPpMenu(orchestrator: Orchestrator, ctx: any): Promise<
   }
   // bb waits for a model run after every prompt, and /pp starts none; on a
   // host pi-pi cannot identify it may be the same. Said before the menu opens.
-  if (ctx?.mode === "rpc" && currentHost().settlesCommandOnlyPrompt !== true) {
-    notice(ctx, "/pp: this app may stay busy after the menu closes; press Stop if it does.", "warning");
-  }
+  const mayStayBusy = ctx?.mode === "rpc" && currentHost().settlesCommandOnlyPrompt !== true;
+  if (mayStayBusy) commandNotice(ctx, "/pp: this app may stay busy after the menu closes; press Stop if it does.", "warning");
   for (;;) {
-    const choice = await selectOption(ctx, "/pp · session control panel", [
+    const choice = await selectOption(ctx, mayStayBusy ? "/pp · session control panel (press Stop afterwards if the app stays busy)" : "/pp · session control panel", [
       opt("Status", "Model, context, providers, workers, and warnings"),
       opt("Workers", workersSummary(orchestrator)),
       opt("Usage", "Session token usage and cost breakdown"),

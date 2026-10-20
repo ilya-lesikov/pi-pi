@@ -28,6 +28,13 @@ export interface WorkerHooks {
 
 const RECOVERY_DECISION_MS = 30_000;
 
+/** Failed workers whose provider recovery has not decided yet: neither active nor delivered. */
+const recovering = new Set<string>();
+
+export function recoveringWorkers(): number {
+  return recovering.size;
+}
+
 const RESUME_AFTER_REROUTE = "[PI-PI] The provider that refused your last request has been routed around, and you are now on another one. Everything above is your own work — continue from where you stopped. Do not start over and do not repeat work you already finished.";
 
 /**
@@ -60,6 +67,7 @@ export function createWorkers(orchestrator: Orchestrator, hooks: WorkerHooks, cr
     // mainTurnInFlight spans one turn; between turns and while compacting the
     // host is not idle yet cannot take a steer either, so delivery holds.
     isStreaming: () => orchestrator.mainTurnInFlight || orchestrator.holdingRun,
+    isHolding: () => orchestrator.holdingRun,
     isBusy: () => !orchestrator.mainTurnInFlight && !orchestrator.holdingRun && ctx()?.isIdle?.() === false,
     canWake: () => {
       const current = ctx();
@@ -104,7 +112,13 @@ function paseoUpdate(record: WorkerRecord, transcripts: TranscriptStore | null, 
     } catch {}
   };
   if (!transcripts) send();
-  else void transcripts.drain(record.id).then(send);
+  // Paseo reads the file once more on a final status and then stops following
+  // it; a drain that timed out sends the status anyway, with the file left out
+  // so the card does not claim a complete transcript.
+  else void transcripts.drain(record.id).then((complete) => {
+    if (!complete) transcripts.abandon(record.id);
+    send();
+  });
 }
 
 function onWorkerEvent(event: WorkerEvent, hooks: WorkerHooks, delivery: WorkerDelivery, transcripts: TranscriptStore | null): void {
@@ -142,7 +156,11 @@ function onWorkerEvent(event: WorkerEvent, hooks: WorkerHooks, delivery: WorkerD
         return false;
       });
       const timeout = new Promise<boolean>((resolve) => { setTimeout(() => resolve(false), RECOVERY_DECISION_MS).unref?.(); });
-      void Promise.race([decision, timeout]).then((resumed) => { if (!resumed && record.status === "failed") deliver(); });
+      recovering.add(record.id);
+      void Promise.race([decision, timeout]).then((resumed) => {
+        recovering.delete(record.id);
+        if (!resumed && record.status === "failed") deliver();
+      });
       break;
     }
     case "phase":

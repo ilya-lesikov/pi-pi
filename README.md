@@ -27,7 +27,7 @@ Start Pi and talk to it normally. The initial Pi session owns all work; pi-pi do
 - providers, model slots and family overrides;
 - main and worker models.
 
-Reports (Status, Usage, Diagnostics, Explain routing) open as a scrollable view in the terminal. Elsewhere they go wherever the host shows pi-pi's messages: its notifications, a chat message the model never sees, or stderr in a run without a UI, where `/pp` prints the status and exits. The worker viewer becomes the transcript as text with Refresh, Send and Stop. Some apps (bb, and possibly ACP adapters) wait for a model run after every prompt and `/pp` starts none; there `/pp` warns first that the app may stay busy afterwards.
+Reports (Status, Usage, Diagnostics, Explain routing) open as a scrollable view in the terminal. Elsewhere they go wherever the host shows pi-pi's messages: its notifications, a chat message the model never sees, or stderr in a run without a UI, where `/pp` prints the status and exits. The worker viewer becomes the transcript as text with Refresh, Send and Stop. Some apps (bb, and possibly ACP adapters) wait for a model run after every prompt and `/pp` starts none; there the menu says the app may stay busy afterwards, and on bb, which shows neither notifications nor chat messages outside a turn, reports open in a read-only text dialog.
 
 ## Memory
 

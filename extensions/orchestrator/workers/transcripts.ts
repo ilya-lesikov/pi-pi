@@ -8,14 +8,17 @@ import { getLogger } from "../log.js";
 const MAX_BYTES = 20 * 1024 * 1024;
 const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const DRAIN_TIMEOUT_MS = 5000;
-const IGNORING_LINES = new Set(["*", "/*", "workers", "workers/", "/workers", "/workers/"]);
+const IGNORING_LINES = new Set(["*", "/*", "**", "workers", "workers/", "/workers", "/workers/", "workers/*", "workers/**", "/workers/*", "/workers/**"]);
 
 interface Writer {
   file: string;
   queue: Promise<void>;
   bytes: number;
   lastId: string | null;
+  /** Nothing more is appended: the size cap was reached or a write failed. */
   disabled: boolean;
+  /** The file could not be created or written; queued writes are dropped. */
+  failed: boolean;
 }
 
 /**
@@ -73,11 +76,22 @@ export class TranscriptStore {
     const overflow = writer.bytes > MAX_BYTES;
     const text = overflow ? `${JSON.stringify({ type: "custom", customType: "pi-pi-truncated", data: { reason: "size cap" } })}\n` : line;
     if (overflow) writer.disabled = true;
-    writer.queue = writer.queue.then(() => appendFile(writer.file, text, { mode: 0o600 })).catch((error: any) => {
-      if (writer.disabled && !overflow) return;
-      writer.disabled = true;
-      getLogger().warn({ s: "workers", id, err: error?.message }, "writing a worker transcript failed; transcripts are off for it");
+    writer.queue = writer.queue.then(async () => {
+      // Creation failed, or an earlier write did: nothing after it may land in some other file.
+      if (writer.failed) return;
+      try {
+        await appendFile(writer.file, text, { mode: 0o600 });
+      } catch (error: any) {
+        writer.failed = writer.disabled = true;
+        getLogger().warn({ s: "workers", id, err: error?.message }, "writing a worker transcript failed; transcripts are off for it");
+      }
     });
+  }
+
+  /** Stops writing a worker's file and forgets where it is: its writes did not finish in time. */
+  abandon(id: string): void {
+    const writer = this.writers.get(id);
+    if (writer) writer.disabled = true;
   }
 
   /** Resolves once everything written so far is on disk, or after a bounded wait. */
@@ -102,10 +116,11 @@ export class TranscriptStore {
     if (!dir) return undefined;
     // A reopened session restarts worker ids, so a file from an earlier
     // incarnation of the same id gets a fresh name instead of being appended to.
-    let file = join(dir, `${id.replace(/[^A-Za-z0-9._-]/g, "_")}.jsonl`);
-    for (let n = 2; existsSync(file); n++) file = join(dir, `${id}-${n}.jsonl`);
+    const safe = id.replace(/[^A-Za-z0-9._-]/g, "_");
+    let file = join(dir, `${safe}.jsonl`);
+    for (let n = 2; existsSync(file); n++) file = join(dir, `${safe}-${n}.jsonl`);
     const header = `${JSON.stringify({ type: "session", version: 3, id: randomUUID(), timestamp: new Date().toISOString(), cwd: this.cwd })}\n`;
-    const writer: Writer = { file, queue: Promise.resolve(), bytes: Buffer.byteLength(header), lastId: null, disabled: false };
+    const writer: Writer = { file, queue: Promise.resolve(), bytes: Buffer.byteLength(header), lastId: null, disabled: false, failed: false };
     writer.queue = mkdir(dir, { recursive: true, mode: 0o700 })
       .then(async () => {
         const handle = await open(file, "wx", 0o600);
@@ -113,7 +128,7 @@ export class TranscriptStore {
         await chmod(file, 0o600);
       })
       .catch((error: any) => {
-        writer.disabled = true;
+        writer.failed = writer.disabled = true;
         getLogger().warn({ s: "workers", id, err: error?.message }, "creating a worker transcript failed; transcripts are off for it");
       });
     this.writers.set(id, writer);
@@ -133,7 +148,19 @@ function ensureIgnored(ppDir: string): boolean {
       writeFileSync(file, "*\n", { flag: "wx" });
       return true;
     }
-    return readFileSync(file, "utf8").split(/\r?\n/).some((line) => IGNORING_LINES.has(line.trim()));
+    // The last rule that matches wins, so a later "!workers" undoes an earlier
+    // "*"; anything that could unignore the folder counts against it.
+    let ignored = false;
+    for (const raw of readFileSync(file, "utf8").split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line || line.startsWith("#")) continue;
+      if (line.startsWith("!")) {
+        if (/^!\/?workers(\/|$)|^!\*/.test(line)) ignored = false;
+        continue;
+      }
+      if (IGNORING_LINES.has(line)) ignored = true;
+    }
+    return ignored;
   } catch {
     return false;
   }

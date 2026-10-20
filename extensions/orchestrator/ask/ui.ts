@@ -208,22 +208,27 @@ function uniqueLabels(labels: string[]): string[] {
  * of the chosen label, the raw value when the host answered with something not
  * on the list, or undefined when it was dismissed.
  */
-async function pick(d: Dialogs, title: string, labels: string[]): Promise<number | string | undefined> {
-  const fitted = uniqueLabels(labels.map((label) => fitLine(label, OPTION_MAX)));
+async function pick(d: Dialogs, title: string, labels: string[], fixed: string[] = []): Promise<number | string | undefined> {
+  const fitted = uniqueLabels([...labels, ...fixed].map((label) => fitLine(label, OPTION_MAX)));
+  const items = fitted.slice(0, labels.length);
+  const tail = fitted.slice(labels.length);
   const paged = fitted.length > PAGED_ABOVE;
   let start = 0;
   for (;;) {
-    const page = paged ? fitted.slice(start, start + PAGE) : fitted;
-    const remaining = fitted.length - start - PAGE;
+    const page = paged ? items.slice(start, start + PAGE) : items;
+    const remaining = items.length - start - PAGE;
     const more = paged ? (remaining > 0 ? `More… (${remaining} more)` : "Back to the first page") : undefined;
-    const raw = await d.ui.select(fitLine(title, TITLE_MAX), more ? [...page, more] : page, { signal: d.signal });
+    const shown = [...page, ...tail, ...(more ? [more] : [])];
+    const raw = await d.ui.select(fitLine(title, TITLE_MAX), shown, { signal: d.signal });
     if (raw == null) return undefined;
     if (more && raw === more) {
       start = remaining > 0 ? start + PAGE : 0;
       continue;
     }
-    const index = page.indexOf(String(raw));
-    return index >= 0 ? start + index : String(raw);
+    const inPage = page.indexOf(String(raw));
+    if (inPage >= 0) return start + inPage;
+    const inTail = tail.indexOf(String(raw));
+    return inTail >= 0 ? items.length + inTail : String(raw);
   }
 }
 
@@ -279,7 +284,7 @@ async function askViaDialogs(ctx: AskContext, q: Question, opts: SequenceOptions
     if (nav?.canPrev) extras.push(BACK);
     const chosenNames = [...[...checked].sort((a, b) => a - b).map((i) => q.options[i]!.title), ...(other ? [other] : [])];
     const state = q.allowMultiple ? `(${count} selected${count ? `: ${chosenNames.join(", ")}` : ""}) ` : comment ? "(comment added) " : "";
-    let picked = await pick(d, `${prefix}${typingNote}${state}${q.question}`, [...labels, ...extras]);
+    let picked = await pick(d, `${prefix}${typingNote}${state}${q.question}`, labels, extras);
     if (signal?.aborted) return cancel("signal");
     if (picked === undefined) return null;
     // A host that answers with the bare title rather than the label it was shown.
@@ -298,7 +303,7 @@ async function askViaDialogs(ctx: AskContext, q: Question, opts: SequenceOptions
       }
       repeats = picked === last ? repeats + 1 : 1;
       last = picked;
-      if (repeats >= 3) return cancel("incomplete", chosenNames.join(", "));
+      if (repeats >= 6) return cancel("incomplete", chosenNames.join(", "));
       if (!checked.delete(picked)) checked.add(picked);
       continue;
     }
@@ -318,6 +323,13 @@ async function askViaDialogs(ctx: AskContext, q: Question, opts: SequenceOptions
     if (signal?.aborted) return cancel("signal");
     const text = answer.text?.trim() || (extra === undefined && typeof picked === "string" ? picked.trim() : "");
     if (text) {
+      if (!q.allowMultiple && opts.paseoCombined) {
+        // Paseo's form took a comment with the custom answer and hands it to
+        // the next optional input; asking keeps it from being dropped.
+        const note = await typed(d, "Comment on your answer", "Optional comment — leave empty to skip");
+        if (signal?.aborted) return cancel("signal");
+        return freeform(note.text?.trim() ? `${text}\n\nComment: ${note.text.trim()}` : text);
+      }
       if (!q.allowMultiple) return freeform(text);
       other = text;
     } else if (answer.unavailable) {
@@ -330,9 +342,9 @@ async function askViaDialogs(ctx: AskContext, q: Question, opts: SequenceOptions
 /** The last step of a sequence of questions outside the terminal: submit, or go back to one. */
 export async function reviewAnswers(ctx: AskContext, lines: string[], signal?: AbortSignal): Promise<"submit" | number | undefined> {
   const d = dialogsFor(ctx, signal);
-  const picked = await pick(d, "Submit these answers?", ["Submit", ...lines.map((line, i) => `Change ${i + 1}: ${line}`)]);
+  const picked = await pick(d, "Submit these answers?", lines.map((line, i) => `Change ${i + 1}: ${line}`), ["Submit"]);
   if (typeof picked !== "number") return undefined;
-  return picked === 0 ? "submit" : picked - 1;
+  return picked === lines.length ? "submit" : picked;
 }
 
 class AskComponent implements Component, Focusable {
@@ -389,7 +401,8 @@ class AskComponent implements Component, Focusable {
     this.tui.requestRender();
   }
 
-  // ctrl+c belongs to the host (clear the editor, quit): it never cancels a question.
+  // ctrl+c never cancels a question: it is too easy to hit while meaning to
+  // clear or quit, and a question dismissed by accident costs a turn.
   private isCancelKey(data: string): boolean {
     if (matchesKey(data, Key.ctrl("c"))) return false;
     return matchesKey(data, Key.escape) || this.keys.matches(data, "tui.select.cancel");

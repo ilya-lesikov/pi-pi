@@ -107,3 +107,29 @@ describe("pruneTranscripts", () => {
     expect(existsSync(fresh)).toBe(true);
   });
 });
+
+describe("TranscriptStore, round two", () => {
+  it("treats a later negation as not ignoring workers", async () => {
+    writeFileSync(join(cwd, ".pp", ".gitignore"), "*\n!workers/\n");
+    const store = new TranscriptStore(cwd, "s", vi.fn(), cache);
+    store.open("w-1");
+    expect(store.fileFor("w-1")!.startsWith(cache)).toBe(true);
+    writeFileSync(join(cwd, ".pp", ".gitignore"), "!workers/\nworkers/**\n");
+    const again = new TranscriptStore(cwd, "s2", vi.fn(), cache);
+    again.open("w-1");
+    expect(again.fileFor("w-1")!.startsWith(join(cwd, ".pp"))).toBe(true);
+  });
+
+  it("drops queued writes when the file could not be created, rather than writing into someone else's", async () => {
+    const store = new TranscriptStore(cwd, "s", vi.fn(), cache);
+    store.open("w-1");
+    const file = store.fileFor("w-1")!;
+    // Another process took the name between the check and the exclusive create.
+    mkdirSync(join(cwd, ".pp", "workers", "s"), { recursive: true });
+    writeFileSync(file, "theirs\n");
+    store.append("w-1", { role: "user", content: "mine" });
+    await store.drain("w-1");
+    expect(readFileSync(file, "utf8")).toBe("theirs\n");
+    expect(store.fileFor("w-1")).toBeUndefined();
+  });
+});

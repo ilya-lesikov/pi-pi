@@ -3,7 +3,7 @@ import type { WorkerManager } from "./manager.js";
 import type { WorkerRecord } from "./types.js";
 
 export const HOLD_IDLE_MS = { rpc: 30 * 60_000, headless: 2 * 60 * 60_000 };
-const PENDING_POLL_MS = 500;
+const POLL_MS = 500;
 
 export type HoldOutcome =
   /** A result or question went into the run; the next turn deals with it. */
@@ -18,6 +18,8 @@ export type HoldOutcome =
 export interface HoldHost {
   manager: WorkerManager;
   delivery: WorkerDelivery;
+  /** Workers that failed and are still being considered for a retry on another provider. */
+  recovering?(): number;
   signal: AbortSignal | undefined;
   /** Whether the user submitted a message pi has not yet taken in. */
   hasPendingMessages(): boolean;
@@ -48,11 +50,13 @@ export class WorkerHold {
 
   async wait(host: HoldHost): Promise<HoldOutcome> {
     const { manager, delivery, signal } = host;
-    // Something already handed to the run but not taken in yet: pi takes it
-    // in only after this handler returns, so waiting here would wait on itself.
-    if (delivery.inFlightCount() > 0) return "yield";
-    if (delivery.flushNow() === "queued") return "yield";
-    if (!manager.active().length) return "settled";
+    const recovering = () => host.recovering?.() ?? 0;
+    const lastWorkerActivity = () => Math.max(0, ...manager.active().map((record) => record.lastEventAt));
+    // Anything already handed to the run but not taken in yet: pi takes it in
+    // only after this handler returns, so waiting here would wait on itself.
+    const ready = () => delivery.inFlightCount() > 0 || delivery.flushNow() === "queued";
+    if (ready()) return "yield";
+    if (!manager.active().length && !recovering() && delivery.pending() === 0) return "settled";
     if (manager.active().some((record) => record.question)) return "released";
     if (signal?.aborted || host.hasPendingMessages()) return "released";
     this.touch();
@@ -62,41 +66,33 @@ export class WorkerHold {
         if (finished) return;
         finished = true;
         clearInterval(poll);
-        clearTimeout(idleTimer);
         unsubscribe();
         signal?.removeEventListener("abort", onAbort);
         resolve(outcome);
       };
+      // Everything is re-checked on a short poll as well as on events: a
+      // delivery coalesces on its own timer, a failed worker's result waits on
+      // its recovery decision, and a worker's streaming updates its activity
+      // time without raising an event.
       const check = () => {
+        if (finished) return;
         if (signal?.aborted || host.hasPendingMessages()) return finish("released");
-        if (delivery.flushNow() === "queued" || delivery.inFlightCount() > 0) return finish("yield");
+        if (ready()) return finish("yield");
         const active = manager.active();
         if (active.some((record) => record.question)) return finish("released");
-        if (!active.length && delivery.pending() === 0) return finish("settled");
-        armIdle();
-      };
-      let idleTimer: ReturnType<typeof setTimeout> | undefined;
-      const armIdle = () => {
-        if (idleTimer) clearTimeout(idleTimer);
-        const left = Math.max(0, host.idleMs - (this.now() - this.lastActivity));
-        idleTimer = setTimeout(() => (this.now() - this.lastActivity >= host.idleMs ? finish("idle") : armIdle()), left);
-        idleTimer.unref?.();
+        if (!active.length && !recovering() && delivery.pending() === 0) return finish("settled");
+        this.lastActivity = Math.max(this.lastActivity, lastWorkerActivity());
+        if (this.now() - this.lastActivity >= host.idleMs) finish("idle");
       };
       const onAbort = () => finish("released");
       signal?.addEventListener("abort", onAbort, { once: true });
       const unsubscribe = manager.subscribe((event) => {
-        if (event.type !== "phase") this.touch();
-        if (event.type === "settled" || event.type === "question" || event.type === "changed") queueMicrotask(check);
+        // A stall warning reports silence; it is not activity.
+        if (event.type !== "phase" && event.type !== "stall_warning") this.touch();
+        queueMicrotask(check);
       });
-      // A submitted message raises no event an extension can await.
-      const poll = setInterval(() => {
-        if (signal?.aborted || host.hasPendingMessages()) {
-          this.touch();
-          finish("released");
-        }
-      }, PENDING_POLL_MS);
+      const poll = setInterval(check, POLL_MS);
       poll.unref?.();
-      armIdle();
       check();
     });
   }

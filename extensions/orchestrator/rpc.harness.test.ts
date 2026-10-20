@@ -139,9 +139,10 @@ describe.skipIf(!existsSync(PI))("pi-pi over pi's RPC mode", { timeout: 60_000 }
     await run.close();
   });
 
-  it("opens /pp as a select, warns first on bb, and keeps its reports out of the model's context", async () => {
+  it("opens /pp on bb with the warning in the menu, the report in a text dialog, and neither in the model's context", async () => {
     let step = 0;
     const run = start([{ text: "first" }, { text: "second" }], (request) => {
+      if (request.method === "editor") return request.prefill;
       if (request.method !== "select") return undefined;
       step++;
       return request.options!.find((option) => option.startsWith(step === 1 ? "Status" : "Close"));
@@ -149,14 +150,16 @@ describe.skipIf(!existsSync(PI))("pi-pi over pi's RPC mode", { timeout: 60_000 }
     run.send({ type: "prompt", message: "hello" });
     await settled(run);
     run.send({ type: "prompt", message: "/pp" });
-    await run.waitFor((event) => event.type === "extension_ui_request" && event.method === "select" && /Close/.test(JSON.stringify(event.options)) && step >= 2);
-    const warned = run.events.find((event) => event.type === "extension_ui_request" && event.method === "notify" && /may stay busy/.test(event.message));
-    expect(warned).toBeTruthy();
+    await run.waitFor(() => step >= 2);
+    // bb drops notify and shows chat messages only inside a turn, which /pp
+    // does not open: what it does show are dialogs.
     const menu = run.dialogs[0]!;
-    expect(menu.title).toBe("/pp · session control panel");
+    expect(menu.method).toBe("select");
+    expect(menu.title).toMatch(/^\/pp · session control panel \(press Stop afterwards if the app stays busy\)$/);
     expect(menu.options![0]).toMatch(/^Status — /);
-    const reportMessage = await run.waitFor((event) => event.type === "message_end" && event.message?.customType === "pp-report");
-    expect(reportMessage.message.content).toMatch(/^pi-pi · status/);
+    const reportDialog = run.dialogs.find((dialog) => dialog.method === "editor")!;
+    expect(reportDialog.title).toMatch(/^pi-pi · status/);
+    expect(reportDialog.prefill).toMatch(/^Model: /);
     run.send({ type: "prompt", message: "again" });
     await run.waitFor((event) => event.type === "agent_settled" && run.events.filter((e) => e.type === "agent_settled").length >= 2);
     const lastRequest = run.modelSaw().at(-1)!;
@@ -164,6 +167,27 @@ describe.skipIf(!existsSync(PI))("pi-pi over pi's RPC mode", { timeout: 60_000 }
     expect(lastRequest.some((message: any) => message.content?.[0]?.text === "again")).toBe(true);
     expect(JSON.stringify(lastRequest)).not.toContain("pi-pi · status");
     expect(JSON.stringify(lastRequest)).not.toContain("may stay busy");
+    await run.close();
+  });
+
+  it("puts /pp reports in the chat and keeps them from the model on a host that shows chat messages", async () => {
+    let step = 0;
+    const run = start([{ text: "first" }, { text: "second" }], (request) => {
+      if (request.method !== "select") return undefined;
+      step++;
+      return request.options!.find((option) => option.startsWith(step === 1 ? "Status" : "Close"));
+    });
+    run.send({ type: "prompt", message: "hello" });
+    await settled(run);
+    run.send({ type: "prompt", message: "/pp" });
+    const reportMessage = await run.waitFor((event) => event.type === "message_end" && event.message?.customType === "pp-report");
+    expect(JSON.stringify(reportMessage.message.content)).toContain("pi-pi · status");
+    await run.waitFor(() => step >= 2);
+    run.send({ type: "prompt", message: "again" });
+    await run.waitFor((event) => event.type === "agent_settled" && run.events.filter((e) => e.type === "agent_settled").length >= 2);
+    const lastRequest = run.modelSaw().at(-1)!;
+    expect(lastRequest.some((message: any) => message.content?.[0]?.text === "again")).toBe(true);
+    expect(JSON.stringify(lastRequest)).not.toContain("pi-pi · status");
     await run.close();
   });
 });

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { detectHost, fitLine } from "./host.js";
-import { attachHost, currentHost, notice, registerNotices, report } from "./notices.js";
+import { asCommand, attachHost, commandNotice, currentHost, notice, registerNotices, report } from "./notices.js";
 
 function makePi(): any {
   const handlers = new Map<string, Array<(...args: any[]) => any>>();
@@ -167,5 +167,43 @@ describe("notices", () => {
       expect(pi.sendMessage.mock.calls.length > 0).toBe(chat);
       for (const key of Object.keys(env)) delete process.env[key];
     }
+  });
+
+  it("strips presentation messages from what compaction summarizes", () => {
+    const pi = makePi();
+    registerNotices(pi);
+    const preparation = {
+      messagesToSummarize: [{ role: "user", content: "a" }, { role: "custom", customType: "pp-report", content: "r" }],
+      turnPrefixMessages: [{ role: "custom", customType: "pp-notice", content: "n" }, { role: "assistant", content: [] }],
+    };
+    pi.handlers.get("session_before_compact")[0]({ preparation });
+    expect(preparation.messagesToSummarize.map((m: any) => m.role)).toEqual(["user"]);
+    expect(preparation.turnPrefixMessages.map((m: any) => m.role)).toEqual(["assistant"]);
+  });
+
+  it("shows a command's notices at once on T3, whose turn is open for the command", async () => {
+    process.env.T3_PI_RUNTIME_MODE = "x";
+    const pi = makePi();
+    registerNotices(pi);
+    const idle = ctx("rpc", true);
+    attachHost(idle);
+    await asCommand(async () => notice(idle, "Config update rejected", "error"));
+    expect(idle.ui.notify).toHaveBeenCalledWith("Config update rejected", "error");
+    delete process.env.T3_PI_RUNTIME_MODE;
+  });
+
+  it("on bb, sends a command notice as a chat message right away and shows an idle report in a text dialog", async () => {
+    process.env.BB_THREAD_ID = "t";
+    const pi = makePi();
+    registerNotices(pi);
+    const idle: any = ctx("rpc", true);
+    idle.ui.editor = vi.fn(async () => undefined);
+    attachHost(idle);
+    commandNotice(idle, "may stay busy", "warning");
+    expect(pi.sendMessage).toHaveBeenCalledWith(expect.objectContaining({ customType: "pp-notice", content: "⚠ may stay busy" }), { triggerTurn: false });
+    await report(idle, "pi-pi · status", "Model x");
+    expect(idle.ui.editor).toHaveBeenCalledWith("pi-pi · status (read-only; closing discards edits)", "Model x");
+    expect(pi.sendMessage).toHaveBeenCalledTimes(1);
+    delete process.env.BB_THREAD_ID;
   });
 });

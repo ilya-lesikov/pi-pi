@@ -36,6 +36,8 @@ export interface DeliveryHost {
   canWake(): boolean;
   /** Whether the session can neither take a steer nor start a turn (between turns, compacting): hold and retry. */
   isBusy?(): boolean;
+  /** Whether the run is being held open for workers: then even a silent result goes into it, since nothing else will take it. */
+  isHolding?(): boolean;
   send(message: { customType: string; content: string; display: boolean; details: WorkerMessageDetails }, options: { deliverAs?: "steer" | "nextTurn"; triggerTurn?: boolean }): void;
   now(): number;
 }
@@ -140,7 +142,7 @@ export class WorkerDelivery {
       if (held.length) this.schedule(this.options.pollMs ?? 1000);
       return;
     }
-    const silent = ready.every((item) => item.kind === "settled" && item.record.spec.notify === "silent");
+    const silent = !this.host.isHolding?.() && ready.every((item) => item.kind === "settled" && item.record.spec.notify === "silent");
     const deliveryId = `d${++this.sequence}`;
     const message = { customType: WORKER_MESSAGE_TYPE, content: renderForModel(ready, this.host.now()), display: true, details: { ...describe(ready, this.host.now()), deliveryId } };
     const streaming = this.host.isStreaming();

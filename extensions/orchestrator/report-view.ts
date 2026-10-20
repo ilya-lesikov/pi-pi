@@ -17,7 +17,7 @@ export async function showReport(ctx: any, title: string, text: string, level: "
     });
     return;
   }
-  report(ctx, title, text, level);
+  await report(ctx, title, text, level);
 }
 
 class ReportView implements Component {

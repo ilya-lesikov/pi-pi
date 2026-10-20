@@ -14,8 +14,8 @@ export const DIALOG_LIMITS = { title: 200, option: 512, options: 64, placeholder
 export const PRESENTATION_TYPES = new Set(["pp-notice", "pp-report", "subagent-notification", "subagent-update"]);
 
 // A person cannot answer a dialog this fast; an adapter that cancels every
-// text dialog it is sent does.
-const INSTANT_CANCEL_MS = 50;
+// text dialog it is sent does, within a stdio round trip.
+const INSTANT_CANCEL_MS = 150;
 
 export class HostProfile {
   private textInput: Support = "unknown";
