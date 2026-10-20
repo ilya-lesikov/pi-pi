@@ -318,7 +318,7 @@ async function reconcileRouting(orchestrator: Orchestrator, ctx: any, reregister
   if (!ctx) return;
   await orchestrator.runModelSwitchBetweenTurns(async () => {
     if (orchestrator.routedMainSpec) await orchestrator.restoreMainRouting(ctx);
-    else if (!await orchestrator.applyMainAgent(ctx)) notice(ctx, mainUnavailableMessage(orchestrator), "warning");
+    else if (!orchestrator.mainPickedByHand && !await orchestrator.applyMainAgent(ctx)) notice(ctx, mainUnavailableMessage(orchestrator), "warning");
   });
 }
 

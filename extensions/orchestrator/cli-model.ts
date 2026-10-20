@@ -1,4 +1,4 @@
-import { parseArgs, resolveCliModel } from "@earendil-works/pi-coding-agent";
+import { parseArgs } from "@earendil-works/pi-coding-agent";
 
 export interface CliModelRequest {
   model: string;
@@ -21,25 +21,4 @@ export function cliModelRequest(argv: readonly string[] = process.argv.slice(2))
   }
   if (!parsed.model) return null;
   return { model: parsed.model, provider: parsed.provider, thinking: parsed.thinking };
-}
-
-/**
- * Resolves the request against the models registered now, with pi's own
- * matching rules (provider/model, fuzzy id, `model:thinking`). pi has already
- * put the session on this model; resolving it again tells pi-pi which one
- * that was, and still finds a model whose provider pi-pi registered later.
- */
-export function resolveCliRequest(request: CliModelRequest, registry: any): { model: any; thinking?: string } | null {
-  if (!registry?.getAll) return null;
-  const runtime = {
-    getModels: () => registry.getAll(),
-    hasConfiguredAuth: (provider: string) => registry.getAll().some((model: any) => model.provider === provider && registry.hasConfiguredAuth?.(model)),
-  };
-  try {
-    const resolved = resolveCliModel({ cliProvider: request.provider, cliModel: request.model, cliThinking: request.thinking as any, modelRuntime: runtime as any });
-    if (!resolved.model) return null;
-    return { model: resolved.model, thinking: request.thinking ?? resolved.thinkingLevel };
-  } catch {
-    return null;
-  }
 }

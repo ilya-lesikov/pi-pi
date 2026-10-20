@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { cliModelRequest, resolveCliRequest } from "./cli-model.js";
+import { cliModelRequest } from "./cli-model.js";
 import type { NormalizedPiPiConfig, PoolEntry, PoolKey } from "./config.js";
 import { configureRouting, describeRef, describeSpec, isPaused, resolveRef, resolveSpec, routePauseKey, type ModelDescription } from "./routing.js";
 import { setProbeRoutePolicy } from "./flant-infra.js";
@@ -121,6 +121,12 @@ export class Orchestrator {
    * user's own /model pick and must be left alone.
    */
   routedMainSpec: string | null = null;
+  /**
+   * Set when the session started on a model given with `--model`: settings
+   * changes then leave it where it is. (A later /model pick is caught by
+   * restoreMainRouting, which only moves a session still on routedMainSpec.)
+   */
+  mainPickedByHand = false;
   private agentRegistrationSignature = "";
   subSwitchBackTimer: ReturnType<typeof setTimeout> | null = null;
   /** Expiry timers of the timed routing pauses, keyed by pause. */
@@ -402,26 +408,17 @@ export class Orchestrator {
   }
 
   /**
-   * Puts the root session on the model pi was started with, when one was
-   * given. It counts as the user's own pick: routing never moves it, and
-   * workers keep their routed models. Returns false when there is no such
-   * request; a request that names no known model leaves pi's choice and warns.
+   * Leaves the root session on the model pi was started with, when one was
+   * given: it counts as the user's own pick, routing never moves it, and
+   * workers keep their routed models. Returns false when there is none.
    */
-  async applyCliModel(ctx: ExtensionContext, request = cliModelRequest()): Promise<"none" | "applied" | "unknown"> {
-    if (!request) return "none";
-    const resolved = resolveCliRequest(request, (ctx as any).modelRegistry);
-    if (!resolved || typeof (this.pi as any).setModel !== "function") return "unknown";
-    try {
-      const current = (ctx as any).model;
-      const same = current?.provider === resolved.model.provider && current?.id === resolved.model.id;
-      // pi refuses a model it has no credentials for and keeps the old one.
-      if (!same && await (this.pi as any).setModel(resolved.model) === false) return "unknown";
-      if (resolved.thinking && typeof (this.pi as any).setThinkingLevel === "function") await (this.pi as any).setThinkingLevel(resolved.thinking);
-      this.routedMainSpec = null;
-      return "applied";
-    } catch {
-      return "unknown";
-    }
+  keepCliModel(request = cliModelRequest()): boolean {
+    if (!request) return false;
+    // pi already started the session on it (and exits when it cannot); all
+    // pi-pi has to do is not move it.
+    this.routedMainSpec = null;
+    this.mainPickedByHand = true;
+    return true;
   }
 
   mainAgentConfig(): { model: string; thinking: string } {

@@ -250,6 +250,18 @@ describe("WorkerWidget", () => {
     expect(lines.at(-1)).toBe("  … 2 more pending");
   });
 
+  it("shows a stopped worker as stopped, not done", async () => {
+    const { manager, sessions, render } = mount();
+    const record = manager.spawn(spec());
+    await flush();
+    manager.stop(record.id);
+    sessions[0]!.finish();
+    await flush();
+    const lines = render(200).map(plain);
+    expect(lines[0]).toBe("Workers • 1 stopped   ctrl+n");
+    expect(lines[1]).toMatch(/^  ■ explore: /);
+  });
+
   it("takes a finished worker off on time even when nothing else is running", async () => {
     const { manager, sessions, ui } = mount();
     manager.spawn(spec());
@@ -652,9 +664,18 @@ describe("WorkerPicker (ctrl+n)", () => {
   it("interrupts, stops, and kills only after a second k", async () => {
     const { manager, sessions, picker } = open();
     const record = manager.spawn(spec());
+    const other = manager.spawn(spec({ description: "other" }));
     await flush();
     picker.handleInput("i");
     expect(sessions[0]!.interrupted).toBe(1);
+    picker.handleInput(KEY.down);
+    picker.handleInput("s");
+    // Stopping asks it to wrap up; it is stopped once its session ends.
+    expect(plain(picker.render(120).at(-2)!)).toMatch(/^  Asked explore to wrap up/);
+    sessions[1]!.finish();
+    await flush();
+    expect(other.status).toBe("stopped");
+    picker.handleInput(KEY.up);
     picker.handleInput("k");
     expect(record.status).toBe("running");
     expect(plain(picker.render(120).at(-2)!)).toBe("  Press k again to kill explore.");

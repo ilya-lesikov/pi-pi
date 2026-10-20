@@ -149,17 +149,12 @@ export async function askQuestion(ctx: AskContext, opts: AskOptions & SequenceOp
   const { signal } = opts;
   if (signal?.aborted) return cancel("signal");
   const q = toQuestion(opts);
-  ctx.ui.setWorkingMessage?.("Waiting for user to answer…");
-  try {
-    if (ctx.mode === undefined || ctx.mode === "tui") {
-      const result = await showComponent(ctx.ui, q, opts);
-      if (signal?.aborted) return cancel("signal");
-      if (result !== undefined) return result;
-    }
-    return await askViaDialogs(ctx, q, opts);
-  } finally {
-    ctx.ui.setWorkingMessage?.();
+  if (ctx.mode === undefined || ctx.mode === "tui") {
+    const result = await showComponent(ctx.ui, q, opts);
+    if (signal?.aborted) return cancel("signal");
+    if (result !== undefined) return result;
   }
+  return await askViaDialogs(ctx, q, opts);
 }
 
 async function showComponent(ui: any, q: Question, opts: AskOptions & SequenceOptions): Promise<UIResult | undefined> {

@@ -213,18 +213,19 @@ export class WorkerWidget {
   }
 }
 
-type WorkerState = "asking" | "silent" | "failed" | "running" | "pending" | "done";
+type WorkerState = "asking" | "silent" | "failed" | "running" | "pending" | "stopped" | "done";
 
 function stateOf(record: WorkerRecord): WorkerState {
   if (record.question) return "asking";
   if (record.status === "queued") return "pending";
   if (record.status === "running") return record.stallWarned ? "silent" : "running";
   if (FAILED_STATUSES.has(record.status)) return "failed";
+  if (record.status === "stopped") return "stopped";
   return "done";
 }
 
-const STATE_ORDER: WorkerState[] = ["asking", "silent", "failed", "running", "pending", "done"];
-const STATE_COLOR: Record<WorkerState, string> = { asking: "warning", silent: "error", failed: "error", running: "accent", pending: "muted", done: "dim" };
+const STATE_ORDER: WorkerState[] = ["asking", "silent", "failed", "running", "pending", "stopped", "done"];
+const STATE_COLOR: Record<WorkerState, string> = { asking: "warning", silent: "error", failed: "error", running: "accent", pending: "muted", stopped: "dim", done: "dim" };
 
 function workerHeader(records: readonly WorkerRecord[], theme: Theme, sep: string): string {
   const counts = new Map<WorkerState, number>();
@@ -258,6 +259,7 @@ function recordLines(record: WorkerRecord, now: number, frame: number, theme: Th
     failed: theme.fg("error", "✗"),
     running: theme.fg("accent", SPINNER[frame % SPINNER.length]!),
     pending: theme.fg("dim", "○"),
+    stopped: theme.fg("dim", "■"),
     done: theme.fg("success", "✓"),
   }[state];
   const name = `${record.spec.type}${theme.fg("dim", ":")} ${record.spec.description}`;
@@ -266,7 +268,7 @@ function recordLines(record: WorkerRecord, now: number, frame: number, theme: Th
   const tokens = record.usage.input + record.usage.output + record.usage.cacheRead + record.usage.cacheWrite;
   const stats = [elapsed, ...(tokens ? [formatTokens(tokens)] : [])].map((part) => theme.fg("dim", part)).join(sep);
   const first = `  ${glyph} ${name}${sep}${stats}`;
-  if (state === "done") return [first];
+  if (state === "done" || state === "stopped") return [first];
   if (state === "failed") {
     const reason = record.error ? `${record.status}: ${record.error.replace(/\s+/g, " ")}` : record.status;
     return [`${first}${sep}${theme.fg("error", reason)}`];

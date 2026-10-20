@@ -78,7 +78,6 @@ describe("ask_user in the terminal", () => {
     const result = await run({ question: "Pick a database", header: "DB", options: ["A", { title: "B", description: "bee" }] });
     expect(text(result)).toBe("User answered: B");
     expect(result.details).toMatchObject({ question: "Pick a database", header: "DB", options: [{ title: "A" }, { title: "B", description: "bee" }], response: { kind: "selection", selections: ["B"] }, cancelled: false, status: "answered" });
-    expect(ui.working).toEqual(["Waiting for user to answer…", undefined]);
     const first = frames[0]!.join("\n");
     expect(first).toMatch(/╭─ ask_user · DB ─/);
     expect(first).toContain("Pick a database");
