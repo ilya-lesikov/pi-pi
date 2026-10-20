@@ -640,7 +640,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   const workerHooks = createWorkerHooks(orchestrator);
   registerWorkerToolsFor(orchestrator, workerHooks);
   registerWorkerUi(orchestrator);
-  registerTasks(pi);
+  registerTasks(pi, () => orchestrator.workerWidget?.restack());
   registerAskUser(pi);
   registerConfirm(pi);
   registerLspTool(pi, () => orchestrator.lsp);
@@ -744,7 +744,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     const cli = await orchestrator.applyCliModel(ctx);
     if (cli === "unknown") {
       const request = cliModelRequest();
-      notice(ctx, `--model ${request?.provider ? `${request.provider}/` : ""}${request?.model} matches no known model; using ${ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "pi's default"}.`, "warning");
+      notice(ctx, `--model ${request?.provider ? `${request.provider}/` : ""}${request?.model} is not usable here; staying on ${ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "pi's default"}.`, "warning");
     } else if (cli === "none" && !await orchestrator.applyMainAgent(ctx)) {
       notice(ctx, mainUnavailableMessage(orchestrator), "warning");
     }

@@ -34,6 +34,8 @@ const NO_RESPONSE_MS = 120_000;
  */
 export class MainStatusTracker {
   private state: State = { kind: "idle", since: Date.now() };
+  /** What a dialog or a compaction interrupted, to go back to when it ends. */
+  private underneath: State | null = null;
   private readonly tools = new Map<string, string>();
   private modelLabel = "the model";
   private lastActivity = Date.now();
@@ -70,14 +72,16 @@ export class MainStatusTracker {
       case "idle":
         return { text: s.settledAt ? `Idle • done ${formatDuration(now - s.settledAt)} ago` : "Idle", level: "idle", since: s.since };
       case "waiting_model":
+      case "thinking":
+      case "writing": {
+        // A model that has gone quiet, whether before its first token or mid-stream.
         if (now - this.lastActivity >= NO_RESPONSE_MS) {
           return { text: `No response for ${formatDuration(now - this.lastActivity)}`, level: "alarm", since: s.since, suffix: "esc to interrupt" };
         }
+        if (s.kind === "thinking") return { text: "Thinking", level: "normal", since: s.since };
+        if (s.kind === "writing") return { text: "Writing the answer", level: "normal", since: s.since };
         return { text: `Waiting for ${s.model}`, level: "normal", since: s.since };
-      case "thinking":
-        return { text: "Thinking", level: "normal", since: s.since };
-      case "writing":
-        return { text: "Writing the answer", level: "normal", since: s.since };
+      }
       case "tool": {
         const waits = this.hooks.activeWaits();
         if (waits > 0 && this.tools.size === 1 && [...this.tools.values()][0] === "agent_wait") {
@@ -141,17 +145,36 @@ export class MainStatusTracker {
       }
       this.set({ kind: "waiting_model", since: this.now(), model: this.modelLabel });
     });
-    on("ui_prompt_start", () => this.set({ kind: "waiting_user", since: this.now() }));
+    // A dialog can open while idle (a /pp menu) or in the middle of a tool;
+    // when it closes the agent is back to whatever it was doing before.
+    on("ui_prompt_start", () => {
+      if (this.state.kind !== "waiting_user") this.underneath = this.state;
+      this.set({ kind: "waiting_user", since: this.now() });
+    });
     on("ui_prompt_end", () => {
       this.activity();
-      if (this.state.kind === "waiting_user" && !this.tools.size) this.set({ kind: "waiting_model", since: this.now(), model: this.modelLabel });
+      if (this.state.kind !== "waiting_user") return;
+      const back = this.underneath;
+      this.underneath = null;
+      if (back) this.set(back.kind === "idle" ? back : { ...back, since: this.now() } as State);
     });
-    on("session_before_compact", () => this.set({ kind: "compacting", since: this.now() }));
-    on("session_compact", () => {
-      if (this.state.kind === "compacting") this.set({ kind: "waiting_model", since: this.now(), model: this.modelLabel });
+    // A /compact typed while idle ends idle; one pi runs mid-run goes back to the run.
+    on("session_before_compact", () => {
+      if (this.state.kind !== "compacting") this.underneath = this.state;
+      this.set({ kind: "compacting", since: this.now() });
     });
+    const compacted = () => {
+      if (this.state.kind !== "compacting") return;
+      this.activity();
+      const back = this.underneath;
+      this.underneath = null;
+      this.set(!back || back.kind === "idle" ? { kind: "idle", since: this.now(), settledAt: this.now() } : { kind: "waiting_model", since: this.now(), model: this.modelLabel });
+    };
+    on("session_compact", compacted);
+    on("session_compact_failed", compacted);
     on("agent_settled", () => {
       this.tools.clear();
+      this.underneath = null;
       this.set({ kind: "idle", since: this.now(), settledAt: this.now() });
     });
   }

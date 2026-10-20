@@ -260,9 +260,16 @@ export function createCustomFooter(
   let disposed = false;
   let frame = 0;
   // The status line animates and counts seconds; it only needs that while busy.
+  // Idle still counts "done … ago", but only needs a repaint every few seconds.
+  let idleTicks = 0;
   const ticker = setInterval(() => {
-    if (disposed || !footerStatus || footerStatus.current().level === "idle") return;
-    frame++;
+    if (disposed || !footerStatus) return;
+    if (footerStatus.current().level === "idle") {
+      if (++idleTicks % 25 !== 0) return;
+    } else {
+      idleTicks = 0;
+      frame++;
+    }
     tui.requestRender();
   }, 200);
   ticker.unref?.();

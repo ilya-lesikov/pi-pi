@@ -414,7 +414,8 @@ export class Orchestrator {
     try {
       const current = (ctx as any).model;
       const same = current?.provider === resolved.model.provider && current?.id === resolved.model.id;
-      if (!same) await (this.pi as any).setModel(resolved.model);
+      // pi refuses a model it has no credentials for and keeps the old one.
+      if (!same && await (this.pi as any).setModel(resolved.model) === false) return "unknown";
       if (resolved.thinking && typeof (this.pi as any).setThinkingLevel === "function") await (this.pi as any).setThinkingLevel(resolved.thinking);
       this.routedMainSpec = null;
       return "applied";

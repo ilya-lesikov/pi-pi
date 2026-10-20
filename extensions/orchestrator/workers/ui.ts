@@ -67,6 +67,7 @@ export class WorkerWidget {
   private registered = false;
   private suspended = false;
   private timer: ReturnType<typeof setInterval> | null = null;
+  private expiry: ReturnType<typeof setTimeout> | null = null;
   private frame = 0;
   private unsubscribe: (() => void) | null = null;
   private manager: WorkerManager | null = null;
@@ -113,6 +114,15 @@ export class WorkerWidget {
     this.update();
   }
 
+  /** Adds the panel again, so it stacks below a widget that was just added. */
+  restack(): void {
+    if (!this.registered || this.suspended) return;
+    this.ui?.setWidget?.("workers", undefined);
+    this.registered = false;
+    this.tui = null;
+    this.update();
+  }
+
   update(): void {
     if (!this.ui || this.suspended) return;
     const visible = this.visibleRecords();
@@ -137,6 +147,7 @@ export class WorkerWidget {
       this.timer.unref?.();
     } else if (!active) {
       this.stopTimer();
+      this.scheduleExpiry(visible);
     }
     if (!this.registered) {
       this.ui.setWidget?.("workers", (tui: TUI, theme: Theme) => {
@@ -152,6 +163,22 @@ export class WorkerWidget {
   private stopTimer(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    if (this.expiry) clearTimeout(this.expiry);
+    this.expiry = null;
+  }
+
+  /** With nothing running there is no animation tick; a finished worker still has to leave on time. */
+  private scheduleExpiry(visible: readonly WorkerRecord[]): void {
+    const now = Date.now();
+    const due = visible
+      .filter((record) => !FAILED_STATUSES.has(record.status) && record.settledAt)
+      .map((record) => record.settledAt! + FINISHED_VISIBLE_MS - now);
+    if (!due.length) return;
+    this.expiry = setTimeout(() => {
+      this.expiry = null;
+      this.update();
+    }, Math.max(0, Math.min(...due)) + 50);
+    this.expiry.unref?.();
   }
 
   visibleRecords(): WorkerRecord[] {
@@ -515,9 +542,10 @@ export async function openWorkerViewer(orchestrator: Orchestrator, ctx: any, id:
  * the draft untouched.
  */
 export class WorkerPicker implements Component {
-  private index = 0;
-  private composer: Input | null = null;
-  private armed = false;
+  /** The selected worker, by id: the list re-sorts as workers change state. */
+  private selectedId: string | null = null;
+  private composer: { input: Input; id: string } | null = null;
+  private armedId: string | null = null;
   private notice = "";
   private readonly timer: ReturnType<typeof setInterval>;
   private frame = 0;
@@ -541,11 +569,10 @@ export class WorkerPicker implements Component {
     return this.widget.visibleRecords().sort(order);
   }
 
-  private selected(): WorkerRecord | undefined {
-    const records = this.records();
-    if (!records.length) return undefined;
-    this.index = Math.min(this.index, records.length - 1);
-    return records[this.index];
+  private selected(records = this.records()): WorkerRecord | undefined {
+    const current = records.find((record) => record.id === this.selectedId) ?? records[0];
+    this.selectedId = current?.id ?? null;
+    return current;
   }
 
   private close(): void {
@@ -555,20 +582,22 @@ export class WorkerPicker implements Component {
 
   handleInput(data: string): void {
     if (this.composer) {
-      this.composer.handleInput(data);
+      this.composer.input.handleInput(data);
       this.tui.requestRender();
       return;
     }
-    const record = this.selected();
+    const records = this.records();
+    const record = this.selected(records);
     if (matchesKey(data, "escape") || matchesKey(data, "ctrl+n") || !record) {
       this.close();
       return;
     }
     const active = ACTIVE_STATUSES.has(record.status);
-    const wasArmed = this.armed;
-    this.armed = false;
-    if (matchesKey(data, "up")) this.index = Math.max(0, this.index - 1);
-    else if (matchesKey(data, "down")) this.index = Math.min(this.records().length - 1, this.index + 1);
+    const armed = this.armedId === record.id;
+    this.armedId = null;
+    const at = records.indexOf(record);
+    if (matchesKey(data, "up")) this.selectedId = records[Math.max(0, at - 1)]!.id;
+    else if (matchesKey(data, "down")) this.selectedId = records[Math.min(records.length - 1, at + 1)]!.id;
     else if (matchesKey(data, "enter")) {
       clearInterval(this.timer);
       void this.open(record.id).finally(() => this.done());
@@ -581,12 +610,12 @@ export class WorkerPicker implements Component {
       this.manager.stop(record.id);
       this.notice = `Asked ${record.spec.type} to wrap up; killed in a minute if it does not.`;
     } else if (matchesKey(data, "k") && active) {
-      if (wasArmed) {
+      if (armed) {
         this.manager.kill(record.id);
         this.notice = `Killed ${record.spec.type}.`;
       } else {
-        this.armed = true;
-        this.notice = "Press k again to kill it.";
+        this.armedId = record.id;
+        this.notice = `Press k again to kill ${record.spec.type}.`;
       }
     } else return;
     this.tui.requestRender();
@@ -609,33 +638,48 @@ export class WorkerPicker implements Component {
       this.composer = null;
       this.tui.requestRender();
     };
-    this.composer = input;
+    this.composer = { input, id };
   }
 
   render(width: number): string[] {
     const th = this.theme;
     const records = this.records();
-    const selected = this.selected();
+    const selected = this.selected(records);
     if (!records.length || !selected) return [truncateToWidth(th.fg("dim", "No workers. Esc to go back."), width)];
     const sep = th.fg("dim", " • ");
     const now = Date.now();
-    const lines = [truncateToWidth(workerHeader(records, th, sep).replace(/\s+\S*ctrl\+n\S*$/, ""), width)];
-    for (const record of records) {
-      const block = recordLines(record, now, this.frame, th, sep);
-      const mark = record === selected ? th.fg("accent", "▌") : " ";
-      lines.push(...block.map((line, i) => truncateToWidth(`${i === 0 || record === selected ? mark : " "}${line.slice(1)}`, width)));
-    }
+    const header = truncateToWidth(workerHeader(records, th, sep).replace(/\s+\S*ctrl\+n\S*$/, ""), width);
+    const footer: string[] = [];
     if (this.composer) {
-      const label = selected.question ? "Answer: " : "Message: ";
-      lines.push(truncateToWidth(`${th.fg("accent", label)}${this.composer.render(Math.max(1, width - label.length))[0] ?? ""}`, width));
-      lines.push(truncateToWidth(th.fg("dim", "  enter send · esc cancel"), width));
-      return lines;
+      const target = this.manager.get(this.composer.id);
+      const label = target?.question ? `Answer ${target.spec.type}: ` : `Message ${target?.spec.type ?? "worker"}: `;
+      footer.push(truncateToWidth(`${th.fg("accent", label)}${this.composer.input.render(Math.max(1, width - visibleWidth(label)))[0] ?? ""}`, width));
+      footer.push(truncateToWidth(th.fg("dim", "  enter send · esc cancel"), width));
+    } else {
+      if (this.notice) footer.push(truncateToWidth(th.fg("warning", `  ${this.notice}`), width));
+      const answer = selected.question ? "m answer" : "m message";
+      const actions = ACTIVE_STATUSES.has(selected.status) ? [answer, "i interrupt", "s stop", "k kill"] : [answer];
+      footer.push(truncateToWidth(th.fg("dim", `  ↑↓ select · enter output · ${actions.join(" · ")} · esc back`), width));
     }
-    if (this.notice) lines.push(truncateToWidth(th.fg("warning", `  ${this.notice}`), width));
-    const answer = selected.question ? "m answer" : "m message";
-    const actions = ACTIVE_STATUSES.has(selected.status) ? [answer, "i interrupt", "s stop", "k kill"] : [answer];
-    lines.push(truncateToWidth(th.fg("dim", `  ↑↓ select · enter output · ${actions.join(" · ")} · esc back`), width));
-    return lines;
+    // It stands in the editor's place, so it gets the editor's share of the
+    // screen: a long list scrolls to keep the selected worker in view.
+    const rows = this.tui.terminal?.rows ?? 30;
+    const room = Math.max(2, Math.floor(rows * 0.5) - 1 - footer.length);
+    const blocks = records.map((record) => {
+      const lines = recordLines(record, now, this.frame, th, sep);
+      const mark = record === selected ? th.fg("accent", "▌") : " ";
+      return lines.map((line, i) => truncateToWidth(`${i === 0 || record === selected ? mark : " "}${line.slice(1)}`, width));
+    });
+    const at = records.indexOf(selected);
+    let first = at;
+    let used = blocks[at]!.length;
+    while (first > 0 && used + blocks[first - 1]!.length <= room) used += blocks[--first]!.length;
+    let last = at;
+    while (last < blocks.length - 1 && used + blocks[last + 1]!.length <= room) used += blocks[++last]!.length;
+    const body = blocks.slice(first, last + 1).flat();
+    if (first > 0) body.unshift(truncateToWidth(th.fg("dim", `  ↑ ${first} more`), width));
+    if (last < blocks.length - 1) body.push(truncateToWidth(th.fg("dim", `  ↓ ${blocks.length - 1 - last} more`), width));
+    return [header, ...body, ...footer];
   }
 
   invalidate(): void {}

@@ -250,6 +250,24 @@ describe("WorkerWidget", () => {
     expect(lines.at(-1)).toBe("  … 2 more pending");
   });
 
+  it("takes a finished worker off on time even when nothing else is running", async () => {
+    const { manager, sessions, ui } = mount();
+    manager.spawn(spec());
+    await flush();
+    sessions[0]!.finish();
+    await flush();
+    vi.advanceTimersByTime(10_100);
+    expect(ui.setWidget).toHaveBeenLastCalledWith("workers", undefined);
+  });
+
+  it("re-adds itself so it stacks below a panel added after it", async () => {
+    const { manager, ui, widget } = mount();
+    manager.spawn(spec());
+    ui.setWidget.mockClear();
+    widget.restack();
+    expect(ui.setWidget.mock.calls.map((call: any[]) => [call[0], typeof call[1]])).toEqual([["workers", "undefined"], ["workers", "function"]]);
+  });
+
   it("removes the panel once nothing is visible", async () => {
     const { manager, sessions, ui, widget } = mount();
     manager.spawn(spec());
@@ -593,11 +611,42 @@ describe("WorkerPicker (ctrl+n)", () => {
     await flush();
     const answer = sessions[0]!.hooks.askParent("which branch?", undefined);
     picker.handleInput("m");
-    expect(plain(picker.render(120).at(-2)!)).toMatch(/^Answer: /);
+    expect(plain(picker.render(120).at(-2)!)).toMatch(/^Answer explore: /);
     for (const ch of "main") picker.handleInput(ch);
     picker.handleInput(KEY.enter);
     expect(await answer).toBe("main");
     expect(plain(picker.render(120).at(-2)!)).toBe("  Answer sent.");
+  });
+
+  it("keeps acting on the worker it selected and confirmed, however the list re-sorts", async () => {
+    const { manager, sessions, picker } = open();
+    const a = manager.spawn(spec({ description: "A" }));
+    const b = manager.spawn(spec({ description: "B" }));
+    await flush();
+    picker.handleInput(KEY.down);
+    expect(plain(picker.render(120)[3]!)).toMatch(/^▌ ⠋ explore: B/);
+    picker.handleInput("k");
+    // A asks a question and moves first; the selection and the armed kill stay on B.
+    void sessions[0]!.hooks.askParent("?", undefined);
+    picker.handleInput("k");
+    expect(b.status).toBe("killed");
+    expect(a.status).toBe("running");
+  });
+
+  it("scrolls a long list to keep the selected worker on screen", async () => {
+    const { manager } = open();
+    const tui = { terminal: { rows: 16 }, requestRender: vi.fn() };
+    const orchestrator: any = { workers: manager };
+    const widget = new WorkerWidget(orchestrator);
+    const picker = new WorkerPicker(tui as any, theme, widget, manager, async () => {}, () => {});
+    for (let i = 0; i < 6; i++) manager.spawn(spec({ description: `w${i}` }));
+    await flush();
+    for (let i = 0; i < 5; i++) picker.handleInput(KEY.down);
+    const lines = picker.render(120).map(plain);
+    // Half the terminal: the editor's place.
+    expect(lines.length).toBeLessThanOrEqual(9);
+    expect(lines.some((line) => /^▌ ○ explore: w5/.test(line))).toBe(true);
+    expect(lines.some((line) => /^  ↑ \d+ more$/.test(line))).toBe(true);
   });
 
   it("interrupts, stops, and kills only after a second k", async () => {
@@ -608,7 +657,7 @@ describe("WorkerPicker (ctrl+n)", () => {
     expect(sessions[0]!.interrupted).toBe(1);
     picker.handleInput("k");
     expect(record.status).toBe("running");
-    expect(plain(picker.render(120).at(-2)!)).toBe("  Press k again to kill it.");
+    expect(plain(picker.render(120).at(-2)!)).toBe("  Press k again to kill explore.");
     picker.handleInput("k");
     expect(record.status).toBe("killed");
   });

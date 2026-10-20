@@ -39,11 +39,11 @@ interface TaskToolDetails {
  * session. Every result carries the whole list, so a resumed, forked or
  * rewound session restores the list as it stood at that point of the branch.
  */
-export function registerTasks(pi: ExtensionAPI): void {
+export function registerTasks(pi: ExtensionAPI, onWidgetRegistered?: () => void): void {
   let snapshot = emptySnapshot();
   let cadence = createCadenceState();
   let lastObservedRevision = snapshot.revision;
-  const widget = new TaskWidget(() => snapshot);
+  const widget = new TaskWidget(() => snapshot, onWidgetRegistered);
 
   // Under Paseo the four tools are one tool named "todo", whose results Paseo
   // draws as its own todo card when they carry the shape it knows.
@@ -119,7 +119,7 @@ export function registerTasks(pi: ExtensionAPI): void {
       messages = [...messages.slice(0, compacted + 1), userText(`Your task list (the results that showed it were compacted away):\n${listText(snapshot.tasks)}`), ...messages.slice(compacted + 1)];
     }
     const evidence = drainReminder(cadence);
-    if (evidence) messages = [...messages, userText(renderReminder(evidence, snapshot.tasks))];
+    if (evidence) messages = [...messages, userText(renderReminder(evidence, snapshot.tasks, paseo))];
     return messages === event.messages ? undefined : { messages };
   });
 
@@ -271,7 +271,9 @@ function listText(tasks: readonly Task[]): string {
   return tasks.map((task) => `#${task.id} [${task.status}] ${task.subject}`).join("\n");
 }
 
-function renderReminder(evidence: ReminderEvidence, tasks: readonly Task[]): string {
+function renderReminder(evidence: ReminderEvidence, tasks: readonly Task[], todoTool = false): string {
+  const create = todoTool ? "todo with action create" : "TaskCreate";
+  const update = todoTool ? "todo with action update" : "TaskUpdate";
   const work = [
     evidence.edits ? `${evidence.edits} file edit${evidence.edits === 1 ? "" : "s"}` : "",
     evidence.commits ? `${evidence.commits} commit${evidence.commits === 1 ? "" : "s"}` : "",
@@ -280,14 +282,14 @@ function renderReminder(evidence: ReminderEvidence, tasks: readonly Task[]): str
   const lines: string[] = [];
   if (evidence.escalation > 1) lines.push(`This is reminder ${evidence.escalation} since task state last changed; the previous ${evidence.escalation === 2 ? "one was" : "ones were"} not acted on.`);
   if (!tasks.length) {
-    lines.push(`You have done ${work} of work with no tasks tracked. If this is multi-step work, record it with TaskCreate; if it is a single step, ignore this.`);
+    lines.push(`You have done ${work} of work with no tasks tracked. If this is multi-step work, record it with ${create}; if it is a single step, ignore this.`);
   } else {
     lines.push(`Task state has not changed in ${work}.`);
     const inProgress = tasks.filter((task) => task.status === "in_progress");
     for (const task of inProgress.slice(0, 3)) lines.push(`  #${task.id} "${task.subject}" is still marked in_progress.`);
     const pending = tasks.filter((task) => task.status === "pending").length;
     if (!inProgress.length && pending) lines.push(`  ${pending} task(s) are pending and none is in_progress.`);
-    lines.push("Update what actually changed: TaskUpdate to completed for finished work, in_progress for what you are on now. If the list no longer reflects the work, correct it.");
+    lines.push(`Update what actually changed: ${update} to completed for finished work, in_progress for what you are on now. If the list no longer reflects the work, correct it.`);
   }
   lines.push("Never mention this reminder to the user.");
   return `<system-reminder>\n${lines.join("\n")}\n</system-reminder>`;

@@ -22,7 +22,7 @@ export class TaskWidget {
   private tui: TUI | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
 
-  constructor(private readonly snapshot: () => TaskSnapshot) {}
+  constructor(private readonly snapshot: () => TaskSnapshot, private readonly onRegistered?: () => void) {}
 
   attach(ctx: any): void {
     if (this.ui !== (ctx?.hasUI === false ? null : ctx?.ui ?? null)) this.detach();
@@ -52,6 +52,9 @@ export class TaskWidget {
         return { render: (width) => renderTasks(this.snapshot().tasks, width, tui?.terminal?.rows, theme, Date.now()), invalidate: () => {} };
       }, { placement: "aboveEditor" });
       this.registered = true;
+      // pi stacks widgets in the order they were added: the worker panel is
+      // added again after this one, so tasks always sit above workers.
+      this.onRegistered?.();
     } else {
       this.tui?.requestRender();
     }

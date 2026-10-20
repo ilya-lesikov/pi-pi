@@ -99,9 +99,9 @@ const settled = (run: Run) => run.waitFor((event) => event.type === "agent_settl
 const person = (answers: Record<string, (request: Request) => unknown>): Profile => (request) => answers[request.method]?.(request);
 
 describe.skipIf(!existsSync(PI))("pi-pi over pi's RPC mode", { timeout: 60_000 }, () => {
-  it("starts on the model pi was given, even one only an extension provides", async () => {
+  it("keeps the model pi was started with instead of moving to the configured main model", async () => {
     const run = start([{ text: "hi" }], () => undefined, {}, ["--model", "pp-fake/scripted", "--thinking", "low"]);
-    // pi resolved --model before the extension registered the provider; pi-pi applies it once it exists.
+    // pi-pi's session start used to move every session onto its configured main model.
     await new Promise((resolve) => setTimeout(resolve, 1500));
     run.send({ id: "state", type: "get_state" });
     const after = await run.waitFor((event) => event.type === "response" && event.id === "state");

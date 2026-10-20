@@ -53,6 +53,15 @@ describe("Orchestrator.applyCliModel", () => {
     expect(orchestrator.routedMainSpec).toBeNull();
   });
 
+  it("reports a model pi will not switch to, leaving the session and its routing alone", async () => {
+    const { pi, orchestrator } = setup();
+    pi.setModel = vi.fn(async () => false);
+    orchestrator.routedMainSpec = "github-copilot/claude-opus-4.5";
+    expect(await orchestrator.applyCliModel({ modelRegistry: registry, model: models[2] } as any, { model: "sub/claude-opus-4-5", thinking: "high" })).toBe("unknown");
+    expect(pi.setThinkingLevel).not.toHaveBeenCalled();
+    expect(orchestrator.routedMainSpec).toBe("github-copilot/claude-opus-4.5");
+  });
+
   it("does nothing without a request, and reports a request that matches nothing", async () => {
     const { pi, orchestrator } = setup();
     const ctx: any = { modelRegistry: registry };

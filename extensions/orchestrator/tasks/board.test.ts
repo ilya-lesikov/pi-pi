@@ -61,4 +61,18 @@ describe("under Paseo", () => {
     expect(result.isError).toBe(true);
     expect(result.details.error).toMatch(/^Task #9 not found/);
   });
+
+  it("names the todo tool in its reminders", async () => {
+    process.env.PASEO_AGENT_ID = "a";
+    const handlers = new Map<string, any>();
+    registerTasks({ registerTool: () => {}, on: (event: string, handler: any) => handlers.set(event, handler) } as any);
+    for (let turn = 0; turn < 5; turn++) {
+      await handlers.get("turn_start")?.({});
+      await handlers.get("tool_result")?.({ toolName: "edit", input: {}, isError: false });
+    }
+    const out = await handlers.get("context")({ messages: [{ role: "user", content: "go" }] });
+    const reminder = JSON.stringify(out?.messages ?? []);
+    expect(reminder).toContain("todo with action create");
+    expect(reminder).not.toContain("TaskCreate");
+  });
 });

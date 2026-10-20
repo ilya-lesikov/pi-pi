@@ -24,10 +24,10 @@ export function cliModelRequest(argv: readonly string[] = process.argv.slice(2))
 }
 
 /**
- * Resolves the request against the models registered now, pi-pi's own
- * providers included: pi resolved `--model` before those existed, so a model
- * only pi-pi provides was rejected there and the session started on another.
- * Same matching rules as pi (provider/model, fuzzy id, `model:thinking`).
+ * Resolves the request against the models registered now, with pi's own
+ * matching rules (provider/model, fuzzy id, `model:thinking`). pi has already
+ * put the session on this model; resolving it again tells pi-pi which one
+ * that was, and still finds a model whose provider pi-pi registered later.
  */
 export function resolveCliRequest(request: CliModelRequest, registry: any): { model: any; thinking?: string } | null {
   if (!registry?.getAll) return null;

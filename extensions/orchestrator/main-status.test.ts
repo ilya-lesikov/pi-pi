@@ -51,6 +51,39 @@ describe("MainStatusTracker", () => {
     expect(tracker.current()).toMatchObject({ text: "No response for 2m1s", level: "alarm", suffix: "esc to interrupt" });
   });
 
+  it("goes red when a model stream stops mid-answer, not only before the first token", () => {
+    const { tracker, fire, advance } = tracked();
+    fire("agent_start");
+    fire("message_update", { assistantMessageEvent: { type: "thinking_delta" } });
+    advance(121_000);
+    expect(tracker.current()).toMatchObject({ text: "No response for 2m1s", level: "alarm" });
+  });
+
+  it("returns to what it was doing when a dialog closes, idle included", () => {
+    const { tracker, fire } = tracked();
+    fire("ui_prompt_start", { kind: "select" });
+    expect(tracker.current().text).toBe("Waiting for your answer");
+    fire("ui_prompt_end", { kind: "select" });
+    expect(tracker.current()).toMatchObject({ level: "idle" });
+    fire("agent_start");
+    fire("tool_execution_start", { toolCallId: "1", toolName: "bash", args: { command: "make" } });
+    fire("ui_prompt_start", { kind: "confirm" });
+    fire("ui_prompt_end", { kind: "confirm" });
+    expect(tracker.current().text).toBe("Running bash: make");
+  });
+
+  it("ends a /compact typed while idle as idle, and one that failed too", () => {
+    const { tracker, fire } = tracked();
+    fire("session_before_compact", { reason: "manual" });
+    expect(tracker.current().text).toBe("Compacting context");
+    fire("session_compact", { reason: "manual" });
+    expect(tracker.current()).toMatchObject({ level: "idle" });
+    fire("agent_start");
+    fire("session_before_compact", { reason: "overflow" });
+    fire("session_compact_failed", { reason: "overflow" });
+    expect(tracker.current().text).toBe("Waiting for claude-opus-4-5");
+  });
+
   it("shows pi-pi's own pauses and compaction", () => {
     const { tracker, fire } = tracked();
     fire("agent_start");
