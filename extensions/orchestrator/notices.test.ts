@@ -192,7 +192,7 @@ describe("notices", () => {
     delete process.env.T3_PI_RUNTIME_MODE;
   });
 
-  it("on bb, sends a command notice as a chat message right away and shows an idle report in a text dialog", async () => {
+  it("on bb, sends no chat copy a command could not show, and shows an idle report in a text dialog", async () => {
     process.env.BB_THREAD_ID = "t";
     const pi = makePi();
     registerNotices(pi);
@@ -200,10 +200,15 @@ describe("notices", () => {
     idle.ui.editor = vi.fn(async () => undefined);
     attachHost(idle);
     commandNotice(idle, "may stay busy", "warning");
-    expect(pi.sendMessage).toHaveBeenCalledWith(expect.objectContaining({ customType: "pp-notice", content: "⚠ may stay busy" }), { triggerTurn: false });
     await report(idle, "pi-pi · status", "Model x");
     expect(idle.ui.editor).toHaveBeenCalledWith("pi-pi · status (read-only; closing discards edits)", "Model x");
-    expect(pi.sendMessage).toHaveBeenCalledTimes(1);
+    expect(pi.sendMessage).not.toHaveBeenCalled();
+    // On an unmarked host the copy goes out at once.
+    delete process.env.BB_THREAD_ID;
+    const other = ctx("rpc", true);
+    attachHost(other);
+    commandNotice(other, "may stay busy", "warning");
+    expect(pi.sendMessage).toHaveBeenCalledWith(expect.objectContaining({ customType: "pp-notice", content: "⚠ may stay busy" }), { triggerTurn: false });
     delete process.env.BB_THREAD_ID;
   });
 });

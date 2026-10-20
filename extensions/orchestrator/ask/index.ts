@@ -265,13 +265,13 @@ export function registerAskUser(pi: ExtensionAPI): void {
 }
 
 /**
- * Paseo answers a plain ask_user select with its own form, holding a custom
- * answer and a comment, when the call's own top-level arguments ask for a
- * comment and not for several answers; it reads nothing nested in questions.
+ * Paseo answers an ask_user select with its own form, holding a custom answer
+ * and a comment, whenever the call's top-level arguments ask for a comment
+ * and not for several answers; it never looks inside `questions`.
  */
-function paseoCombines(params: AskParams, item: AskItem, multi: AskItem[] | undefined): boolean {
+function paseoCombines(params: AskParams, _item: AskItem, _multi: AskItem[] | undefined): boolean {
   if (!process.env.PASEO_AGENT_ID) return false;
-  return params.allowComment === true && params.allowMultiple !== true && !multi && item.allowMultiple !== true;
+  return params.allowComment === true && params.allowMultiple !== true;
 }
 
 function unattended(items: AskItem[], multi: boolean) {

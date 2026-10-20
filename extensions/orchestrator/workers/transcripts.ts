@@ -29,6 +29,8 @@ interface Writer {
  */
 export class TranscriptStore {
   private readonly writers = new Map<string, Writer>();
+  /** Every file this store has claimed, including ones still being created. */
+  private readonly claimed = new Set<string>();
   private root: string | null | undefined;
 
   constructor(
@@ -134,7 +136,8 @@ export class TranscriptStore {
     // incarnation of the same id gets a fresh name instead of being appended to.
     const safe = id.replace(/[^A-Za-z0-9._-]/g, "_");
     let file = join(dir, `${safe}.jsonl`);
-    for (let n = 2; existsSync(file); n++) file = join(dir, `${safe}-${n}.jsonl`);
+    for (let n = 2; existsSync(file) || this.claimed.has(file); n++) file = join(dir, `${safe}-${n}.jsonl`);
+    this.claimed.add(file);
     const header = `${JSON.stringify({ type: "session", version: 3, id: randomUUID(), timestamp: new Date().toISOString(), cwd: this.cwd })}\n`;
     const writer: Writer = { file, queue: Promise.resolve(), bytes: Buffer.byteLength(header), lastId: null, disabled: false, failed: false };
     writer.queue = mkdir(dir, { recursive: true, mode: 0o700 })

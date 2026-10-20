@@ -82,7 +82,7 @@ export function registerConfirm(pi: ExtensionAPI): void {
         // which every host shows.
         // T3 answers a confirm it has seen approved "always" by itself; a
         // dangerous one carries the time it was asked, so it is always new.
-        const detail = [params.detail?.trim(), params.danger ? `⚠ Destructive · request ${randomUUID().slice(0, 8)}` : ""].filter(Boolean).join("\n");
+        const detail = [params.detail?.trim().slice(0, 4000), params.danger ? `⚠ Destructive · request ${randomUUID().slice(0, 8)}` : ""].filter(Boolean).join("\n");
         const yes = await ctx.ui.confirm(fitLine(question, 160), detail, { signal });
         details = { ...base, decision: signal?.aborted ? "dismissed" : yes ? "yes" : "no" };
       }

@@ -45,7 +45,8 @@ class HostChannel {
       try {
         current?.ui?.notify?.(message, level);
       } catch {}
-      if (this.needsChatCopy()) this.chat("pp-notice", `${GLYPH[level]} ${message}`, { level });
+      // bb shows a chat message only inside a turn, and a command opens none.
+      if (this.needsChatCopy() && this.host.id !== "bb") this.chat("pp-notice", `${GLYPH[level]} ${message}`, { level });
       return;
     }
     const idle = typeof current?.isIdle !== "function" || current.isIdle();

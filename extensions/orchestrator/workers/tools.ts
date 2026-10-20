@@ -51,7 +51,7 @@ export function registerWorkerTools(pi: ExtensionAPI, host: WorkerToolsHost): vo
       description: Type.String({ description: "A short (3-5 word) description of the task (shown in UI)." }),
       prompt: Type.String({ description: "The task for the worker. It starts with an empty context: state everything it needs." }),
       skills: Type.Optional(Type.Array(Type.String(), { description: "Skill names to preload into the worker's prompt. Only skills marked as usable by subagents in your skills catalog are accepted." })),
-      notify: Type.Optional(Type.Union([Type.Literal("wake"), Type.Literal("silent")], { description: "\"wake\" (default): its result starts a turn if you are idle. \"silent\": the result waits for your next turn." })),
+      notify: Type.Optional(Type.Union([Type.Literal("wake"), Type.Literal("silent")], { description: "\"wake\" (default): its result starts a turn if you are idle. \"silent\": the result waits for your next turn (outside the terminal it arrives in the current one, like \"wake\")." })),
     }),
     async execute(toolCallId, params: any, _signal, _onUpdate, ctx) {
       const manager = host.manager();

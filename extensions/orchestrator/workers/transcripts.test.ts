@@ -149,4 +149,14 @@ describe("TranscriptStore, round two", () => {
     expect(lines(first).at(-1).message.content).toBe("first run");
     expect(lines(second).at(-1).message.content).toBe("second run");
   });
+
+  it("never gives a resumed run the name of a file still being created", async () => {
+    const store = new TranscriptStore(cwd, "s", vi.fn(), cache);
+    store.open("w-1");
+    store.rotate("w-1");
+    store.append("w-1", { role: "user", content: "second run" });
+    await store.drain("w-1");
+    expect(store.fileFor("w-1")).toBe(join(cwd, ".pp", "workers", "s", "w-1-2.jsonl"));
+    expect(lines(store.fileFor("w-1")!).at(-1).message.content).toBe("second run");
+  });
 });

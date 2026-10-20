@@ -342,9 +342,10 @@ async function askViaDialogs(ctx: AskContext, q: Question, opts: SequenceOptions
 /** The last step of a sequence of questions outside the terminal: submit, or go back to one. */
 export async function reviewAnswers(ctx: AskContext, lines: string[], signal?: AbortSignal): Promise<"submit" | number | undefined> {
   const d = dialogsFor(ctx, signal);
-  const picked = await pick(d, "Submit these answers?", lines.map((line, i) => `Change ${i + 1}: ${line}`), ["Submit"]);
+  // Submit first: a host that answers a select with its first entry (MonoCode's Allow) must still be able to submit.
+  const picked = await pick(d, "Submit these answers?", ["Submit", ...lines.map((line, i) => `Change ${i + 1}: ${line}`)]);
   if (typeof picked !== "number") return undefined;
-  return picked === lines.length ? "submit" : picked;
+  return picked === 0 ? "submit" : picked - 1;
 }
 
 class AskComponent implements Component, Focusable {

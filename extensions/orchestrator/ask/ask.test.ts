@@ -332,6 +332,7 @@ describe("ask_user over host dialogs", () => {
     expect(calls[0]!.title).toBe("(1/3) One");
     expect(calls[1]!.options).toContain("← Back");
     expect(calls[5]!.title).toBe("Submit these answers?");
+    expect(calls[5]!.options![0]).toBe("Submit");
     expect(calls[6]!.title).toBe("(1/3) One");
     expect(calls[7]!.title).toBe("Submit these answers?");
   });
@@ -353,6 +354,14 @@ describe("ask_user over host dialogs", () => {
     const { calls, run } = dialogHost(["✏️ Type custom response...", "use argo", "only on staging"]);
     expect(text(await run({ question: "Pick", options: ["A", "B"], allowComment: true }))).toBe("User answered: use argo\n\nComment: only on staging");
     expect(calls[2]).toMatchObject({ method: "input", placeholder: "Optional comment — leave empty to skip" });
+  });
+
+  it("leaves Other… to Paseo's form for every question when the call asks for comments at the top level", async () => {
+    process.env.PASEO_AGENT_ID = "a";
+    const { calls, run } = dialogHost(["A", "", "C", "", "Submit"]);
+    await run({ allowComment: true, questions: [{ question: "One", options: ["A", "B"] }, { question: "Two", options: ["C", "D"] }] });
+    expect(calls[0]!.options).toEqual(["A", "B"]);
+    expect(calls[2]!.options).toEqual(["C", "D", "← Back"]);
   });
 
   it("lets Paseo's own form collect the comment, and leaves Other… to it", async () => {
