@@ -459,3 +459,24 @@ describe("registerWorkerToolsFor", () => {
     expect(result.content[0].text).toBe("Workers are unavailable: the session is not ready.");
   });
 });
+
+describe("Paseo sub-agent cards", () => {
+  afterEach(() => { delete process.env.PASEO_AGENT_ID; });
+
+  it("sends a hidden lifecycle message per settlement under Paseo, and nothing elsewhere", async () => {
+    for (const paseo of [false, true]) {
+      if (paseo) process.env.PASEO_AGENT_ID = "a";
+      const { factory, sessions } = fakeFactory();
+      const sendMessage = vi.fn();
+      const hooks = workerHooks({ sendMessage });
+      const { orchestrator: orch } = orchestrator();
+      const { manager } = createWorkers(orch, hooks, factory);
+      manager.spawn(spec());
+      await flush();
+      sessions[0]!.finish();
+      await flush();
+      expect(sendMessage.mock.calls.length).toBe(paseo ? 1 : 0);
+      if (paseo) expect(sendMessage.mock.calls[0]![0]).toEqual({ customType: "subagent-notification", content: "", display: false, details: { id: "explore-1", status: "completed", description: "look" } });
+    }
+  });
+});

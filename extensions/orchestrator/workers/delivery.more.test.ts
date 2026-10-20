@@ -27,15 +27,16 @@ function record(overrides: Partial<WorkerRecord> = {}): WorkerRecord {
 }
 
 describe("worker delivery — more", () => {
-  it("says a worker produced nothing, escaping its description", () => {
+  it("says a worker produced nothing, in plain text a host can show as is", () => {
     const out = renderForModel([{ kind: "settled", record: record() }], 0);
-    expect(out).toContain('description="say &quot;hi&quot; &lt;b> &amp; go"');
+    expect(out).toContain('w-1 · explore · say "hi" <b> & go');
+    expect(out).not.toMatch(/<\/?worker/);
     expect(out).toContain("No output.");
   });
 
   it("names the tool a silent worker is stuck in, and reports how long", () => {
     const stuck = record({ status: "running", lastEventAt: 0, activity: { toolName: "bash", summary: "sleep 9", startedAt: 0 } });
-    expect(renderForModel([{ kind: "stall", record: stuck }], 3_600_000)).toContain('silent_for="1h">\nNo activity from this worker (in bash: sleep 9).');
+    expect(renderForModel([{ kind: "stall", record: stuck }], 3_600_000)).toContain('· silent for 1h\nNo activity from this worker (in bash: sleep 9).');
     expect(renderForModel([{ kind: "stall", record: record({ status: "running" }) }], 5_000)).toContain("No activity from this worker. Inspect");
   });
 

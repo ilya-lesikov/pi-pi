@@ -10,6 +10,20 @@ export interface WorkerToolsHost {
   prepareSpawn(params: { subagent_type: string; description: string; prompt: string; skills?: string[]; notify?: "wake" | "silent" }, toolCallId: string, ctx: any): WorkerSpawnSpec | string;
   /** Called when a tool showed the model these outcomes, so the push delivery skips them. */
   consumed(records: WorkerRecord[], kind?: "settled" | "question"): void;
+  /** The worker's transcript file, once it has one. */
+  transcriptFile?(id: string): string | undefined;
+  /** Whether to add what Paseo reads to show a worker as a native sub-agent card. */
+  paseoCards?(): boolean;
+}
+
+const PROGRESS_MS = 2000;
+
+/** How a worker status reads in the format Paseo's sub-agent cards understand. */
+export function paseoStatus(status: WorkerRecord["status"]): string {
+  if (status === "completed" || status === "idle") return "completed";
+  if (status === "failed") return "error";
+  if (status === "stopped" || status === "killed") return "stopped";
+  return "running";
 }
 
 const WAIT_MAX_SEC = 600;
@@ -28,7 +42,7 @@ export function registerWorkerTools(pi: ExtensionAPI, host: WorkerToolsHost): vo
     label: "Agent",
     description: [
       "Start a worker agent in the background. Returns its id at once; the worker runs while you keep working.",
-      "Its result arrives on its own as a worker update — after your current tool calls if you are busy, or as a new turn if you are idle — so do not wait for it unless your very next step needs it.",
+      "Its result arrives on its own as a worker update — after your current tool calls if you are busy, or when you are idle — so do not wait for it unless your very next step needs it.",
       "Control it with agent_send (steer it, answer its question, or give a finished worker more work in the same context), agent_status, agent_wait (bounded), and agent_stop.",
     ].join("\n"),
     promptSnippet: "Start a background worker agent; returns its id immediately",
@@ -46,7 +60,12 @@ export function registerWorkerTools(pi: ExtensionAPI, host: WorkerToolsHost): vo
       if (typeof spec === "string") return { ...text(spec), isError: true } as any;
       const record = manager.spawn(spec);
       const queued = record.status === "queued" ? " It is queued behind the concurrency limit and starts when a slot frees." : "";
-      return text(`Started worker ${record.id} (${spec.type}: ${spec.description}).${queued} Its result will arrive as a worker update; keep working.`, { id: record.id });
+      const message = `Started worker ${record.id} (${spec.type}: ${spec.description}); it is still running.${queued} Its result will arrive as a worker update; keep working.`;
+      if (!host.paseoCards?.()) return text(message, { id: record.id });
+      // Paseo follows the file named on an "Output file:" line, and needs the
+      // worker id and status in the details to keep its card up to date.
+      const file = host.transcriptFile?.(record.id);
+      return text(`${message}${file ? `\nOutput file: ${file}` : ""}`, { id: record.id, agentId: record.id, status: paseoStatus(record.status), displayName: spec.type, description: spec.description });
     },
   });
 
@@ -58,14 +77,28 @@ export function registerWorkerTools(pi: ExtensionAPI, host: WorkerToolsHost): vo
       ids: Type.Array(Type.String(), { description: "Worker ids to wait on.", minItems: 1 }),
       timeout_sec: Type.Optional(Type.Number({ description: `Seconds to wait, at most ${WAIT_MAX_SEC} (default ${WAIT_DEFAULT_SEC}).`, minimum: 1, maximum: WAIT_MAX_SEC })),
     }),
-    async execute(_toolCallId, params: any, signal) {
+    async execute(_toolCallId, params: any, signal, onUpdate) {
       const manager = host.manager();
       if (!manager) return { ...text("Workers are unavailable."), isError: true } as any;
       const ids: string[] = params.ids ?? [];
       const unknown = ids.filter((id) => !manager.get(id));
       if (unknown.length === ids.length) return { ...text(`No such worker: ${unknown.join(", ")}.`), isError: true } as any;
       const timeoutSec = Math.min(WAIT_MAX_SEC, Math.max(1, Number(params.timeout_sec) || WAIT_DEFAULT_SEC));
-      const outcome = await manager.wait(ids, timeoutSec * 1000, signal);
+      // What the workers are doing, as the call's progress: hosts show a
+      // running tool's updates, which is how a user outside the terminal sees
+      // workers at all while the agent waits on them.
+      let last = "";
+      const report = () => {
+        const lines = ids.map((id) => manager.get(id)).filter((record): record is WorkerRecord => !!record).map((record) => progressLine(record, Date.now()));
+        const body = lines.join("\n");
+        if (body === last) return;
+        last = body;
+        onUpdate?.({ content: [{ type: "text", text: body }], details: { progress: true } } as any);
+      };
+      report();
+      const ticker = onUpdate ? setInterval(report, PROGRESS_MS) : undefined;
+      ticker?.unref?.();
+      const outcome = await manager.wait(ids, timeoutSec * 1000, signal).finally(() => { if (ticker) clearInterval(ticker); });
       if (outcome.kind === "settled" || outcome.kind === "question") host.consumed(outcome.records, outcome.kind);
       return text(renderWait(outcome, manager, unknown), { kind: outcome.kind, ids: outcome.records.map((record) => record.id) });
     },
@@ -167,6 +200,14 @@ function renderWait(outcome: WaitOutcome, manager: WorkerManager, unknown: strin
   }
   if (unknown.length) lines.push(`Unknown ids ignored: ${unknown.join(", ")}.`);
   return lines.join("\n\n");
+}
+
+function progressLine(record: WorkerRecord, now: number): string {
+  const mark = record.question ? "?" : record.status === "running" ? "⠿" : record.status === "queued" ? "…" : record.status === "completed" ? "✓" : "✗";
+  const elapsed = formatDuration((record.settledAt ?? now) - (record.startedAt ?? record.createdAt));
+  const head = `${mark} ${record.id}  ${record.spec.description}  ${elapsed} · ${record.toolUses} tools`;
+  const detail = record.question ? `asks: ${record.question.text}` : record.status === "running" ? record.step?.label : record.result?.summary ?? record.error;
+  return detail ? `${head}\n  ⎿ ${detail.replace(/\s+/g, " ").slice(0, 160)}` : head;
 }
 
 export function statusLine(record: WorkerRecord, now: number): string {

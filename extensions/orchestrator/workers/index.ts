@@ -7,7 +7,9 @@ import type { Orchestrator } from "../orchestrator.js";
 import { WorkerDelivery, WORKER_MESSAGE_TYPE } from "./delivery.js";
 import { WorkerManager } from "./manager.js";
 import { createChildSessionFactory } from "./session.js";
-import { registerWorkerTools } from "./tools.js";
+import { paseoStatus, registerWorkerTools } from "./tools.js";
+import { TranscriptStore } from "./transcripts.js";
+import { notice } from "../notices.js";
 import type { WorkerEvent, WorkerRecord, WorkerSessionFactory, WorkerSpawnSpec } from "./types.js";
 
 export interface WorkerHooks {
@@ -20,6 +22,8 @@ export interface WorkerHooks {
   /** For a failed worker: moves routing if the provider refused it and resumes it there. Resolves whether it was resumed. */
   onProviderFailure(record: WorkerRecord): Promise<boolean>;
   onChange(): void;
+  /** Sends a custom message into the root session. */
+  sendMessage?(message: { customType: string; content: string; display: boolean; details: unknown }): void;
 }
 
 const RECOVERY_DECISION_MS = 30_000;
@@ -31,10 +35,13 @@ const RESUME_AFTER_REROUTE = "[PI-PI] The provider that refused your last reques
  * replaced with the session: workers never outlive the root session that
  * spawned them.
  */
-export function createWorkers(orchestrator: Orchestrator, hooks: WorkerHooks, createSession?: WorkerSessionFactory): { manager: WorkerManager; delivery: WorkerDelivery } {
+export function createWorkers(orchestrator: Orchestrator, hooks: WorkerHooks, createSession?: WorkerSessionFactory): { manager: WorkerManager; delivery: WorkerDelivery; transcripts: TranscriptStore | null } {
   const config = () => orchestrator.config;
   const ctx = () => orchestrator.lastCtx;
+  const sessionId = ctx()?.sessionManager?.getSessionId?.();
+  const transcripts = orchestrator.cwd && sessionId ? new TranscriptStore(orchestrator.cwd, sessionId, (message) => notice(ctx(), message, "warning")) : null;
   const manager = new WorkerManager({
+    onMessage: (record, message) => transcripts?.append(record.id, message),
     createSession: createSession ?? createChildSessionFactory({
       cwd: orchestrator.cwd,
       modelRegistry: () => ctx()?.modelRegistry,
@@ -65,17 +72,50 @@ export function createWorkers(orchestrator: Orchestrator, hooks: WorkerHooks, cr
     send: (message, options) => orchestrator.pi.sendMessage(message as any, options as any),
     now: () => Date.now(),
   });
-  manager.subscribe((event) => onWorkerEvent(event, hooks, delivery));
-  return { manager, delivery };
+  manager.subscribe((event) => onWorkerEvent(event, hooks, delivery, transcripts));
+  return { manager, delivery, transcripts };
 }
 
-function onWorkerEvent(event: WorkerEvent, hooks: WorkerHooks, delivery: WorkerDelivery): void {
+/** Running under Paseo: its pi adapter turns these into native sub-agent cards that follow the transcript. */
+export function paseoCards(): boolean {
+  return !!process.env.PASEO_AGENT_ID;
+}
+
+/**
+ * Tells Paseo a worker's card changed. Sent only after what the worker wrote
+ * so far is on disk: Paseo reads the file once more when a card turns final
+ * and then stops following it. Hidden from the transcript and from the model.
+ */
+function paseoUpdate(record: WorkerRecord, transcripts: TranscriptStore | null, sendMessage: (message: any) => void): void {
+  if (!paseoCards()) return;
+  const send = () => {
+    const status = paseoStatus(record.status);
+    const outputFile = transcripts?.fileFor(record.id);
+    try {
+      sendMessage({
+        customType: status === "running" ? "subagent-update" : "subagent-notification",
+        content: "",
+        display: false,
+        details: { id: record.id, status, description: record.spec.description, ...(outputFile ? { outputFile } : {}) },
+      });
+    } catch {}
+  };
+  if (!transcripts) send();
+  else void transcripts.drain(record.id).then(send);
+}
+
+function onWorkerEvent(event: WorkerEvent, hooks: WorkerHooks, delivery: WorkerDelivery, transcripts: TranscriptStore | null): void {
   const { record } = event;
   switch (event.type) {
     case "created":
+      transcripts?.open(record.id);
       getTracer()?.openSubagent({ subagentId: record.id, type: record.spec.type, description: record.spec.description, parentToolCallId: record.spec.parentToolCallId, depth: 1 });
       break;
+    case "started":
+      if (record.runs > 1) paseoUpdate(record, transcripts, hooks.sendMessage ?? (() => {}));
+      break;
     case "settled": {
+      paseoUpdate(record, transcripts, hooks.sendMessage ?? (() => {}));
       getTracer()?.traceSubagent(record.id, "subagent_settled", {
         status: record.status,
         error: record.error,
@@ -157,6 +197,8 @@ function systemPromptFor(spec: WorkerSpawnSpec, cwd: string): string {
 export function registerWorkerToolsFor(orchestrator: Orchestrator, hooks: WorkerHooks): void {
   registerWorkerTools(orchestrator.pi, {
     manager: () => orchestrator.workers,
+    transcriptFile: (id) => orchestrator.workerTranscripts?.fileFor(id),
+    paseoCards,
     prepareSpawn: (params, toolCallId, ctx) => prepareSpawn(orchestrator, hooks, params, toolCallId, ctx),
     consumed: (records, kind = "settled") => {
       if (kind === "settled") orchestrator.workers?.markDelivered(records);

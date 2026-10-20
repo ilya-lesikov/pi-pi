@@ -168,6 +168,7 @@ class ChildSession implements WorkerSession {
         break;
       case "message_end": {
         const message: any = event.message;
+        this.hooks.onMessage?.(message);
         if (message?.role === "assistant" && message.usage) {
           this.hooks.onUsage({
             input: message.usage.input ?? 0,

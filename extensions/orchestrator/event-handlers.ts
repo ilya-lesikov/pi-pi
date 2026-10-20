@@ -31,6 +31,7 @@ import { registerAskUser, registerConfirm } from "./ask/index.js";
 import { LspManager } from "./lsp/manager.js";
 import { editDiagnostics, registerLspTool, registerLspWarmup } from "./lsp/tool.js";
 import { createWorkers, registerWorkerToolsFor, resumeOnNewRouting, WORKER_MESSAGE_TYPE, type WorkerHooks } from "./workers/index.js";
+import { pruneTranscripts, transcriptRoots } from "./workers/transcripts.js";
 import { registerWorkerUi } from "./workers/ui.js";
 import type { WorkerRecord } from "./workers/types.js";
 import { ensureProviderRetrySettings, patchRetryPredicate } from "./provider-retry.js";
@@ -486,6 +487,7 @@ function stopWorkers(orchestrator: Orchestrator): void {
   orchestrator.workerDelivery?.close();
   orchestrator.workers = null;
   orchestrator.workerDelivery = null;
+  orchestrator.workerTranscripts = null;
 }
 
 /** Gives the root session a fresh worker manager; the previous session's workers are killed. */
@@ -494,6 +496,8 @@ export function startWorkers(orchestrator: Orchestrator, ctx: any, hooks: Worker
   const workers = createWorkers(orchestrator, hooks, orchestrator.workerSessionFactory);
   orchestrator.workers = workers.manager;
   orchestrator.workerDelivery = workers.delivery;
+  orchestrator.workerTranscripts = workers.transcripts;
+  void pruneTranscripts(transcriptRoots(orchestrator.cwd));
   orchestrator.workerWidget?.attach(ctx);
 }
 
@@ -522,6 +526,7 @@ function createWorkerHooks(orchestrator: Orchestrator): WorkerHooks {
     },
     onProviderFailure: (record) => recoverWorkerFromProvider(orchestrator, record),
     onChange: () => {},
+    sendMessage: (message) => orchestrator.pi.sendMessage(message as any, { triggerTurn: false }),
   };
 }
 
@@ -850,8 +855,10 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     orchestrator.queueContinuation(nudge, true);
   });
 
-  pi.on("session_shutdown", (_event, ctx) => {
+  pi.on("session_shutdown", async (_event, ctx) => {
     orchestrator.interactivePromptOpen = false;
+    // A run without a UI exits right after this: what workers wrote must be on disk first.
+    await orchestrator.workerTranscripts?.drainAll().catch(() => {});
     try {
       const usage = tracker();
       const sessionId = ctx.sessionManager?.getSessionId?.();

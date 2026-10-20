@@ -161,17 +161,22 @@ function stillRelevant(item: DeliveryItem): boolean {
 
 const MODEL_BODY_LIMIT = 6000;
 
+/**
+ * The update as the model reads it, and as hosts that show custom messages
+ * verbatim (bb) show it to the user: plain lines, no markup.
+ */
 export function renderForModel(items: DeliveryItem[], now: number): string {
   const blocks = items.map(({ kind, record }) => {
-    const head = `<worker id="${record.id}" type="${record.spec.type}" description="${escapeAttr(record.spec.description)}"`;
+    const name = `${record.id} · ${record.spec.type} · ${record.spec.description}`;
     if (kind === "question") {
-      return `${head} event="question">\n${record.question?.text ?? ""}\nAnswer with agent_send(id: "${record.id}", message: ...). If only the user can answer, ask them, then send their answer. It waits for you, up to its question timeout.\n</worker>`;
+      return `? ${name} asks:\n${record.question?.text ?? ""}\nAnswer with agent_send(id: "${record.id}", message: ...). If only the user can answer, ask them, then send their answer. It waits for you, up to its question timeout.`;
     }
     if (kind === "stall") {
-      return `${head} event="silent" silent_for="${formatDuration(now - record.lastEventAt)}">\nNo activity from this worker${record.activity ? ` (in ${record.activity.toolName}: ${record.activity.summary})` : ""}. Inspect it with agent_status, interrupt the tool with agent_stop(mode: "tool"), or stop it. Nothing stops it automatically; deciding is yours.\n</worker>`;
+      return `⚠ ${name} · silent for ${formatDuration(now - record.lastEventAt)}\nNo activity from this worker${record.activity ? ` (in ${record.activity.toolName}: ${record.activity.summary})` : ""}. Inspect it with agent_status, interrupt the tool with agent_stop(mode: "tool"), or stop it. Nothing stops it automatically; deciding is yours.`;
     }
     const result = record.result;
-    const lines = [`${head} event="finished" status="${record.status}" duration="${formatDuration((record.settledAt ?? now) - (record.startedAt ?? record.createdAt))}" tool_uses="${record.toolUses}">`];
+    const mark = record.status === "completed" ? "✓" : "✗";
+    const lines = [`${mark} ${name} · ${record.status} · ${formatDuration((record.settledAt ?? now) - (record.startedAt ?? record.createdAt))} · ${record.toolUses} tools`];
     if (record.error) lines.push(`Error: ${record.error}`);
     if (result) {
       lines.push(`Result (${result.status}): ${result.summary}`);
@@ -186,10 +191,9 @@ export function renderForModel(items: DeliveryItem[], now: number): string {
     } else if (!record.error) {
       lines.push("No output.");
     }
-    lines.push("</worker>");
     return lines.join("\n");
   });
-  return `[PI-PI] Worker update. Results describe what the worker intended; verify edits before relying on them.\n${blocks.join("\n")}`;
+  return `[PI-PI] Worker update. Results describe what the worker intended; verify edits before relying on them.\n\n${blocks.join("\n\n")}`;
 }
 
 function describe(items: DeliveryItem[], now: number): WorkerMessageDetails {
@@ -209,10 +213,6 @@ function describe(items: DeliveryItem[], now: number): WorkerMessageDetails {
       ...(kind === "stall" ? { silentMs: now - record.lastEventAt } : {}),
     })),
   };
-}
-
-function escapeAttr(text: string): string {
-  return text.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 }
 
 export function formatDuration(ms: number): string {

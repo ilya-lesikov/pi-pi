@@ -14,6 +14,8 @@ export interface WorkerManagerOptions {
   /** How long an ask_parent question waits for an answer. */
   questionTimeoutMs?: () => number;
   tickMs?: number;
+  /** Every message a worker's session finishes, including after a stop was asked for. */
+  onMessage?: (record: WorkerRecord, message: unknown) => void;
   /** Finished records kept for inspection and resume. */
   retainMs?: number;
   retainMax?: number;
@@ -481,6 +483,9 @@ export class WorkerManager {
         this.touch(record);
       },
       askParent: (text, signal) => this.ask(record, epoch, text, signal),
+      onMessage: (message) => {
+        if (this.live.get(record.id)?.epoch === epoch) this.options.onMessage?.(record, message);
+      },
     };
   }
 

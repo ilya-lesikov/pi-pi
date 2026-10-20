@@ -74,6 +74,8 @@ export interface WorkerSessionHooks {
   onTurnEnd(): void;
   onUsage(usage: Partial<WorkerUsage>): void;
   onText(text: string): void;
+  /** A message the session finished: the user prompt, a reply, a tool result. */
+  onMessage?(message: unknown): void;
   /** Child tool: structured result. */
   submitResult(result: WorkerResult): void;
   /** Child tool: non-blocking progress note. */

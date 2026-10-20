@@ -10,6 +10,7 @@ import { createReviewerAgent } from "./agents/reviewer.js";
 import { createDeepDebuggerAgent } from "./agents/deep-debugger.js";
 import { encodePoolVariant, registerAgentDefinitions } from "./agents/registry.js";
 import type { WorkerDelivery } from "./workers/delivery.js";
+import type { TranscriptStore } from "./workers/transcripts.js";
 import type { WorkerManager } from "./workers/manager.js";
 import type { WorkerSessionFactory } from "./workers/types.js";
 import type { WorkerWidget } from "./workers/ui.js";
@@ -43,6 +44,8 @@ export class Orchestrator {
   /** The root session's workers; replaced with the session, so none outlives it. */
   workers: WorkerManager | null = null;
   workerDelivery: WorkerDelivery | null = null;
+  /** Where the root session's workers write their transcripts; null without a session id. */
+  workerTranscripts: TranscriptStore | null = null;
   workerWidget: WorkerWidget | null = null;
   /** The root session's language servers, shared with its workers; replaced with the session. */
   lsp: LspManager | null = null;

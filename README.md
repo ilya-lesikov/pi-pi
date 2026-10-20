@@ -96,6 +96,8 @@ A worker has no run, turn or silence limit: the parent agent watches it with `ag
 
 The panel above the editor shows each worker's current step (waiting for the model, thinking, running a tool, retrying…) and how long it has been at it, when the model last produced output, and any pending question; `agent_status` gives the agent the same view, plus the tail of what a worker is writing; `/pp → Workers` lists them and opens a live transcript where you can steer, answer, interrupt a tool, stop or kill one.
 
+Every worker's conversation is written as it happens to `.pp/workers/<session>/<worker>.jsonl`, in pi's session format, readable only by you and deleted after a week. A missing `.pp/.gitignore` is created ignoring everything; when an existing one does not ignore `workers/`, transcripts go to `~/.cache/pi-pi/workers` instead. While the main agent waits with `agent_wait`, the call's progress shows each worker's current step, so apps that show a running tool's progress show the workers too. Under Paseo, workers also appear as Paseo's own sub-agent cards following that transcript.
+
 ## Task checklist
 
 The main agent keeps a checklist with `TaskCreate`, `TaskUpdate`, `TaskList` and `TaskGet`, shown above the editor. The list lives in the session itself: every task tool result carries it, so `/resume`, forks and `/tree` restore the list as it stood at that point, and it survives compaction. Once every task is completed, the next one starts a fresh list. When edits, commits or turns pile up without the list changing, the agent gets a reminder that names what has gone stale. Workers have no task tools.
