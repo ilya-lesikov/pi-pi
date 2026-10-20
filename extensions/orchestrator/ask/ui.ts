@@ -279,9 +279,15 @@ async function askViaDialogs(ctx: AskContext, q: Question, opts: SequenceOptions
     if (nav?.canPrev) extras.push(BACK);
     const chosenNames = [...[...checked].sort((a, b) => a - b).map((i) => q.options[i]!.title), ...(other ? [other] : [])];
     const state = q.allowMultiple ? `(${count} selected${count ? `: ${chosenNames.join(", ")}` : ""}) ` : comment ? "(comment added) " : "";
-    const picked = await pick(d, `${prefix}${typingNote}${state}${q.question}`, [...labels, ...extras]);
+    let picked = await pick(d, `${prefix}${typingNote}${state}${q.question}`, [...labels, ...extras]);
     if (signal?.aborted) return cancel("signal");
     if (picked === undefined) return null;
+    // A host that answers with the bare title rather than the label it was shown.
+    if (typeof picked === "string") {
+      const byTitle = q.options.findIndex((option) => option.title === picked);
+      if (byTitle >= 0) picked = byTitle;
+      else if (!q.allowFreeform) continue;
+    }
     if (typeof picked === "number" && picked < labels.length) {
       if (!q.allowMultiple) {
         const title = q.options[picked]!.title;

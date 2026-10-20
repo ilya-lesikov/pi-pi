@@ -252,6 +252,11 @@ describe("ask_user over host dialogs", () => {
     expect(calls).toEqual([{ method: "select", title: "Strategy? for payments", options: ["Rolling", "Blue/green (recommended) — instant rollback", "Other…"] }]);
   });
 
+  it("accepts a host answering with the bare option title instead of the label it was shown", async () => {
+    const { run } = dialogHost(["Blue/green"]);
+    expect(text(await run({ question: "Pick", options: ["Rolling", { title: "Blue/green", description: "instant rollback" }] }))).toBe("User answered: Blue/green");
+  });
+
   it("keeps titles and options within the strictest host's limits", async () => {
     const long = "q".repeat(400);
     const { calls, run } = dialogHost(["A"]);
