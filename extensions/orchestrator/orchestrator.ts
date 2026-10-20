@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { cliModelRequest, resolveCliRequest } from "./cli-model.js";
 import type { NormalizedPiPiConfig, PoolEntry, PoolKey } from "./config.js";
 import { configureRouting, describeRef, describeSpec, isPaused, resolveRef, resolveSpec, routePauseKey, type ModelDescription } from "./routing.js";
 import { setProbeRoutePolicy } from "./flant-infra.js";
@@ -392,6 +393,28 @@ export class Orchestrator {
     if (!force && signature === this.agentRegistrationSignature) return;
     this.agentRegistrationSignature = signature;
     registerAgentDefinitions(definitions);
+  }
+
+  /**
+   * Puts the root session on the model pi was started with, when one was
+   * given. It counts as the user's own pick: routing never moves it, and
+   * workers keep their routed models. Returns false when there is no such
+   * request; a request that names no known model leaves pi's choice and warns.
+   */
+  async applyCliModel(ctx: ExtensionContext, request = cliModelRequest()): Promise<"none" | "applied" | "unknown"> {
+    if (!request) return "none";
+    const resolved = resolveCliRequest(request, (ctx as any).modelRegistry);
+    if (!resolved || typeof (this.pi as any).setModel !== "function") return "unknown";
+    try {
+      const current = (ctx as any).model;
+      const same = current?.provider === resolved.model.provider && current?.id === resolved.model.id;
+      if (!same) await (this.pi as any).setModel(resolved.model);
+      if (resolved.thinking && typeof (this.pi as any).setThinkingLevel === "function") await (this.pi as any).setThinkingLevel(resolved.thinking);
+      this.routedMainSpec = null;
+      return "applied";
+    } catch {
+      return "unknown";
+    }
   }
 
   mainAgentConfig(): { model: string; thinking: string } {

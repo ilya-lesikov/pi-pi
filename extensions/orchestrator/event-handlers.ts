@@ -33,6 +33,7 @@ import { editDiagnostics, registerLspTool, registerLspWarmup } from "./lsp/tool.
 import { createWorkers, registerWorkerToolsFor, resumeOnNewRouting, WORKER_MESSAGE_TYPE, type WorkerHooks, recoveringWorkers } from "./workers/index.js";
 import { pruneTranscripts, transcriptRoots } from "./workers/transcripts.js";
 import { HOLD_IDLE_MS, unfinishedSummary, type HoldOutcome } from "./workers/hold.js";
+import { cliModelRequest } from "./cli-model.js";
 import { registerWorkerUi } from "./workers/ui.js";
 import type { WorkerRecord } from "./workers/types.js";
 import { ensureProviderRetrySettings, patchRetryPredicate } from "./provider-retry.js";
@@ -733,7 +734,13 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       forgetMissingCbmBin();
       registerFeatureToolsAndAgents(orchestrator);
     });
-    if (!await orchestrator.applyMainAgent(ctx)) {
+    // A model pi was started with wins over the configured main model: an app
+    // that picked one (bb's model menu, a script) expects to get it.
+    const cli = await orchestrator.applyCliModel(ctx);
+    if (cli === "unknown") {
+      const request = cliModelRequest();
+      notice(ctx, `--model ${request?.provider ? `${request.provider}/` : ""}${request?.model} matches no known model; using ${ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "pi's default"}.`, "warning");
+    } else if (cli === "none" && !await orchestrator.applyMainAgent(ctx)) {
       notice(ctx, mainUnavailableMessage(orchestrator), "warning");
     }
     // The Claude OAuth token expires within hours. Turn-start refreshes cover

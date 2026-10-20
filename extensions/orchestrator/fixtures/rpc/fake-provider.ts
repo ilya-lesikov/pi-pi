@@ -49,7 +49,7 @@ export default function (pi: ExtensionAPI) {
     baseUrl: "http://localhost:0",
     apiKey: "fake",
     api: "pp-fake-api" as any,
-    models: [{ id: "scripted", name: "Scripted", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 100000, maxTokens: 4096 }],
+    models: [{ id: "scripted", name: "Scripted", reasoning: true, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 100000, maxTokens: 4096 }],
     streamSimple: stream as any,
   });
 }

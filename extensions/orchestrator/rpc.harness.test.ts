@@ -41,9 +41,9 @@ function sandbox(): { agent: string; project: string; log: string } {
   return { agent, project, log: join(project, "model.log") };
 }
 
-function start(steps: unknown[], profile: Profile, env: Record<string, string> = {}): Run {
+function start(steps: unknown[], profile: Profile, env: Record<string, string> = {}, model: string[] = ["--provider", "pp-fake", "--model", "scripted"]): Run {
   const { agent, project, log } = sandbox();
-  const child: ChildProcessWithoutNullStreams = spawn(PI, ["--mode", "rpc", "--no-session", "--no-extensions", "-e", join(root, "extensions", "orchestrator", "index.ts"), "-e", FAKE, "--provider", "pp-fake", "--model", "scripted"], {
+  const child: ChildProcessWithoutNullStreams = spawn(PI, ["--mode", "rpc", "--no-session", "--no-extensions", "-e", join(root, "extensions", "orchestrator", "index.ts"), "-e", FAKE, ...model], {
     cwd: project,
     env: { ...process.env, PI_CODING_AGENT_DIR: agent, PI_OFFLINE: "1", PP_FAKE_SCRIPT: JSON.stringify(steps), PP_FAKE_LOG: log, BB_THREAD_ID: "", PASEO_AGENT_ID: "", T3_PI_RUNTIME_MODE: "", ...env },
   });
@@ -99,6 +99,17 @@ const settled = (run: Run) => run.waitFor((event) => event.type === "agent_settl
 const person = (answers: Record<string, (request: Request) => unknown>): Profile => (request) => answers[request.method]?.(request);
 
 describe.skipIf(!existsSync(PI))("pi-pi over pi's RPC mode", { timeout: 60_000 }, () => {
+  it("starts on the model pi was given, even one only an extension provides", async () => {
+    const run = start([{ text: "hi" }], () => undefined, {}, ["--model", "pp-fake/scripted", "--thinking", "low"]);
+    // pi resolved --model before the extension registered the provider; pi-pi applies it once it exists.
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    run.send({ id: "state", type: "get_state" });
+    const after = await run.waitFor((event) => event.type === "response" && event.id === "state");
+    expect(after.data.model).toMatchObject({ provider: "pp-fake", id: "scripted" });
+    expect(after.data.thinkingLevel).toBe("low");
+    await run.close();
+  });
+
   it("asks a single-choice question as one bounded select and gets the answer by label", async () => {
     const run = start([{ tool: "ask_user", args: { question: "Which strategy for the payments service?", options: ["Rolling", { title: "Blue/green", description: "instant rollback" }], recommended: "Blue/green" } }, { text: "ok" }], person({ select: (r) => r.options![1] }));
     run.send({ type: "prompt", message: "go" });
@@ -212,8 +223,8 @@ describe.skipIf(!existsSync(PI))("pi-pi in print mode", { timeout: 60_000 }, () 
       setTimeout(() => child.kill("SIGKILL"), 40_000);
     });
     expect(output.stdout.trim()).toBe("picked SQLite");
-    // Notices without a UI go to stderr, never into the printed answer.
-    expect(output.stderr).toContain("pi-pi: ");
+    // pi-pi's notices never end up in the printed answer.
+    expect(output.stdout).not.toContain("pi-pi: ");
     const sent = readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line)).at(-1)!;
     const toolMessage = sent.find((message: any) => message.role === "toolResult" && message.toolName === "ask_user");
     expect(toolMessage.isError).toBe(false);
