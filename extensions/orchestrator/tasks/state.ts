@@ -23,7 +23,8 @@ export interface TaskSnapshot {
   revision: number;
 }
 
-export const TASK_TOOL_NAMES: ReadonlySet<string> = new Set(["TaskCreate", "TaskUpdate", "TaskList", "TaskGet"]);
+/** "todo" is the same tools as one, registered under Paseo. */
+export const TASK_TOOL_NAMES: ReadonlySet<string> = new Set(["TaskCreate", "TaskUpdate", "TaskList", "TaskGet", "todo"]);
 
 export function emptySnapshot(): TaskSnapshot {
   return { version: 1, tasks: [], nextId: 1, revision: 0 };

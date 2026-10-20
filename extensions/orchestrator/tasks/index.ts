@@ -4,6 +4,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createCadenceState, drainReminder, isCommitCall, observeToolResult, onTurnStart, type ReminderEvidence } from "./cadence.js";
 import { cloneSnapshot, createTask, emptySnapshot, findTask, replaySnapshot, TASK_TOOL_NAMES, updateTask, type Task, type TaskSnapshot } from "./state.js";
 import { TaskWidget } from "./widget.js";
+import { taskBoardText } from "./board.js";
 
 const EDITING_TOOLS: ReadonlySet<string> = new Set(["edit", "write"]);
 
@@ -30,6 +31,7 @@ const GET_DESCRIPTION = "Show one task from your checklist in full, including it
 
 interface TaskToolDetails {
   snapshot: TaskSnapshot;
+  [paseo: string]: unknown;
 }
 
 /**
@@ -43,11 +45,39 @@ export function registerTasks(pi: ExtensionAPI): void {
   let lastObservedRevision = snapshot.revision;
   const widget = new TaskWidget(() => snapshot);
 
-  const result = (text: string, isError = false) => ({
+  // Under Paseo the four tools are one tool named "todo", whose results Paseo
+  // draws as its own todo card when they carry the shape it knows.
+  const paseo = !!process.env.PASEO_AGENT_ID;
+  const result = (text: string, isError = false, call?: { action: string; params: Record<string, unknown> }) => ({
     content: [{ type: "text" as const, text }],
-    details: { snapshot: cloneSnapshot(snapshot) } satisfies TaskToolDetails,
+    details: {
+      snapshot: cloneSnapshot(snapshot),
+      ...(paseo && call ? paseoTodo(snapshot, call.action, call.params, isError ? text : undefined) : {}),
+    } satisfies TaskToolDetails,
     ...(isError ? { isError: true } : {}),
   });
+  // Apps that do not show pi-pi's widget see the list here, each time it changes.
+  const withBoard = (text: string) => `${text}\n${taskBoardText(snapshot.tasks)}`;
+  const create = (params: any) => {
+    const { task, rolledOver } = createTask(snapshot, { subject: String(params.subject ?? ""), description: String(params.description ?? ""), activeForm: params.activeForm });
+    widget.update();
+    const fresh = rolledOver ? ` Started a new list; the ${rolledOver} completed task${rolledOver === 1 ? " was" : "s were"} cleared.` : "";
+    return result(withBoard(`Task #${task.id} created: ${task.subject}.${fresh}`), false, { action: "create", params });
+  };
+  const update = (params: any) => {
+    const outcome = updateTask(snapshot, String(params.taskId ?? ""), params, Date.now());
+    if (!outcome) return result(`Task #${params.taskId} not found. Current list:\n${listText(snapshot.tasks)}`, true, { action: "update", params });
+    widget.update();
+    const id = String(params.taskId).replace(/^#/, "");
+    return result(withBoard(outcome.changed.length ? `Updated task #${id}: ${outcome.changed.join(", ")}` : `Task #${id} already matched; nothing changed`), false, { action: "update", params });
+  };
+  const list = () => result(listText(snapshot.tasks), false, { action: "list", params: {} });
+  const get = (params: any) => {
+    const task = findTask(snapshot, String(params.taskId ?? ""));
+    if (!task) return result(`Task #${params.taskId} not found. Current list:\n${listText(snapshot.tasks)}`, true, { action: "get", params });
+    // Models sometimes double-escape newlines inside JSON strings.
+    return result(`Task #${task.id}: ${task.subject}\nStatus: ${task.status}\nDescription: ${task.description.replace(/\\n/g, "\n")}`, false, { action: "get", params });
+  };
   const restore = (ctx: any) => {
     snapshot = replaySnapshot(ctx.sessionManager?.getBranch?.() ?? []);
     lastObservedRevision = snapshot.revision;
@@ -93,6 +123,11 @@ export function registerTasks(pi: ExtensionAPI): void {
     return messages === event.messages ? undefined : { messages };
   });
 
+  if (paseo) {
+    registerTodoTool(pi, { create, update, list, get });
+    return;
+  }
+
   pi.registerTool({
     name: "TaskCreate",
     label: "TaskCreate",
@@ -103,10 +138,7 @@ export function registerTasks(pi: ExtensionAPI): void {
       activeForm: Type.Optional(Type.String({ description: "Present continuous form shown while in progress (e.g. 'Running tests')" })),
     }),
     async execute(_id, params: any) {
-      const { task, rolledOver } = createTask(snapshot, { subject: String(params.subject ?? ""), description: String(params.description ?? ""), activeForm: params.activeForm });
-      widget.update();
-      const fresh = rolledOver ? ` Started a new list; the ${rolledOver} completed task${rolledOver === 1 ? " was" : "s were"} cleared.` : "";
-      return result(`Task #${task.id} created: ${task.subject}.${fresh}`);
+      return create(params);
     },
     renderCall: (args: any, theme: any) => new Text(`${theme.fg("toolTitle", theme.bold("TaskCreate"))} ${theme.fg("muted", String(args?.subject ?? ""))}`, 0, 0),
     renderResult: renderResultLine,
@@ -118,17 +150,13 @@ export function registerTasks(pi: ExtensionAPI): void {
     description: UPDATE_DESCRIPTION,
     parameters: Type.Object({
       taskId: Type.String({ description: "The id of the task to update" }),
-      status: Type.Optional(Type.Union([Type.Literal("pending"), Type.Literal("in_progress"), Type.Literal("completed"), Type.Literal("deleted")], { description: "New status; deleted removes the task" })),
+      status: Type.Optional(STATUS),
       subject: Type.Optional(Type.String({ description: "New subject" })),
       description: Type.Optional(Type.String({ description: "New description" })),
       activeForm: Type.Optional(Type.String({ description: "New present continuous form" })),
     }),
     async execute(_id, params: any) {
-      const outcome = updateTask(snapshot, String(params.taskId ?? ""), params, Date.now());
-      if (!outcome) return result(`Task #${params.taskId} not found. Current list:\n${listText(snapshot.tasks)}`, true);
-      widget.update();
-      const id = String(params.taskId).replace(/^#/, "");
-      return result(outcome.changed.length ? `Updated task #${id}: ${outcome.changed.join(", ")}` : `Task #${id} already matched; nothing changed`);
+      return update(params);
     },
     renderCall: (args: any, theme: any) => {
       const change = args?.status ? ` → ${args.status}` : "";
@@ -143,7 +171,7 @@ export function registerTasks(pi: ExtensionAPI): void {
     description: LIST_DESCRIPTION,
     parameters: Type.Object({}),
     async execute() {
-      return result(listText(snapshot.tasks));
+      return list();
     },
     renderCall: (_args: any, theme: any) => new Text(theme.fg("toolTitle", theme.bold("TaskList")), 0, 0),
     renderResult: renderResultLine,
@@ -155,14 +183,60 @@ export function registerTasks(pi: ExtensionAPI): void {
     description: GET_DESCRIPTION,
     parameters: Type.Object({ taskId: Type.String({ description: "The id of the task to show" }) }),
     async execute(_id, params: any) {
-      const task = findTask(snapshot, String(params.taskId ?? ""));
-      if (!task) return result(`Task #${params.taskId} not found. Current list:\n${listText(snapshot.tasks)}`, true);
-      // Models sometimes double-escape newlines inside JSON strings.
-      return result(`Task #${task.id}: ${task.subject}\nStatus: ${task.status}\nDescription: ${task.description.replace(/\\n/g, "\n")}`);
+      return get(params);
     },
     renderCall: (args: any, theme: any) => new Text(`${theme.fg("toolTitle", theme.bold("TaskGet"))} ${theme.fg("accent", `#${String(args?.taskId ?? "").replace(/^#/, "")}`)}`, 0, 0),
     renderResult: renderResultLine,
   });
+}
+
+const STATUS = Type.Union([Type.Literal("pending"), Type.Literal("in_progress"), Type.Literal("completed"), Type.Literal("deleted")], { description: "New status; deleted removes the task" });
+
+const TODO_DESCRIPTION = `Your task checklist for the current request: create, update, list or get tasks. The user sees the list.
+
+Use it for work with 3 or more distinct steps, when the user gives several things to do, or to capture new instructions that arrive mid-work. Skip it for a single straightforward step or a purely conversational request.
+
+- action "create": subject (brief imperative title), description (what needs to be done and how you will know it is done), activeForm (present continuous, shown while in progress). Tasks start as pending; once every task is completed, the next create starts a fresh list.
+- action "update": taskId plus what changed. Mark a task in_progress BEFORE you start it and completed as soon as it is fully done, not while tests fail or work is partial. Set status deleted for a task no longer relevant.
+- action "list": every task with its id and status.
+- action "get": one task in full.`;
+
+/** The same four operations as one tool named "todo", the name Paseo draws as a todo card. */
+function registerTodoTool(pi: ExtensionAPI, ops: { create(p: any): any; update(p: any): any; list(): any; get(p: any): any }): void {
+  pi.registerTool({
+    name: "todo",
+    label: "todo",
+    description: TODO_DESCRIPTION,
+    parameters: Type.Object({
+      action: Type.Union([Type.Literal("create"), Type.Literal("update"), Type.Literal("list"), Type.Literal("get")]),
+      taskId: Type.Optional(Type.String({ description: "update/get: the id of the task" })),
+      subject: Type.Optional(Type.String({ description: "create/update: a brief imperative title" })),
+      description: Type.Optional(Type.String({ description: "create/update: what needs to be done and how you will know it is done" })),
+      activeForm: Type.Optional(Type.String({ description: "create/update: present continuous form shown while in progress" })),
+      status: Type.Optional(STATUS),
+    }),
+    async execute(_id, params: any) {
+      switch (params?.action) {
+        case "create": return ops.create(params);
+        case "update": return ops.update(params);
+        case "get": return ops.get(params);
+        default: return ops.list();
+      }
+    },
+    renderCall: (args: any, theme: any) => new Text(`${theme.fg("toolTitle", theme.bold("todo"))} ${theme.fg("muted", `${args?.action ?? ""}${args?.taskId ? ` #${String(args.taskId).replace(/^#/, "")}` : ""}${args?.subject ? ` ${args.subject}` : ""}`)}`, 0, 0),
+    renderResult: renderResultLine,
+  });
+}
+
+/** The result shape Paseo's todo mapper reads; task ids must be numbers there. */
+function paseoTodo(snapshot: TaskSnapshot, action: string, params: Record<string, unknown>, error?: string) {
+  return {
+    action,
+    params,
+    nextId: snapshot.nextId,
+    tasks: snapshot.tasks.map((task) => ({ id: Number(task.id), subject: task.subject, status: task.status, ...(task.activeForm ? { activeForm: task.activeForm } : {}) })),
+    ...(error ? { error } : {}),
+  };
 }
 
 function renderResultLine(result: any, options: { expanded: boolean }, theme: any, context: any): Text {

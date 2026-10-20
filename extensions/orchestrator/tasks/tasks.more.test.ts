@@ -34,7 +34,7 @@ describe("task tools", () => {
     await h.fire("session_start");
     await h.call("TaskCreate", { subject: "a", description: "d" });
     await h.call("TaskUpdate", { taskId: "1", status: "completed" });
-    expect(text(await h.call("TaskCreate", { subject: "b", description: "d" }))).toBe("Task #2 created: b. Started a new list; the 1 completed task was cleared.");
+    expect(text(await h.call("TaskCreate", { subject: "b", description: "d" }))).toBe("Task #2 created: b. Started a new list; the 1 completed task was cleared.\nTasks • 1 pending\n  ○ #2 b");
     await h.call("TaskCreate", { subject: "c", description: "d" });
     await h.call("TaskUpdate", { taskId: "2", status: "completed" });
     await h.call("TaskUpdate", { taskId: "3", status: "completed" });
@@ -45,8 +45,8 @@ describe("task tools", () => {
     const h = harness();
     await h.fire("session_start");
     await h.call("TaskCreate", { subject: "a", description: "d" });
-    expect(text(await h.call("TaskUpdate", { taskId: "#1", subject: "a" }))).toBe("Task #1 already matched; nothing changed");
-    expect(text(await h.call("TaskUpdate", { taskId: "#1", subject: "b", status: "in_progress" }))).toBe("Updated task #1: subject, status");
+    expect(text(await h.call("TaskUpdate", { taskId: "#1", subject: "a" }))).toBe("Task #1 already matched; nothing changed\nTasks • 1 pending\n  ○ #1 a");
+    expect(text(await h.call("TaskUpdate", { taskId: "#1", subject: "b", status: "in_progress" }))).toBe("Updated task #1: subject, status\nTasks • 1 running\n  ◐ #1 b");
   });
 
   it("shows one task in full, unescaping double-escaped newlines, and errors on an unknown id", async () => {
@@ -62,7 +62,7 @@ describe("task tools", () => {
   it("tolerates missing parameters", async () => {
     const h = harness();
     await h.fire("session_start");
-    expect(text(await h.call("TaskCreate", {}))).toBe("Task #1 created: .");
+    expect(text(await h.call("TaskCreate", {}))).toBe("Task #1 created: .\nTasks • 1 pending\n  ○ #1 ");
     expect(text(await h.call("TaskUpdate", {}))).toContain("not found");
     expect(text(await h.call("TaskGet", {}))).toContain("not found");
   });

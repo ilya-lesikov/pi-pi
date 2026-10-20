@@ -41,7 +41,7 @@ export interface ReminderEvidence {
 const TURN_INTERVAL = 4;
 const EDIT_INTERVAL = 8;
 const COMMIT_INTERVAL = 2;
-const TASK_TOOLS: ReadonlySet<string> = new Set(["TaskCreate", "TaskUpdate", "TaskList", "TaskGet"]);
+const TASK_TOOLS: ReadonlySet<string> = new Set(["TaskCreate", "TaskUpdate", "TaskList", "TaskGet", "todo"]);
 
 export function createCadenceState(): CadenceState {
   return {
