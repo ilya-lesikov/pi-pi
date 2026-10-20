@@ -71,6 +71,15 @@ describe("MainStatusTracker", () => {
     expect(tracker.current().text).toBe("Running bash");
   });
 
+  it("keeps waiting on the user while a question is open, whatever finishes beside it", () => {
+    const { tracker, fire } = tracked();
+    fire("agent_start");
+    fire("tool_execution_start", { toolCallId: "b", toolName: "bash", args: { command: "make" } });
+    fire("tool_execution_start", { toolCallId: "a", toolName: "ask_user" });
+    fire("tool_execution_end", { toolCallId: "b", toolName: "bash" });
+    expect(tracker.current()).toMatchObject({ text: "Waiting for your answer", level: "attention" });
+  });
+
   it("returns to what it was doing when a dialog closes, idle included", () => {
     const { tracker, fire } = tracked();
     fire("ui_prompt_start", { kind: "select" });

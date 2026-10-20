@@ -30,6 +30,14 @@ export function registerWorkerUi(orchestrator: Orchestrator): void {
   const widget = new WorkerWidget(orchestrator);
   orchestrator.workerWidget = widget;
   pi.on("session_shutdown", async () => widget.detach());
+  // A question would open under the picker, taking the keys while the picker
+  // still covers it: close the picker first. Both events come before the
+  // question is put on screen.
+  const on = pi.on.bind(pi) as (event: string, handler: (event: any) => void) => void;
+  on("ui_prompt_start", () => closeOpenPicker?.());
+  on("tool_execution_start", (event) => {
+    if (event?.toolName === "ask_user" || event?.toolName === "confirm") closeOpenPicker?.();
+  });
   pi.registerShortcut?.("ctrl+n", {
     description: "Select a worker: see its output, message, interrupt, stop or kill it",
     handler: async (ctx: any) => {
@@ -591,6 +599,11 @@ export class WorkerPicker implements Component {
     this.done();
   }
 
+  /** Closed from outside: something else needs the user's attention now. */
+  dismiss(): void {
+    this.close();
+  }
+
   handleInput(data: string): void {
     if (this.composer) {
       this.composer.input.handleInput(data);
@@ -672,14 +685,17 @@ export class WorkerPicker implements Component {
       const actions = ACTIVE_STATUSES.has(selected.status) ? [answer, "i interrupt", "s stop", "k kill"] : [answer];
       footer.push(truncateToWidth(th.fg("dim", `  ↑↓ select · enter output · ${actions.join(" · ")} · esc back`), width));
     }
-    // A long list scrolls to keep the selected worker in view.
-    const rows = this.tui.terminal?.rows ?? 30;
-    const room = Math.max(2, Math.floor(rows * 0.6) - 1 - footer.length);
+    // A long list scrolls to keep the selected worker in view. Everything,
+    // the "N more" markers included, fits the overlay's height: pi cuts what
+    // does not, and the composer and the key help are the last lines.
     const blocks = records.map((record) => {
       const lines = recordLines(record, now, this.frame, th, sep);
       const mark = record === selected ? th.fg("accent", "▌") : " ";
       return lines.map((line, i) => truncateToWidth(`${i === 0 || record === selected ? mark : " "}${line.slice(1)}`, width));
     });
+    const total = blocks.reduce((sum, block) => sum + block.length, 0);
+    let room = Math.max(2, pickerHeight(rowsOf(this.tui)) - 1 - footer.length);
+    if (total > room) room = Math.max(2, room - 2);
     const at = records.indexOf(selected);
     let first = at;
     let used = blocks[at]!.length;
@@ -695,7 +711,19 @@ export class WorkerPicker implements Component {
   invalidate(): void {}
 }
 
-/** Opens the picker in the editor's place; its Enter opens the full viewer. */
+/** Rows the picker overlay may take; the picker lays itself out to the same. */
+function pickerHeight(rows: number): number {
+  return Math.max(6, Math.floor(rows * 0.6));
+}
+
+function rowsOf(tui: TUI | null): number {
+  return tui?.terminal?.rows ?? process.stdout.rows ?? 30;
+}
+
+/** Closes the open picker, if any: a question is about to take the screen. */
+let closeOpenPicker: (() => void) | null = null;
+
+/** Opens the picker over the bottom of the screen; its Enter opens the full viewer. */
 export async function openWorkerPicker(orchestrator: Orchestrator, ctx: any): Promise<void> {
   const manager = orchestrator.workers;
   const widget = orchestrator.workerWidget;
@@ -709,10 +737,20 @@ export async function openWorkerPicker(orchestrator: Orchestrator, ctx: any): Pr
     // An overlay, not a stand-in for the editor: a question the agent asks
     // meanwhile takes the editor's place, and would otherwise drop the picker
     // with its promise never settling.
-    await ctx.ui.custom((tui: TUI, theme: Theme, _keys: unknown, done: (value: undefined) => void) =>
-      new WorkerPicker(tui, theme, widget, manager, (id) => openWorkerViewer(orchestrator, ctx, id), () => done(undefined)), {
+    let tuiRef: TUI | null = null;
+    await ctx.ui.custom((tui: TUI, theme: Theme, _keys: unknown, done: (value: undefined) => void) => {
+      tuiRef = tui;
+      const picker = new WorkerPicker(tui, theme, widget, manager, (id) => openWorkerViewer(orchestrator, ctx, id), () => {
+        if (closeOpenPicker === close) closeOpenPicker = null;
+        done(undefined);
+      });
+      const close = () => picker.dismiss();
+      closeOpenPicker = close;
+      return picker;
+    }, {
       overlay: true,
-      overlayOptions: { anchor: "bottom-center", width: "100%", maxHeight: "60%", margin: 0 },
+      // Re-read on every layout, so it follows the terminal's height as the picker does.
+      overlayOptions: () => ({ anchor: "bottom-center", width: "100%", maxHeight: pickerHeight(rowsOf(tuiRef)), margin: 0 }),
     });
   } finally {
     widget.resume();

@@ -142,7 +142,10 @@ export class MainStatusTracker {
       this.activity();
       this.tools.delete(String(event?.toolCallId ?? event?.toolName));
       if (this.tools.size) {
-        // An answered question leaves the tools that ran beside it.
+        // An answered question leaves the tools that ran beside it; a question
+        // still open keeps the status on the user.
+        const asking = [...this.tools.values()].some((name) => name === "ask_user" || name === "confirm");
+        if (asking) return;
         if (this.state.kind === "tool" || this.state.kind === "waiting_user") {
           const since = this.state.kind === "tool" ? this.state.since : this.now();
           this.set({ kind: "tool", since, label: this.tools.size === 1 ? [...this.tools.values()][0]! : `${this.tools.size} tools` });

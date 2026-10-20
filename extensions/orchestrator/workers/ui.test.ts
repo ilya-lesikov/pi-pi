@@ -113,6 +113,28 @@ describe("worker update renderer", () => {
     for (const width of [20, 40, 80]) expectFits(render(details, true).render(width), width);
   });
 
+  it("closes the picker before a question or dialog opens under it", async () => {
+    const shortcuts = new Map<string, any>();
+    const handlers = new Map<string, any[]>();
+    const on = (event: string, handler: any) => handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+    const orchestrator: any = { pi: { registerMessageRenderer: vi.fn(), on, registerShortcut: (key: string, options: any) => shortcuts.set(key, options) }, workers: setup().manager };
+    registerWorkerUi(orchestrator);
+    orchestrator.workerWidget.attach({ ui: { setWidget: vi.fn(), setStatus: vi.fn() } });
+    orchestrator.workers.spawn(spec());
+    for (const trigger of [() => handlers.get("tool_execution_start")!.forEach((h) => h({ toolName: "ask_user" })), () => handlers.get("ui_prompt_start")!.forEach((h) => h({}))]) {
+      let resolved = false;
+      const custom = vi.fn((factory: any) => new Promise<void>((resolve) => {
+        factory({ terminal: { rows: 30 }, requestRender: vi.fn() }, theme, undefined, () => resolve());
+      }));
+      const opened = shortcuts.get("ctrl+n").handler({ ui: { custom } }).then(() => { resolved = true; });
+      await flush();
+      expect(resolved).toBe(false);
+      trigger();
+      await opened;
+      expect(resolved).toBe(true);
+    }
+  });
+
   it("binds ctrl+n to the worker picker, in the terminal only", async () => {
     const shortcuts = new Map<string, any>();
     const orchestrator: any = { pi: { registerMessageRenderer: vi.fn(), on: vi.fn(), registerShortcut: (key: string, options: any) => shortcuts.set(key, options) }, workers: setup().manager };
@@ -662,6 +684,22 @@ describe("WorkerPicker (ctrl+n)", () => {
     picker.handleInput("k");
     expect(b.status).toBe("killed");
     expect(a.status).toBe("running");
+  });
+
+  it("fits the overlay's height with the overflow markers and the message box showing", async () => {
+    const { manager } = open();
+    const tui = { terminal: { rows: 16 }, requestRender: vi.fn() };
+    const orchestrator: any = { workers: manager };
+    const picker = new WorkerPicker(tui as any, theme, new WorkerWidget(orchestrator), manager, async () => {}, () => {});
+    for (let i = 0; i < 10; i++) manager.spawn(spec({ description: `w${i}` }));
+    await flush();
+    for (let i = 0; i < 7; i++) picker.handleInput(KEY.down);
+    picker.handleInput("m");
+    const lines = picker.render(120).map(plain);
+    // pickerHeight(16) is 9: pi cuts anything past it, the message box first.
+    expect(lines.length).toBeLessThanOrEqual(9);
+    expect(lines.at(-2)).toMatch(/^Message explore: /);
+    expect(lines.some((line) => /^▌ ○ explore: w7/.test(line))).toBe(true);
   });
 
   it("scrolls a long list to keep the selected worker on screen", async () => {
