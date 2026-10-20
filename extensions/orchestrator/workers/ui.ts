@@ -30,6 +30,13 @@ export function registerWorkerUi(orchestrator: Orchestrator): void {
   const widget = new WorkerWidget(orchestrator);
   orchestrator.workerWidget = widget;
   pi.on("session_shutdown", async () => widget.detach());
+  pi.registerShortcut?.("ctrl+n", {
+    description: "Select a worker: see its output, message, interrupt, stop or kill it",
+    handler: async (ctx: any) => {
+      if (ctx?.mode !== undefined && ctx.mode !== "tui") return;
+      await openWorkerPicker(orchestrator, ctx);
+    },
+  });
 }
 
 function renderItem(item: WorkerMessageDetails["items"][number], expanded: boolean, theme: Theme): string {
@@ -147,7 +154,7 @@ export class WorkerWidget {
     this.timer = null;
   }
 
-  private visibleRecords(): WorkerRecord[] {
+  visibleRecords(): WorkerRecord[] {
     const now = Date.now();
     return (this.orchestrator.workers?.list() ?? []).filter((record) =>
       ACTIVE_STATUSES.has(record.status)
@@ -499,5 +506,155 @@ export async function openWorkerViewer(orchestrator: Orchestrator, ctx: any, id:
     });
   } finally {
     orchestrator.workerWidget?.resume();
+  }
+}
+
+/**
+ * ctrl+n: the worker panel takes the keyboard in the editor's place. Arrow
+ * keys pick a worker; single keys act on it; Esc gives the editor back with
+ * the draft untouched.
+ */
+export class WorkerPicker implements Component {
+  private index = 0;
+  private composer: Input | null = null;
+  private armed = false;
+  private notice = "";
+  private readonly timer: ReturnType<typeof setInterval>;
+  private frame = 0;
+
+  constructor(
+    private readonly tui: TUI,
+    private readonly theme: Theme,
+    private readonly widget: WorkerWidget,
+    private readonly manager: WorkerManager,
+    private readonly open: (id: string) => Promise<void>,
+    private readonly done: () => void,
+  ) {
+    this.timer = setInterval(() => {
+      this.frame++;
+      this.tui.requestRender();
+    }, 200);
+    this.timer.unref?.();
+  }
+
+  private records(): WorkerRecord[] {
+    return this.widget.visibleRecords().sort(order);
+  }
+
+  private selected(): WorkerRecord | undefined {
+    const records = this.records();
+    if (!records.length) return undefined;
+    this.index = Math.min(this.index, records.length - 1);
+    return records[this.index];
+  }
+
+  private close(): void {
+    clearInterval(this.timer);
+    this.done();
+  }
+
+  handleInput(data: string): void {
+    if (this.composer) {
+      this.composer.handleInput(data);
+      this.tui.requestRender();
+      return;
+    }
+    const record = this.selected();
+    if (matchesKey(data, "escape") || matchesKey(data, "ctrl+n") || !record) {
+      this.close();
+      return;
+    }
+    const active = ACTIVE_STATUSES.has(record.status);
+    const wasArmed = this.armed;
+    this.armed = false;
+    if (matchesKey(data, "up")) this.index = Math.max(0, this.index - 1);
+    else if (matchesKey(data, "down")) this.index = Math.min(this.records().length - 1, this.index + 1);
+    else if (matchesKey(data, "enter")) {
+      clearInterval(this.timer);
+      void this.open(record.id).finally(() => this.done());
+      return;
+    } else if (matchesKey(data, "m")) {
+      this.openComposer(record);
+    } else if (matchesKey(data, "i") && active) {
+      this.notice = this.manager.interruptTool(record.id) ? "Interrupted the current tool call." : "No tool call in progress.";
+    } else if (matchesKey(data, "s") && active) {
+      this.manager.stop(record.id);
+      this.notice = `Asked ${record.spec.type} to wrap up; killed in a minute if it does not.`;
+    } else if (matchesKey(data, "k") && active) {
+      if (wasArmed) {
+        this.manager.kill(record.id);
+        this.notice = `Killed ${record.spec.type}.`;
+      } else {
+        this.armed = true;
+        this.notice = "Press k again to kill it.";
+      }
+    } else return;
+    this.tui.requestRender();
+  }
+
+  private openComposer(record: WorkerRecord): void {
+    const input = new Input();
+    input.focused = true;
+    const id = record.id;
+    input.onSubmit = (value: string) => {
+      const text = value.trim();
+      this.composer = null;
+      if (text) {
+        const outcome = this.manager.send(id, text);
+        this.notice = outcome === "answered" ? "Answer sent." : outcome === "steered" ? "Message sent." : outcome === "resumed" ? "Resumed with your message." : outcome === "queued" ? "Added to its task." : "It can no longer take messages.";
+      }
+      this.tui.requestRender();
+    };
+    input.onEscape = () => {
+      this.composer = null;
+      this.tui.requestRender();
+    };
+    this.composer = input;
+  }
+
+  render(width: number): string[] {
+    const th = this.theme;
+    const records = this.records();
+    const selected = this.selected();
+    if (!records.length || !selected) return [truncateToWidth(th.fg("dim", "No workers. Esc to go back."), width)];
+    const sep = th.fg("dim", " • ");
+    const now = Date.now();
+    const lines = [truncateToWidth(workerHeader(records, th, sep).replace(/\s+\S*ctrl\+n\S*$/, ""), width)];
+    for (const record of records) {
+      const block = recordLines(record, now, this.frame, th, sep);
+      const mark = record === selected ? th.fg("accent", "▌") : " ";
+      lines.push(...block.map((line, i) => truncateToWidth(`${i === 0 || record === selected ? mark : " "}${line.slice(1)}`, width)));
+    }
+    if (this.composer) {
+      const label = selected.question ? "Answer: " : "Message: ";
+      lines.push(truncateToWidth(`${th.fg("accent", label)}${this.composer.render(Math.max(1, width - label.length))[0] ?? ""}`, width));
+      lines.push(truncateToWidth(th.fg("dim", "  enter send · esc cancel"), width));
+      return lines;
+    }
+    if (this.notice) lines.push(truncateToWidth(th.fg("warning", `  ${this.notice}`), width));
+    const answer = selected.question ? "m answer" : "m message";
+    const actions = ACTIVE_STATUSES.has(selected.status) ? [answer, "i interrupt", "s stop", "k kill"] : [answer];
+    lines.push(truncateToWidth(th.fg("dim", `  ↑↓ select · enter output · ${actions.join(" · ")} · esc back`), width));
+    return lines;
+  }
+
+  invalidate(): void {}
+}
+
+/** Opens the picker in the editor's place; its Enter opens the full viewer. */
+export async function openWorkerPicker(orchestrator: Orchestrator, ctx: any): Promise<void> {
+  const manager = orchestrator.workers;
+  const widget = orchestrator.workerWidget;
+  if (!manager || !widget || typeof ctx?.ui?.custom !== "function") return;
+  if (!widget.visibleRecords().length) {
+    ctx.ui.notify?.("No workers to select.", "info");
+    return;
+  }
+  widget.suspend();
+  try {
+    await ctx.ui.custom((tui: TUI, theme: Theme, _keys: unknown, done: (value: undefined) => void) =>
+      new WorkerPicker(tui, theme, widget, manager, (id) => openWorkerViewer(orchestrator, ctx, id), () => done(undefined)));
+  } finally {
+    widget.resume();
   }
 }

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WORKER_MESSAGE_TYPE, type WorkerMessageDetails } from "./delivery.js";
 import { WorkerManager } from "./manager.js";
 import type { WorkerSession, WorkerSessionHooks, WorkerSpawnSpec } from "./types.js";
-import { openWorkerViewer, registerWorkerUi, WorkerViewer, WorkerWidget } from "./ui.js";
+import { openWorkerPicker, openWorkerViewer, registerWorkerUi, WorkerPicker, WorkerViewer, WorkerWidget } from "./ui.js";
 
 // Colors wrap text in escape codes, so a width check proves truncation counts visible cells only.
 const theme = { fg: (_color: string, text: string) => `\x1b[33m${text}\x1b[0m`, bold: (text: string) => `\x1b[1m${text}\x1b[22m` };
@@ -111,6 +111,18 @@ describe("worker update renderer", () => {
     const { render } = renderer();
     const details = { items: [item({ summary: "x".repeat(300) }), item({ kind: "question", question: "why ".repeat(40) }), item({ status: "killed", error: "e".repeat(200) })] };
     for (const width of [20, 40, 80]) expectFits(render(details, true).render(width), width);
+  });
+
+  it("binds ctrl+n to the worker picker, in the terminal only", async () => {
+    const shortcuts = new Map<string, any>();
+    const orchestrator: any = { pi: { registerMessageRenderer: vi.fn(), on: vi.fn(), registerShortcut: (key: string, options: any) => shortcuts.set(key, options) }, workers: setup().manager };
+    registerWorkerUi(orchestrator);
+    const custom = vi.fn();
+    orchestrator.workers.spawn(spec());
+    await shortcuts.get("ctrl+n").handler({ mode: "rpc", ui: { custom } });
+    expect(custom).not.toHaveBeenCalled();
+    await shortcuts.get("ctrl+n").handler({ ui: { custom } });
+    expect(custom).toHaveBeenCalledTimes(1);
   });
 
   it("detaches the panel when the session shuts down", async () => {
@@ -539,5 +551,77 @@ describe("openWorkerViewer", () => {
     await openWorkerViewer({ workers: manager } as any, { ui: {} }, record.id);
     await openWorkerViewer({ workers: null } as any, { ui: { custom } }, record.id);
     expect(custom).not.toHaveBeenCalled();
+  });
+});
+
+describe("WorkerPicker (ctrl+n)", () => {
+  function open() {
+    const { manager, sessions } = setup();
+    const orchestrator: any = { workers: manager };
+    const widget = new WorkerWidget(orchestrator);
+    orchestrator.workerWidget = widget;
+    widget.attach({ ui: { setWidget: vi.fn(), setStatus: vi.fn() } });
+    const opened: string[] = [];
+    let closed = false;
+    const tui = { terminal: { rows: 40 }, requestRender: vi.fn() };
+    const picker = new WorkerPicker(tui as any, theme, widget, manager, async (id) => { opened.push(id); }, () => { closed = true; });
+    return { manager, sessions, picker, opened, isClosed: () => closed };
+  }
+
+  it("selects with the arrows, starting at the worker that needs the user, and opens its output on enter", async () => {
+    const { manager, sessions, picker, opened, isClosed } = open();
+    manager.spawn(spec());
+    manager.spawn(spec({ type: "librarian", description: "read docs" }));
+    await flush();
+    void sessions[1]!.hooks.askParent("which?", undefined);
+    let lines = picker.render(120).map(plain);
+    expect(lines[0]).toBe("Workers • 1 asking • 1 running");
+    expect(lines[1]).toMatch(/^▌ \? librarian: read docs/);
+    expect(lines.at(-1)).toBe("  ↑↓ select · enter output · m answer · i interrupt · s stop · k kill · esc back");
+    picker.handleInput(KEY.down);
+    lines = picker.render(120).map(plain);
+    expect(lines[3]).toMatch(/^▌ ⠋ explore: /);
+    picker.handleInput(KEY.enter);
+    await flush();
+    expect(opened).toEqual([manager.list()[0]!.id]);
+    expect(isClosed()).toBe(true);
+  });
+
+  it("answers the selected worker's question from the message box", async () => {
+    const { manager, sessions, picker } = open();
+    manager.spawn(spec());
+    await flush();
+    const answer = sessions[0]!.hooks.askParent("which branch?", undefined);
+    picker.handleInput("m");
+    expect(plain(picker.render(120).at(-2)!)).toMatch(/^Answer: /);
+    for (const ch of "main") picker.handleInput(ch);
+    picker.handleInput(KEY.enter);
+    expect(await answer).toBe("main");
+    expect(plain(picker.render(120).at(-2)!)).toBe("  Answer sent.");
+  });
+
+  it("interrupts, stops, and kills only after a second k", async () => {
+    const { manager, sessions, picker } = open();
+    const record = manager.spawn(spec());
+    await flush();
+    picker.handleInput("i");
+    expect(sessions[0]!.interrupted).toBe(1);
+    picker.handleInput("k");
+    expect(record.status).toBe("running");
+    expect(plain(picker.render(120).at(-2)!)).toBe("  Press k again to kill it.");
+    picker.handleInput("k");
+    expect(record.status).toBe("killed");
+  });
+
+  it("gives the editor back on esc, or when there is nothing to select", async () => {
+    const { manager, picker, isClosed } = open();
+    manager.spawn(spec());
+    picker.handleInput(KEY.escape);
+    expect(isClosed()).toBe(true);
+    const notify = vi.fn();
+    const custom = vi.fn();
+    await openWorkerPicker({ workers: setup().manager, workerWidget: new WorkerWidget({ workers: setup().manager } as any) } as any, { ui: { custom, notify } });
+    expect(custom).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledWith("No workers to select.", "info");
   });
 });
