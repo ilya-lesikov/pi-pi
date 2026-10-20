@@ -119,7 +119,7 @@ export const PINNED_TOOLS = new Set(["load_skill"]);
  * because it is rare and small: a long session's asks weigh a few kilobytes
  * between them, against the megabytes of tool output around them.
  */
-export const NEVER_FOLDED_TOOLS = new Set(["ask_user"]);
+export const NEVER_FOLDED_TOOLS = new Set(["ask_user", "confirm"]);
 
 export interface FoldResult {
   /** Estimated prompt size after folding, in tokens. */

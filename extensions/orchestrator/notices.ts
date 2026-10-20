@@ -16,16 +16,20 @@ const BUFFER_LIMIT = 20;
  * chat message the model never sees. Raised between turns on a host that
  * shows either only inside one, it waits for the next run.
  */
+let host = new HostProfile("tui");
+
 class HostChannel {
-  host: HostProfile = new HostProfile("tui");
   private buffered: Array<{ message: string; level: NoticeLevel; notified: boolean }> = [];
   private lastCtx: any = null;
 
   constructor(private readonly pi: ExtensionAPI) {}
 
+  get host(): HostProfile {
+    return host;
+  }
+
   attach(ctx: any): void {
     this.lastCtx = ctx;
-    this.host = detectHost(ctx?.mode);
     this.buffered = [];
   }
 
@@ -116,12 +120,13 @@ export function registerNotices(pi: ExtensionAPI): void {
 }
 
 export function attachHost(ctx: any): HostProfile {
+  host = detectHost(ctx?.mode);
   channel?.attach(ctx);
-  return currentHost();
+  return host;
 }
 
 export function currentHost(): HostProfile {
-  return channel?.host ?? new HostProfile("tui");
+  return host;
 }
 
 /** Tells the user something that matters, wherever pi is hosted. */

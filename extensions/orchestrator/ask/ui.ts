@@ -1,48 +1,78 @@
-import { Editor, Key, matchesKey, truncateToWidth, wrapTextWithAnsi, type Component, type Focusable, type Keybinding, type KeybindingsManager, type TUI } from "@earendil-works/pi-tui";
+import { Editor, Key, matchesKey, truncateToWidth, wrapTextWithAnsi, type Component, type Focusable, type KeybindingsManager, type TUI } from "@earendil-works/pi-tui";
+import { fitLine } from "../host.js";
+import { currentHost, notice } from "../notices.js";
 
 export interface QuestionOption { title: string; description?: string }
-export type AskResponse = { kind: "selection"; selections: string[]; comment?: string } | { kind: "freeform"; text: string };
-export type CancelReason = "user" | "signal";
-export interface AskCancel { __cancel: true; reason: CancelReason }
+export type AskResponse =
+  | { kind: "selection"; selections: string[]; other?: string; comment?: string }
+  | { kind: "freeform"; text: string };
+/** user: dismissed; signal: aborted; no_text: the host cannot collect typed text; incomplete: the host kept returning one answer. */
+export type CancelReason = "user" | "signal" | "no_text" | "incomplete";
+export interface AskCancel { __cancel: true; reason: CancelReason; note?: string }
 // A step through a `questions` sequence, reported the way a cancel is: execute() owns the index.
 export interface AskNavigate { __navigate: "prev" | "next" }
 export interface Navigation { index: number; total: number; canPrev: boolean; canNext: boolean }
 
 export interface AskOptions {
   question: string;
-  context?: string;
+  /** Short label shown in the dialog frame. */
+  header?: string;
+  /** Muted lines under the question. */
+  detail?: string;
   options?: Array<string | QuestionOption>;
+  /** Title of the option to suggest: focused first and marked. */
+  recommended?: string;
   allowMultiple?: boolean;
   allowFreeform?: boolean;
+  /** false: never. Unset: ctrl+e in the terminal only. true: also an "Add a comment…" entry elsewhere. */
   allowComment?: boolean;
+  /** Esc in the terminal asks for an optional reason before cancelling. */
+  declineNote?: boolean;
   signal?: AbortSignal;
 }
 
-interface SequenceOptions {
+export interface SequenceOptions {
   navigation?: Navigation;
   initialIndex?: number;
   checkedIndices?: number[];
+  /** Paseo turns this select into its own form with a custom answer and a comment, and answers the follow-up inputs itself. */
+  paseoCombined?: boolean;
+  /** Frame label; "ask_user" by default. */
+  label?: string;
+  /** Keys that pick an option directly, by index. */
+  hotkeys?: Record<string, number>;
 }
 
 interface Question {
   question: string;
-  context?: string;
+  header?: string;
+  detail?: string;
   options: QuestionOption[];
+  recommended: number;
   allowMultiple: boolean;
   allowFreeform: boolean;
-  allowComment: boolean;
+  commentOffered: boolean;
+  commentEntry: boolean;
+  declineNote: boolean;
 }
 
-type AskContext = { hasUI: boolean; ui: any; mode?: string };
+type AskContext = { hasUI: boolean; ui: any; mode?: string; isIdle?: () => boolean };
 type Theme = { fg(color: string, text: string): string; bold(text: string): string };
 type UIResult = AskResponse | AskCancel | AskNavigate | null;
 
-const FREEFORM_ROW = "Type something.";
-const FREEFORM_ENTRY = "Type something…";
+export const OTHER = "Other…";
+const ADD_COMMENT = "Add a comment…";
+const ADD_OTHER = "Add your own…";
+const BACK = "← Back";
+const TITLE_MAX = 160;
+const OPTION_MAX = 200;
+// bb refuses a select with more than 64 entries; longer lists are paged.
+const PAGE = 48;
+const PAGED_ABOVE = 60;
 // Proxies that mangle the option schema (Google function calling and the like) leave the model guessing the key.
 const OPTION_TITLE_KEYS = ["title", "label", "text", "value", "name", "option"];
 
-const cancel = (reason: CancelReason): AskCancel => ({ __cancel: true, reason });
+const cancel = (reason: CancelReason, note?: string): AskCancel => (note ? { __cancel: true, reason, note } : { __cancel: true, reason });
 
 export function isCancel(value: unknown): value is AskCancel {
   return typeof value === "object" && value !== null && (value as AskCancel).__cancel === true;
@@ -70,21 +100,22 @@ export function normalizeOptions(options: readonly unknown[]): QuestionOption[] 
   return options.map(coerceOption).filter((option): option is QuestionOption => option !== null);
 }
 
-export function formatOptionList(options: readonly QuestionOption[]): string {
-  return options.map((option, i) => `${i + 1}. ${option.title}${option.description ? ` — ${option.description}` : ""}`).join("\n");
+export function formatOptionList(options: readonly QuestionOption[], recommended?: string): string {
+  return options.map((option, i) => `${i + 1}. ${option.title}${option.title === recommended ? " (recommended)" : ""}${option.description ? ` — ${option.description}` : ""}`).join("\n");
 }
 
 export function formatResponse(response: AskResponse): string {
   if (response.kind === "freeform") return response.text;
-  const selections = response.selections.join(", ");
-  return response.comment ? `${selections} — ${response.comment}` : selections;
+  const picked = [...response.selections, ...(response.other ? [`Other: ${response.other}`] : [])].join(", ");
+  return response.comment ? `${picked} — ${response.comment}` : picked;
 }
 
-function selection(selections: string[], comment?: string | null): AskResponse | null {
+function selection(selections: string[], comment?: string | null, other?: string): AskResponse | null {
   const picked = selections.map((s) => s.trim()).filter(Boolean);
-  if (!picked.length) return null;
+  const custom = other?.trim();
+  if (!picked.length && !custom) return null;
   const note = comment?.trim();
-  return note ? { kind: "selection", selections: picked, comment: note } : { kind: "selection", selections: picked };
+  return { kind: "selection", selections: picked, ...(custom ? { other: custom } : {}), ...(note ? { comment: note } : {}) };
 }
 
 function freeform(text: string | null | undefined): AskResponse | null {
@@ -92,11 +123,23 @@ function freeform(text: string | null | undefined): AskResponse | null {
   return trimmed ? { kind: "freeform", text: trimmed } : null;
 }
 
-function withContext(q: Question): string {
-  return q.context ? `${q.question}\n\nContext:\n${q.context}` : q.question;
+function toQuestion(opts: AskOptions): Question {
+  const options = normalizeOptions(opts.options ?? []);
+  return {
+    question: opts.question,
+    header: opts.header?.trim() || undefined,
+    detail: opts.detail?.trim() || undefined,
+    options,
+    recommended: opts.recommended ? options.findIndex((option) => option.title === opts.recommended) : -1,
+    allowMultiple: opts.allowMultiple ?? false,
+    allowFreeform: opts.allowFreeform ?? true,
+    commentOffered: opts.allowComment !== false,
+    commentEntry: opts.allowComment === true,
+    declineNote: opts.declineNote ?? false,
+  };
 }
 
-export async function askUser(ctx: AskContext, opts: AskOptions): Promise<AskResponse | AskCancel | null> {
+export async function askUser(ctx: AskContext, opts: AskOptions & Pick<SequenceOptions, "label" | "hotkeys">): Promise<AskResponse | AskCancel | null> {
   // Without `navigation` the component never reports a step.
   return (await askQuestion(ctx, opts)) as AskResponse | AskCancel | null;
 }
@@ -105,26 +148,15 @@ export async function askQuestion(ctx: AskContext, opts: AskOptions & SequenceOp
   if (!ctx.hasUI || !ctx.ui) return null;
   const { signal } = opts;
   if (signal?.aborted) return cancel("signal");
-  const q: Question = {
-    question: opts.question,
-    context: opts.context?.trim() || undefined,
-    options: normalizeOptions(opts.options ?? []),
-    allowMultiple: opts.allowMultiple ?? false,
-    allowFreeform: opts.allowFreeform ?? true,
-    allowComment: opts.allowComment ?? true,
-  };
+  const q = toQuestion(opts);
   ctx.ui.setWorkingMessage?.("Waiting for user to answer…");
   try {
-    if (!q.options.length) {
-      const answer = await ctx.ui.input(withContext(q), "Type your answer...", { signal });
-      return signal?.aborted ? cancel("signal") : freeform(answer);
-    }
     if (ctx.mode === undefined || ctx.mode === "tui") {
       const result = await showComponent(ctx.ui, q, opts);
       if (signal?.aborted) return cancel("signal");
       if (result !== undefined) return result;
     }
-    return await askViaDialogs(ctx.ui, q, signal);
+    return await askViaDialogs(ctx, q, opts);
   } finally {
     ctx.ui.setWorkingMessage?.();
   }
@@ -152,48 +184,165 @@ async function showComponent(ui: any, q: Question, opts: AskOptions & SequenceOp
   }
 }
 
-// RPC and other non-TUI hosts: custom() is unavailable, so walk the stock dialogs.
-async function askViaDialogs(ui: any, q: Question, signal: AbortSignal | undefined): Promise<AskResponse | AskCancel | null> {
-  const dialog = { signal };
-  const prompt = withContext(q);
-  let selections: string[];
-  if (q.allowMultiple) {
-    const raw = await ui.input(`${prompt}\n\nOptions (select one or more):\n${formatOptionList(q.options)}`, "Type your selection(s)...", dialog);
-    if (signal?.aborted) return cancel("signal");
-    if (raw == null) return null;
-    selections = String(raw).split(",").map((s) => s.trim()).filter(Boolean);
-    if (!selections.length) return null;
-  } else {
-    const titles = q.options.map((option) => option.title);
-    const picked = await ui.select(prompt, q.allowFreeform ? [...titles, FREEFORM_ENTRY] : titles, dialog);
-    if (signal?.aborted) return cancel("signal");
-    if (picked == null) return null;
-    if (picked === FREEFORM_ENTRY) {
-      const answer = await ui.input(prompt, "Type your answer...", dialog);
-      if (signal?.aborted) return cancel("signal");
-      return freeform(answer);
+interface Dialogs {
+  ui: any;
+  signal?: AbortSignal;
+  runLive: () => boolean;
+}
+
+function dialogsFor(ctx: AskContext, signal: AbortSignal | undefined): Dialogs {
+  return { ui: ctx.ui, signal, runLive: () => typeof ctx.isIdle === "function" && !ctx.isIdle() };
+}
+
+function uniqueLabels(labels: string[]): string[] {
+  const seen = new Map<string, number>();
+  return labels.map((label) => {
+    const count = (seen.get(label) ?? 0) + 1;
+    seen.set(label, count);
+    return count === 1 ? label : `${fitLine(label, OPTION_MAX - 6)} (${count})`;
+  });
+}
+
+/**
+ * One select, bounded the way the strictest host requires. Resolves the index
+ * of the chosen label, the raw value when the host answered with something not
+ * on the list, or undefined when it was dismissed.
+ */
+async function pick(d: Dialogs, title: string, labels: string[]): Promise<number | string | undefined> {
+  const fitted = uniqueLabels(labels.map((label) => fitLine(label, OPTION_MAX)));
+  const paged = fitted.length > PAGED_ABOVE;
+  let start = 0;
+  for (;;) {
+    const page = paged ? fitted.slice(start, start + PAGE) : fitted;
+    const remaining = fitted.length - start - PAGE;
+    const more = paged ? (remaining > 0 ? `More… (${remaining} more)` : "Back to the first page") : undefined;
+    const raw = await d.ui.select(fitLine(title, TITLE_MAX), more ? [...page, more] : page, { signal: d.signal });
+    if (raw == null) return undefined;
+    if (more && raw === more) {
+      start = remaining > 0 ? start + PAGE : 0;
+      continue;
     }
-    selections = [picked];
+    const index = page.indexOf(String(raw));
+    return index >= 0 ? start + index : String(raw);
   }
-  if (!q.allowComment) return selection(selections);
-  const label = selections.length === 1 ? "Selected option" : "Selected options";
-  const comment = await ui.input(`${prompt}\n\n${label}:\n${selections.map((s) => `- ${s}`).join("\n")}`, "Optional comment (press Enter to skip)...", dialog);
-  if (signal?.aborted) return cancel("signal");
-  if (comment == null) return null;
-  return selection(selections, comment);
+}
+
+/** One text dialog; teaches the host profile whether typed text reaches the user at all. */
+async function typed(d: Dialogs, title: string, placeholder: string): Promise<{ text?: string; unavailable: boolean }> {
+  const started = Date.now();
+  const live = d.runLive();
+  const raw = await d.ui.input(fitLine(title, TITLE_MAX), placeholder, { signal: d.signal });
+  const host = currentHost();
+  host.observeTextDialog(raw != null, Date.now() - started, live && !d.signal?.aborted);
+  return raw != null ? { text: String(raw), unavailable: false } : { unavailable: !host.offersText };
+}
+
+function optionLabel(option: QuestionOption, recommended: boolean): string {
+  return `${option.title}${recommended ? " (recommended)" : ""}${option.description ? ` — ${option.description}` : ""}`;
+}
+
+function quoted(text: string, max = 40): string {
+  return `“${fitLine(text, max)}”`;
+}
+
+// RPC and other non-TUI hosts: custom() is unavailable, so walk the stock dialogs.
+async function askViaDialogs(ctx: AskContext, q: Question, opts: SequenceOptions & { signal?: AbortSignal }): Promise<UIResult> {
+  const { signal, navigation: nav } = opts;
+  const d = dialogsFor(ctx, signal);
+  const host = currentHost();
+  const prefix = nav ? `(${nav.index + 1}/${nav.total}) ` : "";
+  if (prefix.length + q.question.length > TITLE_MAX) notice(ctx, q.question, "info");
+  if (!q.options.length) {
+    const answer = await typed(d, `${prefix}${q.question}`, "Type your answer");
+    if (signal?.aborted) return cancel("signal");
+    if (answer.text !== undefined) return freeform(answer.text);
+    return answer.unavailable ? cancel("no_text") : null;
+  }
+  const textEntries = () => !opts.paseoCombined && host.offersText;
+  let typingNote = "";
+  let comment: string | undefined;
+  let other: string | undefined;
+  const checked = new Set(q.allowMultiple ? opts.checkedIndices ?? [] : []);
+  let last = -1;
+  let repeats = 0;
+  const steps = 2 * q.options.length + 8;
+  for (let step = 0; step < steps; step++) {
+    const count = checked.size + (other ? 1 : 0);
+    const labels = q.options.map((option, i) => {
+      const label = optionLabel(option, i === q.recommended);
+      return q.allowMultiple ? `${checked.has(i) ? "Remove" : "Add"} ${label}` : label;
+    });
+    const extras: string[] = [];
+    if (q.allowMultiple && count > 0) extras.push(`Use selected (${count})`);
+    if (q.allowFreeform && textEntries()) extras.push(q.allowMultiple ? (other ? `Change your own… ${quoted(other)}` : ADD_OTHER) : OTHER);
+    if (q.commentEntry && textEntries()) extras.push(comment ? `Change comment… ${quoted(comment)}` : ADD_COMMENT);
+    if (nav?.canPrev) extras.push(BACK);
+    const chosenNames = [...[...checked].sort((a, b) => a - b).map((i) => q.options[i]!.title), ...(other ? [other] : [])];
+    const state = q.allowMultiple ? `(${count} selected${count ? `: ${chosenNames.join(", ")}` : ""}) ` : comment ? "(comment added) " : "";
+    const picked = await pick(d, `${prefix}${typingNote}${state}${q.question}`, [...labels, ...extras]);
+    if (signal?.aborted) return cancel("signal");
+    if (picked === undefined) return null;
+    if (typeof picked === "number" && picked < labels.length) {
+      if (!q.allowMultiple) {
+        const title = q.options[picked]!.title;
+        if (!opts.paseoCombined) return selection([title], comment);
+        const note = await typed(d, `Comment on ${quoted(title)}`, "Optional comment — leave empty to skip");
+        if (signal?.aborted) return cancel("signal");
+        return selection([title], note.text);
+      }
+      repeats = picked === last ? repeats + 1 : 1;
+      last = picked;
+      if (repeats >= 3) return cancel("incomplete", chosenNames.join(", "));
+      if (!checked.delete(picked)) checked.add(picked);
+      continue;
+    }
+    const extra = typeof picked === "number" ? extras[picked - labels.length]! : undefined;
+    if (extra === BACK) return { __navigate: "prev" };
+    if (extra?.startsWith("Use selected")) return selection(chosenNames.slice(0, checked.size), comment, other);
+    if (extra === ADD_COMMENT || extra?.startsWith("Change comment")) {
+      const note = await typed(d, `Comment — ${q.question}`, "Your comment; then pick an option");
+      if (signal?.aborted) return cancel("signal");
+      if (note.text !== undefined) comment = note.text.trim() || undefined;
+      else if (note.unavailable) typingNote = "(typing is unavailable here) ";
+      continue;
+    }
+    // "Other…", or a value the host made up: Paseo answers its own custom
+    // entry with a marker and fills the next text dialog with what was typed.
+    const answer = await typed(d, `Your answer — ${q.question}`, "Type your answer");
+    if (signal?.aborted) return cancel("signal");
+    const text = answer.text?.trim() || (extra === undefined && typeof picked === "string" ? picked.trim() : "");
+    if (text) {
+      if (!q.allowMultiple) return freeform(text);
+      other = text;
+    } else if (answer.unavailable) {
+      typingNote = "(typing is unavailable here) ";
+    }
+  }
+  return cancel("incomplete");
+}
+
+/** The last step of a sequence of questions outside the terminal: submit, or go back to one. */
+export async function reviewAnswers(ctx: AskContext, lines: string[], signal?: AbortSignal): Promise<"submit" | number | undefined> {
+  const d = dialogsFor(ctx, signal);
+  const picked = await pick(d, "Submit these answers?", ["Submit", ...lines.map((line, i) => `Change ${i + 1}: ${line}`)]);
+  if (typeof picked !== "number") return undefined;
+  return picked === 0 ? "submit" : picked - 1;
 }
 
 class AskComponent implements Component, Focusable {
-  private mode: "list" | "freeform" | "comment" = "list";
+  private mode: "list" | "freeform" | "comment" | "decline" = "list";
   private cursor: number;
   private top = 0;
   private readonly checked: Set<number>;
+  private other: string | undefined;
   private pending: string[] = [];
   private draft = "";
   private editor?: Editor;
   private cache?: { width: number; lines: string[] };
   private _focused = false;
   private readonly nav?: Navigation;
+  private readonly label: string;
+  private readonly hotkeys: Record<string, number>;
 
   constructor(
     private readonly q: Question,
@@ -204,10 +353,13 @@ class AskComponent implements Component, Focusable {
     private readonly done: (result: UIResult) => void,
   ) {
     const count = q.options.length;
-    const initial = opts.initialIndex ?? 0;
+    const initial = opts.initialIndex ?? (q.recommended >= 0 ? q.recommended : 0);
     this.cursor = Number.isInteger(initial) && initial >= 0 && initial < count ? initial : 0;
     this.checked = new Set((opts.checkedIndices ?? []).filter((i) => Number.isInteger(i) && i >= 0 && i < count));
     this.nav = opts.navigation;
+    this.label = opts.label ?? "ask_user";
+    this.hotkeys = opts.hotkeys ?? {};
+    if (!count) this.openEditor("freeform");
   }
 
   get focused(): boolean {
@@ -226,55 +378,82 @@ class AskComponent implements Component, Focusable {
 
   handleInput(data: string): void {
     if (this.mode === "list") this.handleListInput(data);
-    else if (matchesKey(data, Key.escape)) this.closeEditor();
-    else if (this.keys.matches(data, "tui.select.cancel")) this.done(cancel("user"));
-    else this.editor!.handleInput(data);
+    else this.handleEditorInput(data);
     this.cache = undefined;
     this.tui.requestRender();
   }
 
+  // ctrl+c belongs to the host (clear the editor, quit): it never cancels a question.
+  private isCancelKey(data: string): boolean {
+    if (matchesKey(data, Key.ctrl("c"))) return false;
+    return matchesKey(data, Key.escape) || this.keys.matches(data, "tui.select.cancel");
+  }
+
+  private handleEditorInput(data: string): void {
+    if (matchesKey(data, Key.ctrl("c"))) return;
+    if (!matchesKey(data, Key.escape)) return this.editor!.handleInput(data);
+    if (this.mode === "decline") return this.done(cancel("user"));
+    if (!this.q.options.length) return this.decline();
+    this.closeEditor();
+  }
+
   private handleListInput(data: string): void {
-    const { options, allowMultiple, allowComment } = this.q;
-    const count = options.length + (this.q.allowFreeform ? 1 : 0);
-    const onFreeform = this.cursor === options.length;
-    if (this.keys.matches(data, "tui.select.cancel")) return this.done(cancel("user"));
-    if (this.nav && matchesKey(data, Key.alt("left"))) {
+    const { options, allowMultiple } = this.q;
+    const total = options.length + (this.q.allowFreeform ? 1 : 0);
+    const onOther = this.cursor === options.length;
+    if (this.isCancelKey(data)) return this.decline();
+    if (this.nav && (matchesKey(data, Key.alt("left")) || matchesKey(data, Key.left))) {
       if (this.nav.canPrev) this.done({ __navigate: "prev" });
       return;
     }
-    if (this.nav && matchesKey(data, Key.alt("right"))) {
+    if (this.nav && (matchesKey(data, Key.alt("right")) || matchesKey(data, Key.right))) {
       if (this.nav.canNext) this.done({ __navigate: "next" });
       return;
     }
-    if (allowComment && matchesKey(data, Key.ctrl("e"))) {
-      if (!onFreeform) this.openEditor("comment", this.chosen());
+    if (this.q.commentOffered && matchesKey(data, Key.ctrl("e"))) {
+      if (onOther && !allowMultiple) return;
+      if (allowMultiple && !this.checked.size && !this.other && !onOther) this.checked.add(this.cursor);
+      const chosen = this.chosen();
+      if (chosen.length || this.other) this.openEditor("comment", chosen);
       return;
     }
+    const hotkey = this.hotkeys[data.toLowerCase()];
+    if (hotkey !== undefined && hotkey < options.length) return this.done(selection([options[hotkey]!.title]));
     // Before confirm: ctrl+j arrives as "\n", which also matches enter.
     if (this.keys.matches(data, "tui.select.up") || matchesKey(data, Key.ctrl("k"))) {
-      this.cursor = (this.cursor + count - 1) % count;
+      this.cursor = (this.cursor + total - 1) % total;
       return;
     }
     if (this.keys.matches(data, "tui.select.down") || matchesKey(data, Key.ctrl("j"))) {
-      this.cursor = (this.cursor + 1) % count;
+      this.cursor = (this.cursor + 1) % total;
       return;
     }
     if (/^[1-9]$/.test(data)) {
       const index = Number(data) - 1;
-      if (index >= options.length) return;
+      if (index >= total) return;
       this.cursor = index;
+      if (index === options.length) return this.openEditor("freeform");
       if (allowMultiple) this.toggle(index);
+      else this.done(selection([options[index]!.title]));
       return;
     }
     if (allowMultiple && matchesKey(data, Key.space)) {
-      if (onFreeform) this.openEditor("freeform");
+      if (onOther) this.openEditor("freeform");
       else this.toggle(this.cursor);
       return;
     }
-    if (this.keys.matches(data, "tui.select.confirm")) {
-      if (onFreeform) this.openEditor("freeform");
-      else this.done(selection(this.chosen()));
-    }
+    if (!this.keys.matches(data, "tui.select.confirm")) return;
+    if (onOther && !(allowMultiple && (this.other || this.checked.size))) return this.openEditor("freeform");
+    if (!allowMultiple) return this.done(selection([options[this.cursor]!.title]));
+    // Enter with nothing checked checks the item under the cursor rather than
+    // submitting something the user never picked.
+    if (!this.checked.size && !this.other) return this.toggle(this.cursor);
+    this.done(selection(this.chosen(), undefined, this.other));
+  }
+
+  private decline(): void {
+    if (this.q.declineNote) this.openEditor("decline");
+    else this.done(cancel("user"));
   }
 
   private toggle(index: number): void {
@@ -283,11 +462,11 @@ class AskComponent implements Component, Focusable {
 
   private chosen(): string[] {
     const { options } = this.q;
-    const checked = this.q.allowMultiple ? [...this.checked].sort((a, b) => a - b) : [];
-    return (checked.length ? checked : [this.cursor]).map((i) => options[i]!.title);
+    if (!this.q.allowMultiple) return [options[this.cursor]!.title];
+    return [...this.checked].sort((a, b) => a - b).map((i) => options[i]!.title);
   }
 
-  private openEditor(mode: "freeform" | "comment", pending: string[] = []): void {
+  private openEditor(mode: "freeform" | "comment" | "decline", pending: string[] = []): void {
     if (!this.editor) {
       const t = this.theme;
       this.editor = new Editor(this.tui, {
@@ -304,7 +483,7 @@ class AskComponent implements Component, Focusable {
     }
     this.mode = mode;
     this.pending = pending;
-    this.editor.setText(mode === "freeform" ? this.draft : "");
+    this.editor.setText(mode === "freeform" ? this.other ?? this.draft : "");
     this.editor.focused = this._focused;
   }
 
@@ -315,7 +494,15 @@ class AskComponent implements Component, Focusable {
   }
 
   private submitEditor(text: string): void {
-    if (this.mode === "comment") return this.done(selection(this.pending, text));
+    if (this.mode === "decline") return this.done(cancel("user", text.trim() || undefined));
+    if (this.mode === "comment") return this.done(selection(this.pending, text, this.other));
+    if (this.q.allowMultiple) {
+      this.other = text.trim() || undefined;
+      this.draft = "";
+      this.closeEditor();
+      this.cache = undefined;
+      return;
+    }
     const answer = freeform(text);
     if (answer) this.done(answer);
   }
@@ -325,25 +512,24 @@ class AskComponent implements Component, Focusable {
     const t = this.theme;
     const inner = Math.max(1, width - 4);
     const border = (s: string) => t.fg("accent", s);
-    const position = this.nav ? ` ${this.nav.index + 1}/${this.nav.total}` : "";
     const head = [
-      t.fg("accent", t.bold(this.mode === "comment" ? "Optional comment" : `Question${position}`)),
       "",
-      ...wrapTextWithAnsi(this.q.question, inner).map((line) => t.fg("dim", line)),
+      ...wrapTextWithAnsi(this.q.question, inner).map((line) => t.fg("text", t.bold(line))),
+      ...(this.q.detail ? wrapTextWithAnsi(this.q.detail, inner).map((line) => t.fg("muted", line)) : []),
       "",
     ];
     const tail = ["", ...wrapTextWithAnsi(this.helpLine(), inner), ""];
     const body = this.mode === "list"
       ? this.listLines(inner, Math.max(4, this.tui.terminal.rows - head.length - tail.length - 3))
       : this.editorLines(inner);
-    const label = " ask_user ";
+    const label = ` ${[this.label, this.nav && `${this.nav.index + 1}/${this.nav.total}`, this.q.header].filter(Boolean).join(" · ")} `;
     const fill = width - 3 - label.length;
     const top = fill > 0
       ? border("╭─") + t.fg("dim", t.bold(label)) + border(`${"─".repeat(fill)}╮`)
       : border(`╭${"─".repeat(Math.max(0, width - 2))}╮`);
     const lines = [
       top,
-      ...["", ...head, ...body, ...tail].map((line) => border("│ ") + truncateToWidth(line, inner, "", true) + border(" │")),
+      ...[...head, ...body, ...tail].map((line) => border("│ ") + truncateToWidth(line, inner, "", true) + border(" │")),
       border(`╰${"─".repeat(Math.max(0, width - 2))}╯`),
     ].map((line) => truncateToWidth(line, width, ""));
     if (this.mode === "list") this.cache = { width, lines };
@@ -353,23 +539,28 @@ class AskComponent implements Component, Focusable {
   private listLines(inner: number, maxRows: number): string[] {
     const t = this.theme;
     const { options, allowMultiple } = this.q;
-    const pointer = (here: boolean) => (here ? t.fg("accent", "→") : " ");
+    const total = options.length + (this.q.allowFreeform ? 1 : 0);
+    const digits = String(Math.min(total, 9)).length;
+    const pointer = (here: boolean) => (here ? t.fg("accent", "❯") : " ");
+    const number = (i: number) => t.fg("dim", (i < 9 ? String(i + 1) : "").padStart(digits));
+    const box = (on: boolean) => (allowMultiple ? (on ? t.fg("success", "☑") : t.fg("dim", "☐")) + " " : "");
+    const indent = 3 + digits + (allowMultiple ? 2 : 0);
     const blocks = options.map((option, i) => {
       const here = i === this.cursor;
-      const number = `${i + 1}.`;
-      const box = allowMultiple ? (this.checked.has(i) ? t.fg("success", "[✓]") : t.fg("dim", "[ ]")) + " " : "";
-      const indent = 3 + number.length + (allowMultiple ? 4 : 0);
-      const prefix = `${pointer(here)} ${t.fg("dim", number)} ${box}`;
+      const prefix = `${pointer(here)} ${number(i)} ${box(this.checked.has(i))}`;
+      const mark = i === this.q.recommended ? `  ${t.fg("success", "★ recommended")}` : "";
       const lines = wrapTextWithAnsi(option.title, Math.max(1, inner - indent))
-        .map((line, j) => (j === 0 ? prefix : " ".repeat(indent)) + t.fg(here ? "accent" : "text", t.bold(line)));
+        .map((line, j) => (j === 0 ? prefix : " ".repeat(indent)) + t.fg(here ? "accent" : "text", t.bold(line)) + (j === 0 ? mark : ""));
       if (option.description) {
-        for (const line of wrapTextWithAnsi(option.description, Math.max(1, inner - 6))) lines.push(`      ${t.fg("muted", line)}`);
+        for (const line of wrapTextWithAnsi(option.description, Math.max(1, inner - indent))) lines.push(" ".repeat(indent) + t.fg("muted", line));
       }
       return lines;
     });
     if (this.q.allowFreeform) {
       const here = this.cursor === options.length;
-      blocks.push([`${pointer(here)}   ${t.fg(here ? "accent" : "text", t.bold(FREEFORM_ROW))} ${t.fg("dim", "—")} ${t.fg("muted", "Enter a custom response")}`]);
+      const rule = " ".repeat(indent) + t.fg("dim", "─".repeat(Math.max(1, Math.min(32, inner - indent))));
+      const label = this.other ? `${t.fg(here ? "accent" : "text", t.bold(OTHER))} ${t.fg("text", this.other)}` : `${t.fg(here ? "accent" : "text", t.bold(OTHER))} ${t.fg("muted", "type your own answer")}`;
+      blocks.push([rule, `${pointer(here)} ${number(options.length)} ${box(!!this.other)}${label}`]);
     }
     if (blocks.reduce((n, block) => n + block.length, 0) <= maxRows) return blocks.flat();
 
@@ -389,35 +580,32 @@ class AskComponent implements Component, Focusable {
 
   private editorLines(inner: number): string[] {
     const t = this.theme;
-    const heading = this.mode === "freeform"
-      ? [t.fg("accent", t.bold("Custom response"))]
-      : [
-        t.fg("accent", t.bold(this.pending.length === 1 ? "Selected option:" : "Selected options:")),
-        ...wrapTextWithAnsi(this.pending.join(", "), inner).map((line) => t.fg("text", line)),
-      ];
-    return [...heading, "", ...this.editor!.render(inner)];
+    const subject = [...this.pending, ...(this.other ? [this.other] : [])].join(", ");
+    const heading = this.mode === "freeform" ? "Your answer" : this.mode === "decline" ? "Why cancel? (optional)" : `Comment on ${subject}`;
+    return [...wrapTextWithAnsi(heading, inner).map((line) => t.fg("accent", t.bold(line))), "", ...this.editor!.render(inner)];
   }
 
   private helpLine(): string {
     const t = this.theme;
     const hint = (key: string, description: string) => `${t.fg("dim", key)}${t.fg("muted", ` ${description}`)}`;
-    const keys = (id: Keybinding) => this.keys.getKeys(id).join("/");
-    const otherCancel = this.keys.getKeys("tui.select.cancel").filter((key) => key !== "escape" && key !== "esc");
-    const hints = this.mode === "list"
-      ? [
-        hint("↑↓", "navigate"),
-        this.q.allowMultiple && hint("space", "toggle"),
-        this.q.allowComment && hint("ctrl+e", "add context"),
-        this.nav && hint("alt+←/alt+→", "prev/next question"),
-        hint(keys("tui.select.confirm"), this.q.allowMultiple ? "submit" : "select"),
-        hint(keys("tui.select.cancel"), "cancel"),
-      ]
-      : [
-        hint(keys("tui.input.submit"), "submit"),
-        hint(keys("tui.input.newLine"), "newline"),
-        hint("esc", "back"),
-        otherCancel.length > 0 && hint(otherCancel.join("/"), "cancel"),
-      ];
-    return hints.filter(Boolean).join(t.fg("dim", " • "));
+    const total = this.q.options.length + (this.q.allowFreeform ? 1 : 0);
+    if (this.mode === "decline") return [hint("enter", "cancel with this reason"), hint("esc", "cancel now")].join(t.fg("dim", " · "));
+    if (this.mode !== "list") {
+      return [
+        hint("enter", "send"),
+        hint(this.keys.getKeys("tui.input.newLine").join("/"), "newline"),
+        hint("esc", this.q.options.length ? "back" : "cancel"),
+      ].join(t.fg("dim", " · "));
+    }
+    const hotkeys = Object.keys(this.hotkeys);
+    return [
+      hotkeys.length ? hint(hotkeys.join("/"), "answer") : hint(`1–${Math.min(total, 9)}`, this.q.allowMultiple ? "toggle" : "choose"),
+      hint("↑↓", "move"),
+      this.q.allowMultiple && hint("space", "toggle"),
+      hint("enter", this.q.allowMultiple ? "submit" : "select"),
+      this.q.commentOffered && hint("ctrl+e", "comment"),
+      this.nav && hint("←/→", "question"),
+      hint("esc", "cancel"),
+    ].filter(Boolean).join(t.fg("dim", " · "));
   }
 }

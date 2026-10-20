@@ -27,7 +27,7 @@ import { installConsoleGuard } from "./console-guard.js";
 import { clearAllPauses, demoteUnusableSubscription, handleMainAuthFailure, handleMainRateLimit, handleMainRefusal, handleSubagentAuthFailure, handleSubagentRateLimit, handleSubscriptionRouteOutage, isAuthError, isModelRefusal, isPolicyBlockError, isRateLimitError } from "./rate-limit-fallback.js";
 import { adjudicateCheckIn, adjudicateContinuation } from "./continuation-adjudicator.js";
 import { registerTasks } from "./tasks/index.js";
-import { registerAskUser } from "./ask/index.js";
+import { registerAskUser, registerConfirm } from "./ask/index.js";
 import { LspManager } from "./lsp/manager.js";
 import { editDiagnostics, registerLspTool, registerLspWarmup } from "./lsp/tool.js";
 import { createWorkers, registerWorkerToolsFor, resumeOnNewRouting, WORKER_MESSAGE_TYPE, type WorkerHooks } from "./workers/index.js";
@@ -396,13 +396,13 @@ function registerLifecycle(orchestrator: Orchestrator): void {
     if (event?.toolName === "edit" || event?.toolName === "write") orchestrator.requestHadEdit = true;
     if (event?.toolName === "edit" || event?.toolName === "write" || event?.toolName === "Agent") orchestrator.requestHadFileMutation = true;
     orchestrator.mainTurnLastActivity = Date.now();
-    if (event?.toolName === "ask_user") orchestrator.interactivePromptOpen = true;
+    if (event?.toolName === "ask_user" || event?.toolName === "confirm") orchestrator.interactivePromptOpen = true;
   });
   pi.on("tool_execution_update", () => { orchestrator.mainTurnLastActivity = Date.now(); });
   pi.on("tool_execution_end", (event: any) => {
     orchestrator.mainTurnToolInFlight = Math.max(0, orchestrator.mainTurnToolInFlight - 1);
     orchestrator.mainTurnLastActivity = Date.now();
-    if (event?.toolName === "ask_user") orchestrator.interactivePromptOpen = false;
+    if (event?.toolName === "ask_user" || event?.toolName === "confirm") orchestrator.interactivePromptOpen = false;
   });
   pi.on("message_update", () => { orchestrator.mainTurnLastActivity = Date.now(); });
   // The exact messages the turn ran with, so a continuation check can replay it
@@ -587,6 +587,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   registerWorkerUi(orchestrator);
   registerTasks(pi);
   registerAskUser(pi);
+  registerConfirm(pi);
   registerLspTool(pi, () => orchestrator.lsp);
   registerLspWarmup(pi, () => orchestrator.lsp, () => orchestrator.config?.lsp.diagnosticsAfterEdit ?? false);
   pi.on("message_end", async (event: any) => {

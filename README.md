@@ -100,7 +100,11 @@ The main agent keeps a checklist with `TaskCreate`, `TaskUpdate`, `TaskList` and
 
 ## Asking the user
 
-`ask_user` asks one short question inline, above the editor: a list of options with optional descriptions, multi-select, a "Type something." row for a free answer, and ctrl+e to attach a comment to a choice. Several decisions go in one call as `questions`, shown one at a time as `Question N/M`; alt+← and alt+→ move between them, a revisited question keeps its earlier answer selected, and Esc cancels the whole call. Without the terminal UI (RPC) it falls back to the host's select and input dialogs.
+`ask_user` asks one short question inline, above the editor: the question as the main line, a short `header` in the frame, options with optional descriptions, an optional `recommended` option focused and marked, multi-select, and an "Other…" row for a typed answer. Digits answer at once, ctrl+e attaches a comment to the choice, and Esc cancels after an optional reason; ctrl+c never cancels a question. Several decisions go in one call as `questions`, shown one at a time; ← and → move between them. Calls with one option, duplicate options or an option that only declines are refused before anything is shown.
+
+`confirm` puts a single yes/no decision: Yes, No, or dismissed, with `danger` focusing No for destructive actions.
+
+Outside the terminal both use the host's own dialogs, kept within the limits of the strictest host: one-line titles, `Title — description` options, multi-select as Add/Remove entries with an explicit "Use selected", a Back entry and a final review for several questions, and "Other…" or "Add a comment…" only where the host can collect typed text. `confirm` becomes the host's native approval. Without any UI, `ask_user` lists the questions for the model to answer on stated assumptions, and `confirm` reports that nothing was confirmed.
 
 ## Models and providers
 
