@@ -125,7 +125,7 @@ Roles name a model slot, not a provider: Claude Haiku, Sonnet, Opus and Fable, a
 
 A provider without credentials serves nothing and is passed over. On a rate limit the provider steps aside — a subscription for the whole account, the others for that one model — and work moves to the next one that serves the slot, paid LLM API included; it comes back once the limit clears. A slot can be locked to one version, and a role can name an exact `provider/model`, which routing then never moves.
 
-A model pi is started with (`--model`, `--provider`, `--thinking`, as apps like bb pass it) is kept instead of being replaced by the configured main model, and settings changes leave it alone; workers keep their own routing.
+A model pi is started with (`--model`, `--provider`, `--thinking`, as apps like bb pass it) is kept instead of being replaced by the configured main model, and provider or routing changes leave it alone (changing the main model itself in `/pp` still applies); workers keep their own routing.
 
 A whole family can be replaced by another provider's models, for example every Claude slot served by a cheaper model from a provider pi already has credentials for. It still reads as "Claude Opus · override zai/glm-5.3" everywhere; an overridden family does not fall back to another provider.
 

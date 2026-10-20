@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -41,8 +41,12 @@ function sandbox(): { agent: string; project: string; log: string } {
   return { agent, project, log: join(project, "model.log") };
 }
 
-function start(steps: unknown[], profile: Profile, env: Record<string, string> = {}, model: string[] = ["--provider", "pp-fake", "--model", "scripted"]): Run {
+function start(steps: unknown[], profile: Profile, env: Record<string, string> = {}, model: string[] = ["--provider", "pp-fake", "--model", "scripted"], config?: unknown): Run {
   const { agent, project, log } = sandbox();
+  if (config) {
+    mkdirSync(join(agent, "extensions", "pp"), { recursive: true });
+    writeFileSync(join(agent, "extensions", "pp", "config.json"), JSON.stringify(config));
+  }
   const child: ChildProcessWithoutNullStreams = spawn(PI, ["--mode", "rpc", "--no-session", "--no-extensions", "-e", join(root, "extensions", "orchestrator", "index.ts"), "-e", FAKE, ...model], {
     cwd: project,
     env: { ...process.env, PI_CODING_AGENT_DIR: agent, PI_OFFLINE: "1", PP_FAKE_SCRIPT: JSON.stringify(steps), PP_FAKE_LOG: log, BB_THREAD_ID: "", PASEO_AGENT_ID: "", T3_PI_RUNTIME_MODE: "", ...env },
@@ -99,6 +103,16 @@ const settled = (run: Run) => run.waitFor((event) => event.type === "agent_settl
 const person = (answers: Record<string, (request: Request) => unknown>): Profile => (request) => answers[request.method]?.(request);
 
 describe.skipIf(!existsSync(PI))("pi-pi over pi's RPC mode", { timeout: 60_000 }, () => {
+  it("moves a session started without --model onto the configured main model", async () => {
+    const run = start([{ text: "hi" }], () => undefined, {}, [], { agents: { main: { model: "pp-fake/scripted", thinking: "minimal" } } });
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    run.send({ id: "state", type: "get_state" });
+    const state = await run.waitFor((event) => event.type === "response" && event.id === "state");
+    expect(state.data.model).toMatchObject({ provider: "pp-fake", id: "scripted" });
+    expect(state.data.thinkingLevel).toBe("minimal");
+    await run.close();
+  });
+
   it("keeps the model pi was started with instead of moving to the configured main model", async () => {
     const run = start([{ text: "hi" }], () => undefined, {}, ["--model", "pp-fake/scripted", "--thinking", "low"]);
     // pi-pi's session start used to move every session onto its configured main model.
@@ -223,11 +237,30 @@ describe.skipIf(!existsSync(PI))("pi-pi in print mode", { timeout: 60_000 }, () 
       setTimeout(() => child.kill("SIGKILL"), 40_000);
     });
     expect(output.stdout.trim()).toBe("picked SQLite");
-    // pi-pi's notices never end up in the printed answer.
     expect(output.stdout).not.toContain("pi-pi: ");
     const sent = readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line)).at(-1)!;
     const toolMessage = sent.find((message: any) => message.role === "toolResult" && message.toolName === "ask_user");
     expect(toolMessage.isError).toBe(false);
     expect(toolMessage.content[0].text).toContain("Take the recommended option for each");
+  });
+
+  it("writes its notices to stderr, never into the printed answer", async () => {
+    const { agent, project, log } = sandbox();
+    const output = await new Promise<{ stdout: string; stderr: string }>((resolve) => {
+      // No --model and a main model nobody here serves: pi-pi warns about it.
+      const child = spawn(PI, ["-p", "--no-session", "--no-extensions", "-e", join(root, "extensions", "orchestrator", "index.ts"), "-e", FAKE, "go"], {
+        cwd: project,
+        env: { ...process.env, PI_CODING_AGENT_DIR: agent, PI_OFFLINE: "1", PP_FAKE_SCRIPT: JSON.stringify([{ text: "done" }]), PP_FAKE_LOG: log },
+      });
+      child.stdin.end();
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (chunk) => (stdout += chunk));
+      child.stderr.on("data", (chunk) => (stderr += chunk));
+      child.on("exit", () => resolve({ stdout, stderr }));
+      setTimeout(() => child.kill("SIGKILL"), 40_000);
+    });
+    expect(output.stderr).toContain("pi-pi: ");
+    expect(output.stdout).not.toContain("pi-pi: ");
   });
 });

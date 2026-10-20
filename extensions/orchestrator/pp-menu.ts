@@ -289,7 +289,10 @@ function refreshRuntimeAfterConfigChange(orchestrator: Orchestrator, keyPath: st
   if (keyPath[0] === "agents") {
     orchestrator.registerAgents(true);
     if (keyPath[1] === "maxConcurrentSubagents") orchestrator.workers?.poke();
+    // Changing the configured main model is a deliberate pick: it applies even
+    // to a session started on --model.
     if (keyPath[1] === "main" && orchestrator.lastCtx) {
+      orchestrator.mainPickedByHand = false;
       void orchestrator.applyMainAgent(orchestrator.lastCtx).then((ok) => {
         if (!ok) notice(orchestrator.lastCtx, mainUnavailableMessage(orchestrator), "warning");
       });

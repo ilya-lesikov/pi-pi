@@ -48,7 +48,7 @@ describe("MainStatusTracker", () => {
     expect(tracker.current().text).toBe("Waiting for 1 worker to report");
     holding = 0;
     advance(121_000);
-    expect(tracker.current()).toMatchObject({ text: "No response for 2m1s", level: "alarm", suffix: "esc to interrupt" });
+    expect(tracker.current()).toMatchObject({ text: "No response", level: "alarm", suffix: "esc to interrupt" });
   });
 
   it("goes red when a model stream stops mid-answer, not only before the first token", () => {
@@ -56,7 +56,19 @@ describe("MainStatusTracker", () => {
     fire("agent_start");
     fire("message_update", { assistantMessageEvent: { type: "thinking_delta" } });
     advance(121_000);
-    expect(tracker.current()).toMatchObject({ text: "No response for 2m1s", level: "alarm" });
+    expect(tracker.current()).toMatchObject({ text: "No response", level: "alarm" });
+  });
+
+  it("goes back to the tool still running beside an answered question, and keeps the question's clock", () => {
+    const { tracker, fire, advance } = tracked();
+    fire("agent_start");
+    fire("tool_execution_start", { toolCallId: "b", toolName: "bash", args: { command: "make" } });
+    fire("tool_execution_start", { toolCallId: "a", toolName: "ask_user" });
+    advance(5_000);
+    fire("ui_prompt_start", {});
+    expect(tracker.current().since).toBe(tracker.clock() - 5_000);
+    fire("tool_execution_end", { toolCallId: "a", toolName: "ask_user" });
+    expect(tracker.current().text).toBe("Running bash");
   });
 
   it("returns to what it was doing when a dialog closes, idle included", () => {
@@ -84,11 +96,13 @@ describe("MainStatusTracker", () => {
     expect(tracker.current().text).toBe("Waiting for claude-opus-4-5");
   });
 
-  it("shows pi-pi's own pauses and compaction", () => {
-    const { tracker, fire } = tracked();
-    fire("agent_start");
-    tracker.pause("Rate-limited • waiting until 14:05");
+  it("shows pi-pi's own pauses until they run out, and compaction", () => {
+    const { tracker, fire, advance, at } = tracked();
+    tracker.pause("Rate-limited • waiting until 14:05", at() + 60_000);
     expect(tracker.current()).toMatchObject({ text: "Rate-limited • waiting until 14:05", level: "attention" });
+    advance(61_000);
+    expect(tracker.current()).toMatchObject({ text: "Idle", level: "idle" });
+    fire("agent_start");
     fire("session_before_compact");
     expect(tracker.current().text).toBe("Compacting context");
   });
@@ -121,6 +135,16 @@ describe("footer status line", () => {
     const narrow = render(40)[0]!;
     expect(visibleWidth(narrow)).toBeLessThanOrEqual(40);
     expect(narrow).toContain("• 0s");
+  });
+
+  it("says how long the model has been silent once, then how to stop it", () => {
+    const { tracker, fire, advance } = tracked();
+    setFooterStatus(tracker);
+    fire("agent_start");
+    advance(10_000);
+    fire("message_update", { assistantMessageEvent: { type: "text_delta" } });
+    advance(125_000);
+    expect(render(140)[0]).toMatch(/^! No response • 2m5s • esc to interrupt +\//);
   });
 
   it("shows other extensions' statuses on a third line, leaving out pi-pi's own", () => {

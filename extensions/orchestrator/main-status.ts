@@ -20,7 +20,7 @@ type State =
   | { kind: "tool"; since: number; label: string }
   | { kind: "waiting_workers"; since: number; count: number }
   | { kind: "waiting_user"; since: number }
-  | { kind: "paused"; since: number; why: string }
+  | { kind: "paused"; since: number; why: string; until?: number }
   | { kind: "compacting"; since: number };
 
 /** How long a request may go without a token before the status says so in red. */
@@ -76,7 +76,7 @@ export class MainStatusTracker {
       case "writing": {
         // A model that has gone quiet, whether before its first token or mid-stream.
         if (now - this.lastActivity >= NO_RESPONSE_MS) {
-          return { text: `No response for ${formatDuration(now - this.lastActivity)}`, level: "alarm", since: s.since, suffix: "esc to interrupt" };
+          return { text: "No response", level: "alarm", since: this.lastActivity, suffix: "esc to interrupt" };
         }
         if (s.kind === "thinking") return { text: "Thinking", level: "normal", since: s.since };
         if (s.kind === "writing") return { text: "Writing the answer", level: "normal", since: s.since };
@@ -94,6 +94,8 @@ export class MainStatusTracker {
       case "waiting_user":
         return { text: "Waiting for your answer", level: "attention", since: s.since };
       case "paused":
+        // A wait that has run out while nothing else happened: back to what it was.
+        if (s.until !== undefined && now >= s.until) return { text: "Idle", level: "idle", since: s.until };
         return { text: s.why, level: "attention", since: s.since };
       case "compacting":
         return { text: "Compacting context", level: "normal", since: s.since };
@@ -102,10 +104,10 @@ export class MainStatusTracker {
 
   /**
    * pi-pi's own waits that pi has no event for: a provider rate limit it is
-   * waiting out, a model switch it is making. Cleared by the next event.
+   * waiting out. Cleared by the next event, or by running out.
    */
-  pause(why: string): void {
-    this.set({ kind: "paused", since: this.now(), why });
+  pause(why: string, until?: number): void {
+    this.set({ kind: "paused", since: this.now(), why, until });
   }
 
   register(pi: ExtensionAPI): void {
@@ -140,7 +142,11 @@ export class MainStatusTracker {
       this.activity();
       this.tools.delete(String(event?.toolCallId ?? event?.toolName));
       if (this.tools.size) {
-        if (this.state.kind === "tool") this.set({ kind: "tool", since: this.state.since, label: this.tools.size === 1 ? [...this.tools.values()][0]! : `${this.tools.size} tools` });
+        // An answered question leaves the tools that ran beside it.
+        if (this.state.kind === "tool" || this.state.kind === "waiting_user") {
+          const since = this.state.kind === "tool" ? this.state.since : this.now();
+          this.set({ kind: "tool", since, label: this.tools.size === 1 ? [...this.tools.values()][0]! : `${this.tools.size} tools` });
+        }
         return;
       }
       this.set({ kind: "waiting_model", since: this.now(), model: this.modelLabel });
@@ -148,7 +154,8 @@ export class MainStatusTracker {
     // A dialog can open while idle (a /pp menu) or in the middle of a tool;
     // when it closes the agent is back to whatever it was doing before.
     on("ui_prompt_start", () => {
-      if (this.state.kind !== "waiting_user") this.underneath = this.state;
+      if (this.state.kind === "waiting_user") return;
+      this.underneath = this.state;
       this.set({ kind: "waiting_user", since: this.now() });
     });
     on("ui_prompt_end", () => {

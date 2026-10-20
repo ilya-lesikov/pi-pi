@@ -123,6 +123,8 @@ describe("worker update renderer", () => {
     expect(custom).not.toHaveBeenCalled();
     await shortcuts.get("ctrl+n").handler({ ui: { custom } });
     expect(custom).toHaveBeenCalledTimes(1);
+    // An overlay: another dialog taking the editor's place cannot drop it.
+    expect(custom.mock.calls[0]![1]).toMatchObject({ overlay: true });
   });
 
   it("detaches the panel when the session shuts down", async () => {
@@ -672,8 +674,8 @@ describe("WorkerPicker (ctrl+n)", () => {
     await flush();
     for (let i = 0; i < 5; i++) picker.handleInput(KEY.down);
     const lines = picker.render(120).map(plain);
-    // Half the terminal: the editor's place.
-    expect(lines.length).toBeLessThanOrEqual(9);
+    // At most 60% of the terminal.
+    expect(lines.length).toBeLessThanOrEqual(10);
     expect(lines.some((line) => /^▌ ○ explore: w5/.test(line))).toBe(true);
     expect(lines.some((line) => /^  ↑ \d+ more$/.test(line))).toBe(true);
   });

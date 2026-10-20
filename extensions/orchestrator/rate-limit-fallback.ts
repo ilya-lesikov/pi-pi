@@ -150,7 +150,7 @@ async function pauseAndReroute(
     const next = ref ? resolveSpec(ref) : null;
     if (!next || next === current) {
       notice(switchCtx, `${trigger}; nothing else serves ${current}. Waiting until ${formatUntil(entry)}; the request resumes then.${recovery}`, "warning");
-      orchestrator.mainStatus?.pause(`Rate-limited • waiting until ${formatUntil(entry)}`);
+      orchestrator.mainStatus?.pause(`Rate-limited • waiting until ${formatUntil(entry)}`, entry.until ?? undefined);
       if (resumeRequest) orchestrator.pausedMainRoutes.set(key, { from: current, to: current, owned, resume: true, generation: orchestrator.continuationGeneration });
       return;
     }

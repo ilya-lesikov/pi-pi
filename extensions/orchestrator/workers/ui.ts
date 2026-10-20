@@ -183,6 +183,7 @@ export class WorkerWidget {
 
   visibleRecords(): WorkerRecord[] {
     const now = Date.now();
+    for (const id of this.seen.keys()) if (!this.orchestrator.workers?.get(id)) this.seen.delete(id);
     return (this.orchestrator.workers?.list() ?? []).filter((record) =>
       ACTIVE_STATUSES.has(record.status)
       || (FAILED_STATUSES.has(record.status) && this.seen.get(record.id) !== record.settledAt)
@@ -547,7 +548,7 @@ export async function openWorkerViewer(orchestrator: Orchestrator, ctx: any, id:
 }
 
 /**
- * ctrl+n: the worker panel takes the keyboard in the editor's place. Arrow
+ * ctrl+n: the worker panel, selectable, over the bottom of the screen. Arrow
  * keys pick a worker; single keys act on it; Esc gives the editor back with
  * the draft untouched.
  */
@@ -671,10 +672,9 @@ export class WorkerPicker implements Component {
       const actions = ACTIVE_STATUSES.has(selected.status) ? [answer, "i interrupt", "s stop", "k kill"] : [answer];
       footer.push(truncateToWidth(th.fg("dim", `  ↑↓ select · enter output · ${actions.join(" · ")} · esc back`), width));
     }
-    // It stands in the editor's place, so it gets the editor's share of the
-    // screen: a long list scrolls to keep the selected worker in view.
+    // A long list scrolls to keep the selected worker in view.
     const rows = this.tui.terminal?.rows ?? 30;
-    const room = Math.max(2, Math.floor(rows * 0.5) - 1 - footer.length);
+    const room = Math.max(2, Math.floor(rows * 0.6) - 1 - footer.length);
     const blocks = records.map((record) => {
       const lines = recordLines(record, now, this.frame, th, sep);
       const mark = record === selected ? th.fg("accent", "▌") : " ";
@@ -706,8 +706,14 @@ export async function openWorkerPicker(orchestrator: Orchestrator, ctx: any): Pr
   }
   widget.suspend();
   try {
+    // An overlay, not a stand-in for the editor: a question the agent asks
+    // meanwhile takes the editor's place, and would otherwise drop the picker
+    // with its promise never settling.
     await ctx.ui.custom((tui: TUI, theme: Theme, _keys: unknown, done: (value: undefined) => void) =>
-      new WorkerPicker(tui, theme, widget, manager, (id) => openWorkerViewer(orchestrator, ctx, id), () => done(undefined)));
+      new WorkerPicker(tui, theme, widget, manager, (id) => openWorkerViewer(orchestrator, ctx, id), () => done(undefined)), {
+      overlay: true,
+      overlayOptions: { anchor: "bottom-center", width: "100%", maxHeight: "60%", margin: 0 },
+    });
   } finally {
     widget.resume();
   }

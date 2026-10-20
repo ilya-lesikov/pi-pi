@@ -23,6 +23,7 @@ export const PI_PI_OWNED_TOOL_NAMES: readonly string[] = [
   "lsp", // pi-pi's lsp tool
   "Agent", // pi-pi's workers
   "TaskCreate", // pi-pi's task tools
+  "todo", // the same, under Paseo
   "ask_user", // pi-pi's ask_user
   "vcc_recall", // pi-pi's own recall tools
   "recall_tool_output",
