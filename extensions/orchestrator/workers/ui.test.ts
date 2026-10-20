@@ -250,6 +250,23 @@ describe("WorkerWidget", () => {
     expect(lines.at(-1)).toBe("  … 2 more pending");
   });
 
+  it("keeps a failure on the panel when the worker was only opened before it failed", async () => {
+    const { manager, sessions, render, widget } = mount();
+    const record = manager.spawn(spec());
+    await flush();
+    widget.markSeen(record.id);
+    manager.kill(record.id, "failed", "boom");
+    await flush();
+    vi.setSystemTime(Date.now() + 11_000);
+    expect(plain(render(200)[1]!)).toMatch(/^  ✗ explore: .* failed: boom$/);
+    widget.markSeen(record.id);
+    vi.setSystemTime(Date.now() + 1_000);
+    void sessions;
+    // A later run that fails again is a new failure.
+    record.settledAt = Date.now();
+    expect(widget.visibleRecords()).toEqual([record]);
+  });
+
   it("shows a stopped worker as stopped, not done", async () => {
     const { manager, sessions, render } = mount();
     const record = manager.spawn(spec());

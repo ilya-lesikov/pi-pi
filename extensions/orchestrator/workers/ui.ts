@@ -71,7 +71,7 @@ export class WorkerWidget {
   private frame = 0;
   private unsubscribe: (() => void) | null = null;
   private manager: WorkerManager | null = null;
-  private readonly seen = new Set<string>();
+  private readonly seen = new Map<string, number | undefined>();
 
   constructor(private readonly orchestrator: Orchestrator) {}
 
@@ -185,13 +185,19 @@ export class WorkerWidget {
     const now = Date.now();
     return (this.orchestrator.workers?.list() ?? []).filter((record) =>
       ACTIVE_STATUSES.has(record.status)
-      || (FAILED_STATUSES.has(record.status) && !this.seen.has(record.id))
+      || (FAILED_STATUSES.has(record.status) && this.seen.get(record.id) !== record.settledAt)
       || now - (record.settledAt ?? 0) < FINISHED_VISIBLE_MS);
   }
 
-  /** A failed worker stays on the panel until the user has opened it. */
+  /**
+   * A failed worker stays on the panel until the user has opened it. What is
+   * acknowledged is that failure: opening a worker before it fails, or a
+   * later run failing again, does not hide anything.
+   */
   markSeen(id: string): void {
-    this.seen.add(id);
+    const record = this.orchestrator.workers?.get(id);
+    if (!record || !FAILED_STATUSES.has(record.status)) return;
+    this.seen.set(id, record.settledAt);
     this.update();
   }
 
@@ -534,6 +540,8 @@ export async function openWorkerViewer(orchestrator: Orchestrator, ctx: any, id:
       overlayOptions: { anchor: "center", width: "100%", maxHeight: "100%", margin: 0 },
     });
   } finally {
+    // It may have failed while the transcript was open: that failure was seen.
+    orchestrator.workerWidget?.markSeen(id);
     orchestrator.workerWidget?.resume();
   }
 }
