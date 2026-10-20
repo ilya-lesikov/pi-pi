@@ -13,6 +13,7 @@ import { encodePoolVariant, registerAgentDefinitions } from "./agents/registry.j
 import type { WorkerDelivery } from "./workers/delivery.js";
 import type { TranscriptStore } from "./workers/transcripts.js";
 import { WorkerHold } from "./workers/hold.js";
+import { MainStatusTracker } from "./main-status.js";
 import type { WorkerManager } from "./workers/manager.js";
 import type { WorkerSessionFactory } from "./workers/types.js";
 import type { WorkerWidget } from "./workers/ui.js";
@@ -50,6 +51,11 @@ export class Orchestrator {
   holdingRun = false;
   /** The idle clock of that hold, shared across the turns of a session. */
   workerHold = new WorkerHold();
+  /** What the main agent is doing, for the footer's first line. */
+  mainStatus = new MainStatusTracker({
+    holdingWorkers: () => (this.holdingRun ? this.workers?.active().length ?? 0 : 0),
+    activeWaits: () => this.workers?.list().filter((record) => record.waitHolds > 0 && record.status === "running").length ?? 0,
+  });
   /** Where the root session's workers write their transcripts; null without a session id. */
   workerTranscripts: TranscriptStore | null = null;
   workerWidget: WorkerWidget | null = null;

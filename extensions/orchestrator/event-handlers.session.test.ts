@@ -85,6 +85,20 @@ function session() {
 }
 
 describe("session lifecycle", () => {
+  it("hides pi's own working row in the terminal, where the footer says what the agent does", async () => {
+    const { pi, ctx } = session();
+    ctx.ui.setWorkingVisible = vi.fn();
+    await emit(pi, "session_start", {}, ctx);
+    expect(ctx.ui.setWorkingVisible).toHaveBeenCalledWith(false);
+    const rpc = session();
+    rpc.ctx.mode = "rpc";
+    rpc.ctx.ui.setWorkingVisible = vi.fn();
+    await emit(rpc.pi, "session_start", {}, rpc.ctx);
+    expect(rpc.ctx.ui.setWorkingVisible).not.toHaveBeenCalled();
+    await emit(pi, "session_shutdown", {}, ctx);
+    await emit(rpc.pi, "session_shutdown", {}, rpc.ctx);
+  });
+
   it("replaces the previous session's language servers on start and drops them on shutdown", async () => {
     const { pi, orchestrator, ctx } = session();
     const previous = { shutdown: vi.fn(async () => {}) };

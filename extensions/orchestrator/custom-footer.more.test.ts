@@ -84,19 +84,19 @@ describe("stats line", () => {
         ],
       },
     }));
-    expect(render()[1]).toMatch(/claude-x \[paid\] • high$/);
+    expect(render()[1]).toMatch(/claude-x \[paid\] • high • pp v\S+$/);
   });
 
   it("degrades without a session context", () => {
     setFooterContext(undefined as any);
     const [, stats] = render();
     expect(stats).toContain("?%/?/0 (auto)");
-    expect(stats).toMatch(/no-model • off$/);
+    expect(stats).toMatch(/no-model • off • pp v\S+$/);
   });
 
   it("truncates the model side first, then drops it, as width shrinks", () => {
     const wide = render(200)[1];
-    expect(wide).toMatch(/\(auto\) +\(test\) m1 • off$/);
+    expect(wide).toMatch(/\(auto\) +\(test\) m1 • off • pp v\S+$/);
     const narrow = render(44)[1];
     expect(visibleWidth(narrow)).toBe(44);
     expect(narrow).toContain("(auto)  (test) m");
@@ -115,7 +115,7 @@ describe("stats line", () => {
 describe("path line", () => {
   it("abbreviates the home directory and appends the session name", () => {
     setFooterContext(ctx({ cwd: join(homedir(), "src", "app") }));
-    expect(render()[0]).toMatch(/^~\/src\/app \(main\) • my session • pp v/);
+    expect(render()[0]).toMatch(/ ~\/src\/app \(main\) • my session$/);
   });
 });
 

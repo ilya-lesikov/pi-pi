@@ -17,7 +17,7 @@ import { enabledSkillLayers, listLayeredSkills, loadLayeredSkill } from "./skill
 import { identityBlock, principlesBlock, toolsBlock, delegationBlock } from "./agents/tool-routing.js";
 import { buildPoolRoster } from "./agents/registry.js";
 import { pinnedRoleSpecs, resolveRef, setCatalog } from "./routing.js";
-import { createCustomFooter, setFooterContext, setFooterTracker, setFooterOrchestrator } from "./custom-footer.js";
+import { createCustomFooter, setFooterContext, setFooterOrchestrator, setFooterStatus, setFooterTracker } from "./custom-footer.js";
 import { createUsageTracker, dumpUsageSummary, isSubscriptionRouted, loadUsageSummary, type UsageTracker } from "./usage-tracker.js";
 import { runAfterEdit } from "./commands.js";
 import { registerImageShrink } from "./image-shrink.js";
@@ -629,6 +629,7 @@ async function verifySubscriptionCredential(orchestrator: Orchestrator, ctx: any
 
 export function registerEventHandlers(orchestrator: Orchestrator): void {
   const pi = orchestrator.pi;
+  orchestrator.mainStatus.register(pi);
   registerNotices(pi);
   registerTracing(pi);
   registerBillingHook(pi);
@@ -723,7 +724,11 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     setFooterContext(ctx);
     setFooterTracker(usage);
     setFooterOrchestrator(orchestrator);
+    setFooterStatus(orchestrator.mainStatus);
     ctx.ui?.setFooter?.(createCustomFooter);
+    // The footer's first line says what the agent is doing; pi's own
+    // "Working" row above the editor would say less, twice.
+    if (ctx?.mode === undefined || ctx?.mode === "tui") ctx.ui?.setWorkingVisible?.(false);
     startWorkers(orchestrator, ctx, workerHooks);
     registerFeatureToolsAndAgents(orchestrator);
     // Never awaited: a first run downloads tens of megabytes, and a session

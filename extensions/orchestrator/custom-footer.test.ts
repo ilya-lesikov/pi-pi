@@ -107,9 +107,9 @@ describe("createCustomFooter", () => {
     expect(line2).toContain("?%/?/1.0M (auto)");
   });
 
-  it("line 1 shows the pi-pi package version", () => {
+  it("line 2 ends with the pi-pi package version", () => {
     setFooterContext(makeCtx());
-    const [line1] = render();
+    const [, line1] = render();
     const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8"));
     expect(line1).toContain(`pp v${pkg.version}`);
   });

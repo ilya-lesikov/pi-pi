@@ -29,6 +29,10 @@ Start Pi and talk to it normally. The initial Pi session owns all work; pi-pi do
 
 Reports (Status, Usage, Diagnostics, Explain routing) open as a scrollable view in the terminal. Elsewhere they go wherever the host shows pi-pi's messages: its notifications, a chat message the model never sees, or stderr in a run without a UI, where `/pp` prints the status and exits. The worker viewer becomes the transcript as text with Refresh, Send and Stop. Some apps (bb, and possibly ACP adapters) wait for a model run after every prompt and `/pp` starts none; there the menu says the app may stay busy afterwards, and on bb, which shows neither notifications nor chat messages outside a turn, reports open in a read-only text dialog.
 
+## Footer
+
+The first line says what the main agent is doing and for how long — waiting for the model, thinking, writing, running a tool (and which), waiting on workers or on your answer, waiting out a rate limit, compacting — or that it is idle and since when; it turns amber when it waits on you and red when the model has said nothing for two minutes. The directory and branch sit on the right of that line and shorten first when space runs out. The second line has the token, cache, cost and context figures and the provider, model, thinking level and pi-pi version. Statuses other extensions set get a third line when there are any. pi's own "Working" row is hidden, since the footer says more.
+
 ## Memory
 
 The prompt is kept inside the model's window by folding old tool traffic out of the copy on its way to the provider: a result becomes an `[omitted: <size>B]` notice, and the call that asked for it, along with everything the user and the model said, is never touched. Arguments are left exactly as they were written, so a folded call still states what it ran and on what; only the answer goes. Folding is oldest-first and never reversed, so the prompt's prefix stays stable between requests and the provider's cache survives. Calls old enough to be finished with are removed outright rather than left as husks.
@@ -120,6 +124,8 @@ Roles name a model slot, not a provider: Claude Haiku, Sonnet, Opus and Fable, a
 - LLM API — paid per token.
 
 A provider without credentials serves nothing and is passed over. On a rate limit the provider steps aside — a subscription for the whole account, the others for that one model — and work moves to the next one that serves the slot, paid LLM API included; it comes back once the limit clears. A slot can be locked to one version, and a role can name an exact `provider/model`, which routing then never moves.
+
+A model pi is started with (`--model`, `--provider`, `--thinking`, as apps like bb pass it) is used instead of the configured main model, including models only pi-pi provides such as the Claude subscription's; workers keep their own routing.
 
 A whole family can be replaced by another provider's models, for example every Claude slot served by a cheaper model from a provider pi already has credentials for. It still reads as "Claude Opus · override zai/glm-5.3" everywhere; an overridden family does not fall back to another provider.
 

@@ -5,6 +5,8 @@ import { dirname, join, resolve as resolvePath } from "node:path";
 import type { ExtensionContext, ReadonlyFooterDataProvider, Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 import type { UsageTracker } from "./usage-tracker.js";
+import type { MainStatus, MainStatusTracker } from "./main-status.js";
+import { formatDuration } from "./workers/delivery.js";
 import type { Orchestrator } from "./orchestrator.js";
 import { LLM_API_PROVIDER, concreteProviderLabel } from "./routing.js";
 
@@ -27,6 +29,9 @@ const BRANCH_REFRESH_MS = 5000;
 let footerCtx: ExtensionContext | undefined;
 let footerTracker: UsageTracker | undefined;
 let footerOrchestrator: Orchestrator | undefined;
+let footerStatus: MainStatusTracker | undefined;
+/** Statuses pi-pi sets for other apps; its own footer shows the same thing elsewhere. */
+const OWN_STATUS_KEYS: ReadonlySet<string> = new Set(["workers"]);
 
 export function setFooterContext(ctx: ExtensionContext): void {
   footerCtx = ctx;
@@ -38,6 +43,10 @@ export function setFooterTracker(tracker: UsageTracker): void {
 
 export function setFooterOrchestrator(orchestrator: Orchestrator): void {
   footerOrchestrator = orchestrator;
+}
+
+export function setFooterStatus(tracker: MainStatusTracker): void {
+  footerStatus = tracker;
 }
 
 // The host caches its branch behind an fs.watch on .git/HEAD, which silently
@@ -141,7 +150,7 @@ function renderStatsLine(width: number, theme: Theme): string {
   // Per-token billing is the one routing outcome worth seeing at a glance:
   // automatic fallback can land there without asking.
   const paid = provider === LLM_API_PROVIDER ? " [paid]" : "";
-  let right = `(${concreteProviderLabel(provider)}) ${modelId}${paid} • ${thinkingLevel}`;
+  let right = `(${concreteProviderLabel(provider)}) ${modelId}${paid} • ${thinkingLevel} • pp v${PP_VERSION}`;
 
   let leftWidth = visibleWidth(left);
   if (leftWidth > width) {
@@ -176,29 +185,88 @@ function renderStatsLine(width: number, theme: Theme): string {
   return theme.fg("dim", left) + theme.fg("dim", remainder);
 }
 
-function renderPathLine(width: number, theme: Theme, branch: string | null): string {
+const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const STATUS_COLOR = { normal: "accent", attention: "warning", alarm: "error", idle: "dim" } as const;
+
+function statusText(status: MainStatus, frame: number, now: number): { glyph: string; body: string; tail: string } {
+  const glyph = status.level === "idle" ? "" : status.level === "attention" ? "?" : status.level === "alarm" ? "!" : SPINNER[frame % SPINNER.length]!;
+  const elapsed = status.level === "idle" ? "" : formatDuration(now - status.since);
+  const tail = [elapsed, status.suffix].filter(Boolean).join(" • ");
+  return { glyph, body: status.text, tail };
+}
+
+/**
+ * Line one: what the main agent is doing on the left, the directory (and
+ * branch, session name) on the right. When they do not fit, the directory
+ * shortens first, then the status text; never the status's time.
+ */
+function renderStatusLine(width: number, theme: Theme, branch: string | null, frame: number, now: number): string {
   const ctx = footerCtx;
-  const path = formatPath(ctx?.cwd ?? process.cwd());
-
-  let line = path;
-  if (branch) line += ` (${branch})`;
-
   const sessionName = ctx?.sessionManager.getSessionName();
-  if (sessionName) line += ` • ${sessionName}`;
+  const suffix = `${branch ? ` (${branch})` : ""}${sessionName ? ` • ${sessionName}` : ""}`;
+  const fullPath = formatPath(ctx?.cwd ?? process.cwd());
+  const status = footerStatus?.current();
+  const parts = status ? statusText(status, frame, now) : { glyph: "", body: "", tail: "" };
+  const color = status ? STATUS_COLOR[status.level] : "dim";
+  const head = parts.glyph ? `${parts.glyph} ` : "";
+  const tail = parts.tail ? ` • ${parts.tail}` : "";
+  const fixed = visibleWidth(head) + visibleWidth(tail);
+  const minGap = 2;
+  const pathCandidates = [fullPath, shortenPath(fullPath), fullPath.split("/").filter(Boolean).at(-1) ?? fullPath];
+  let right = "";
+  let body = parts.body;
+  for (const candidate of pathCandidates) {
+    const text = `${candidate}${suffix}`;
+    if (fixed + visibleWidth(body) + minGap + visibleWidth(text) <= width) {
+      right = text;
+      break;
+    }
+  }
+  if (!right) {
+    right = `${pathCandidates.at(-1)}${suffix}`;
+    const room = width - fixed - minGap - visibleWidth(right);
+    if (room < 8) right = "";
+    body = truncateToWidth(body, Math.max(1, width - fixed - (right ? minGap + visibleWidth(right) : 0)), "…");
+  }
+  const left = parts.body || parts.glyph ? `${head}${body}${tail}` : "";
+  const gap = Math.max(right ? minGap : 0, width - visibleWidth(left) - visibleWidth(right));
+  const line = `${theme.fg(color, left)}${" ".repeat(gap)}${theme.fg("dim", right)}`;
+  return truncateToWidth(line, width, "");
+}
 
-  line += ` • pp v${PP_VERSION}`;
+/** ~/git/github.com/org/repo → ~/git/…/org/repo */
+function shortenPath(path: string): string {
+  const parts = path.split("/");
+  if (parts.length <= 4) return path;
+  return [parts[0], parts[1], "…", ...parts.slice(-2)].join("/");
+}
 
-  return truncateToWidth(theme.fg("dim", line), width, theme.fg("dim", "..."));
+/** Line three: statuses other extensions set, shown only when there are any. */
+function renderExtensionStatuses(width: number, theme: Theme, footerData: ReadonlyFooterDataProvider | undefined): string | undefined {
+  const statuses = footerData?.getExtensionStatuses?.();
+  if (!statuses?.size) return undefined;
+  const texts = [...statuses.entries()].filter(([key, text]) => !OWN_STATUS_KEYS.has(key) && text?.trim()).map(([, text]) => text.replace(/\s+/g, " ").trim());
+  if (!texts.length) return undefined;
+  return truncateToWidth(theme.fg("dim", texts.join(" • ")), width, theme.fg("dim", "…"));
 }
 
 export function createCustomFooter(
   tui: TUI,
   theme: Theme,
-  _footerData: ReadonlyFooterDataProvider,
+  footerData: ReadonlyFooterDataProvider,
   resolveBranch: (cwd?: string) => string | null = resolveGitBranchSync,
 ): Component & { dispose?(): void } {
   let branch = resolveBranch();
   let disposed = false;
+  let frame = 0;
+  // The status line animates and counts seconds; it only needs that while busy.
+  const ticker = setInterval(() => {
+    if (disposed || !footerStatus || footerStatus.current().level === "idle") return;
+    frame++;
+    tui.requestRender();
+  }, 200);
+  ticker.unref?.();
+  footerStatus?.subscribe(() => { if (!disposed) tui.requestRender(); });
   let confirming = false;
   let detachedConfirmed = false;
 
@@ -237,14 +305,16 @@ export function createCustomFooter(
 
   return {
     render(width: number): string[] {
-      const line1 = renderPathLine(width, theme, branch);
-      const line2 = renderStatsLine(width, theme);
-      return [line1, line2];
+      const lines = [renderStatusLine(width, theme, branch, frame, footerStatus?.clock() ?? Date.now()), renderStatsLine(width, theme)];
+      const extra = renderExtensionStatuses(width, theme, footerData);
+      if (extra) lines.push(extra);
+      return lines;
     },
     invalidate(): void {},
     dispose(): void {
       disposed = true;
       clearInterval(timer);
+      clearInterval(ticker);
     },
   };
 }
