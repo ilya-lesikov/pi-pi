@@ -13,7 +13,6 @@ import type { WorkerDelivery } from "./workers/delivery.js";
 import type { WorkerManager } from "./workers/manager.js";
 import type { WorkerSessionFactory } from "./workers/types.js";
 import type { WorkerWidget } from "./workers/ui.js";
-import { publishAcpState } from "./acp.js";
 import type { PromptGuard } from "./promptcap/guard.js";
 import type { LspManager } from "./lsp/manager.js";
 import { getLogger } from "./log.js";
@@ -124,9 +123,7 @@ export class Orchestrator {
   }
 
   set interactivePromptOpen(open: boolean) {
-    if (this._interactivePromptOpen === open) return;
     this._interactivePromptOpen = open;
-    publishAcpState(this);
   }
 
   sendUserMessageWhenIdle(text: string, generation: number, attempt = 0): void {
@@ -312,7 +309,6 @@ export class Orchestrator {
 
   updateStatus(ctx: any): void {
     this.lastCtx = ctx;
-    publishAcpState(this);
     ctx?.ui?.requestRender?.();
   }
 
@@ -323,7 +319,6 @@ export class Orchestrator {
 
   abortAllSubagents(): void {
     this.workers?.killAll();
-    publishAcpState(this);
   }
 
   /**

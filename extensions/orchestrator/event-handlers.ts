@@ -18,7 +18,6 @@ import { buildPoolRoster } from "./agents/registry.js";
 import { pinnedRoleSpecs, resolveRef, setCatalog } from "./routing.js";
 import { createCustomFooter, setFooterContext, setFooterTracker, setFooterOrchestrator } from "./custom-footer.js";
 import { createUsageTracker, dumpUsageSummary, isSubscriptionRouted, loadUsageSummary, type UsageTracker } from "./usage-tracker.js";
-import { publishAcpState, resetAcpStateCache } from "./acp.js";
 import { runAfterEdit } from "./commands.js";
 import { registerImageShrink } from "./image-shrink.js";
 import { checkDuplicateExtensions } from "./duplicate-extension-guard.js";
@@ -363,7 +362,6 @@ function registerLifecycle(orchestrator: Orchestrator): void {
       try { orchestrator.lastCtx?.abort?.(); } catch {}
       orchestrator.mainTurnInFlight = false;
       orchestrator.queueContinuation(CONTINUE_STALLED);
-      publishAcpState(orchestrator);
     }, 30000);
   };
   pi.on("turn_start", async (_event, ctx) => {
@@ -389,7 +387,6 @@ function registerLifecycle(orchestrator: Orchestrator): void {
       // definition names; the guard inside makes this a no-op when it did not.
       orchestrator.registerAgents();
     } catch {}
-    publishAcpState(orchestrator);
   });
   pi.on("tool_execution_start", (event: any) => {
     orchestrator.mainTurnToolInFlight++;
@@ -523,7 +520,7 @@ function createWorkerHooks(orchestrator: Orchestrator): WorkerHooks {
       }
     },
     onProviderFailure: (record) => recoverWorkerFromProvider(orchestrator, record),
-    onChange: () => publishAcpState(orchestrator),
+    onChange: () => {},
   };
 }
 
@@ -617,7 +614,6 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     orchestrator.resetContinuation();
     orchestrator.lastContextMessages = [];
     resetRequestActivity(orchestrator);
-    resetAcpStateCache(ctx.sessionManager?.getSessionId?.());
     (globalThis as any)[Symbol.for("pi-pi:root-session-source")] = {
       getSessionFile: () => ctx.sessionManager?.getSessionFile?.(),
       getSessionManager: () => ctx.sessionManager,
@@ -647,7 +643,6 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (ctx.hasUI) installConsoleGuard();
     if (checkDuplicateExtensions(pi, ctx)) {
       orchestrator.duplicateExtensionError = true;
-      publishAcpState(orchestrator);
       return;
     }
     orchestrator.duplicateExtensionError = false;
@@ -692,7 +687,6 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       orchestrator.tokenRefreshTimer.unref?.();
     }
     if (sessionId) void verifySubscriptionCredential(orchestrator, ctx, sessionId);
-    publishAcpState(orchestrator);
   });
 
   pi.on("before_agent_start", async (event: any, ctx) => {
@@ -765,7 +759,6 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     if (message?.usage && isSubscriptionRouted(message?.model ?? ctx.model?.id, message?.provider ?? ctx.model?.provider)) {
       noteSubscriptionCredentialAccepted();
     }
-    publishAcpState(orchestrator);
     // A switch parked mid-request is carried out here, between two LLM calls.
     // Only a turn that ran to completion is drained: a truncated, empty or
     // failed one has recovery of its own below, and an error may route the

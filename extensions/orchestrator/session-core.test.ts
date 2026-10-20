@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { getDefaultConfig, normalizeConfigDurations } from "./config.js";
 import { Orchestrator } from "./orchestrator.js";
-import { buildAcpState } from "./acp.js";
 import { clearPauses, forgetLastGood, isPaused, listPauses, pause, setCatalog, unpause } from "./routing.js";
 import { classifyContinuation, isMainTurnStalled, preloadSkillsForSpawn, registerEventHandlers, registerLoadSkill, registerSubagentPromptcap, renderGenericPrompt, startWorkers } from "./event-handlers.js";
 import { listLayeredSkills } from "./skills-manifest.js";
@@ -575,16 +574,6 @@ describe("session-first core", () => {
     }
   });
 
-  it("publishes session activity rather than a phase plan", () => {
-    const orchestrator = new Orchestrator(makePi());
-    orchestrator.config = normalizeConfigDurations(getDefaultConfig());
-    expect(buildAcpState(orchestrator)).toEqual({ status: "idle", subagents: [] });
-    orchestrator.mainTurnInFlight = true;
-    expect(buildAcpState(orchestrator)).toEqual({ status: "running", subagents: [] });
-    orchestrator.interactivePromptOpen = true;
-    expect(buildAcpState(orchestrator)).toEqual({ status: "waiting", subagents: [] });
-  });
-
   it("classifies only objective stops and substantial action-backed prose stops for continuation", () => {
     const idle = { hadTools: false, toolCallCount: 0, hadFileMutation: false, hadEdit: false };
     const trivial = { hadTools: true, toolCallCount: 2, hadFileMutation: false, hadEdit: false };
@@ -867,7 +856,6 @@ describe("session-first core", () => {
     await emit(pi, "turn_start", {}, ctx);
     await emit(pi, "tool_execution_start", { toolName: "ask_user" }, ctx);
     expect(orchestrator.interactivePromptOpen).toBe(true);
-    expect(buildAcpState(orchestrator).status).toBe("waiting");
     expect(isMainTurnStalled(orchestrator, Date.now() + orchestrator.config.performance.internals.mainTurnStale)).toBe(false);
     await emit(pi, "turn_end", { message: { stopReason: "aborted", content: [] } }, ctx);
     expect(orchestrator.interactivePromptOpen).toBe(false);

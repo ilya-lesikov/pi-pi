@@ -102,10 +102,6 @@ The main agent keeps a checklist with `TaskCreate`, `TaskUpdate`, `TaskList` and
 
 `ask_user` asks one short question inline, above the editor: a list of options with optional descriptions, multi-select, a "Type something." row for a free answer, and ctrl+e to attach a comment to a choice. Several decisions go in one call as `questions`, shown one at a time as `Question N/M`; alt+← and alt+→ move between them, a revisited question keeps its earlier answer selected, and Esc cancels the whole call. Without the terminal UI (RPC) it falls back to the host's select and input dialogs.
 
-## ACP clients
-
-The pi-acp fork can expose `/pp`, usage, workers, elicitation, and session status in clients such as Zed. pi-pi no longer publishes a phase pipeline because there is none.
-
 ## Models and providers
 
 Roles name a model slot, not a provider: Claude Haiku, Sonnet, Opus and Fable, and GPT Luna, Terra, Sol and Astra (GPT also with a costlier Pro variant), written `claude/opus` or `gpt/astra:pro` in config. Each slot runs on the newest version the first provider in a priority list serves:
