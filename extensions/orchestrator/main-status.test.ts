@@ -112,6 +112,16 @@ describe("MainStatusTracker", () => {
     expect(tracker.current().text).toBe("Waiting for claude-opus-4-5");
   });
 
+  it("shows the tool that started under a dialog once the dialog closes", () => {
+    const { tracker, fire } = tracked();
+    fire("agent_start");
+    fire("ui_prompt_start", { kind: "confirm" });
+    fire("tool_execution_start", { toolCallId: "1", toolName: "bash", args: { command: "make" } });
+    expect(tracker.current().text).toBe("Waiting for your answer");
+    fire("ui_prompt_end", { kind: "confirm" });
+    expect(tracker.current().text).toBe("Running bash: make");
+  });
+
   it("keeps waiting while a second dialog is open after the first one's end arrives late", () => {
     const { tracker, fire } = tracked();
     fire("ui_prompt_start", { kind: "custom" });

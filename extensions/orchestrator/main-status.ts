@@ -136,7 +136,11 @@ export class MainStatusTracker {
       const name = String(event?.toolName ?? "a tool");
       this.tools.set(String(event?.toolCallId ?? name), name);
       if (name === "ask_user" || name === "confirm") return this.set({ kind: "waiting_user", since: this.now() });
-      if (this.state.kind === "waiting_user") return;
+      if (this.state.kind === "waiting_user") {
+        // What the dialog covers moves on; it shows again when the dialog closes.
+        if (this.underneath) this.underneath = { kind: "tool", since: this.now(), label: this.tools.size === 1 ? toolLabel(name, event?.args) : `${this.tools.size} tools` };
+        return;
+      }
       if (this.state.kind === "tool" && this.tools.size > 1) return this.set({ kind: "tool", since: this.state.since, label: `${this.tools.size} tools` });
       this.set({ kind: "tool", since: this.now(), label: toolLabel(name, event?.args) });
     });
