@@ -17,7 +17,7 @@ describe("taskBoard", () => {
     const tasks = [task(1, "in_progress"), ...Array.from({ length: 8 }, (_, i) => task(i + 2, "pending"))];
     const board = taskBoard(tasks);
     expect(board.rows).toHaveLength(5);
-    expect(board.rows.at(-1)).toEqual({ kind: "more", text: "… 5 pending more" });
+    expect(board.rows.at(-1)).toEqual({ kind: "more", text: "… 5 more pending" });
     expect(taskBoard(tasks.slice(0, 5)).rows.every((row) => row.kind !== "more")).toBe(true);
   });
 

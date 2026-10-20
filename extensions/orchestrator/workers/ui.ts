@@ -11,7 +11,10 @@ const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", 
 // so on a short terminal it would push the editor off screen. Shared in spirit
 // with the task widget, which takes the same share.
 const MAX_ROWS_FRACTION = 0.3;
-const FINISHED_VISIBLE_MS = 30_000;
+// A worker that finished well shows briefly; one that failed stays until opened.
+const FINISHED_VISIBLE_MS = 10_000;
+const WORKER_ROWS = 3;
+const FAILED_STATUSES: ReadonlySet<string> = new Set(["failed", "killed"]);
 
 /**
  * The always-visible worker panel above the editor, the transcript viewer the
@@ -60,6 +63,7 @@ export class WorkerWidget {
   private frame = 0;
   private unsubscribe: (() => void) | null = null;
   private manager: WorkerManager | null = null;
+  private readonly seen = new Set<string>();
 
   constructor(private readonly orchestrator: Orchestrator) {}
 
@@ -115,7 +119,8 @@ export class WorkerWidget {
     }
     const active = visible.filter((record) => ACTIVE_STATUSES.has(record.status)).length;
     const asking = visible.filter((record) => record.question).length;
-    this.ui.setStatus?.("workers", active ? `${active} worker${active === 1 ? "" : "s"}${asking ? ` · ${asking} waiting on you` : ""}` : undefined);
+    // For apps that show a status line but not this panel (MonoCode); pi-pi's own footer leaves it out.
+    this.ui.setStatus?.("workers", active ? `${active} worker${active === 1 ? "" : "s"}${asking ? ` • ${asking} waiting on you` : ""}` : undefined);
     if (active && !this.timer) {
       this.timer = setInterval(() => {
         this.frame++;
@@ -144,63 +149,101 @@ export class WorkerWidget {
 
   private visibleRecords(): WorkerRecord[] {
     const now = Date.now();
-    return (this.orchestrator.workers?.list() ?? []).filter((record) => ACTIVE_STATUSES.has(record.status) || now - (record.settledAt ?? 0) < FINISHED_VISIBLE_MS);
+    return (this.orchestrator.workers?.list() ?? []).filter((record) =>
+      ACTIVE_STATUSES.has(record.status)
+      || (FAILED_STATUSES.has(record.status) && !this.seen.has(record.id))
+      || now - (record.settledAt ?? 0) < FINISHED_VISIBLE_MS);
+  }
+
+  /** A failed worker stays on the panel until the user has opened it. */
+  markSeen(id: string): void {
+    this.seen.add(id);
+    this.update();
   }
 
   private render(width: number, tui: TUI, theme: Theme): string[] {
     const records = this.visibleRecords().sort(order);
     if (!records.length) return [];
     const rows = tui?.terminal?.rows;
-    const budget = typeof rows === "number" && rows > 0 ? Math.max(3, Math.floor(rows * MAX_ROWS_FRACTION)) : 12;
+    // Header plus two rows per worker, and one for what does not fit.
+    const share = typeof rows === "number" && rows > 0 ? Math.floor(rows * MAX_ROWS_FRACTION) : 1 + WORKER_ROWS * 2 + 1;
+    const fit = Math.max(1, Math.min(WORKER_ROWS, Math.floor((share - 2) / 2)));
     const now = Date.now();
-    const running = records.filter((record) => record.status === "running").length;
-    const queued = records.filter((record) => record.status === "queued").length;
-    const asking = records.filter((record) => record.question).length;
-    const done = records.length - running - queued;
-    const head = [`${running} running`, ...(queued ? [`${queued} queued`] : []), ...(asking ? [theme.fg("warning", `${asking} waiting on you`)] : []), ...(done ? [`${done} done`] : [])];
-    const lines = [truncateToWidth(`${theme.fg("accent", "Workers")} ${theme.fg("dim", "·")} ${head.join(theme.fg("dim", " · "))} ${theme.fg("dim", "· /pp › Workers")}`, width)];
-    for (const [index, record] of records.entries()) {
-      const block = recordLines(record, now, this.frame, theme);
-      // Leaves a row for the overflow marker unless this is the last record.
-      if (lines.length + block.length + (index < records.length - 1 ? 1 : 0) > budget) {
-        const hidden = records.length - index;
-        lines.push(truncateToWidth(theme.fg("dim", `  … ${hidden} more`), width));
-        break;
-      }
-      lines.push(...block.map((line) => truncateToWidth(line, width)));
-    }
-    return lines;
+    const sep = theme.fg("dim", " • ");
+    const lines = [workerHeader(records, theme, sep)];
+    const shown = records.length <= fit ? records : records.slice(0, fit);
+    for (const record of shown) lines.push(...recordLines(record, now, this.frame, theme, sep));
+    const hidden = records.slice(shown.length);
+    if (hidden.length) lines.push(`  ${theme.fg("dim", `… ${hiddenSummary(hidden)}`)}`);
+    return lines.map((line) => truncateToWidth(line, width));
   }
+}
+
+type WorkerState = "asking" | "silent" | "failed" | "running" | "pending" | "done";
+
+function stateOf(record: WorkerRecord): WorkerState {
+  if (record.question) return "asking";
+  if (record.status === "queued") return "pending";
+  if (record.status === "running") return record.stallWarned ? "silent" : "running";
+  if (FAILED_STATUSES.has(record.status)) return "failed";
+  return "done";
+}
+
+const STATE_ORDER: WorkerState[] = ["asking", "silent", "failed", "running", "pending", "done"];
+const STATE_COLOR: Record<WorkerState, string> = { asking: "warning", silent: "error", failed: "error", running: "accent", pending: "muted", done: "dim" };
+
+function workerHeader(records: readonly WorkerRecord[], theme: Theme, sep: string): string {
+  const counts = new Map<WorkerState, number>();
+  for (const record of records) counts.set(stateOf(record), (counts.get(stateOf(record)) ?? 0) + 1);
+  const parts = STATE_ORDER.filter((state) => counts.get(state)).map((state) => theme.fg(STATE_COLOR[state], `${counts.get(state)} ${state}`));
+  return `${[theme.bold("Workers"), ...parts].join(sep)}   ${theme.fg("dim", "ctrl+n")}`;
+}
+
+function hiddenSummary(hidden: readonly WorkerRecord[]): string {
+  const counts = new Map<WorkerState, number>();
+  for (const record of hidden) counts.set(stateOf(record), (counts.get(stateOf(record)) ?? 0) + 1);
+  return STATE_ORDER.filter((state) => counts.get(state)).map((state, i) => `${counts.get(state)}${i === 0 ? " more" : ""} ${state}`).join(", ");
 }
 
 function order(a: WorkerRecord, b: WorkerRecord): number {
-  const rank = (record: WorkerRecord) => record.question ? 0 : record.status === "running" ? 1 : record.status === "queued" ? 2 : 3;
-  return rank(a) - rank(b) || a.createdAt - b.createdAt;
+  return STATE_ORDER.indexOf(stateOf(a)) - STATE_ORDER.indexOf(stateOf(b)) || a.createdAt - b.createdAt;
 }
 
-function recordLines(record: WorkerRecord, now: number, frame: number, theme: Theme): string[] {
+export function formatTokens(count: number): string {
+  if (count < 1000) return String(count);
+  if (count < 10_000) return `${(count / 1000).toFixed(1)}k`;
+  if (count < 1_000_000) return `${Math.round(count / 1000)}k`;
+  return `${(count / 1_000_000).toFixed(1)}M`;
+}
+
+function recordLines(record: WorkerRecord, now: number, frame: number, theme: Theme, sep: string): string[] {
+  const state = stateOf(record);
+  const glyph = {
+    asking: theme.fg("warning", "?"),
+    silent: theme.fg("error", "!"),
+    failed: theme.fg("error", "✗"),
+    running: theme.fg("accent", SPINNER[frame % SPINNER.length]!),
+    pending: theme.fg("dim", "○"),
+    done: theme.fg("success", "✓"),
+  }[state];
+  const name = `${record.spec.type}${theme.fg("dim", ":")} ${record.spec.description}`;
+  if (state === "pending") return [`  ${glyph} ${theme.fg("dim", `${record.spec.type}: ${record.spec.description} • queued`)}`];
   const elapsed = formatDuration((record.settledAt ?? now) - (record.startedAt ?? record.createdAt));
-  const name = `${theme.bold(record.spec.type)} ${theme.fg("muted", record.spec.description)}`;
-  const stats = theme.fg("dim", `${elapsed} · ${record.toolUses} tools · ${record.id}`);
-  if (record.status === "queued") return [`${theme.fg("dim", "◦")} ${name} ${theme.fg("dim", "queued")}`];
-  if (record.status !== "running") {
-    const ok = record.status === "completed";
-    const icon = ok ? theme.fg("success", "✓") : theme.fg("error", "✗");
-    return [`${icon} ${name} ${stats}${ok ? "" : ` ${theme.fg("error", record.status)}`}`];
+  const tokens = record.usage.input + record.usage.output + record.usage.cacheRead + record.usage.cacheWrite;
+  const stats = [elapsed, ...(tokens ? [formatTokens(tokens)] : [])].map((part) => theme.fg("dim", part)).join(sep);
+  const first = `  ${glyph} ${name}${sep}${stats}`;
+  if (state === "done") return [first];
+  if (state === "failed") {
+    const reason = record.error ? `${record.status}: ${record.error.replace(/\s+/g, " ")}` : record.status;
+    return [`${first}${sep}${theme.fg("error", reason)}`];
   }
-  const silentMs = now - record.lastEventAt;
-  const stalled = record.stallWarned && !record.question;
-  const icon = stalled ? theme.fg("warning", "…") : theme.fg("accent", SPINNER[frame % SPINNER.length]!);
-  const first = `${icon} ${name} ${stats}${stalled ? ` ${theme.fg("warning", `silent ${formatDuration(silentMs)}`)}` : ""}`;
-  if (record.question) {
-    const waited = record.step ? ` (${formatDuration(now - record.step.since)})` : "";
-    return [first, `  ${theme.fg("warning", `? asks${waited}: ${record.question.text.replace(/\s+/g, " ")}`)}`];
+  if (state === "asking") return [first, `    ${theme.fg("warning", `⎿ asks: ${record.question!.text.replace(/\s+/g, " ")}`)}`];
+  if (state === "silent") {
+    const where = record.step ? ` in ${record.step.label.replace(/^running /, "")}` : "";
+    return [first, `    ${theme.fg("error", `⎿ silent ${formatDuration(now - record.lastEventAt)}${where}`)}`];
   }
-  const step = record.step
-    ? `${record.step.label} (${formatDuration(now - record.step.since)})${record.lastOutputAt ? ` · last output ${formatDuration(now - record.lastOutputAt)} ago` : ""}`
-    : undefined;
-  const activity = [record.progress, step].filter(Boolean).join(" · ") || (record.lastText ? lastLine(record.lastText) : "thinking…");
-  return [first, `  ${theme.fg("dim", `⎿  ${activity}`)}`];
+  const activity = record.progress || record.step?.label || (record.lastText ? lastLine(record.lastText) : "thinking");
+  return [first, `    ${theme.fg("dim", `⎿ ${activity}`)}`];
 }
 
 function lastLine(text: string): string {
@@ -447,6 +490,7 @@ export function workerTranscriptText(manager: WorkerManager, id: string, maxChar
 export async function openWorkerViewer(orchestrator: Orchestrator, ctx: any, id: string): Promise<void> {
   const manager = orchestrator.workers;
   if (!manager?.get(id) || typeof ctx?.ui?.custom !== "function") return;
+  orchestrator.workerWidget?.markSeen(id);
   orchestrator.workerWidget?.suspend();
   try {
     await ctx.ui.custom((tui: TUI, theme: Theme, _keys: unknown, done: (value: undefined) => void) => new WorkerViewer(tui, theme, manager, id, () => done(undefined)), {

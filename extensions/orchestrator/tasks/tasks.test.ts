@@ -37,7 +37,7 @@ function harness() {
   return { tools, fire, call, text, branch, widgets, sent, ctx };
 }
 
-const theme = { fg: (_color: string, text: string) => text, strikethrough: (text: string) => `~${text}~` };
+const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
 
 describe("task state", () => {
   it("starts a fresh list once every task is completed", () => {
@@ -272,36 +272,28 @@ describe("task widget", () => {
     return snapshot;
   };
 
-  it("keeps to a share of a short terminal and scrolls to the first open task", () => {
-    const snapshot = many(20);
-    for (let i = 1; i <= 10; i++) updateTask(snapshot, String(i), { status: "completed" }, 0);
-    const lines = renderTasks(snapshot.tasks, 200, 20, theme, 0);
-    expect(lines.length).toBeLessThanOrEqual(6);
-    expect(lines[0]).toContain("20 tasks (10 done, 10 open)");
-    expect(lines.some((line) => line.includes("#11 Task 11"))).toBe(true);
-    expect(lines.some((line) => line.includes("10 earlier"))).toBe(true);
-    expect(lines.at(-1)).toContain("more");
-  });
-
-  it("still shows one task between both markers on a tiny terminal", () => {
-    const snapshot = many(20);
-    for (let i = 1; i <= 10; i++) updateTask(snapshot, String(i), { status: "completed" }, 0);
-    const lines = renderTasks(snapshot.tasks, 200, 5, theme, 0);
-    expect(lines).toHaveLength(4);
-    expect(lines[2]).toContain("#11");
-  });
-
-  it("shows everything when the terminal has room", () => {
-    expect(renderTasks(many(15).tasks, 200, 80, theme, 0)).toHaveLength(16);
-    expect(renderTasks(many(15).tasks, 200, undefined, theme, 0)).toHaveLength(16);
-  });
-
-  it("marks each status and times the active task", () => {
-    const snapshot = many(3);
+  it("counts every state in the header and lists running tasks, timed, before pending ones", () => {
+    const snapshot = many(4);
     updateTask(snapshot, "1", { status: "completed" }, 0);
-    updateTask(snapshot, "2", { status: "in_progress", activeForm: "Doing two" }, 1000);
-    const lines = renderTasks(snapshot.tasks, 200, undefined, theme, 66_000);
-    expect(lines.slice(1)).toEqual(["  ✔ ~#1 Task 1~", "  ◼ #2 Doing two… (1m5s)", "  ◻ #3 Task 3"]);
+    updateTask(snapshot, "3", { status: "in_progress", activeForm: "Doing three" }, 1000);
+    expect(renderTasks(snapshot.tasks, 200, undefined, theme, 241_000)).toEqual([
+      "Tasks • 1 running • 2 pending • 1 done",
+      "  ◐ #3 Doing three • 4m",
+      "  ○ #2 Task 2",
+      "  ○ #4 Task 4",
+    ]);
+  });
+
+  it("shows at most five task rows, the last one saying what it hides", () => {
+    const lines = renderTasks(many(9).tasks, 200, 80, theme, 0);
+    expect(lines).toHaveLength(6);
+    expect(lines.at(-1)).toBe("  … 5 more pending");
+  });
+
+  it("takes fewer rows on a short terminal, and none once every task is done", () => {
+    expect(renderTasks(many(9).tasks, 200, 10, theme, 0)).toHaveLength(3);
+    const snapshot = many(2);
+    for (const id of ["1", "2"]) updateTask(snapshot, id, { status: "completed" }, 0);
+    expect(renderTasks(snapshot.tasks, 200, undefined, theme, 0)).toEqual([]);
   });
 });
-

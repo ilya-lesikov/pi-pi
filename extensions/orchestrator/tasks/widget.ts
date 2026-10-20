@@ -1,8 +1,9 @@
 import { truncateToWidth, type TUI } from "@earendil-works/pi-tui";
 import { formatDuration } from "../workers/delivery.js";
+import { TASK_GLYPH, TASK_ROWS, taskBoard } from "./board.js";
 import type { Task, TaskSnapshot } from "./state.js";
 
-type Theme = { fg(color: string, text: string): string; strikethrough(text: string): string };
+type Theme = { fg(color: string, text: string): string; bold(text: string): string };
 
 type WidgetUi = {
   setWidget(key: string, content: undefined | ((tui: TUI, theme: Theme) => { render(width: number): string[]; invalidate(): void }), options?: { placement?: "aboveEditor" | "belowEditor" }): void;
@@ -39,7 +40,7 @@ export class TaskWidget {
   update(): void {
     if (!this.ui) return;
     const tasks = this.snapshot().tasks;
-    if (!tasks.length) {
+    if (!tasks.some((task) => task.status !== "completed")) {
       this.detach();
       return;
     }
@@ -69,30 +70,28 @@ export class TaskWidget {
 }
 
 export function renderTasks(tasks: readonly Task[], width: number, rows: number | undefined, theme: Theme, now: number): string[] {
-  if (!tasks.length) return [];
-  // Four rows is the least that shows one task between both overflow markers.
-  const budget = typeof rows === "number" && rows > 0 ? Math.max(4, Math.floor(rows * MAX_ROWS_FRACTION)) : Number.POSITIVE_INFINITY;
-  const done = tasks.filter((task) => task.status === "completed").length;
-  const active = tasks.filter((task) => task.status === "in_progress").length;
-  const open = tasks.length - done - active;
-  const counts = [done && `${done} done`, active && `${active} in progress`, open && `${open} open`].filter(Boolean).join(", ");
-  const lines = [theme.fg("accent", `● ${tasks.length} task${tasks.length === 1 ? "" : "s"} (${counts})`)];
-  // Room for the heading and both overflow markers.
-  const limit = Math.max(1, Math.min(tasks.length, budget - 3));
-  const firstOpen = tasks.findIndex((task) => task.status !== "completed");
-  const start = tasks.length <= budget - 1 ? 0 : Math.max(0, Math.min(firstOpen === -1 ? tasks.length : firstOpen, tasks.length - limit));
-  const visible = tasks.length <= budget - 1 ? tasks : tasks.slice(start, start + limit);
-  if (start > 0) lines.push(theme.fg("dim", `    … ${start} earlier`));
-  for (const task of visible) lines.push(taskLine(task, theme, now));
-  const below = tasks.length - start - visible.length;
-  if (below > 0) lines.push(theme.fg("dim", `    … and ${below} more`));
+  // Done tasks are only counted: with nothing running or pending there is nothing to show.
+  if (!tasks.some((task) => task.status !== "completed")) return [];
+  // The header plus at most five task rows, fewer on a short terminal.
+  const share = typeof rows === "number" && rows > 0 ? Math.floor(rows * MAX_ROWS_FRACTION) - 1 : TASK_ROWS;
+  const board = taskBoard(tasks, Math.max(1, Math.min(TASK_ROWS, share)));
+  const sep = theme.fg("dim", " • ");
+  const counts = board.counts.map((count) => {
+    const text = `${count.n} ${count.kind}`;
+    return count.kind === "running" ? theme.fg("accent", text) : count.kind === "done" ? theme.fg("dim", text) : text;
+  });
+  const lines = [[theme.bold("Tasks"), ...counts].join(sep)];
+  for (const row of board.rows) {
+    if (row.kind === "more") {
+      lines.push(`  ${theme.fg("dim", row.text)}`);
+      continue;
+    }
+    if (row.kind === "pending") {
+      lines.push(`  ${theme.fg("dim", TASK_GLYPH.pending)} ${row.text}`);
+      continue;
+    }
+    const elapsed = row.task?.startedAt ? `${sep}${theme.fg("dim", formatDuration(now - row.task.startedAt))}` : "";
+    lines.push(`  ${theme.fg("accent", TASK_GLYPH.running)} ${row.text}${elapsed}`);
+  }
   return lines.map((line) => truncateToWidth(line, width));
-}
-
-function taskLine(task: Task, theme: Theme, now: number): string {
-  const id = `#${task.id}`;
-  if (task.status === "completed") return `  ${theme.fg("success", "✔")} ${theme.fg("dim", theme.strikethrough(`${id} ${task.subject}`))}`;
-  if (task.status === "pending") return `  ◻ ${theme.fg("dim", id)} ${task.subject}`;
-  const elapsed = task.startedAt ? ` ${theme.fg("dim", `(${formatDuration(now - task.startedAt)})`)}` : "";
-  return `  ${theme.fg("accent", "◼")} ${theme.fg("dim", id)} ${theme.fg("accent", `${task.activeForm || task.subject}…`)}${elapsed}`;
 }

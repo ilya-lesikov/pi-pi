@@ -38,8 +38,8 @@ export function taskBoard(tasks: readonly Task[], maxRows = TASK_ROWS): TaskBoar
   if (hidden.length) {
     const hiddenRunning = hidden.filter((task) => task.status === "in_progress").length;
     const hiddenPending = hidden.length - hiddenRunning;
-    const parts = [hiddenRunning ? `${hiddenRunning} running` : "", hiddenPending ? `${hiddenPending} pending` : ""].filter(Boolean);
-    rows.push({ kind: "more", text: `… ${parts.join(", ")} more` });
+    const parts = [hiddenRunning ? `${hiddenRunning} more running` : "", hiddenPending ? `${hiddenPending} more pending` : ""].filter(Boolean);
+    rows.push({ kind: "more", text: `… ${parts.join(", ")}` });
   }
   return { counts, rows };
 }

@@ -167,8 +167,8 @@ describe("TaskWidget", () => {
     expect(calls).toHaveLength(1);
     const renders: number[] = [];
     const tui = { terminal: { rows: 40 }, requestRender: () => renders.push(Date.now()) };
-    const component = calls[0]![1](tui, { fg: (_c: string, s: string) => s, strikethrough: (s: string) => s });
-    expect(component.render(80)[0]).toContain("1 task (1 in progress)");
+    const component = calls[0]![1](tui, { fg: (_c: string, s: string) => s, bold: (s: string) => s });
+    expect(component.render(80)[0]).toBe("Tasks • 1 running");
     component.invalidate();
     vi.advanceTimersByTime(2500);
     expect(renders).toHaveLength(2);

@@ -150,81 +150,101 @@ describe("WorkerWidget", () => {
     expect(hidden.setWidget).not.toHaveBeenCalled();
   });
 
-  it("lists running, queued and asking workers, the one waiting on the user first", async () => {
+  it("counts workers by state in the header, and lists the one asking first with its question", async () => {
     const { manager, sessions, ui, render } = mount();
     manager.spawn(spec());
     manager.spawn(spec({ type: "task", description: "fix it" }));
     manager.spawn(spec({ type: "librarian", description: "read docs" }));
     await flush();
     void sessions[1]!.hooks.askParent("which branch?\n  main or dev", undefined);
-    expect(ui.setStatus).toHaveBeenLastCalledWith("workers", "3 workers · 1 waiting on you");
+    expect(ui.setStatus).toHaveBeenLastCalledWith("workers", "3 workers • 1 waiting on you");
     const lines = render(120).map(plain);
-    expect(lines[0]).toBe("Workers · 2 running · 1 queued · 1 waiting on you · /pp › Workers");
-    expect(lines[1]).toMatch(/^⠋ task fix it 0s · 0 tools · task-2$/);
-    expect(lines[2]).toBe("  ? asks (0s): which branch? main or dev");
-    expect(lines[3]).toMatch(/^⠋ explore look around the auth module/);
-    expect(lines[4]).toBe("  ⎿  starting: sending the prompt (0s)");
-    expect(lines[5]).toBe("◦ librarian read docs queued");
+    expect(lines[0]).toBe("Workers • 1 asking • 1 running • 1 pending   ctrl+n");
+    expect(lines[1]).toBe("  ? task: fix it • 0s");
+    expect(lines[2]).toBe("    ⎿ asks: which branch? main or dev");
+    expect(lines[3]).toMatch(/^  ⠋ explore: look around the auth module • 0s$/);
+    expect(lines[4]).toBe("    ⎿ starting: sending the prompt");
+    expect(lines[5]).toBe("  ○ librarian: read docs • queued");
   });
 
-  it("shows what a running worker is doing: progress, step, last output, or its last line of text", async () => {
+  it("shows tokens after the time, and what a running worker is doing", async () => {
     const { manager, sessions, render } = mount();
     manager.spawn(spec());
     await flush();
     const hooks = sessions[0]!.hooks;
     hooks.onEvent();
-    hooks.onStep("thinking");
-    vi.advanceTimersByTime(5000);
-    hooks.onOutput("hmm");
-    vi.advanceTimersByTime(2000);
-    expect(plain(render(200)[2]!)).toBe("  ⎿  thinking (7s) · last output 2s ago");
+    hooks.onUsage({ input: 100_000, output: 23_000 });
+    hooks.onStep("running rg -n 'extension_ui' plugins");
+    vi.advanceTimersByTime(130_000);
+    hooks.onOutput("…");
+    manager.list()[0]!.stallWarned = false;
+    const lines = render(200).map(plain);
+    expect(lines[1]).toBe("  ⠋ explore: look around the auth module • 2m10s • 123k");
+    expect(lines[2]).toBe("    ⎿ running rg -n 'extension_ui' plugins");
     hooks.reportProgress("read 3 of 5 files");
-    expect(plain(render(200)[2]!)).toBe("  ⎿  read 3 of 5 files · thinking (7s) · last output 2s ago");
+    expect(plain(render(200)[2]!)).toBe("    ⎿ read 3 of 5 files");
     const record = manager.list()[0]!;
     record.progress = undefined;
     record.step = undefined;
     record.lastText = "first\n\n  the   last line \n";
-    expect(plain(render(200)[2]!)).toBe("  ⎿  the last line");
-    record.lastText = "";
-    expect(plain(render(200)[2]!)).toBe("  ⎿  thinking…");
+    expect(plain(render(200)[2]!)).toBe("    ⎿ the last line");
   });
 
-  it("marks a silent worker as stalled and advances the spinner while any is active", async () => {
+  it("marks a silent worker red with how long and where, and advances the spinner while any is active", async () => {
     const { manager, sessions, render, tui } = mount();
     manager.spawn(spec());
     await flush();
     sessions[0]!.hooks.onEvent();
     vi.advanceTimersByTime(200);
-    expect(plain(render(200)[1]!)).toMatch(/^⠙ /);
+    expect(plain(render(200)[1]!)).toMatch(/^  ⠙ /);
     expect(tui.requestRender).toHaveBeenCalled();
+    sessions[0]!.hooks.onStep("running web_search");
     vi.setSystemTime(Date.now() + 120_000);
     manager.tick();
-    expect(plain(render(200)[1]!)).toMatch(/^… explore .* silent 2m$/);
+    const lines = render(200).map(plain);
+    expect(lines[0]).toBe("Workers • 1 silent   ctrl+n");
+    expect(lines[1]).toMatch(/^  ! explore: /);
+    expect(lines[2]).toBe("    ⎿ silent 2m in web_search");
   });
 
-  it("keeps a finished worker on the panel for a while, then removes the panel", async () => {
-    const { manager, sessions, ui, render, mounted } = mount();
+  it("shows a finished worker briefly and a failed one until it is opened", async () => {
+    const { manager, sessions, render, widget, mounted } = mount();
     manager.spawn(spec());
     manager.spawn(spec({ type: "task", description: "fix it" }));
     await flush();
     sessions[0]!.finish();
-    manager.kill(manager.list()[1]!.id);
+    manager.kill(manager.list()[1]!.id, "failed", "provider error 529");
     await flush();
-    expect(ui.setStatus).toHaveBeenLastCalledWith("workers", undefined);
     const lines = render(200).map(plain);
-    expect(lines[0]).toBe("Workers · 0 running · 2 done · /pp › Workers");
-    expect(lines[1]).toMatch(/^✓ explore look around the auth module \d+s · 0 tools · explore-1$/);
-    expect(lines[2]).toMatch(/^✗ task fix it .* task-2 killed$/);
-    expect(mounted()).toBe(true);
-    vi.setSystemTime(Date.now() + 31_000);
-    expect(render(200)).toEqual([]);
+    expect(lines[0]).toBe("Workers • 1 failed • 1 done   ctrl+n");
+    expect(lines[1]).toMatch(/^  ✗ task: fix it • \d+s • failed: provider error 529$/);
+    expect(lines[2]).toMatch(/^  ✓ explore: look around the auth module • \d+s$/);
+    vi.setSystemTime(Date.now() + 11_000);
+    expect(render(200).map(plain)).toEqual(["Workers • 1 failed   ctrl+n", expect.stringMatching(/^  ✗ task: fix it/)]);
+    widget.markSeen(manager.list()[1]!.id);
+    expect(mounted()).toBe(false);
+  });
+
+  it("shows at most three workers, alerts first, and sums up the rest in one row", async () => {
+    const { manager, sessions, render } = mount();
+    for (let i = 0; i < 2; i++) manager.spawn(spec({ description: `worker ${i}` }));
+    for (let i = 2; i < 5; i++) manager.spawn(spec({ description: `worker ${i}` }));
+    await flush();
+    void sessions[1]!.hooks.askParent("ok?", undefined);
+    const lines = render(200).map(plain);
+    expect(lines).toHaveLength(1 + 3 * 2 - 1 + 1);
+    expect(lines[0]).toBe("Workers • 1 asking • 1 running • 3 pending   ctrl+n");
+    expect(lines[1]).toBe("  ? explore: worker 1 • 0s");
+    expect(lines.at(-1)).toBe("  … 2 more pending");
   });
 
   it("removes the panel once nothing is visible", async () => {
-    const { manager, ui, widget } = mount();
+    const { manager, sessions, ui, widget } = mount();
     manager.spawn(spec());
-    manager.kill(manager.list()[0]!.id);
-    vi.setSystemTime(Date.now() + 31_000);
+    await flush();
+    sessions[0]!.finish();
+    await flush();
+    vi.setSystemTime(Date.now() + 11_000);
     widget.update();
     expect(ui.setWidget).toHaveBeenLastCalledWith("workers", undefined);
   });
@@ -249,7 +269,7 @@ describe("WorkerWidget", () => {
       const lines = render(width);
       expect(lines.length).toBeLessThanOrEqual(6);
       expectFits(lines, width);
-      if (width >= 12) expect(plain(lines.at(-1)!)).toMatch(/… \d+ more/);
+      if (width >= 14) expect(plain(lines.at(-1)!)).toMatch(/… \d+ more/);
     }
   });
 
@@ -486,7 +506,7 @@ describe("openWorkerViewer", () => {
   it("opens a full-screen overlay with the panel parked, and restores it after", async () => {
     const { manager } = setup();
     const record = manager.spawn(spec());
-    const workerWidget = { suspend: vi.fn(), resume: vi.fn() };
+    const workerWidget = { suspend: vi.fn(), resume: vi.fn(), markSeen: vi.fn() };
     const orchestrator: any = { workers: manager, workerWidget };
     let viewer: any;
     const custom = vi.fn(async (factory: any, options: any) => {
@@ -506,7 +526,7 @@ describe("openWorkerViewer", () => {
   it("restores the panel even when the overlay fails", async () => {
     const { manager } = setup();
     const record = manager.spawn(spec());
-    const workerWidget = { suspend: vi.fn(), resume: vi.fn() };
+    const workerWidget = { suspend: vi.fn(), resume: vi.fn(), markSeen: vi.fn() };
     await expect(openWorkerViewer({ workers: manager, workerWidget } as any, { ui: { custom: async () => { throw new Error("no tty"); } } }, record.id)).rejects.toThrow("no tty");
     expect(workerWidget.resume).toHaveBeenCalled();
   });
