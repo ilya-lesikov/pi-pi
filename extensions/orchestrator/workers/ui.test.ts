@@ -113,7 +113,7 @@ describe("worker update renderer", () => {
     for (const width of [20, 40, 80]) expectFits(render(details, true).render(width), width);
   });
 
-  it("closes the viewer, then the picker it came from, when a question opens", async () => {
+  function screens() {
     const shortcuts = new Map<string, any>();
     const handlers = new Map<string, any[]>();
     const on = (event: string, handler: any) => handlers.set(event, [...(handlers.get(event) ?? []), handler]);
@@ -121,50 +121,69 @@ describe("worker update renderer", () => {
     registerWorkerUi(orchestrator);
     orchestrator.workerWidget.attach({ ui: { setWidget: vi.fn(), setStatus: vi.fn() } });
     orchestrator.workers.spawn(spec());
-    // Like pi: an overlay's done() removes the TOPMOST overlay.
-    const stack: Array<{ component: any; resolve: () => void }> = [];
-    const closed: string[] = [];
-    const custom = vi.fn((factory: any) => new Promise<void>((resolve) => {
-      const entry: any = { resolve };
-      stack.push(entry);
+    const shown: Array<{ name: string; hidden: boolean; done: () => void; component: any }> = [];
+    const custom = vi.fn((factory: any, options: any) => new Promise<void>((resolve) => {
+      const entry: any = { hidden: false };
       entry.component = factory({ terminal: { rows: 30 }, requestRender: vi.fn() }, theme, undefined, () => {
-        // Whoever calls it, pi removes the topmost overlay but settles the caller's promise.
-        const top = stack.pop()!;
-        closed.push(`${entry.component.constructor.name} removed ${top.component.constructor.name}`);
+        shown.splice(shown.indexOf(entry), 1);
         resolve();
       });
+      entry.name = entry.component.constructor.name;
+      entry.done = () => entry.component.handleInput(KEY.escape);
+      shown.push(entry);
+      options?.onHandle?.({ setHidden: (hidden: boolean) => { entry.hidden = hidden; } });
     }));
+    const emit = (event: string, payload: any = {}) => handlers.get(event)?.forEach((h) => h(payload));
+    return { orchestrator, shortcuts, custom, shown, emit };
+  }
+
+  it("steps the picker and its viewer aside while a question is open, and brings them back", async () => {
+    const { shortcuts, custom, shown, emit } = screens();
     const picking = shortcuts.get("ctrl+n").handler({ ui: { custom } });
     await flush();
-    stack[0]!.component.handleInput(KEY.enter);
+    shown[0]!.component.handleInput(KEY.enter);
     await flush();
-    expect(stack.map((entry) => entry.component.constructor.name)).toEqual(["WorkerPicker", "WorkerViewer"]);
-    handlers.get("tool_execution_start")!.forEach((h) => h({ toolName: "ask_user" }));
+    expect(shown.map((entry) => entry.name)).toEqual(["WorkerPicker", "WorkerViewer"]);
+    emit("ui_prompt_start", { kind: "select" });
+    // Hidden, never closed: closing would remove whatever overlay is on top, maybe the question.
+    expect(shown.map((entry) => entry.hidden)).toEqual([true, true]);
+    emit("ui_prompt_end", { kind: "select" });
+    expect(shown.map((entry) => entry.hidden)).toEqual([false, false]);
+    // Closing the viewer closes the picker it came from.
+    shown[1]!.done();
     await picking;
-    expect(closed).toEqual(["WorkerViewer removed WorkerViewer", "WorkerPicker removed WorkerPicker"]);
-    expect(stack).toEqual([]);
+    expect(shown).toEqual([]);
   });
 
-  it("closes the picker before a question or dialog opens under it", async () => {
-    const shortcuts = new Map<string, any>();
-    const handlers = new Map<string, any[]>();
-    const on = (event: string, handler: any) => handlers.set(event, [...(handlers.get(event) ?? []), handler]);
-    const orchestrator: any = { pi: { registerMessageRenderer: vi.fn(), on, registerShortcut: (key: string, options: any) => shortcuts.set(key, options) }, workers: setup().manager };
-    registerWorkerUi(orchestrator);
-    orchestrator.workerWidget.attach({ ui: { setWidget: vi.fn(), setStatus: vi.fn() } });
-    orchestrator.workers.spawn(spec());
-    for (const trigger of [() => handlers.get("tool_execution_start")!.forEach((h) => h({ toolName: "ask_user" })), () => handlers.get("ui_prompt_start")!.forEach((h) => h({}))]) {
-      let resolved = false;
-      const custom = vi.fn((factory: any) => new Promise<void>((resolve) => {
-        factory({ terminal: { rows: 30 }, requestRender: vi.fn() }, theme, undefined, () => resolve());
-      }));
-      const opened = shortcuts.get("ctrl+n").handler({ ui: { custom } }).then(() => { resolved = true; });
-      await flush();
-      expect(resolved).toBe(false);
-      trigger();
-      await opened;
-      expect(resolved).toBe(true);
-    }
+  it("hides the /pp viewer for the agent's question even when pi reports no dialog for it", async () => {
+    const { orchestrator, custom, shown, emit } = screens();
+    const viewing = openWorkerViewer(orchestrator, { ui: { custom } }, orchestrator.workers.list()[0]!.id);
+    await flush();
+    emit("tool_execution_start", { toolCallId: "q", toolName: "ask_user" });
+    expect(shown[0]!.hidden).toBe(true);
+    emit("tool_execution_end", { toolCallId: "q", toolName: "ask_user" });
+    expect(shown[0]!.hidden).toBe(false);
+    shown[0]!.done();
+    await viewing;
+  });
+
+  it("does not hide the /pp viewer for the dialog event its own opening reports", async () => {
+    const { orchestrator, custom, shown, emit } = screens();
+    const viewing = openWorkerViewer(orchestrator, { ui: { custom } }, orchestrator.workers.list()[0]!.id);
+    // pi reports a command's custom() as a dialog, some microtasks later.
+    await flush();
+    emit("ui_prompt_start", { kind: "custom" });
+    await flush();
+    expect(shown[0]!.hidden).toBe(false);
+    // A real question afterwards still hides it.
+    emit("ui_prompt_start", { kind: "select" });
+    expect(shown[0]!.hidden).toBe(true);
+    emit("ui_prompt_end", { kind: "select" });
+    shown[0]!.done();
+    emit("ui_prompt_end", { kind: "custom" });
+    await viewing;
+    emit("ui_prompt_start", { kind: "select" });
+    emit("ui_prompt_end", { kind: "select" });
   });
 
   it("binds ctrl+n to the worker picker, in the terminal only", async () => {
@@ -724,10 +743,17 @@ describe("WorkerPicker (ctrl+n)", () => {
     for (let i = 0; i < 7; i++) picker.handleInput(KEY.down);
     picker.handleInput("m");
     const lines = picker.render(120).map(plain);
-    // pickerHeight(16) is 9: pi cuts anything past it, the message box first.
+    // pickerHeight(16) is 9.
     expect(lines.length).toBeLessThanOrEqual(9);
     expect(lines.at(-2)).toMatch(/^Message explore: /);
     expect(lines.some((line) => /^▌ ○ explore: w7/.test(line))).toBe(true);
+    // It follows a resize: taller terminal, more rows, still within its share.
+    tui.terminal.rows = 40;
+    expect(picker.render(120).length).toBeLessThanOrEqual(24);
+    expect(picker.render(120).length).toBeGreaterThan(9);
+    // On a tiny terminal everything still fits its minimum of eight rows.
+    tui.terminal.rows = 6;
+    expect(picker.render(120).length).toBeLessThanOrEqual(8);
   });
 
   it("scrolls a long list to keep the selected worker on screen", async () => {

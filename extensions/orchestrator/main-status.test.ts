@@ -71,6 +71,14 @@ describe("MainStatusTracker", () => {
     expect(tracker.current().text).toBe("Running bash");
   });
 
+  it("keeps waiting on the user while a question is open, whatever starts beside it", () => {
+    const { tracker, fire } = tracked();
+    fire("agent_start");
+    fire("tool_execution_start", { toolCallId: "a", toolName: "ask_user" });
+    fire("tool_execution_start", { toolCallId: "b", toolName: "bash", args: { command: "make" } });
+    expect(tracker.current()).toMatchObject({ text: "Waiting for your answer", level: "attention" });
+  });
+
   it("keeps waiting on the user while a question is open, whatever finishes beside it", () => {
     const { tracker, fire } = tracked();
     fire("agent_start");
@@ -91,6 +99,17 @@ describe("MainStatusTracker", () => {
     fire("ui_prompt_start", { kind: "confirm" });
     fire("ui_prompt_end", { kind: "confirm" });
     expect(tracker.current().text).toBe("Running bash: make");
+  });
+
+  it("stays on the user while a dialog outlives the tool that opened it", () => {
+    const { tracker, fire } = tracked();
+    fire("agent_start");
+    fire("tool_execution_start", { toolCallId: "1", toolName: "bash", args: { command: "make" } });
+    fire("ui_prompt_start", { kind: "confirm" });
+    fire("tool_execution_end", { toolCallId: "1", toolName: "bash" });
+    expect(tracker.current().text).toBe("Waiting for your answer");
+    fire("ui_prompt_end", { kind: "confirm" });
+    expect(tracker.current().text).toBe("Waiting for claude-opus-4-5");
   });
 
   it("ends a /compact typed while idle as idle, and one that failed too", () => {

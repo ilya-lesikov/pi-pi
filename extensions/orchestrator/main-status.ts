@@ -134,6 +134,7 @@ export class MainStatusTracker {
       const name = String(event?.toolName ?? "a tool");
       this.tools.set(String(event?.toolCallId ?? name), name);
       if (name === "ask_user" || name === "confirm") return this.set({ kind: "waiting_user", since: this.now() });
+      if (this.state.kind === "waiting_user") return;
       if (this.state.kind === "tool" && this.tools.size > 1) return this.set({ kind: "tool", since: this.state.since, label: `${this.tools.size} tools` });
       this.set({ kind: "tool", since: this.now(), label: toolLabel(name, event?.args) });
     });
@@ -152,7 +153,13 @@ export class MainStatusTracker {
         }
         return;
       }
-      this.set({ kind: "waiting_model", since: this.now(), model: this.modelLabel });
+      const next: State = { kind: "waiting_model", since: this.now(), model: this.modelLabel };
+      // A dialog still open over the finished tool keeps the status on the user.
+      if (this.state.kind === "waiting_user" && this.underneath) {
+        this.underneath = next;
+        return;
+      }
+      this.set(next);
     });
     // A dialog can open while idle (a /pp menu) or in the middle of a tool;
     // when it closes the agent is back to whatever it was doing before.
