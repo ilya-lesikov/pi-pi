@@ -1,7 +1,8 @@
 import { Type } from "@sinclair/typebox";
 import { Text } from "@earendil-works/pi-tui";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { fitLine } from "../host.js";
+import { bbForms, type FormAnswer } from "../bb-forms.js";
+import { detectHost, fitLine } from "../host.js";
 import { askQuestion, formatOptionList, formatResponse, isCancel, isNavigate, normalizeOptions, reviewAnswers, type AskResponse, type CancelReason, type QuestionOption } from "./ui.js";
 
 export { askUser, isCancel, type AskCancel, type AskResponse, type CancelReason, type QuestionOption } from "./ui.js";
@@ -171,6 +172,8 @@ export function registerAskUser(pi: ExtensionAPI): void {
       }
       if (!ctx.hasUI || !ctx.ui) return unattended(items, !!multi);
       const terminal = ctx.mode === undefined || ctx.mode === "tui";
+      const viaForm = terminal ? undefined : await askViaBbForm(ctx, items, !!multi, signal, onUpdate);
+      if (viaForm) return viaForm;
 
       const answers: AskToolDetails[] = [];
       let index = 0;
@@ -263,6 +266,70 @@ export function registerAskUser(pi: ExtensionAPI): void {
       return new Text(out, 0, 0);
     },
   });
+}
+
+/**
+ * Under bb with pi-pi's plugin: every question in one form. Undefined when no
+ * form could be shown, and the stock dialogs ask instead.
+ */
+async function askViaBbForm(ctx: any, items: AskItem[], multi: boolean, signal: AbortSignal | undefined, onUpdate: ((update: any) => void) | undefined) {
+  const forms = detectHost(ctx.mode).id === "bb" ? bbForms() : null;
+  if (!forms) return undefined;
+  const shown = items.map(describe);
+  const questions = items.map((item, i) => ({
+    question: item.question,
+    ...(shown[i]!.header ? { header: shown[i]!.header } : {}),
+    options: shown[i]!.options,
+    ...(item.recommended ? { recommended: item.recommended } : {}),
+    allowMultiple: item.allowMultiple === true,
+    allowFreeform: item.allowFreeform !== false,
+    allowComment: item.allowComment !== false,
+  }));
+  onUpdate?.({ content: text("Waiting for user input..."), details: { ...shown[0]!, response: null, cancelled: false } });
+  const outcome = await forms.ask({ version: 1, kind: "ask", questions }, {
+    title: fitLine(shown[0]!.header || (multi ? `${items.length} questions` : items[0]!.question), 160),
+    signal,
+    // A reply typed in the chat answers the form's first question; the rest stay unanswered.
+    onTyped: (typed) => ({ kind: "ask", answers: [{ kind: "freeform", text: typed }] }),
+  });
+  if (outcome.outcome === "unavailable") return undefined;
+  if (outcome.outcome === "cancelled" || outcome.value.kind === "decline") {
+    const note = outcome.outcome === "submitted" && outcome.value.kind === "decline" ? outcome.value.note : undefined;
+    // Anything but the user's own cancel or the tool's abort is bb taking the form down: not the user's choice.
+    const reason: CancelReason = outcome.outcome === "submitted" || outcome.reason === "user" ? "user" : "signal";
+    const cancelled: AskToolDetails = { ...shown[0]!, response: null, cancelled: true, cancelReason: reason, status: "cancelled", ...(note ? { cancelNote: note } : {}) };
+    if (outcome.outcome === "cancelled" && outcome.reason !== "user" && outcome.reason !== "signal") {
+      return { content: text(`The question was not answered: bb took the form down (${outcome.reason}). Ask it in plain prose in your reply and end the turn.`), details: cancelled };
+    }
+    // The form is cancelled as a whole, so no question in it was answered.
+    return multi
+      ? { content: text(`User cancelled the form with all ${items.length} questions.${note ? ` Their reason: "${note}".` : ""} ${CANCELLED_GUIDANCE}`), details: { ...cancelled, answers: shown.map((entry) => ({ ...entry, response: null, cancelled: true, cancelReason: reason, status: "cancelled" as const })) } }
+      : cancelledResult(cancelled, false, [cancelled], 0, 1);
+  }
+  if (outcome.value.kind !== "ask") return undefined;
+  const given = outcome.value.answers;
+  const answers: AskToolDetails[] = shown.map((entry, i) => {
+    const response = toResponse(given[i]);
+    return response ? { ...entry, response, cancelled: false, status: "answered" } : { ...entry, response: null, cancelled: true, cancelReason: "user", status: "cancelled" };
+  });
+  if (!multi) {
+    const only = answers[0]!;
+    return only.response ? { content: text(`User answered: ${formatResponse(only.response)}`), details: only } : cancelledResult(only, false, [only], 0, 1);
+  }
+  // A reply typed in the chat answers only the first; say which went unanswered rather than inventing answers.
+  const summary = answers.map((answer, i) => `${i + 1}. ${answer.question}: ${outcomeText(answer)}`).join("\n");
+  const unanswered = answers.some((answer) => !answer.response);
+  return { content: text(`User answered:\n${summary}${unanswered ? "\nThey replied in the chat instead of answering every question; ask the rest in prose if you still need them." : ""}`), details: { ...answers[answers.length - 1]!, answers } };
+}
+
+function toResponse(answer: FormAnswer | undefined): AskResponse | null {
+  if (!answer) return null;
+  if (answer.kind === "freeform") return answer.text.trim() ? { kind: "freeform", text: answer.text.trim() } : null;
+  const selections = answer.selections.map((title) => title.trim()).filter(Boolean);
+  const other = answer.other?.trim();
+  if (!selections.length && !other) return null;
+  const comment = answer.comment?.trim();
+  return { kind: "selection", selections, ...(other ? { other } : {}), ...(comment ? { comment } : {}) };
 }
 
 /**

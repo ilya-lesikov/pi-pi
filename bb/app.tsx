@@ -23,6 +23,8 @@ import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { RENDERER_ID } from "./forms";
+import { PiPiForm } from "./form";
 
 type Rpc = ReturnType<typeof useRpc<typeof rpcContract>>;
 
@@ -384,6 +386,7 @@ function Section({ title, body, tone }: { title: string; body: string; tone?: st
 }
 
 export default definePluginApp((app) => {
+  app.slots.pendingInteraction({ id: RENDERER_ID, component: PiPiForm });
   app.composer.customize({
     id: "pi-pi",
     scopes: ["thread"],

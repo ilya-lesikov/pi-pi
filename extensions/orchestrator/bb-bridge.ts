@@ -1,6 +1,7 @@
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { detectHost } from "./host.js";
+import { bbForms, type BbForms } from "./bb-forms.js";
+import { detectHost, fitLine } from "./host.js";
 import { getLogger } from "./log.js";
 import type { Orchestrator } from "./orchestrator.js";
 import type { TaskFeed } from "./tasks/index.js";
@@ -12,6 +13,11 @@ const TICK_MS = 500;
 const HEARTBEAT_MS = 5000;
 const RESULTS_KEPT = 20;
 const PROMPT_CHARS = 1500;
+// The parent usually answers a worker's question within this while its turn runs; the user's form waits that long first.
+const QUESTION_FORM_DELAY_MS = 12_000;
+// A worker's form bb could not show is tried again after this, not on every tick.
+const QUESTION_FORM_RETRY_MS = 30_000;
+const BB_ANSWER_TYPE = "pp-bb-answer";
 const RESULT_CHARS = 2000;
 
 /** What the pi-pi bb plugin reads; bump `version` on an incompatible change. */
@@ -132,8 +138,80 @@ export function registerBbBridge(orchestrator: Orchestrator, tasks: TaskFeed, en
     }
   };
 
+  // Worker questions shown as forms, by question id and when it was asked: a worker
+  // that asks twice in one turn reuses the id.
+  // An entry stays after its form closes, so that question is not shown again; `open` is false then.
+  const questionForms = new Map<string, { controller: AbortController; open: boolean }>();
+  // When a question's form may be tried again after bb could not show it.
+  const retryAt = new Map<string, number>();
+  let forms: BbForms | null = null;
+
+  const showQuestions = () => {
+    const manager = orchestrator.workers;
+    if (!forms || !manager) return;
+    const asking = new Map(manager.list().filter((record) => record.question).map((record) => [`${record.question!.id}@${record.question!.askedAt}`, record]));
+    for (const [questionId, form] of questionForms) {
+      if (!asking.has(questionId)) {
+        form.controller.abort();
+        questionForms.delete(questionId);
+      }
+    }
+    for (const questionId of retryAt.keys()) if (!asking.has(questionId)) retryAt.delete(questionId);
+    const parentBusy = orchestrator.mainTurnInFlight || orchestrator.holdingRun;
+    // The agent asking the user itself is most likely relaying these questions: one form is enough.
+    // Forms already up are taken down, not closed for good: one still unanswered after the agent's form comes back.
+    if (forms.busy) {
+      for (const [questionId, form] of questionForms) {
+        if (!form.open) continue;
+        form.controller.abort();
+        questionForms.delete(questionId);
+      }
+      return;
+    }
+    for (const [questionId, record] of asking) {
+      if (questionForms.has(questionId) || Date.now() < (retryAt.get(questionId) ?? 0)) continue;
+      // Counted again from the agent's last form: it has just asked the user, and its answer to the worker is on its way.
+      const since = Math.max(record.question!.askedAt, forms.lastAskEndedAt);
+      if (parentBusy && Date.now() - since < QUESTION_FORM_DELAY_MS) continue;
+      const form = { controller: new AbortController(), open: true };
+      questionForms.set(questionId, form);
+      void askUserFor(forms, manager, record.id, record.question!, `${record.spec.type}: ${record.spec.description}`, form.controller.signal).then((shown) => {
+        form.open = false;
+        // Never shown, or bb could not keep it up: tried again later. One taken down
+        // while the agent asks is already gone from the map, and comes back without waiting.
+        if (!shown && questionForms.get(questionId) === form) {
+          questionForms.delete(questionId);
+          retryAt.set(questionId, Date.now() + QUESTION_FORM_RETRY_MS);
+        }
+      });
+    }
+  };
+
+  /** False when the user never saw the form through to an answer or a cancel of their own. */
+  const askUserFor = async (forms: BbForms, manager: WorkerManager, workerId: string, question: { id: string; text: string; askedAt: number }, workerLabel: string, signal: AbortSignal): Promise<boolean> => {
+    const outcome = await forms.ask(
+      { version: 1, kind: "worker-question", workerId, workerLabel: fitLine(workerLabel, 200), questionId: question.id, question: question.text.slice(0, 20_000) },
+      { title: fitLine(`${workerLabel} asks`, 160), signal },
+    );
+    if (outcome.outcome === "unavailable" || (outcome.outcome === "cancelled" && outcome.reason !== "user")) return false;
+    if (outcome.outcome !== "submitted" || outcome.value.kind !== "answer") return true;
+    const answer = outcome.value.text.trim();
+    // Answered elsewhere while the form was up (the agent, the worker list, a timeout): this one is late.
+    const current = manager.get(workerId)?.question;
+    if (!answer || current?.id !== question.id || current.askedAt !== question.askedAt) return true;
+    manager.send(workerId, answer);
+    const record = manager.get(workerId);
+    const steer = orchestrator.mainTurnInFlight || orchestrator.holdingRun;
+    orchestrator.pi.sendMessage(
+      { customType: BB_ANSWER_TYPE, content: `The user answered ${workerId}'s question in bb: "${answer}". It has the answer; do not answer it again.`, display: true, details: { workerId, questionId: question.id, type: record?.spec.type } },
+      { deliverAs: steer ? "steer" : "nextTurn", triggerTurn: false },
+    );
+    return true;
+  };
+
   const tick = () => {
     runCommands();
+    showQuestions();
     write(true);
   };
 
@@ -142,6 +220,8 @@ export function registerBbBridge(orchestrator: Orchestrator, tasks: TaskFeed, en
     // (in the terminal, or with -p) must not take over the thread's own file.
     if (detectHost(ctx?.mode, env).id !== "bb") return;
     results = [];
+    forms = bbForms(env);
+    await forms?.cancelStale();
     if (!timer) {
       timer = setInterval(tick, TICK_MS);
       timer.unref?.();
@@ -151,7 +231,16 @@ export function registerBbBridge(orchestrator: Orchestrator, tasks: TaskFeed, en
   orchestrator.pi.on("session_shutdown", async () => {
     if (timer) clearInterval(timer);
     timer = null;
+    for (const form of questionForms.values()) form.controller.abort();
+    questionForms.clear();
     write(false);
+  });
+  // bb no longer holds the composer while pi-pi's form is open: a reply typed there answers the form.
+  orchestrator.pi.on("input", async (event: any) => {
+    // Only what the user typed; an extension's own message must not answer anything.
+    // A message with images is for the agent: a form takes only text.
+    if (!timer || !forms || event?.source === "extension" || typeof event?.text !== "string" || event?.images?.length) return { action: "continue" as const };
+    return forms.takeTyped(event.text) ? { action: "handled" as const } : { action: "continue" as const };
   });
   tasks.subscribe(() => {
     if (timer) write(true);

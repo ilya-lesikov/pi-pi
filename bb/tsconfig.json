@@ -23,6 +23,8 @@
   "include": [
     "server.ts",
     "state.ts",
+    "forms.ts",
+    "form.tsx",
     "app.tsx",
     "components",
     "lib"
