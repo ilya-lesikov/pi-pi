@@ -27,6 +27,7 @@ import { installConsoleGuard } from "./console-guard.js";
 import { clearAllPauses, demoteUnusableSubscription, handleMainAuthFailure, handleMainRateLimit, handleMainRefusal, handleSubagentAuthFailure, handleSubagentRateLimit, handleSubscriptionRouteOutage, isAuthError, isModelRefusal, isPolicyBlockError, isRateLimitError } from "./rate-limit-fallback.js";
 import { adjudicateCheckIn, adjudicateContinuation } from "./continuation-adjudicator.js";
 import { registerTasks } from "./tasks/index.js";
+import { registerBbBridge } from "./bb-bridge.js";
 import { registerAskUser, registerConfirm } from "./ask/index.js";
 import { LspManager } from "./lsp/manager.js";
 import { editDiagnostics, registerLspTool, registerLspWarmup } from "./lsp/tool.js";
@@ -639,7 +640,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   const workerHooks = createWorkerHooks(orchestrator);
   registerWorkerToolsFor(orchestrator, workerHooks);
   registerWorkerUi(orchestrator);
-  registerTasks(pi, () => orchestrator.workerWidget?.restack());
+  registerBbBridge(orchestrator, registerTasks(pi, () => orchestrator.workerWidget?.restack()));
   registerAskUser(pi);
   registerConfirm(pi);
   registerLspTool(pi, () => orchestrator.lsp);

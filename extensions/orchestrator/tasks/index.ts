@@ -34,16 +34,36 @@ interface TaskToolDetails {
   [paseo: string]: unknown;
 }
 
+/** The live list, for surfaces outside pi's own UI. */
+export interface TaskFeed {
+  current(): TaskSnapshot;
+  subscribe(listener: () => void): () => void;
+}
+
 /**
  * pi-pi's checklist: TaskCreate/TaskUpdate/TaskList/TaskGet on the root
  * session. Every result carries the whole list, so a resumed, forked or
  * rewound session restores the list as it stood at that point of the branch.
  */
-export function registerTasks(pi: ExtensionAPI, onWidgetRegistered?: () => void): void {
+export function registerTasks(pi: ExtensionAPI, onWidgetRegistered?: () => void): TaskFeed {
   let snapshot = emptySnapshot();
   let cadence = createCadenceState();
   let lastObservedRevision = snapshot.revision;
   const widget = new TaskWidget(() => snapshot, onWidgetRegistered);
+  const listeners = new Set<() => void>();
+  const changed = () => {
+    widget.update();
+    for (const listener of listeners) {
+      try { listener(); } catch {}
+    }
+  };
+  const feed: TaskFeed = {
+    current: () => snapshot,
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
 
   // Under Paseo the four tools are one tool named "todo", whose results Paseo
   // draws as its own todo card when they carry the shape it knows.
@@ -60,14 +80,14 @@ export function registerTasks(pi: ExtensionAPI, onWidgetRegistered?: () => void)
   const withBoard = (text: string) => `${text}\n${taskBoardText(snapshot.tasks)}`;
   const create = (params: any) => {
     const { task, rolledOver } = createTask(snapshot, { subject: String(params.subject ?? ""), description: String(params.description ?? ""), activeForm: params.activeForm });
-    widget.update();
+    changed();
     const fresh = rolledOver ? ` Started a new list; the ${rolledOver} completed task${rolledOver === 1 ? " was" : "s were"} cleared.` : "";
     return result(withBoard(`Task #${task.id} created: ${task.subject}.${fresh}`), false, { action: "create", params });
   };
   const update = (params: any) => {
     const outcome = updateTask(snapshot, String(params.taskId ?? ""), params, Date.now());
     if (!outcome) return result(`Task #${params.taskId} not found. Current list:\n${listText(snapshot.tasks)}`, true, { action: "update", params });
-    widget.update();
+    changed();
     const id = String(params.taskId).replace(/^#/, "");
     return result(withBoard(outcome.changed.length ? `Updated task #${id}: ${outcome.changed.join(", ")}` : `Task #${id} already matched; nothing changed`), false, { action: "update", params });
   };
@@ -82,6 +102,7 @@ export function registerTasks(pi: ExtensionAPI, onWidgetRegistered?: () => void)
     snapshot = replaySnapshot(ctx.sessionManager?.getBranch?.() ?? []);
     lastObservedRevision = snapshot.revision;
     widget.attach(ctx);
+    changed();
   };
 
   pi.on("session_start", async (_event, ctx) => {
@@ -125,7 +146,7 @@ export function registerTasks(pi: ExtensionAPI, onWidgetRegistered?: () => void)
 
   if (paseo) {
     registerTodoTool(pi, { create, update, list, get });
-    return;
+    return feed;
   }
 
   pi.registerTool({
@@ -188,6 +209,7 @@ export function registerTasks(pi: ExtensionAPI, onWidgetRegistered?: () => void)
     renderCall: (args: any, theme: any) => new Text(`${theme.fg("toolTitle", theme.bold("TaskGet"))} ${theme.fg("accent", `#${String(args?.taskId ?? "").replace(/^#/, "")}`)}`, 0, 0),
     renderResult: renderResultLine,
   });
+  return feed;
 }
 
 const STATUS = Type.Union([Type.Literal("pending"), Type.Literal("in_progress"), Type.Literal("completed"), Type.Literal("deleted")], { description: "New status; deleted removes the task" });
