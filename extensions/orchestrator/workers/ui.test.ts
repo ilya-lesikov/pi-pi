@@ -142,7 +142,7 @@ describe("worker update renderer", () => {
 
   it("steps the picker and its viewer aside while a question is open, and brings them back", async () => {
     const { shortcuts, custom, shown, emit } = screens();
-    const picking = shortcuts.get("ctrl+n").handler({ ui: { custom } });
+    const picking = shortcuts.get("alt+w").handler({ ui: { custom } });
     await flush();
     shown[0]!.component.handleInput(KEY.enter);
     await flush();
@@ -183,7 +183,7 @@ describe("worker update renderer", () => {
 
   it("settles whichever order pi delivers a dialog's end and the next one's start", async () => {
     const { shortcuts, custom, shown, emit } = screens();
-    const picking = shortcuts.get("ctrl+n").handler({ ui: { custom } });
+    const picking = shortcuts.get("alt+w").handler({ ui: { custom } });
     await flush();
     // A menu closes and a question opens; the two reports arrive swapped.
     emit("ui_prompt_start", { kind: "custom" });
@@ -201,15 +201,15 @@ describe("worker update renderer", () => {
     await picking;
   });
 
-  it("binds ctrl+n to the worker picker, in the terminal only", async () => {
+  it("binds alt+w to the worker picker, in the terminal only", async () => {
     const shortcuts = new Map<string, any>();
     const orchestrator: any = { pi: { registerMessageRenderer: vi.fn(), on: vi.fn(), registerShortcut: (key: string, options: any) => shortcuts.set(key, options) }, workers: setup().manager };
     registerWorkerUi(orchestrator);
     const custom = vi.fn();
     orchestrator.workers.spawn(spec());
-    await shortcuts.get("ctrl+n").handler({ mode: "rpc", ui: { custom } });
+    await shortcuts.get("alt+w").handler({ mode: "rpc", ui: { custom } });
     expect(custom).not.toHaveBeenCalled();
-    await shortcuts.get("ctrl+n").handler({ ui: { custom } });
+    await shortcuts.get("alt+w").handler({ ui: { custom } });
     expect(custom).toHaveBeenCalledTimes(1);
     // An overlay: another dialog taking the editor's place cannot drop it.
     expect(custom.mock.calls[0]![1]).toMatchObject({ overlay: true });
@@ -261,7 +261,7 @@ describe("WorkerWidget", () => {
     void sessions[1]!.hooks.askParent("which branch?\n  main or dev", undefined);
     expect(ui.setStatus).toHaveBeenLastCalledWith("workers", "3 workers • 1 waiting on you");
     const lines = render(120).map(plain);
-    expect(lines[0]).toBe("Workers • 1 asking • 1 running • 1 pending   ctrl+n");
+    expect(lines[0]).toBe("Workers • 1 asking • 1 running • 1 pending   alt+w");
     expect(lines[1]).toBe("  ? task: fix it • 0s");
     expect(lines[2]).toBe("    ⎿ asks: which branch? main or dev");
     expect(lines[3]).toMatch(/^  ⠋ explore: look around the auth module • 0s$/);
@@ -304,7 +304,7 @@ describe("WorkerWidget", () => {
     vi.setSystemTime(Date.now() + 120_000);
     manager.tick();
     const lines = render(200).map(plain);
-    expect(lines[0]).toBe("Workers • 1 silent   ctrl+n");
+    expect(lines[0]).toBe("Workers • 1 silent   alt+w");
     expect(lines[1]).toMatch(/^  ! explore: /);
     expect(lines[2]).toBe("    ⎿ silent 2m in web_search");
   });
@@ -318,11 +318,11 @@ describe("WorkerWidget", () => {
     manager.kill(manager.list()[1]!.id, "failed", "provider error 529");
     await flush();
     const lines = render(200).map(plain);
-    expect(lines[0]).toBe("Workers • 1 failed • 1 done   ctrl+n");
+    expect(lines[0]).toBe("Workers • 1 failed • 1 done   alt+w");
     expect(lines[1]).toMatch(/^  ✗ task: fix it • \d+s • failed: provider error 529$/);
     expect(lines[2]).toMatch(/^  ✓ explore: look around the auth module • \d+s$/);
     vi.setSystemTime(Date.now() + 11_000);
-    expect(render(200).map(plain)).toEqual(["Workers • 1 failed   ctrl+n", expect.stringMatching(/^  ✗ task: fix it/)]);
+    expect(render(200).map(plain)).toEqual(["Workers • 1 failed   alt+w", expect.stringMatching(/^  ✗ task: fix it/)]);
     widget.markSeen(manager.list()[1]!.id);
     expect(mounted()).toBe(false);
   });
@@ -335,7 +335,7 @@ describe("WorkerWidget", () => {
     void sessions[1]!.hooks.askParent("ok?", undefined);
     const lines = render(200).map(plain);
     expect(lines).toHaveLength(1 + 3 * 2 - 1 + 1);
-    expect(lines[0]).toBe("Workers • 1 asking • 1 running • 3 pending   ctrl+n");
+    expect(lines[0]).toBe("Workers • 1 asking • 1 running • 3 pending   alt+w");
     expect(lines[1]).toBe("  ? explore: worker 1 • 0s");
     expect(lines.at(-1)).toBe("  … 2 more pending");
   });
@@ -361,7 +361,7 @@ describe("WorkerWidget", () => {
     sessions[0]!.finish();
     await flush();
     const lines = render(200).map(plain);
-    expect(lines[0]).toBe("Workers • 1 stopped   ctrl+n");
+    expect(lines[0]).toBe("Workers • 1 stopped   alt+w");
     expect(lines[1]).toMatch(/^  ■ explore: /);
   });
 
@@ -687,7 +687,7 @@ describe("openWorkerViewer", () => {
   });
 });
 
-describe("WorkerPicker (ctrl+n)", () => {
+describe("WorkerPicker (alt+w)", () => {
   function open() {
     const { manager, sessions } = setup();
     const orchestrator: any = { workers: manager };

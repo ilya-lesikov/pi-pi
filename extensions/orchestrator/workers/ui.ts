@@ -39,7 +39,7 @@ export function registerWorkerUi(orchestrator: Orchestrator): void {
   // pi reports one top-level dialog at a time, start and end each in a
   // microtask of their own, so they can arrive swapped; a balance settles
   // either way. The /pp viewer is such a dialog itself (and nothing else is
-  // reported while it is open), so only screens opened with ctrl+n follow it.
+  // reported while it is open), so only screens opened with alt+w follow it.
   on("ui_prompt_start", () => setPromptBalance(promptBalance + 1));
   on("ui_prompt_end", () => setPromptBalance(promptBalance - 1));
   // A dialog nested inside another (the agent asking while /pp is open) is
@@ -53,7 +53,7 @@ export function registerWorkerUi(orchestrator: Orchestrator): void {
     if (questionTools.delete(String(event?.toolCallId))) refreshScreens();
   });
   on("session_start", () => resetScreens());
-  pi.registerShortcut?.("ctrl+n", {
+  pi.registerShortcut?.("alt+w", {
     description: "Select a worker: see its output, message, interrupt, stop or kill it",
     handler: async (ctx: any) => {
       if (ctx?.mode !== undefined && ctx.mode !== "tui") return;
@@ -261,7 +261,7 @@ function workerHeader(records: readonly WorkerRecord[], theme: Theme, sep: strin
   const counts = new Map<WorkerState, number>();
   for (const record of records) counts.set(stateOf(record), (counts.get(stateOf(record)) ?? 0) + 1);
   const parts = STATE_ORDER.filter((state) => counts.get(state)).map((state) => theme.fg(STATE_COLOR[state], `${counts.get(state)} ${state}`));
-  return `${[theme.bold("Workers"), ...parts].join(sep)}   ${theme.fg("dim", "ctrl+n")}`;
+  return `${[theme.bold("Workers"), ...parts].join(sep)}   ${theme.fg("dim", "alt+w")}`;
 }
 
 function hiddenSummary(hidden: readonly WorkerRecord[]): string {
@@ -577,7 +577,7 @@ export async function openWorkerViewer(orchestrator: Orchestrator, ctx: any, id:
 }
 
 /**
- * ctrl+n: the worker panel, selectable, over the bottom of the screen. Arrow
+ * alt+w: the worker panel, selectable, over the bottom of the screen. Arrow
  * keys pick a worker; single keys act on it; Esc gives the editor back with
  * the draft untouched.
  */
@@ -632,7 +632,7 @@ export class WorkerPicker implements Component {
     }
     const records = this.records();
     const record = this.selected(records);
-    if (matchesKey(data, "escape") || matchesKey(data, "ctrl+n") || !record) {
+    if (matchesKey(data, "escape") || matchesKey(data, "alt+w") || !record) {
       this.close();
       return;
     }
@@ -692,7 +692,7 @@ export class WorkerPicker implements Component {
     if (!records.length || !selected) return [truncateToWidth(th.fg("dim", "No workers. Esc to go back."), width)];
     const sep = th.fg("dim", " • ");
     const now = Date.now();
-    const header = truncateToWidth(workerHeader(records, th, sep).replace(/\s+\S*ctrl\+n\S*$/, ""), width);
+    const header = truncateToWidth(workerHeader(records, th, sep).replace(/\s+\S*alt\+w\S*$/, ""), width);
     const footer: string[] = [];
     if (this.composer) {
       const target = this.manager.get(this.composer.id);
@@ -751,7 +751,7 @@ function rowsOf(tui: TUI | null): number {
  * removing the topmost one, which by then may be the question itself.
  */
 type OverlayHandle = { setHidden(hidden: boolean): void };
-/** Screen → whether reported dialogs hide it (only those opened with ctrl+n). */
+/** Screen → whether reported dialogs hide it (only those opened with alt+w). */
 const screens = new Map<OverlayHandle, { followsPrompts: boolean; hidden: boolean }>();
 let promptBalance = 0;
 const questionTools = new Set<string>();
