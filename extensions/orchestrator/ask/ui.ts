@@ -63,6 +63,7 @@ type UIResult = AskResponse | AskCancel | AskNavigate | null;
 export const OTHER = "Other…";
 const ADD_COMMENT = "Add a comment…";
 const ADD_OTHER = "Add your own…";
+const SEVERAL = "Choose several…";
 const BACK = "← Back";
 const TITLE_MAX = 160;
 const OPTION_MAX = 200;
@@ -263,6 +264,10 @@ async function askViaDialogs(ctx: AskContext, q: Question, opts: SequenceOptions
   let comment: string | undefined;
   let other: string | undefined;
   const checked = new Set(q.allowMultiple ? opts.checkedIndices ?? [] : []);
+  // Hosts show each select as a form with its own Submit, so a pick must be an
+  // answer: a multi-select starts as a plain list, and toggling is a mode the
+  // user asks for, in which a pick only adds or removes and Done answers.
+  let several = checked.size > 0;
   let last = -1;
   let repeats = 0;
   const steps = 2 * q.options.length + 8;
@@ -270,16 +275,23 @@ async function askViaDialogs(ctx: AskContext, q: Question, opts: SequenceOptions
     const count = checked.size + (other ? 1 : 0);
     const labels = q.options.map((option, i) => {
       const label = optionLabel(option, i === q.recommended);
-      return q.allowMultiple ? `${checked.has(i) ? "Remove" : "Add"} ${label}` : label;
+      return several ? `${checked.has(i) ? "☑" : "☐"} ${label}` : label;
     });
+    const chosenNames = [...[...checked].sort((a, b) => a - b).map((i) => q.options[i]!.title), ...(other ? [other] : [])];
+    const done = `Done — use ${count} selected`;
     const extras: string[] = [];
-    if (q.allowMultiple && count > 0) extras.push(`Use selected (${count})`);
-    if (q.allowFreeform && textEntries()) extras.push(q.allowMultiple ? (other ? `Change your own… ${quoted(other)}` : ADD_OTHER) : OTHER);
+    if (q.allowMultiple && !several) extras.push(SEVERAL);
+    if (q.allowFreeform && textEntries()) extras.push(several ? (other ? `Change your own… ${quoted(other)}` : ADD_OTHER) : OTHER);
     if (q.commentEntry && textEntries()) extras.push(comment ? `Change comment… ${quoted(comment)}` : ADD_COMMENT);
     if (nav?.canPrev) extras.push(BACK);
-    const chosenNames = [...[...checked].sort((a, b) => a - b).map((i) => q.options[i]!.title), ...(other ? [other] : [])];
-    const state = q.allowMultiple ? `(${count} selected${count ? `: ${chosenNames.join(", ")}` : ""}) ` : comment ? "(comment added) " : "";
-    let picked = await pick(d, `${prefix}${typingNote}${state}${q.question}`, labels, extras);
+    const state = several ? `(${count} selected${count ? `: ${chosenNames.join(", ")}` : ""}; pick to add or remove) ` : comment ? "(comment added) " : "";
+    // Done goes first, where it is seen, and a host that answers with the first entry can still finish.
+    const head = several && count > 0 ? [done] : [];
+    let picked = await pick(d, `${prefix}${typingNote}${state}${q.question}`, [...head, ...labels], extras);
+    if (typeof picked === "number") {
+      if (picked < head.length) return selection(chosenNames.slice(0, checked.size), comment, other);
+      picked -= head.length;
+    }
     if (signal?.aborted) return cancel("signal");
     if (picked === undefined) return null;
     // A host that answers with the bare title rather than the label it was shown.
@@ -289,7 +301,7 @@ async function askViaDialogs(ctx: AskContext, q: Question, opts: SequenceOptions
       else if (!q.allowFreeform) continue;
     }
     if (typeof picked === "number" && picked < labels.length) {
-      if (!q.allowMultiple) {
+      if (!several) {
         const title = q.options[picked]!.title;
         if (!opts.paseoCombined) return selection([title], comment);
         const note = await typed(d, `Comment on ${quoted(title)}`, "Optional comment — leave empty to skip");
@@ -304,7 +316,10 @@ async function askViaDialogs(ctx: AskContext, q: Question, opts: SequenceOptions
     }
     const extra = typeof picked === "number" ? extras[picked - labels.length]! : undefined;
     if (extra === BACK) return { __navigate: "prev" };
-    if (extra?.startsWith("Use selected")) return selection(chosenNames.slice(0, checked.size), comment, other);
+    if (extra === SEVERAL) {
+      several = true;
+      continue;
+    }
     if (extra === ADD_COMMENT || extra?.startsWith("Change comment")) {
       const note = await typed(d, `Comment — ${q.question}`, "Your comment; then pick an option");
       if (signal?.aborted) return cancel("signal");
@@ -325,7 +340,7 @@ async function askViaDialogs(ctx: AskContext, q: Question, opts: SequenceOptions
         if (signal?.aborted) return cancel("signal");
         return freeform(note.text?.trim() ? `${text}\n\nComment: ${note.text.trim()}` : text);
       }
-      if (!q.allowMultiple) return freeform(text);
+      if (!several) return q.allowMultiple ? selection([], comment, text) : freeform(text);
       other = text;
     } else if (answer.unavailable) {
       typingNote = "(typing is unavailable here) ";

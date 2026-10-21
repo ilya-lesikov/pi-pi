@@ -295,20 +295,38 @@ describe("ask_user over host dialogs", () => {
     expect(calls[2]!.title).toBe("(comment added) Pick");
   });
 
-  it("selects several options with Add and Remove entries and an explicit Use selected", async () => {
-    const { calls, run } = dialogHost(["Add Unit", "Add Lint", "Remove Unit", "Add Scan — slow", (_t, o) => o!.find((x) => x.startsWith("Use selected"))]);
-    const result = await run({ question: "Checks?", options: ["Unit", "Lint", { title: "Scan", description: "slow" }], allowMultiple: true });
-    expect(result.details.response).toEqual({ kind: "selection", selections: ["Lint", "Scan"] });
-    expect(calls[0]!.options).toEqual(["Add Unit", "Add Lint", "Add Scan — slow", "Add your own…"]);
-    expect(calls[4]!.title).toBe("(2 selected: Lint, Scan) Checks?");
-    expect(calls[4]!.options).toContain("Use selected (2)");
+  it("answers a multi-select with the one option picked, as bb's form submits it", async () => {
+    // bb shows every select as a form with its own Submit: picking an option and submitting is the answer.
+    const { calls, run } = dialogHost(["Lint (recommended) — style"]);
+    const result = await run({ question: "Checks?", options: ["Unit", { title: "Lint", description: "style" }, "Scan"], allowMultiple: true, recommended: "Lint" });
+    expect(result.details.status).toBe("answered");
+    expect(result.details.response).toEqual({ kind: "selection", selections: ["Lint"] });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.options).toEqual(["Unit", "Lint (recommended) — style", "Scan", "Choose several…", "Other…"]);
   });
 
-  it("gives up on a host that keeps returning the same choice instead of looping", async () => {
+  it("selects several options after Choose several…, with Done first", async () => {
+    const { calls, run } = dialogHost(["Choose several…", "☐ Unit", "☐ Lint", "☑ Unit", "☐ Scan — slow", (_t, o) => o![0]]);
+    const result = await run({ question: "Checks?", options: ["Unit", "Lint", { title: "Scan", description: "slow" }], allowMultiple: true });
+    expect(result.details.response).toEqual({ kind: "selection", selections: ["Lint", "Scan"] });
+    expect(calls[1]!.options).toEqual(["☐ Unit", "☐ Lint", "☐ Scan — slow", "Add your own…"]);
+    expect(calls[5]!.title).toBe("(2 selected: Lint, Scan; pick to add or remove) Checks?");
+    expect(calls[5]!.options![0]).toBe("Done — use 2 selected");
+  });
+
+  it("finishes on a host that always answers with the first entry", async () => {
     const { run } = dialogHost(Array.from({ length: 20 }, () => (_t: string, o?: string[]) => o![0]));
+    const result = await run({ question: "Checks?", options: ["Unit", "Lint"], allowMultiple: true });
+    expect(result.details.response).toEqual({ kind: "selection", selections: ["Unit"] });
+  });
+
+  it("gives up on a host that keeps returning the same toggle instead of looping", async () => {
+    const { run } = dialogHost(["Choose several…", ...Array.from({ length: 20 }, () => (_t: string, o?: string[]) => o!.find((x) => x.endsWith(" Lint")))]);
     const result = await run({ question: "Checks?", options: ["Unit", "Lint"], allowMultiple: true });
     expect(result.details.status).toBe("incomplete");
     expect(text(result)).toMatch(/Ask the question in plain prose/);
+    // The unconfirmed selection is not the user's reason for anything.
+    expect(text(result)).not.toMatch(/Their reason/);
   });
 
   it("learns that the host cannot take typed text, hides Other…, and tells the model to ask in prose", async () => {

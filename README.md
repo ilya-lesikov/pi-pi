@@ -122,7 +122,7 @@ The main agent keeps a checklist with `TaskCreate`, `TaskUpdate`, `TaskList` and
 
 `confirm` puts a single yes/no decision: Yes, No, or dismissed, with `danger` focusing No for destructive actions.
 
-Outside the terminal both use the host's own dialogs, kept within the limits of the strictest host: one-line titles, `Title — description` options, multi-select as Add/Remove entries with an explicit "Use selected", a Back entry and a final review for several questions, and "Other…" or "Add a comment…" only where the host can collect typed text. `confirm` becomes the host's native approval. Without any UI, `ask_user` lists the questions for the model to answer on stated assumptions, and `confirm` reports that nothing was confirmed.
+Outside the terminal both use the host's own dialogs, kept within the limits of the strictest host: one-line titles, `Title — description` options, multi-select as a plain list whose pick is the answer, with a "Choose several…" entry that switches to ☐/☑ toggles and a "Done" entry, a Back entry and a final review for several questions, and "Other…" or "Add a comment…" only where the host can collect typed text. `confirm` becomes the host's native approval. Without any UI, `ask_user` lists the questions for the model to answer on stated assumptions, and `confirm` reports that nothing was confirmed.
 
 ## Models and providers
 

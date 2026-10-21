@@ -131,7 +131,8 @@ const INCOMPLETE_GUIDANCE = "The host could not complete the selection. Ask the 
 function cancelledResult(shown: AskToolDetails, multi: boolean, answers: AskToolDetails[], index: number, total: number) {
   const status = shown.status!;
   const guidance = status === "typing_unavailable" ? NO_TEXT_GUIDANCE : status === "incomplete" ? INCOMPLETE_GUIDANCE : CANCELLED_GUIDANCE;
-  const reason = shown.cancelNote ? ` Their reason: "${shown.cancelNote}".` : "";
+  // An incomplete answer's note is the unconfirmed selection, already in the headline.
+  const reason = shown.cancelNote && status === "cancelled" ? ` Their reason: "${shown.cancelNote}".` : "";
   const headline = status === "cancelled" ? "User cancelled the question." : `Not answered ${outcomeText(shown).slice("(not answered".length).replace(/\)$/, "").replace(/^: /, "— ")}.`;
   if (!multi) return { content: text(`${headline}${reason} ${guidance}`), details: shown };
   const done = answers.slice(0, index).filter((answer) => answer.response);
