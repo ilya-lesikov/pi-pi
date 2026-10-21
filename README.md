@@ -102,6 +102,16 @@ The panel above the editor lists the workers under a header that counts them by 
 
 Every worker's conversation is written as it happens to `.pp/workers/<session>/<worker>.jsonl`, in pi's session format, readable only by you and deleted after a week. A missing `.pp/.gitignore` is created ignoring everything; when an existing one does not ignore `workers/`, transcripts go to `~/.cache/pi-pi/workers` instead. While the main agent waits with `agent_wait`, the call's progress shows each worker's current step, so apps that show a running tool's progress show the workers too. Under Paseo, workers also appear as Paseo's own sub-agent cards following that transcript.
 
+## bb
+
+bb does not show pi's panels, so pi-pi ships a bb plugin in `bb/` that shows them in the thread instead: the task checklist as a card above the composer, and a worker chip in the composer's action row (`running/total` while any run, the total otherwise, amber while a worker is asking you something). The chip opens the worker list with each worker's state, current step, question, result or error; clicking a worker shows its task, latest output and result, with Send (a steer, an answer, or more work for a finished one), Stop and Kill (asks to confirm). Install it once from a checkout:
+
+```
+cd bb && npm install && bb plugin build . && bb plugin install .
+```
+
+Under bb, pi-pi writes the list and its workers to `pi-pi/state.json` in the thread's storage directory (`$BB_THREAD_STORAGE`), and the plugin's buttons come back as files in `pi-pi/commands/` next to it, which pi-pi runs within half a second. When pi's session has ended or stops updating the file, the list says so, its workers show as stopped, and the buttons go away.
+
 ## Task checklist
 
 The main agent keeps a checklist with `TaskCreate`, `TaskUpdate`, `TaskList` and `TaskGet`, shown above the editor as counts plus the running and next pending tasks (five rows at most). Each create or update result repeats that short list, so apps that do not show pi-pi's panels show the tasks there; under Paseo the four tools are one `todo` tool, which Paseo draws as its own todo card. The list lives in the session itself: every task tool result carries it, so `/resume`, forks and `/tree` restore the list as it stood at that point, and it survives compaction. Once every task is completed, the next one starts a fresh list. When edits, commits or turns pile up without the list changing, the agent gets a reminder that names what has gone stale. Workers have no task tools.
