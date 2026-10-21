@@ -119,7 +119,12 @@ describe("worker update renderer", () => {
     const on = (event: string, handler: any) => handlers.set(event, [...(handlers.get(event) ?? []), handler]);
     const orchestrator: any = { pi: { registerMessageRenderer: vi.fn(), on, registerShortcut: (key: string, options: any) => shortcuts.set(key, options) }, workers: setup().manager };
     registerWorkerUi(orchestrator);
-    orchestrator.workerWidget.attach({ ui: { setWidget: vi.fn(), setStatus: vi.fn() } });
+    let panel: { render(width: number): string[] } | null = null;
+    let focus: unknown = "editor";
+    const tui = { terminal: { rows: 30 }, requestRender: vi.fn(), getFocusedComponent: () => focus };
+    const listeners = new Set<(data: string) => { consume?: boolean } | undefined>();
+    const onTerminalInput = (listener: any) => { listeners.add(listener); return () => listeners.delete(listener); };
+    orchestrator.workerWidget.attach({ ui: { setWidget: (_key: string, factory: any) => { panel = factory ? factory(tui, theme) : null; }, setStatus: vi.fn() } });
     orchestrator.workers.spawn(spec());
     const shown: Array<{ name: string; hidden: boolean; done: () => void; component: any }> = [];
     // Like pi: done() pops the TOPMOST overlay and settles the caller's promise;
@@ -137,25 +142,87 @@ describe("worker update renderer", () => {
       options?.onHandle?.({ setHidden: (hidden: boolean) => { entry.hidden = hidden; } });
     }));
     const emit = (event: string, payload: any = {}) => handlers.get(event)?.forEach((h) => h(payload));
-    return { orchestrator, shortcuts, custom, shown, emit };
+    // Like pi-tui: listeners see every key first; one not consumed goes on to the focused component.
+    const press = (data: string) => [...listeners].some((listener) => listener(data)?.consume);
+    const ctx = { ui: { custom, onTerminalInput } };
+    const lines = () => panel?.render(120).map(plain) ?? [];
+    return { orchestrator, shortcuts, custom, shown, emit, press, ctx, lines, listeners, setFocus: (next: unknown) => { focus = next; } };
   }
 
-  it("steps the picker and its viewer aside while a question is open, and brings them back", async () => {
-    const { shortcuts, custom, shown, emit } = screens();
-    const picking = shortcuts.get("alt+w").handler({ ui: { custom } });
+  it("makes the panel selectable in place, leaving the editor and footer where they are", async () => {
+    const { shortcuts, custom, press, ctx, lines, listeners } = screens();
+    await shortcuts.get("alt+w").handler(ctx);
+    // Not an overlay: one is pinned to screen rows, over the editor, and smears as output scrolls.
+    expect(custom).not.toHaveBeenCalled();
+    expect(lines()[1]).toMatch(/^▌ ⠋ explore: /);
+    expect(lines().at(-1)).toMatch(/esc back$/);
+    expect(press("k")).toBe(true);
+    expect(lines().at(-2)).toBe("  Press k again to kill explore.");
+    expect(press(KEY.escape)).toBe(true);
+    expect(lines()[0]).toMatch(/alt\+w$/);
+    expect(listeners.size).toBe(0);
+    expect(press("k")).toBe(false);
+  });
+
+  it("lets a dialog opened meanwhile have the keys, and takes them back once it closes", async () => {
+    const { shortcuts, press, ctx, lines, emit, setFocus } = screens();
+    await shortcuts.get("alt+w").handler(ctx);
+    for (const [open, close] of [
+      [() => emit("ui_prompt_start", { kind: "select" }), () => emit("ui_prompt_end", { kind: "select" })],
+      [() => emit("tool_execution_start", { toolCallId: "q", toolName: "ask_user" }), () => emit("tool_execution_end", { toolCallId: "q" })],
+      // A dialog pi reports nothing for still moves the focus off the editor.
+      [() => setFocus("dialog"), () => setFocus("editor")],
+    ]) {
+      open();
+      expect(press("j")).toBe(false);
+      expect(lines()[0]).toMatch(/alt\+w$/);
+      close();
+      expect(press(KEY.down)).toBe(true);
+      expect(lines()[1]).toMatch(/^▌ /);
+    }
+  });
+
+  it("keeps a finished worker selectable, and a message to it open, past the time it would leave the panel", async () => {
+    const { orchestrator, shortcuts, press, ctx, lines, listeners } = screens();
+    await shortcuts.get("alt+w").handler(ctx);
+    press("m");
+    const record = orchestrator.workers.list()[0]!;
+    orchestrator.workers.kill(record.id, "stopped");
     await flush();
-    shown[0]!.component.handleInput(KEY.enter);
+    vi.advanceTimersByTime(60_000);
+    expect(press("x")).toBe(true);
+    expect(lines().at(-2)).toMatch(/^Message explore: > x/);
+    press(KEY.escape);
+    press(KEY.escape);
+    expect(listeners.size).toBe(0);
+    expect(lines()).toEqual([]);
+  });
+
+  it("passes terminal replies through, and ignores key releases so the release of alt+w does not close it again", async () => {
+    const { shortcuts, press, ctx, lines } = screens();
+    await shortcuts.get("alt+w").handler(ctx);
+    expect(press("\x1b[119;3:3u")).toBe(true);
+    expect(lines()[1]).toMatch(/^▌ /);
+    expect(press("\x1b[6;20;10t")).toBe(false);
+  });
+
+  it("steps the viewer opened from the selection aside while a question is open, and brings it back", async () => {
+    const { shortcuts, shown, emit, press, ctx, lines } = screens();
+    await shortcuts.get("alt+w").handler(ctx);
+    press(KEY.enter);
     await flush();
-    expect(shown.map((entry) => entry.name)).toEqual(["WorkerPicker", "WorkerViewer"]);
+    expect(shown.map((entry) => entry.name)).toEqual(["WorkerViewer"]);
     emit("ui_prompt_start", { kind: "select" });
     // Hidden, never closed: closing would remove whatever overlay is on top, maybe the question.
-    expect(shown.map((entry) => entry.hidden)).toEqual([true, true]);
+    expect(shown[0]!.hidden).toBe(true);
     emit("ui_prompt_end", { kind: "select" });
-    expect(shown.map((entry) => entry.hidden)).toEqual([false, false]);
-    // Closing the viewer closes the picker it came from.
-    shown[1]!.done();
-    await picking;
+    expect(shown[0]!.hidden).toBe(false);
+    shown[0]!.done();
+    await flush();
     expect(shown).toEqual([]);
+    // Back to the editor, with the panel as it was.
+    expect(press("k")).toBe(false);
+    expect(lines()[0]).toMatch(/alt\+w$/);
   });
 
   it("hides the /pp viewer for the agent's question even when pi reports no dialog for it", async () => {
@@ -182,37 +249,28 @@ describe("worker update renderer", () => {
   });
 
   it("settles whichever order pi delivers a dialog's end and the next one's start", async () => {
-    const { shortcuts, custom, shown, emit } = screens();
-    const picking = shortcuts.get("alt+w").handler({ ui: { custom } });
-    await flush();
+    const { shortcuts, emit, press, ctx } = screens();
+    await shortcuts.get("alt+w").handler(ctx);
     // A menu closes and a question opens; the two reports arrive swapped.
     emit("ui_prompt_start", { kind: "custom" });
     emit("ui_prompt_start", { kind: "select" });
     emit("ui_prompt_end", { kind: "custom" });
-    expect(shown[0]!.hidden).toBe(true);
+    expect(press(KEY.down)).toBe(false);
     emit("ui_prompt_end", { kind: "select" });
-    expect(shown[0]!.hidden).toBe(false);
-    // An end with no start seen (a dialog from before) does not leave it hidden later.
+    expect(press(KEY.down)).toBe(true);
+    // An end with no start seen (a dialog from before) does not leave it stuck later.
     emit("ui_prompt_end", { kind: "select" });
     emit("ui_prompt_start", { kind: "select" });
     emit("session_start");
-    expect(shown[0]!.hidden).toBe(false);
-    shown[0]!.done();
-    await picking;
+    expect(press(KEY.down)).toBe(true);
   });
 
-  it("binds alt+w to the worker picker, in the terminal only", async () => {
-    const shortcuts = new Map<string, any>();
-    const orchestrator: any = { pi: { registerMessageRenderer: vi.fn(), on: vi.fn(), registerShortcut: (key: string, options: any) => shortcuts.set(key, options) }, workers: setup().manager };
-    registerWorkerUi(orchestrator);
-    const custom = vi.fn();
-    orchestrator.workers.spawn(spec());
-    await shortcuts.get("alt+w").handler({ mode: "rpc", ui: { custom } });
-    expect(custom).not.toHaveBeenCalled();
-    await shortcuts.get("alt+w").handler({ ui: { custom } });
-    expect(custom).toHaveBeenCalledTimes(1);
-    // An overlay: another dialog taking the editor's place cannot drop it.
-    expect(custom.mock.calls[0]![1]).toMatchObject({ overlay: true });
+  it("binds alt+w to the worker selection, in the terminal only", async () => {
+    const { shortcuts, ctx, listeners } = screens();
+    await shortcuts.get("alt+w").handler({ ...ctx, mode: "rpc" });
+    expect(listeners.size).toBe(0);
+    await shortcuts.get("alt+w").handler(ctx);
+    expect(listeners.size).toBe(1);
   });
 
   it("detaches the panel when the session shuts down", async () => {
@@ -697,7 +755,7 @@ describe("WorkerPicker (alt+w)", () => {
     const opened: string[] = [];
     let closed = false;
     const tui = { terminal: { rows: 40 }, requestRender: vi.fn() };
-    const picker = new WorkerPicker(tui as any, theme, widget, manager, async (id) => { opened.push(id); }, () => { closed = true; });
+    const picker = new WorkerPicker(tui as any, theme, widget, manager, (id) => { opened.push(id); }, () => { closed = true; });
     return { manager, sessions, picker, opened, isClosed: () => closed };
   }
 
@@ -752,20 +810,20 @@ describe("WorkerPicker (alt+w)", () => {
     const { manager } = open();
     const tui = { terminal: { rows: 16 }, requestRender: vi.fn() };
     const orchestrator: any = { workers: manager };
-    const picker = new WorkerPicker(tui as any, theme, new WorkerWidget(orchestrator), manager, async () => {}, () => {});
+    const picker = new WorkerPicker(tui as any, theme, new WorkerWidget(orchestrator), manager, () => {}, () => {});
     for (let i = 0; i < 10; i++) manager.spawn(spec({ description: `w${i}` }));
     await flush();
     for (let i = 0; i < 7; i++) picker.handleInput(KEY.down);
     picker.handleInput("m");
     const lines = picker.render(120).map(plain);
-    // pickerHeight(16) is 9.
-    expect(lines.length).toBeLessThanOrEqual(9);
+    // pickerHeight(16) is 6.
+    expect(lines.length).toBeLessThanOrEqual(6);
     expect(lines.at(-2)).toMatch(/^Message explore: /);
     expect(lines.some((line) => /^▌ ○ explore: w7/.test(line))).toBe(true);
     // It follows a resize: taller terminal, more rows, still within its share.
     tui.terminal.rows = 40;
-    expect(picker.render(120).length).toBeLessThanOrEqual(24);
-    expect(picker.render(120).length).toBeGreaterThan(9);
+    expect(picker.render(120).length).toBeLessThanOrEqual(16);
+    expect(picker.render(120).length).toBeGreaterThan(6);
     // Never taller than the terminal; the message box stays the last lines.
     tui.terminal.rows = 6;
     const tiny = picker.render(120).map(plain);
@@ -778,13 +836,13 @@ describe("WorkerPicker (alt+w)", () => {
     const tui = { terminal: { rows: 16 }, requestRender: vi.fn() };
     const orchestrator: any = { workers: manager };
     const widget = new WorkerWidget(orchestrator);
-    const picker = new WorkerPicker(tui as any, theme, widget, manager, async () => {}, () => {});
+    const picker = new WorkerPicker(tui as any, theme, widget, manager, () => {}, () => {});
     for (let i = 0; i < 6; i++) manager.spawn(spec({ description: `w${i}` }));
     await flush();
     for (let i = 0; i < 5; i++) picker.handleInput(KEY.down);
     const lines = picker.render(120).map(plain);
-    // At most 60% of the terminal.
-    expect(lines.length).toBeLessThanOrEqual(10);
+    // At most 40% of the terminal.
+    expect(lines.length).toBeLessThanOrEqual(6);
     expect(lines.some((line) => /^▌ ○ explore: w5/.test(line))).toBe(true);
     expect(lines.some((line) => /^  ↑ \d+ more$/.test(line))).toBe(true);
   });
@@ -817,9 +875,9 @@ describe("WorkerPicker (alt+w)", () => {
     picker.handleInput(KEY.escape);
     expect(isClosed()).toBe(true);
     const notify = vi.fn();
-    const custom = vi.fn();
-    await openWorkerPicker({ workers: setup().manager, workerWidget: new WorkerWidget({ workers: setup().manager } as any) } as any, { ui: { custom, notify } });
-    expect(custom).not.toHaveBeenCalled();
+    const onTerminalInput = vi.fn();
+    openWorkerPicker({ workers: setup().manager, workerWidget: new WorkerWidget({ workers: setup().manager } as any) } as any, { ui: { onTerminalInput, notify } });
+    expect(onTerminalInput).not.toHaveBeenCalled();
     expect(notify).toHaveBeenCalledWith("No workers to select.", "info");
   });
 });

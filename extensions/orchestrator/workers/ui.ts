@@ -1,4 +1,4 @@
-import { Input, matchesKey, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component, type TUI } from "@earendil-works/pi-tui";
+import { Input, isKeyRelease, matchesKey, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component, type TUI } from "@earendil-works/pi-tui";
 import type { Orchestrator } from "../orchestrator.js";
 import { formatDuration, WORKER_MESSAGE_TYPE, type WorkerMessageDetails } from "./delivery.js";
 import type { WorkerManager } from "./manager.js";
@@ -15,6 +15,8 @@ const MAX_ROWS_FRACTION = 0.3;
 const FINISHED_VISIBLE_MS = 10_000;
 const WORKER_ROWS = 3;
 const FAILED_STATUSES: ReadonlySet<string> = new Set(["failed", "killed"]);
+// pi-tui handles this terminal reply only after extension input listeners.
+const CELL_SIZE_REPLY = /^\x1b\[6;\d+;\d+t$/;
 
 /**
  * The always-visible worker panel above the editor, the transcript viewer the
@@ -57,7 +59,7 @@ export function registerWorkerUi(orchestrator: Orchestrator): void {
     description: "Select a worker: see its output, message, interrupt, stop or kill it",
     handler: async (ctx: any) => {
       if (ctx?.mode !== undefined && ctx.mode !== "tui") return;
-      await openWorkerPicker(orchestrator, ctx);
+      openWorkerPicker(orchestrator, ctx);
     },
   });
 }
@@ -94,6 +96,11 @@ export class WorkerWidget {
   private frame = 0;
   private unsubscribe: (() => void) | null = null;
   private manager: WorkerManager | null = null;
+  private theme: Theme | null = null;
+  /** alt+w: the panel takes the keys while the editor keeps its place, draft and focus. */
+  private nav: { picker: WorkerPicker; focus: unknown; unsubscribe: () => void } | null = null;
+  /** Workers shown when selection began stay selectable, finished or not, until it ends. */
+  private readonly pinned = new Set<string>();
   private readonly seen = new Map<string, number | undefined>();
 
   constructor(private readonly orchestrator: Orchestrator) {}
@@ -107,6 +114,7 @@ export class WorkerWidget {
   follow(): void {
     const manager = this.orchestrator.workers;
     if (manager === this.manager) return;
+    this.closeNav();
     this.unsubscribe?.();
     this.manager = manager;
     this.unsubscribe = manager?.subscribe(() => this.update()) ?? null;
@@ -114,6 +122,7 @@ export class WorkerWidget {
   }
 
   detach(): void {
+    this.closeNav();
     this.unsubscribe?.();
     this.unsubscribe = null;
     this.manager = null;
@@ -125,6 +134,7 @@ export class WorkerWidget {
   }
 
   suspend(): void {
+    this.closeNav();
     this.suspended = true;
     this.stopTimer();
     if (this.registered) this.ui?.setWidget?.("workers", undefined);
@@ -150,6 +160,7 @@ export class WorkerWidget {
     if (!this.ui || this.suspended) return;
     const visible = this.visibleRecords();
     if (!visible.length) {
+      this.closeNav();
       this.stopTimer();
       if (this.registered) this.ui.setWidget?.("workers", undefined);
       this.ui.setStatus?.("workers", undefined);
@@ -175,12 +186,61 @@ export class WorkerWidget {
     if (!this.registered) {
       this.ui.setWidget?.("workers", (tui: TUI, theme: Theme) => {
         this.tui = tui;
+        this.theme = theme;
         return { render: (width: number) => this.render(width, tui, theme), invalidate: () => {} };
       }, { placement: "aboveEditor" });
       this.registered = true;
     } else {
       this.tui?.requestRender();
     }
+  }
+
+  /**
+   * Makes the panel selectable in place. It is not an overlay: one is drawn
+   * at fixed screen rows, so it covers the editor and footer and smears into
+   * scrollback as output arrives. Keys come through a terminal input listener
+   * ahead of the editor.
+   */
+  navigate(ctx: any): void {
+    // A selection still open here is not taking keys (its focus is gone, as
+    // when pi swaps renderers): start over on the current focus.
+    this.closeNav();
+    const tui = this.tui;
+    if (!tui || !this.theme || !this.manager || typeof ctx?.ui?.onTerminalInput !== "function") return;
+    for (const record of this.visibleRecords()) this.pinned.add(record.id);
+    const picker = new WorkerPicker(tui, this.theme, this, this.manager, (id) => void openWorkerViewer(this.orchestrator, ctx, id, true), () => {
+      this.closeNav();
+      this.update();
+    });
+    const unsubscribe = ctx.ui.onTerminalInput((data: string) => this.navInput(data));
+    this.nav = { picker, focus: focusOf(tui), unsubscribe };
+    tui.requestRender();
+  }
+
+  private closeNav(): void {
+    const nav = this.nav;
+    if (!nav) return;
+    this.nav = null;
+    this.pinned.clear();
+    nav.unsubscribe();
+    nav.picker.dispose();
+    this.tui?.requestRender();
+  }
+
+  private navInput(data: string): { consume: true } | undefined {
+    const nav = this.nav;
+    if (!nav || !this.navigable(nav) || CELL_SIZE_REPLY.test(data)) return undefined;
+    if (!isKeyRelease(data)) nav.picker.handleInput(data);
+    return { consume: true };
+  }
+
+  /**
+   * Anything that took the keyboard since (a question, a menu, another
+   * extension's dialog, reported or not) keeps it; the selection comes back
+   * once the editor has the focus again.
+   */
+  private navigable(nav: NonNullable<WorkerWidget["nav"]>): boolean {
+    return !shouldHide(true) && focusOf(this.tui) === nav.focus;
   }
 
   private stopTimer(): void {
@@ -208,7 +268,8 @@ export class WorkerWidget {
     const now = Date.now();
     for (const id of this.seen.keys()) if (!this.orchestrator.workers?.get(id)) this.seen.delete(id);
     return (this.orchestrator.workers?.list() ?? []).filter((record) =>
-      ACTIVE_STATUSES.has(record.status)
+      this.pinned.has(record.id)
+      || ACTIVE_STATUSES.has(record.status)
       || (FAILED_STATUSES.has(record.status) && this.seen.get(record.id) !== record.settledAt)
       || now - (record.settledAt ?? 0) < FINISHED_VISIBLE_MS);
   }
@@ -226,6 +287,7 @@ export class WorkerWidget {
   }
 
   private render(width: number, tui: TUI, theme: Theme): string[] {
+    if (this.nav && this.navigable(this.nav)) return this.nav.picker.render(width);
     const records = this.visibleRecords().sort(order);
     if (!records.length) return [];
     const rows = tui?.terminal?.rows;
@@ -552,13 +614,15 @@ export function workerTranscriptText(manager: WorkerManager, id: string, maxChar
   return `${head}\n\n${body}`;
 }
 
-/** Opens the full-screen viewer for one worker; the panel is parked meanwhile so the overlay does not tear. */
-export async function openWorkerViewer(orchestrator: Orchestrator, ctx: any, id: string, fromPicker = false): Promise<void> {
+/**
+ * Opens the full-screen viewer for one worker; the panel is parked meanwhile so the overlay does not tear.
+ * Opened from alt+w, pi reports no dialog for it, so it steps aside for every dialog reported meanwhile.
+ */
+export async function openWorkerViewer(orchestrator: Orchestrator, ctx: any, id: string, followsPrompts = false): Promise<void> {
   const manager = orchestrator.workers;
   if (!manager?.get(id) || typeof ctx?.ui?.custom !== "function") return;
   orchestrator.workerWidget?.markSeen(id);
-  // From the picker the panel is already suspended, and the picker resumes it.
-  if (!fromPicker) orchestrator.workerWidget?.suspend();
+  orchestrator.workerWidget?.suspend();
   let untrack = () => {};
   try {
     await ctx.ui.custom((tui: TUI, theme: Theme, _keys: unknown, done: (value: undefined) => void) =>
@@ -566,20 +630,20 @@ export async function openWorkerViewer(orchestrator: Orchestrator, ctx: any, id:
       overlay: true,
       overlayOptions: { anchor: "center", width: "100%", maxHeight: "100%", margin: 0 },
       // Full screen, it would hide a question: it steps aside while one is open.
-      onHandle: (handle: any) => { untrack = trackScreen(handle, fromPicker); },
+      onHandle: (handle: any) => { untrack = trackScreen(handle, followsPrompts); },
     });
   } finally {
     untrack();
     // It may have failed while the transcript was open: that failure was seen.
     orchestrator.workerWidget?.markSeen(id);
-    if (!fromPicker) orchestrator.workerWidget?.resume();
+    orchestrator.workerWidget?.resume();
   }
 }
 
 /**
- * alt+w: the worker panel, selectable, over the bottom of the screen. Arrow
- * keys pick a worker; single keys act on it; Esc gives the editor back with
- * the draft untouched.
+ * alt+w: the worker panel, selectable, drawn in the panel's own place above
+ * the editor. Arrow keys pick a worker; single keys act on it; Esc gives the
+ * keys back to the editor.
  */
 export class WorkerPicker implements Component {
   /** The selected worker, by id: the list re-sorts as workers change state. */
@@ -595,7 +659,7 @@ export class WorkerPicker implements Component {
     private readonly theme: Theme,
     private readonly widget: WorkerWidget,
     private readonly manager: WorkerManager,
-    private readonly open: (id: string) => Promise<void>,
+    private readonly open: (id: string) => void,
     private readonly done: () => void,
   ) {
     this.timer = setInterval(() => {
@@ -643,8 +707,8 @@ export class WorkerPicker implements Component {
     if (matchesKey(data, "up")) this.selectedId = records[Math.max(0, at - 1)]!.id;
     else if (matchesKey(data, "down")) this.selectedId = records[Math.min(records.length - 1, at + 1)]!.id;
     else if (matchesKey(data, "enter")) {
-      clearInterval(this.timer);
-      void this.open(record.id).finally(() => this.done());
+      this.close();
+      this.open(record.id);
       return;
     } else if (matchesKey(data, "m")) {
       this.openComposer(record);
@@ -666,8 +730,8 @@ export class WorkerPicker implements Component {
   }
 
   private openComposer(record: WorkerRecord): void {
+    // Unfocused: the editor keeps the hardware cursor; Input still draws its own.
     const input = new Input();
-    input.focused = true;
     const id = record.id;
     input.onSubmit = (value: string) => {
       const text = value.trim();
@@ -735,13 +799,17 @@ export class WorkerPicker implements Component {
   invalidate(): void {}
 }
 
-/** Rows the picker may take. */
+/** Rows the picker may take: a little more than the panel, still leaving room for the editor below it. */
 function pickerHeight(rows: number): number {
-  return Math.min(rows, Math.max(8, Math.floor(rows * 0.6)));
+  return Math.min(rows, Math.max(6, Math.floor(rows * 0.4)));
 }
 
 function rowsOf(tui: TUI | null): number {
   return tui?.terminal?.rows ?? process.stdout.rows ?? 30;
+}
+
+function focusOf(tui: TUI | null): unknown {
+  return (tui as { getFocusedComponent?(): unknown } | null)?.getFocusedComponent?.() ?? null;
 }
 
 /**
@@ -787,34 +855,13 @@ function trackScreen(handle: OverlayHandle, followsPrompts: boolean): () => void
   return () => screens.delete(handle);
 }
 
-/** Opens the picker over the bottom of the screen; its Enter opens the full viewer. */
-export async function openWorkerPicker(orchestrator: Orchestrator, ctx: any): Promise<void> {
-  const manager = orchestrator.workers;
+/** Makes the worker panel selectable; its Enter opens the full viewer. */
+export function openWorkerPicker(orchestrator: Orchestrator, ctx: any): void {
   const widget = orchestrator.workerWidget;
-  if (!manager || !widget || typeof ctx?.ui?.custom !== "function") return;
+  if (!orchestrator.workers || !widget) return;
   if (!widget.visibleRecords().length) {
-    ctx.ui.notify?.("No workers to select.", "info");
+    ctx?.ui?.notify?.("No workers to select.", "info");
     return;
   }
-  widget.suspend();
-  try {
-    // An overlay, not a stand-in for the editor: a question the agent asks
-    // meanwhile takes the editor's place, and would otherwise drop the picker
-    // with its promise never settling.
-    let untrack = () => {};
-    try {
-      await ctx.ui.custom((tui: TUI, theme: Theme, _keys: unknown, done: (value: undefined) => void) =>
-        new WorkerPicker(tui, theme, widget, manager, (id) => openWorkerViewer(orchestrator, ctx, id, true), () => done(undefined)), {
-        overlay: true,
-        // No height cap here: pi fixes it when the overlay opens, while the
-        // picker sizes itself to the terminal it is drawn on.
-        overlayOptions: { anchor: "bottom-center", width: "100%", margin: 0 },
-        onHandle: (handle: any) => { untrack = trackScreen(handle, true); },
-      });
-    } finally {
-      untrack();
-    }
-  } finally {
-    widget.resume();
-  }
+  widget.navigate(ctx);
 }
