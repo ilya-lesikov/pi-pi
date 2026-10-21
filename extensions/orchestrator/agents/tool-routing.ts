@@ -65,6 +65,14 @@ const TOOL_SEGMENTS: ToolSegment[] = [
       { tools: ["read"], text: "- read: file contents of any kind — source, config, docs, logs, data, images." },
       { tools: ["ls", "find"], text: "- ls / find: enumerate a directory or locate files by glob before reading them." },
       { tools: ["bash"], text: "- bash: run commands to observe real state — builds, tests, queries, data processing, system and VCS inspection. Prefer a command that proves something over an assumption." },
+      {
+        tools: ["bash"],
+        text:
+          "- bash and commands that do not exit by themselves: start a server, watcher or `tail -f` in a bash call of its own, in the background " +
+          "with its output in a file (`cmd > /tmp/x.log 2>&1 &`), read the file, and stop it when done. Make scripts exit on their own: close connections and clear timers. " +
+          "Prefix a command that talks to the network or waits on another process with `timeout N`. Give bash an explicit `timeout` for a command that can " +
+          "legitimately run long or print nothing for minutes (a quiet build or install, `sleep`, a `--wait` deploy): without one, bash may stop it after a few minutes with no output, or at a default limit.",
+      },
     ],
   },
   {

@@ -6,6 +6,11 @@ const sdk = vi.hoisted(() => ({
   sessions: [] as any[],
   loadErrors: [] as any[],
   createOptions: [] as any[],
+  guards: [] as any[],
+}));
+
+vi.mock("../bash-guard.js", () => ({
+  registerBashGuard: (pi: any, cwd: string, limits: any) => sdk.guards.push({ pi, cwd, timeoutSec: limits.timeoutSec(), silenceMs: limits.silenceMs() }),
 }));
 
 vi.mock("@earendil-works/pi-coding-agent", () => {
@@ -88,16 +93,22 @@ function hooks() {
   return { h, calls };
 }
 
-function factory(overrides: { registry?: any; bashTimeoutSec?: number } = {}) {
-  const childExtension = vi.fn();
-  const create = createChildSessionFactory({
+function factoryEnv(overrides: { registry?: any; bashTimeoutSec?: number; bashSilenceMs?: number; projectTrusted?: boolean } = {}, childExtension = vi.fn()) {
+  return {
     cwd: "/repo",
     modelRegistry: () => overrides.registry ?? { runtime: { rt: true }, find: (provider: string, id: string) => provider === "p" && id === "m" ? MODEL : undefined },
-    systemPrompt: (s) => `prompt for ${s.type}`,
+    systemPrompt: (s: WorkerSpawnSpec) => `prompt for ${s.type}`,
     toolNames: () => ["read", "bash"],
     childExtension,
     bashTimeoutSec: () => overrides.bashTimeoutSec ?? 0,
-  });
+    bashSilenceMs: () => overrides.bashSilenceMs ?? 0,
+    projectTrusted: () => overrides.projectTrusted ?? true,
+  };
+}
+
+function factory(overrides: { registry?: any; bashTimeoutSec?: number; bashSilenceMs?: number; projectTrusted?: boolean } = {}) {
+  const childExtension = vi.fn();
+  const create = createChildSessionFactory(factoryEnv(overrides, childExtension));
   return { create, childExtension };
 }
 
@@ -116,6 +127,7 @@ beforeEach(() => {
   sdk.loaders.length = 0;
   sdk.sessions.length = 0;
   sdk.createOptions.length = 0;
+  sdk.guards.length = 0;
   sdk.loadErrors = [];
 });
 
@@ -392,8 +404,8 @@ describe("tool interrupt", () => {
 });
 
 describe("worker channel tools", () => {
-  async function tools(overrides: Partial<WorkerSpawnSpec> = {}, bashTimeoutSec = 0) {
-    const { create } = factory({ bashTimeoutSec });
+  async function tools(overrides: Partial<WorkerSpawnSpec> = {}) {
+    const { create } = factory();
     const { h } = hooks();
     await create(spec(overrides), h);
     return { ...channel(sdk.loaders[0]), h };
@@ -430,21 +442,16 @@ describe("worker channel tools", () => {
     expect(unanswered.content[0].text).toMatch(/^No answer came/);
   });
 
-  it("gives a bash call without its own timeout the configured default", async () => {
-    const { handlers } = await tools({}, 120);
-    const onCall = handlers.get("tool_call")!;
-    const unset = { toolName: "bash", input: { command: "x" } as any };
-    const zero = { toolName: "bash", input: { command: "x", timeout: 0 } };
-    const own = { toolName: "bash", input: { command: "x", timeout: 5 } };
-    const other = { toolName: "read", input: {} as any };
-    for (const event of [unset, zero, own, other]) await onCall(event);
-    expect([unset.input.timeout, zero.input.timeout, own.input.timeout, other.input.timeout]).toEqual([120, 120, 5, undefined]);
-  });
-
-  it("leaves bash timeouts alone when no default is configured", async () => {
-    const { handlers } = await tools({}, 0);
-    const event = { toolName: "bash", input: { command: "x" } as any };
-    await handlers.get("tool_call")!(event);
-    expect(event.input.timeout).toBeUndefined();
+  it("gives a worker with bash the guarded bash, with the worker's limits, and none to a worker without bash", async () => {
+    const { create } = factory({ bashTimeoutSec: 120, bashSilenceMs: 90_000 });
+    const { h } = hooks();
+    await create(spec(), h);
+    const entry = sdk.loaders[0].options.extensionFactories.find((f: any) => f.name === "pi-pi-worker-bash");
+    expect(entry).toBeDefined();
+    entry.factory("child-pi");
+    expect(sdk.guards).toEqual([{ pi: "child-pi", cwd: "/repo", timeoutSec: 120, silenceMs: 90_000 }]);
+    const readOnly = createChildSessionFactory({ ...factoryEnv(), toolNames: () => ["read"] });
+    await readOnly(spec(), h);
+    expect(sdk.loaders[1].options.extensionFactories.map((f: any) => f.name)).not.toContain("pi-pi-worker-bash");
   });
 });

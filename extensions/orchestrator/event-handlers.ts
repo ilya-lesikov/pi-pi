@@ -1,6 +1,6 @@
 import { isAbsolute, relative, resolve, sep } from "path";
 import { Type } from "@sinclair/typebox";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, SettingsManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { loadConfig, getDefaultConfig, normalizeConfigDurations, readLspServerLayers } from "./config.js";
 import { getLogger, initSessionLogger, setLogLevel, flushLogs } from "./log.js";
 import { attachHost, notice, registerNotices } from "./notices.js";
@@ -27,6 +27,7 @@ import { installConsoleGuard } from "./console-guard.js";
 import { clearAllPauses, demoteUnusableSubscription, handleMainAuthFailure, handleMainRateLimit, handleMainRefusal, handleSubagentAuthFailure, handleSubagentRateLimit, handleSubscriptionRouteOutage, isAuthError, isModelRefusal, isPolicyBlockError, isRateLimitError } from "./rate-limit-fallback.js";
 import { adjudicateCheckIn, adjudicateContinuation } from "./continuation-adjudicator.js";
 import { registerTasks } from "./tasks/index.js";
+import { bashOwnedElsewhere, keepBashOffWhereItWas, registerBashGuard } from "./bash-guard.js";
 import { registerBbBridge } from "./bb-bridge.js";
 import { registerAskUser, registerConfirm } from "./ask/index.js";
 import { LspManager } from "./lsp/manager.js";
@@ -41,6 +42,7 @@ import { loadRoutingSettings, noteSubscriptionCredentialAccepted, refreshCodexOA
 import type { Orchestrator } from "./orchestrator.js";
 
 const USAGE_TRACKER_KEY = Symbol.for("pi-pi:usage-tracker");
+const BASH_BEFORE_RELOAD_KEY = Symbol.for("pi-pi:bash-before-reload");
 const HOST_BUILTINS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 const MAX_CONTINUATIONS = 3;
 const MAX_OBJECTIVE_CONTINUATIONS = 5;
@@ -643,6 +645,10 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   registerBbBridge(orchestrator, registerTasks(pi, () => orchestrator.workerWidget?.restack()));
   registerAskUser(pi);
   registerConfirm(pi);
+  registerBashGuard(pi, process.cwd(), {
+    timeoutSec: () => Math.round((orchestrator.config?.performance?.internals?.bashTimeout ?? 0) / 1000),
+    silenceMs: () => orchestrator.config?.performance?.internals?.bashSilence ?? 0,
+  });
   registerLspTool(pi, () => orchestrator.lsp);
   registerLspWarmup(pi, () => orchestrator.lsp, () => orchestrator.config?.lsp.diagnosticsAfterEdit ?? false);
   pi.on("message_end", async (event: any) => {
@@ -655,10 +661,26 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     orchestrator.workerDelivery?.requeueUnseen();
   });
 
-  pi.on("session_start", async (_event, ctx) => {
+  // Whether bash was on when a reload began: the reload keeps it as it was. On
+  // globalThis, since a reload loads pi-pi afresh and this closure with it.
+  pi.on("session_shutdown", async (event: any) => {
+    (globalThis as any)[BASH_BEFORE_RELOAD_KEY] = event?.reason === "reload" ? pi.getActiveTools().includes("bash") : undefined;
+  });
+  pi.on("session_start", async (event, ctx) => {
+    // First, before anything can return early: pi has just turned every extension tool on.
+    const bashBeforeReload = (globalThis as any)[BASH_BEFORE_RELOAD_KEY] as boolean | undefined;
+    delete (globalThis as any)[BASH_BEFORE_RELOAD_KEY];
+    keepBashOffWhereItWas(
+      pi,
+      process.argv.slice(2),
+      SettingsManager.create(ctx.cwd, getAgentDir(), { projectTrusted: ctx.isProjectTrusted?.() ?? false }).getDefaultTools(),
+      event.reason === "reload" ? bashBeforeReload : undefined,
+    );
     orchestrator.lastCtx = ctx;
     orchestrator.cwd = ctx.cwd;
     attachHost(ctx);
+    const bashOwner = bashOwnedElsewhere(pi);
+    if (bashOwner) notice(ctx, `bash comes from ${bashOwner}, which loads before pi-pi: its commands get no default timeout or silence limit.`, "warning");
     orchestrator.interactivePromptOpen = false;
     // Before anything resolves a binary: a previous session's downloads are
     // already on disk, and this is what makes them visible to `which`.

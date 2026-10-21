@@ -11,6 +11,7 @@ import {
   type ExtensionFactory,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { registerBashGuard } from "../bash-guard.js";
 import type { WorkerFinding, WorkerResult, WorkerSession, WorkerSessionHooks, WorkerSpawnSpec } from "./types.js";
 
 export interface ChildSessionEnv {
@@ -23,6 +24,10 @@ export interface ChildSessionEnv {
   childExtension: ExtensionFactory;
   /** Default timeout for a child bash call that sets none, in seconds. */
   bashTimeoutSec: () => number;
+  /** How long a child bash call that sets no timeout may print nothing before it is stopped, in ms. */
+  bashSilenceMs: () => number;
+  /** Whether the root session trusts the project; an untrusted one's settings are not read. */
+  projectTrusted: () => boolean;
 }
 
 const CHILD_TOOL_NAMES = ["submit_result", "report_progress", "ask_parent"];
@@ -33,6 +38,7 @@ export function createChildSessionFactory(env: ChildSessionEnv) {
     const model = findModel(registry, spec.model);
     if (!model) throw new Error(`model ${spec.model} is not available`);
     const agentDir = getAgentDir();
+    const settingsManager = SettingsManager.create(env.cwd, agentDir, { projectTrusted: env.projectTrusted() });
     const interrupt = new ToolInterrupt();
     const loader = new DefaultResourceLoader({
       cwd: env.cwd,
@@ -44,7 +50,11 @@ export function createChildSessionFactory(env: ChildSessionEnv) {
       noContextFiles: true,
       extensionFactories: [
         { name: "pi-pi-worker", hidden: true, factory: env.childExtension },
-        { name: "pi-pi-worker-channel", hidden: true, factory: (pi) => registerChildTools(pi, spec, hooks, env.bashTimeoutSec) },
+        { name: "pi-pi-worker-channel", hidden: true, factory: (pi) => registerChildTools(pi, spec, hooks) },
+        // Only for roles that have bash: registering it would hand bash to one that has not.
+        ...(env.toolNames(spec).includes("bash")
+          ? [{ name: "pi-pi-worker-bash", hidden: true, factory: (pi: ExtensionAPI) => registerBashGuard(pi, env.cwd, { timeoutSec: env.bashTimeoutSec, silenceMs: env.bashSilenceMs }, { settings: settingsManager }) }]
+          : []),
       ],
       systemPromptOverride: () => env.systemPrompt(spec),
       appendSystemPromptOverride: () => [],
@@ -63,7 +73,7 @@ export function createChildSessionFactory(env: ChildSessionEnv) {
       tools: [...env.toolNames(spec), ...CHILD_TOOL_NAMES],
       resourceLoader: loader,
       sessionManager: SessionManager.inMemory(env.cwd),
-      settingsManager: SettingsManager.create(env.cwd, agentDir),
+      settingsManager,
     });
     session.setSessionName(`${spec.type}: ${spec.description}`);
     interrupt.install(session);
@@ -292,7 +302,7 @@ const findingSchema = Type.Object({
   issue: Type.String({ description: "What is wrong and why it matters" }),
 });
 
-function registerChildTools(pi: ExtensionAPI, spec: WorkerSpawnSpec, hooks: WorkerSessionHooks, bashTimeoutSec: () => number): void {
+function registerChildTools(pi: ExtensionAPI, spec: WorkerSpawnSpec, hooks: WorkerSessionHooks): void {
   const findings = spec.resultSchema === "findings";
   pi.registerTool({
     name: "submit_result",
@@ -342,9 +352,4 @@ function registerChildTools(pi: ExtensionAPI, spec: WorkerSpawnSpec, hooks: Work
       return { content: [{ type: "text" as const, text }], details: undefined };
     },
   } as ToolDefinition<any, any>);
-  pi.on("tool_call", async (event: any) => {
-    if (event.toolName !== "bash") return;
-    const limit = bashTimeoutSec();
-    if (limit > 0 && (typeof event.input?.timeout !== "number" || event.input.timeout <= 0)) event.input.timeout = limit;
-  });
 }
