@@ -2,6 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { BbState as PluginState } from "../../bb/state.js";
 import { registerBbBridge, type BbState } from "./bb-bridge.js";
 import { registerTasks } from "./tasks/index.js";
 import { WorkerManager } from "./workers/manager.js";
@@ -19,7 +20,7 @@ afterEach(() => {
   rmSync(storage, { recursive: true, force: true });
 });
 
-function harness(env: NodeJS.ProcessEnv = { BB_THREAD_STORAGE: storage }) {
+function harness(env: NodeJS.ProcessEnv = { BB_THREAD_ID: "thr_1", BB_THREAD_STORAGE: storage }, mode = "rpc") {
   const handlers = new Map<string, Array<(event: any, ctx: any) => any>>();
   const tools = new Map<string, any>();
   const pi: any = {
@@ -51,7 +52,7 @@ function harness(env: NodeJS.ProcessEnv = { BB_THREAD_STORAGE: storage }) {
   });
   const orchestrator: any = { pi, workers: manager };
   registerBbBridge(orchestrator, registerTasks(pi), env);
-  const ctx = { hasUI: false, sessionManager: { getBranch: () => [] } };
+  const ctx = { mode, hasUI: false, sessionManager: { getBranch: () => [] } };
   const fire = async (event: string) => {
     for (const handler of handlers.get(event) ?? []) await handler({}, ctx);
   };
@@ -65,6 +66,9 @@ function harness(env: NodeJS.ProcessEnv = { BB_THREAD_STORAGE: storage }) {
 const spec = { type: "explore", description: "look around", prompt: "find the auth module", model: "p/m", thinking: "high", notify: "wake" as const };
 const flush = async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); };
 
+// The bb plugin keeps its own copy of the file's types; this fails to compile when they drift apart.
+const readableByPlugin = (state: BbState): PluginState => state;
+
 describe("bb bridge", () => {
   it("does nothing outside bb", async () => {
     const { fire, file } = harness({});
@@ -72,10 +76,27 @@ describe("bb bridge", () => {
     expect(existsSync(file)).toBe(false);
   });
 
+  it("leaves the thread's file alone in a pi started from one of the thread's shells", async () => {
+    const { fire, file } = harness(undefined, "tui");
+    await fire("session_start");
+    expect(existsSync(file)).toBe(false);
+  });
+
+  it("records a command that throws as failed instead of crashing pi", async () => {
+    const { fire, state, manager, command } = harness();
+    await fire("session_start");
+    const record = manager.spawn(spec);
+    await flush();
+    vi.spyOn(manager, "stop").mockImplementation(() => { throw new Error("boom"); });
+    command("1-a.json", { id: "a", workerId: record.id, action: "stop" });
+    vi.advanceTimersByTime(500);
+    expect(state().commandResults).toEqual([expect.objectContaining({ id: "a", ok: false, message: "Failed: boom" })]);
+  });
+
   it("mirrors the task list as soon as it changes", async () => {
     const { fire, state, call } = harness();
     await fire("session_start");
-    expect(state()).toMatchObject({ version: 1, live: true, tasks: [], workers: [] });
+    expect(readableByPlugin(state())).toMatchObject({ version: 1, live: true, tasks: [], workers: [] });
     await call("TaskCreate", { subject: "Write tests", description: "", activeForm: "Writing tests" });
     await call("TaskUpdate", { taskId: "1", status: "in_progress" });
     expect(state().tasks).toEqual([{ id: "1", subject: "Write tests", status: "in_progress", activeForm: "Writing tests" }]);
@@ -95,6 +116,16 @@ describe("bb bridge", () => {
     expect(state().workers[0]).toMatchObject({ status: "completed", result: { summary: "all done" } });
     await fire("session_shutdown");
     expect(state().live).toBe(false);
+  });
+
+  it("refreshes its heartbeat while nothing changes", async () => {
+    const { fire, state } = harness();
+    await fire("session_start");
+    const first = state().heartbeatAt;
+    vi.advanceTimersByTime(1000);
+    expect(state().heartbeatAt).toBe(first);
+    vi.advanceTimersByTime(5000);
+    expect(state().heartbeatAt).toBeGreaterThan(first);
   });
 
   it("runs Stop, Kill and Message commands once each and reports how they went", async () => {

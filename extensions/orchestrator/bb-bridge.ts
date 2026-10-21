@@ -1,5 +1,6 @@
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { detectHost } from "./host.js";
 import { getLogger } from "./log.js";
 import type { Orchestrator } from "./orchestrator.js";
 import type { TaskFeed } from "./tasks/index.js";
@@ -7,6 +8,8 @@ import type { WorkerManager } from "./workers/manager.js";
 import type { WorkerRecord } from "./workers/types.js";
 
 const TICK_MS = 500;
+// Rewritten at least this often while the session lives, so a reader can tell a crashed pi from an idle one.
+const HEARTBEAT_MS = 5000;
 const RESULTS_KEPT = 20;
 const PROMPT_CHARS = 1500;
 const RESULT_CHARS = 2000;
@@ -17,6 +20,7 @@ export interface BbState {
   pid: number;
   /** False once the session that wrote it has shut down. */
   live: boolean;
+  heartbeatAt: number;
   tasks: Array<{ id: string; subject: string; status: string; activeForm?: string }>;
   workers: BbWorker[];
   commandResults: BbCommandResult[];
@@ -71,11 +75,12 @@ export function registerBbBridge(orchestrator: Orchestrator, tasks: TaskFeed, en
   const stateFile = join(dir, "state.json");
   let timer: ReturnType<typeof setInterval> | null = null;
   let written = "";
+  let writtenAt = 0;
   let results: BbCommandResult[] = [];
   let failed = false;
 
   const write = (live: boolean) => {
-    const state: BbState = {
+    const state: Omit<BbState, "heartbeatAt"> = {
       version: 1,
       pid: process.pid,
       live,
@@ -84,13 +89,15 @@ export function registerBbBridge(orchestrator: Orchestrator, tasks: TaskFeed, en
       commandResults: results,
     };
     const json = JSON.stringify(state);
-    if (json === written) return;
+    const now = Date.now();
+    if (json === written && now - writtenAt < HEARTBEAT_MS) return;
     try {
       mkdirSync(commandsDir, { recursive: true });
       const temp = `${stateFile}.${process.pid}.tmp`;
-      writeFileSync(temp, json);
+      writeFileSync(temp, JSON.stringify({ ...state, heartbeatAt: now } satisfies BbState));
       renameSync(temp, stateFile);
       written = json;
+      writtenAt = now;
       failed = false;
     } catch (error: any) {
       // Logged once per run of failures: the tick retries every half second.
@@ -115,7 +122,12 @@ export function registerBbBridge(orchestrator: Orchestrator, tasks: TaskFeed, en
       // Removed before it runs: a command that throws must not run again on the next tick.
       try { rmSync(file, { force: true }); } catch {}
       if (!command?.id) continue;
-      const outcome = runCommand(orchestrator.workers, command);
+      let outcome: { ok: boolean; message: string };
+      try {
+        outcome = runCommand(orchestrator.workers, command);
+      } catch (error: any) {
+        outcome = { ok: false, message: `Failed: ${error?.message ?? String(error)}` };
+      }
       results = [...results, { id: command.id, ...outcome, at: Date.now() }].slice(-RESULTS_KEPT);
     }
   };
@@ -125,7 +137,10 @@ export function registerBbBridge(orchestrator: Orchestrator, tasks: TaskFeed, en
     write(true);
   };
 
-  orchestrator.pi.on("session_start", async () => {
+  orchestrator.pi.on("session_start", async (_event, ctx: any) => {
+    // bb puts the variable in every shell the agent runs too; a pi started there
+    // (in the terminal, or with -p) must not take over the thread's own file.
+    if (detectHost(ctx?.mode, env).id !== "bb") return;
     results = [];
     if (!timer) {
       timer = setInterval(tick, TICK_MS);
