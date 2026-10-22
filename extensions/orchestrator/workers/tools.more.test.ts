@@ -119,6 +119,25 @@ describe("worker tools — more", () => {
     manager.shutdown();
   });
 
+  // A failed worker a provider recovery may still resume is not active, but
+  // stopping it is what keeps that recovery from bringing it back.
+  it("cancels the pending retry of a failed worker it is asked to stop", async () => {
+    const { manager, call, spawn, sessions } = setup();
+    await spawn();
+    await flush();
+    sessions[0]!.finish("");
+    await flush();
+    const record = manager.get("explore-1")!;
+    record.status = "failed";
+    manager.beginRecovery(record.id);
+    expect(text(await call("agent_stop", { id: "all" }))).toBe("explore-1: failed; it will not be retried.");
+    expect(manager.recovering(record.id)).toBe(false);
+    manager.beginRecovery(record.id);
+    expect(text(await call("agent_stop", { id: "explore-1", mode: "kill" }))).toBe("explore-1: failed; it will not be retried.");
+    expect(manager.recovering(record.id)).toBe(false);
+    manager.shutdown();
+  });
+
   it("reports a stopped queued worker by its new status, and that nothing is active", async () => {
     const { call, spawn } = setup({ maxConcurrent: 1 });
     await spawn();

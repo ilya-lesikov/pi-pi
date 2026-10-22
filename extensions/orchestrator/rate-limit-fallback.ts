@@ -112,7 +112,12 @@ async function pauseAndReroute(
 ): Promise<boolean> {
   // Paused already, a move parked by whatever paused it is still waiting to
   // carry the main session off; this failure is that move's to recover.
-  if (isPaused(key)) return origin === "main" && orchestrator.pendingModelSwitches.some((action) => mainMoves.has(action));
+  if (isPaused(key)) {
+    if (origin !== "main") return false;
+    const parked = orchestrator.pendingModelSwitches.filter((action) => mainMoves.has(action));
+    for (const action of parked) owedRequests.set(action, orchestrator.continuationGeneration);
+    return parked.length > 0;
+  }
   const fallback = fallbackSettings(orchestrator);
   const what = describePauseKey(key);
   const trigger = cause === "auth"
@@ -145,7 +150,13 @@ async function pauseAndReroute(
     // switch runs later, against whatever context is current then.
     const switchCtx = ctx?.model ? ctx : orchestrator.lastCtx ?? ctx;
     const current = liveSpec(switchCtx) || spec;
-    if (!isPausedFor(current)) return;
+    if (!isPausedFor(current)) {
+      // The pause ran out while this was parked, and its expiry found nothing
+      // of this move's to resume: a request taken from pi's retry for it
+      // resumes here, unless the user has sent another since.
+      if (owedRequests.get(move) === orchestrator.continuationGeneration) orchestrator.queueContinuation("[PI-PI] The provider limit cleared. Continue the current request.");
+      return;
+    }
     // A session pi-pi routed follows its configured model; one the user picked
     // by hand stays theirs, moved only within the same slot.
     const owned = orchestrator.routedMainSpec === current;
@@ -179,6 +190,7 @@ async function pauseAndReroute(
     if (resumeRequest) orchestrator.queueContinuation("[PI-PI] Provider routing changed after a provider failure. Continue the current request.");
   };
   if (resumeRequest) mainMoves.add(move);
+  if (resumeRequest && origin === "main") owedRequests.set(move, orchestrator.continuationGeneration);
   await orchestrator.runModelSwitchBetweenTurns(move);
   return true;
 }
@@ -186,6 +198,9 @@ async function pauseAndReroute(
 // The switches pauseAndReroute parks to move the main session off a paused
 // route that also carry the interrupted request on.
 const mainMoves = new WeakSet<object>();
+
+// The main request each of those moves stopped, by its generation.
+const owedRequests = new WeakMap<object, number>();
 
 /** The pause still covering `spec`, so a waiting request can follow it. */
 function routeHolding(spec: string): string | null {
@@ -354,7 +369,7 @@ export function takeOverMainRateLimit(ctx: any, message: unknown, recovering: bo
  * A worker whose role is pinned to a model, or one already moved once, keeps
  * pi's retries.
  */
-export function takeOverWorkerRateLimit(orchestrator: Orchestrator, record: { id: string; modelId?: string; spec: { type: string } }, message: any): void {
+export function takeOverWorkerRateLimit(orchestrator: Orchestrator, record: { id: string; modelId?: string; spec: { type: string }; runs?: number }, message: any): void {
   if (message?.role !== "assistant" || message.stopReason !== "error" || !isRateLimitError(message.errorMessage)) return;
   if (!record.modelId || orchestrator.retriedSubagentIds.has(record.id)) return;
   const ref = getAgentDefinition(record.spec.type)?.ref;
@@ -366,18 +381,22 @@ export function takeOverWorkerRateLimit(orchestrator: Orchestrator, record: { id
   const target = getAgentDefinition(record.spec.type)?.model;
   if (!target || target === record.modelId || isSlotRef(target)) return;
   takenOver.add(message);
-  takenOverWorkers.add(record);
+  takenOverWorkers.set(record, record.runs);
 }
 
-// Workers whose last rate limit was taken from pi's retry, until their recovery claims it.
-const takenOverWorkers = new WeakSet<object>();
+// Workers whose rate limit was taken from pi's retry, by the run it ended:
+// a run that settled some other way leaves nothing owed to a later one.
+const takenOverWorkers = new WeakMap<object, number | undefined>();
 
 /**
- * Whether the rate limit `record` failed on was taken from pi's retry, which
- * leaves its recovery owing it the retry pi would have made. Clears the mark.
+ * Whether the rate limit `record` failed on in its current run was taken from
+ * pi's retry, which leaves its recovery owing it the retry pi would have made.
+ * Clears the mark.
  */
-export function claimWorkerTakeover(record: object): boolean {
-  return takenOverWorkers.delete(record);
+export function claimWorkerTakeover(record: { id: string; runs?: number }): boolean {
+  const owed = takenOverWorkers.has(record) && takenOverWorkers.get(record) === record.runs;
+  takenOverWorkers.delete(record);
+  return owed;
 }
 
 /**

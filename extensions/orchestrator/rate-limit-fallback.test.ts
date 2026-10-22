@@ -256,6 +256,18 @@ describe("pause-based rate-limit fallback", () => {
       expect(claimWorkerTakeover(record)).toBe(false);
     });
 
+    // A run that settles some other way leaves the mark behind; a limit in a
+    // later run was never taken from pi and is owed nothing.
+    it("owes a worker's recovery the retry only for the run whose limit was taken over", () => {
+      setCatalog([SUB, COPILOT_OPUS]);
+      const orchestrator = makeOrchestrator();
+      orchestrator.registerAgents();
+      const record = { id: "task-1", modelId: SUB, spec: { type: "task" }, runs: 1 };
+      takeOverWorkerRateLimit(orchestrator, record, limited());
+      record.runs = 2;
+      expect(claimWorkerTakeover(record)).toBe(false);
+    });
+
     // A worker hitting the limit first parks the main session's move; the main
     // request failing on the same paused route is that move's to recover.
     it("takes the main session's limit over when a worker's pause already parked its move", async () => {
@@ -571,6 +583,85 @@ describe("pause-based rate-limit fallback", () => {
       expect(orchestrator.switchModel).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(2_000);
       expect(pi.sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("The provider limit cleared"), expect.anything());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A request taken from pi's retry is the parked move's to carry on; a pause
+  // that expires before the move runs must not leave it stopped.
+  it("resumes a taken-over request whose pause expired before its parked move ran", async () => {
+    vi.useFakeTimers();
+    try {
+      const LLM_OPUS = "pp-flant-openai/claude-opus-4-8";
+      setCatalog([COPILOT_OPUS, LLM_OPUS]);
+      const pi = makePi();
+      const orchestrator = makeOrchestrator(pi);
+      orchestrator.routedMainSpec = COPILOT_OPUS;
+      orchestrator.switchModel = vi.fn(async () => true);
+      let idle = false;
+      orchestrator.lastCtx = { ...ctxOn(COPILOT_OPUS), isIdle: () => idle };
+      expect(await handleMainRateLimit(orchestrator, orchestrator.lastCtx, COPILOT_OPUS, "429 retry-after: 1")).toBe(true);
+      expect(orchestrator.pendingModelSwitches).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(isPaused("copilot:claude/opus")).toBe(false);
+      idle = true;
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(orchestrator.switchModel).not.toHaveBeenCalled();
+      expect(pi.sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("Continue the current request"), expect.anything());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resumes a request that joined a worker's parked move once that move's pause expired, and sends nothing for the worker alone", async () => {
+    vi.useFakeTimers();
+    try {
+      const LLM_OPUS = "pp-flant-openai/claude-opus-4-8";
+      setCatalog([COPILOT_OPUS, LLM_OPUS]);
+      const pi = makePi();
+      const orchestrator = makeOrchestrator(pi);
+      orchestrator.routedMainSpec = COPILOT_OPUS;
+      orchestrator.switchModel = vi.fn(async () => true);
+      let idle = false;
+      orchestrator.lastCtx = { ...ctxOn(COPILOT_OPUS), isIdle: () => idle };
+      await handleSubagentRateLimit(orchestrator, orchestrator.lastCtx, COPILOT_OPUS, "429 retry-after: 1");
+      expect(orchestrator.pendingModelSwitches).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1_500);
+      idle = true;
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(pi.sendUserMessage).not.toHaveBeenCalled();
+
+      idle = false;
+      await handleSubagentRateLimit(orchestrator, orchestrator.lastCtx, COPILOT_OPUS, "429 retry-after: 2");
+      expect(await handleMainRateLimit(orchestrator, orchestrator.lastCtx, COPILOT_OPUS, "429 retry-after: 2")).toBe(true);
+      await vi.advanceTimersByTimeAsync(2_500);
+      idle = true;
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(orchestrator.switchModel).not.toHaveBeenCalled();
+      expect(pi.sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("Continue the current request"), expect.anything());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not resume a request the user replaced before the expired move ran", async () => {
+    vi.useFakeTimers();
+    try {
+      const LLM_OPUS = "pp-flant-openai/claude-opus-4-8";
+      setCatalog([COPILOT_OPUS, LLM_OPUS]);
+      const pi = makePi();
+      const orchestrator = makeOrchestrator(pi);
+      orchestrator.routedMainSpec = COPILOT_OPUS;
+      orchestrator.switchModel = vi.fn(async () => true);
+      let idle = false;
+      orchestrator.lastCtx = { ...ctxOn(COPILOT_OPUS), isIdle: () => idle };
+      await handleMainRateLimit(orchestrator, orchestrator.lastCtx, COPILOT_OPUS, "429 retry-after: 1");
+      await vi.advanceTimersByTimeAsync(1_500);
+      orchestrator.resetContinuation();
+      idle = true;
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(pi.sendUserMessage).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }

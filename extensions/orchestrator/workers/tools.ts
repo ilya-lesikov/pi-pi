@@ -167,10 +167,14 @@ export function registerWorkerTools(pi: ExtensionAPI, host: WorkerToolsHost): vo
       const manager = host.manager();
       if (!manager) return { ...text("Workers are unavailable."), isError: true } as any;
       const mode = params.mode ?? "graceful";
-      const targets = params.id === "all" ? manager.active() : [manager.get(params.id)].filter((record): record is WorkerRecord => !!record);
+      const targets = params.id === "all" ? [...manager.active(), ...manager.list().filter((record) => manager.recovering(record.id))] : [manager.get(params.id)].filter((record): record is WorkerRecord => !!record);
       if (!targets.length) return { ...text(params.id === "all" ? "No active workers." : `No such worker: ${params.id}.`), isError: params.id !== "all" } as any;
       const lines = targets.map((record) => {
         if (mode === "tool") return manager.interruptTool(record.id) ? `${record.id}: interrupted its running tool calls.` : `${record.id}: no tool call in progress.`;
+        if (manager.recovering(record.id)) {
+          manager.kill(record.id);
+          return `${record.id}: failed; it will not be retried.`;
+        }
         if (!ACTIVE_STATUSES.has(record.status)) return `${record.id}: already ${record.status}.`;
         if (mode === "kill") {
           manager.kill(record.id);

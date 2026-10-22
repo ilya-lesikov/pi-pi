@@ -414,7 +414,7 @@ export class WorkerViewer implements Component {
       return;
     }
     const record = this.record;
-    const active = !!record && ACTIVE_STATUSES.has(record.status);
+    const active = !!record && (ACTIVE_STATUSES.has(record.status) || this.manager.recovering(record.id));
     if (matchesKey(data, "escape") || matchesKey(data, "q")) {
       this.dispose();
       this.done();
@@ -700,7 +700,7 @@ export class WorkerPicker implements Component {
       this.close();
       return;
     }
-    const active = ACTIVE_STATUSES.has(record.status);
+    const active = ACTIVE_STATUSES.has(record.status) || this.manager.recovering(record.id);
     const armed = this.armedId === record.id;
     this.armedId = null;
     const at = records.indexOf(record);

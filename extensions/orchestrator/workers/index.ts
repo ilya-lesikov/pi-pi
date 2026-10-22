@@ -95,7 +95,7 @@ export function createWorkers(orchestrator: Orchestrator, hooks: WorkerHooks, cr
     send: (message, options) => orchestrator.pi.sendMessage((currentHost().id === "bb" ? { ...message, display: false } : message) as any, options as any),
     now: () => Date.now(),
   });
-  manager.subscribe((event) => onWorkerEvent(event, hooks, delivery, transcripts));
+  manager.subscribe((event) => onWorkerEvent(event, manager, hooks, delivery, transcripts));
   return { manager, delivery, transcripts };
 }
 
@@ -141,7 +141,7 @@ function paseoUpdate(record: WorkerRecord, transcripts: TranscriptStore | null, 
   void next.finally(() => { if (paseoQueues.get(record.id) === next) paseoQueues.delete(record.id); });
 }
 
-function onWorkerEvent(event: WorkerEvent, hooks: WorkerHooks, delivery: WorkerDelivery, transcripts: TranscriptStore | null): void {
+function onWorkerEvent(event: WorkerEvent, manager: WorkerManager, hooks: WorkerHooks, delivery: WorkerDelivery, transcripts: TranscriptStore | null): void {
   const { record } = event;
   switch (event.type) {
     case "created":
@@ -174,6 +174,7 @@ function onWorkerEvent(event: WorkerEvent, hooks: WorkerHooks, delivery: WorkerD
       // Held until the routing decision: a worker resumed on another provider
       // has nothing to report yet. Bounded, so a decision that never comes
       // still lets the failure through.
+      manager.beginRecovery(record.id);
       const decision = hooks.onProviderFailure(record).catch((error: any) => {
         getLogger().error({ s: "agents", id: record.id, err: error?.message }, "worker failure handling failed");
         return false;
@@ -182,6 +183,9 @@ function onWorkerEvent(event: WorkerEvent, hooks: WorkerHooks, delivery: WorkerD
       recovering.add(record.id);
       void Promise.race([decision, timeout]).then((resumed) => {
         recovering.delete(record.id);
+        // A decision still under way past the deadline must not resume a
+        // worker whose failure goes out now.
+        manager.endRecovery(record.id);
         if (!resumed && record.status === "failed") deliver();
       });
       break;
@@ -205,7 +209,7 @@ function onWorkerEvent(event: WorkerEvent, hooks: WorkerHooks, delivery: WorkerD
  * resolves to and resumes it in place, keeping its transcript. Once per worker.
  */
 export async function resumeOnNewRouting(manager: WorkerManager, record: WorkerRecord, retried: Set<string>, setModel: (record: WorkerRecord, spec: string) => Promise<boolean>): Promise<boolean> {
-  if (retried.has(record.id) || record.status !== "failed") return false;
+  if (retried.has(record.id) || record.status !== "failed" || !manager.recovering(record.id)) return false;
   const target = getAgentDefinition(record.spec.type)?.model;
   if (!target || target === record.modelId) return false;
   if (!await setModel(record, target)) return false;
@@ -213,6 +217,7 @@ export async function resumeOnNewRouting(manager: WorkerManager, record: WorkerR
   getTracer()?.traceSubagent(record.id, "subagent_retried", { from: record.modelId, to: target });
   record.modelId = target;
   record.spec = { ...record.spec, model: target };
+  if (!manager.recovering(record.id)) return false;
   return manager.resume(record.id, RESUME_AFTER_REROUTE);
 }
 
@@ -224,7 +229,7 @@ const RESUME_AFTER_LIMIT = "[PI-PI] Your last request was rate-limited and is be
  * stays with pi's retries.
  */
 export function resumeInPlace(manager: WorkerManager, record: WorkerRecord, retried: Set<string>): boolean {
-  if (retried.has(record.id) || record.status !== "failed") return false;
+  if (retried.has(record.id) || record.status !== "failed" || !manager.recovering(record.id)) return false;
   retried.add(record.id);
   getTracer()?.traceSubagent(record.id, "subagent_retried", { from: record.modelId, to: record.modelId });
   return manager.resume(record.id, RESUME_AFTER_LIMIT);

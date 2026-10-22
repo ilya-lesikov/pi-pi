@@ -906,6 +906,62 @@ describe("session-first core", () => {
     }
   });
 
+  // The failure is delivered once the recovery decision times out; nothing the
+  // recovery does after that may bring the worker back.
+  it.each([
+    ["a slow failed switch and the retry wait", async () => { await new Promise((resolve) => setTimeout(resolve, 25_000)); return false; }, "429 rate_limit_error retry-after: 10"],
+    ["a switch that lands only after it", async () => { await new Promise((resolve) => setTimeout(resolve, 35_000)); return true; }, "429 rate_limit_error"],
+  ])("does not resume a rate-limited worker whose failure the deadline delivered, after %s", async (_case, slow, error) => {
+    const SUB = "pp-flant-anthropic-sub/sub/claude-opus-4-8";
+    const COPILOT = "github-copilot/claude-opus-4.5";
+    setCatalog([SUB, COPILOT]);
+    vi.useFakeTimers();
+    try {
+      const { pi, orchestrator, sessions } = workerHarness({ setModel: vi.fn(slow), lastError: () => error });
+      orchestrator.registerAgents();
+      const record = orchestrator.workers!.spawn(workerSpec({ type: "task", model: SUB }));
+      await vi.advanceTimersByTimeAsync(0);
+      sessions[0]!.hooks.onMessage({ role: "assistant", stopReason: "error", errorMessage: error, content: [] });
+      sessions[0]!.finish("");
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(pi.sendMessage).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("429") }), expect.anything());
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(sessions[0]!.runs).toHaveLength(1);
+      expect(record.status).toBe("failed");
+    } finally {
+      vi.useRealTimers();
+      resetRouting();
+    }
+  });
+
+  it.each([
+    ["stopped", (orchestrator: Orchestrator, id: string) => orchestrator.workers!.stop(id)],
+    ["killed", (orchestrator: Orchestrator, id: string) => orchestrator.workers!.kill(id)],
+    ["killed with the rest", (orchestrator: Orchestrator) => { orchestrator.abortAllSubagents(); return true; }],
+  ])("does not resume a rate-limited worker %s while it waited for its retry", async (_case, stop) => {
+    const SUB = "pp-flant-anthropic-sub/sub/claude-opus-4-8";
+    const COPILOT = "github-copilot/claude-opus-4.5";
+    setCatalog([SUB, COPILOT]);
+    vi.useFakeTimers();
+    try {
+      const error = "429 rate_limit_error retry-after: 10";
+      const { orchestrator, sessions } = workerHarness({ setModel: vi.fn(async () => false), lastError: () => error });
+      orchestrator.registerAgents();
+      const record = orchestrator.workers!.spawn(workerSpec({ type: "task", model: SUB }));
+      await vi.advanceTimersByTimeAsync(0);
+      sessions[0]!.hooks.onMessage({ role: "assistant", stopReason: "error", errorMessage: error, content: [] });
+      sessions[0]!.finish("");
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(stop(orchestrator, record.id)).toBe(true);
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(sessions[0]!.runs).toHaveLength(1);
+      expect(record.status).toBe("failed");
+    } finally {
+      vi.useRealTimers();
+      resetRouting();
+    }
+  });
+
   it("does not hold a turn that ended in an error or with tool calls", async () => {
     const { pi, orchestrator, ctx } = workerHarness();
     ctx.mode = "rpc";

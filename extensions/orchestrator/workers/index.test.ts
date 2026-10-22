@@ -323,6 +323,8 @@ describe("resumeOnNewRouting", () => {
     await flush();
     sessions[0]!.fail(new Error("refused"));
     await flush();
+    // As the recovery that calls it would: the stub hook already decided.
+    manager.beginRecovery(record.id);
     return { manager, record };
   }
 
@@ -362,6 +364,14 @@ describe("resumeOnNewRouting", () => {
     expect(await resumeOnNewRouting(manager, record, new Set(), setModel)).toBe(false);
     expect(setModel).not.toHaveBeenCalled();
   });
+
+  it("does not resume a worker whose recovery was cancelled while its model was being set", async () => {
+    const { manager, record } = await failedWorker();
+    registerAgentDefinitions([definition("explore", { model: "p/n" })]);
+    const setModel = vi.fn(async () => { manager.kill(record.id); return true; });
+    expect(await resumeOnNewRouting(manager, record, new Set(), setModel)).toBe(false);
+    expect(record.status).toBe("failed");
+  });
 });
 
 describe("resumeInPlace", () => {
@@ -374,6 +384,8 @@ describe("resumeInPlace", () => {
     sessions[0]!.fail(new Error("429 rate limited"));
     await flush();
     const retried = new Set<string>();
+    expect(resumeInPlace(manager, record, new Set())).toBe(false);
+    manager.beginRecovery(record.id);
     expect(resumeInPlace(manager, record, retried)).toBe(true);
     expect(record.modelId).toBe("p/m");
     expect(record.status).not.toBe("failed");
