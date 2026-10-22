@@ -994,6 +994,30 @@ describe("images the conversation has moved past", () => {
     expect(compacted[1].content[0].type).toBe("image");
   });
 
+  // pi stamps a follow-up when it is queued and inserts it only after the
+  // steering and tool turns already in flight, so its timestamp can be older
+  // than messages before it.
+  it("measures an image's age by where it sits, not by when it was stamped", () => {
+    const state = new FoldState();
+    fold(sessionOfTurns(8), 0, roomy, state);
+
+    const replayed = sessionOfTurns(8);
+    replayed.push({ role: "user", content: [{ type: "text", text: "queued" }, { type: "image", data: "q".repeat(300), mimeType: "image/png" }], timestamp: 1005 });
+    const out = fold(replayed, 0, roomy, state);
+
+    expect(out.rewroteFrom).toBe(-1);
+    expect(replayed[24].content[1].type).toBe("image");
+  });
+
+  it("names each of two attachments stamped in the same millisecond apart", () => {
+    const messages = sessionOfTurns(8);
+    messages.splice(1, 0, { role: "user", content: [{ type: "image", data: "v".repeat(200), mimeType: "image/png" }], timestamp: 1000 });
+    fold(messages, 0, roomy, new FoldState());
+
+    expect(messages[0].content[1]).toEqual({ type: "text", text: "[omitted: 500B; recall_tool_output call_id attached-1000]" });
+    expect(messages[1].content[0]).toEqual({ type: "text", text: "[omitted: 200B; recall_tool_output call_id attached-1000-2]" });
+  });
+
   it("does not count pi-pi's own continuations as the user's messages", () => {
     const messages = sessionOfTurns(7);
     messages.push({ role: "user", content: [{ type: "text", text: "[PI-PI] Continue the current request." }], timestamp: 2000 });

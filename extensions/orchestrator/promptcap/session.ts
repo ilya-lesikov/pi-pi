@@ -100,7 +100,7 @@ function onTheWire(id: string): string {
 }
 
 export function findToolCall(entries: any[], callId: string): RecalledCall | undefined {
-  if (callId.startsWith(ATTACHED_IMAGE_ID_PREFIX)) return findAttachedImages(entries, Number(callId.slice(ATTACHED_IMAGE_ID_PREFIX.length)));
+  if (callId.startsWith(ATTACHED_IMAGE_ID_PREFIX)) return findAttachedImages(entries, callId);
   let found: RecalledCall | undefined;
   for (const entry of entries) {
     const message = entry?.message;
@@ -118,13 +118,21 @@ export function findToolCall(entries: any[], callId: string): RecalledCall | und
   return found;
 }
 
-/** The images of the user message an aged-out attachment notice names by its timestamp. */
-function findAttachedImages(entries: any[], timestamp: number): RecalledCall | undefined {
+/**
+ * The images of the user message an aged-out attachment notice names: by its
+ * timestamp, and by its place among the user messages sharing that timestamp
+ * when it is not the first. Undefined unless that message carries an image.
+ */
+function findAttachedImages(entries: any[], id: string): RecalledCall | undefined {
+  const match = /^(\d+)(?:-(\d+))?$/.exec(id.slice(ATTACHED_IMAGE_ID_PREFIX.length));
+  if (!match) return undefined;
+  const timestamp = Number(match[1]);
+  let ordinal = match[2] === undefined ? 1 : Number(match[2]);
   for (const entry of entries) {
     const message = entry?.message;
-    if (message?.role !== "user" || message.timestamp !== timestamp) continue;
+    if (message?.role !== "user" || message.timestamp !== timestamp || --ordinal > 0) continue;
     const images = imagesOf(message.content);
-    return { output: textOf(message.content), ...(images.length > 0 && { images }) };
+    return images.length > 0 ? { output: textOf(message.content), images } : undefined;
   }
   return undefined;
 }

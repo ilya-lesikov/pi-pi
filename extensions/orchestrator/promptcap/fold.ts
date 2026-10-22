@@ -198,12 +198,13 @@ export class FoldState {
    */
   private imagesStripped = new Set<string>();
   /**
-   * Every image in a message older than this timestamp has folded for its
-   * age. Measured on each message's own timestamp rather than on a position,
-   * because pi's compaction renumbers the conversation and can remove the user
-   * message the fold was measured from while keeping what came after it.
+   * User messages whose attached images have folded for their age, by the id
+   * their notice names. Kept by identity rather than by position or by a
+   * timestamp threshold: pi's compaction renumbers the conversation, and a
+   * queued follow-up is stamped when queued but lands after the turns that
+   * were already in flight, so neither says how old a message is.
    */
-  agedImagesBefore: number | undefined;
+  private attachmentsFolded = new Set<string>();
 
   tierOf(callId: string): Tier {
     return this.tiers.get(callId) ?? Tier.Verbatim;
@@ -215,6 +216,14 @@ export class FoldState {
 
   hasStrippedImages(callId: string): boolean {
     return this.imagesStripped.has(callId);
+  }
+
+  foldedAttachment(id: string): void {
+    this.attachmentsFolded.add(id);
+  }
+
+  hasFoldedAttachment(id: string): boolean {
+    return this.attachmentsFolded.has(id);
   }
 
   promote(callId: string, to: Tier): void {
@@ -232,7 +241,7 @@ export class FoldState {
   clear(): void {
     this.tiers.clear();
     this.imagesStripped.clear();
-    this.agedImagesBefore = undefined;
+    this.attachmentsFolded.clear();
     this.reasoningThrough = 0;
   }
 
@@ -319,32 +328,39 @@ export function fold(
   for (const call of calls) {
     if (call.tier === Tier.Verbatim && carriesImage(messages[call.resultMessage])) resultsWithImages.set(call.resultMessage, call);
   }
-  const foldAged = (before: number, replaying: boolean): void => {
+  const attachments = attachedImageIds(messages);
+  for (const [m, id] of attachments) {
+    if (state.hasFoldedAttachment(id) && carriesImage(messages[m])) bytes -= stripAttachedImages(messages[m], id, imageTokens);
+  }
+  // Age is counted in the user's messages that follow an image, which is the
+  // order the model reads them in; a timestamp can be older than messages
+  // placed before it.
+  const turns = userTurns(messages);
+  const laterTurns = (m: number): number => turns.filter((turn) => turn > m).length;
+  const agedImages = (olderThan: number): number[] => {
+    const aged: number[] = [];
     for (let m = 0; m < messages.length; m++) {
-      if (!(messages[m]?.timestamp < before)) continue;
+      const attached = messages[m]?.role === "user" && attachments.has(m) && carriesImage(messages[m]);
+      if ((resultsWithImages.has(m) || attached) && laterTurns(m) > olderThan) aged.push(m);
+    }
+    return aged;
+  };
+  const turnsCeiling = limits.imageTurnsCeiling ?? DEFAULT_IMAGE_TURNS_CEILING;
+  if (agedImages(turnsCeiling).length > 0) {
+    const keep = Math.min(limits.imageTurnsLowWater ?? DEFAULT_IMAGE_TURNS_LOW_WATER, turnsCeiling - 1);
+    for (const m of agedImages(keep)) {
       const call = resultsWithImages.get(m);
       if (call) {
         bytes -= stripResultImages(messages, call, imageTokens);
+        state.strippedImages(call.id);
         resultsWithImages.delete(m);
-      } else if (messages[m]?.role === "user" && carriesImage(messages[m])) bytes -= stripAttachedImages(messages[m], imageTokens);
-      else continue;
-      if (replaying) continue;
+      } else {
+        const id = attachments.get(m)!;
+        bytes -= stripAttachedImages(messages[m], id, imageTokens);
+        state.foldedAttachment(id);
+      }
       imagesFolded++;
       moved(m);
-    }
-  };
-  const turns = userTurns(messages);
-  if (state.agedImagesBefore !== undefined) foldAged(state.agedImagesBefore, true);
-  const oldestImage = messages.findIndex((message, m) => resultsWithImages.has(m) || (message?.role === "user" && carriesImage(message)));
-  const turnsCeiling = limits.imageTurnsCeiling ?? DEFAULT_IMAGE_TURNS_CEILING;
-  if (oldestImage >= 0 && turns.filter((m) => m > oldestImage).length > turnsCeiling) {
-    const keep = Math.min(limits.imageTurnsLowWater ?? DEFAULT_IMAGE_TURNS_LOW_WATER, turnsCeiling - 1);
-    // Without a timestamp the fold could not be replayed on the next request,
-    // and folding afresh each time would rewrite the prompt every turn.
-    const before = messages[turns[turns.length - keep - 1]!]?.timestamp;
-    if (typeof before === "number") {
-      foldAged(before, false);
-      state.agedImagesBefore = before;
     }
   }
 
@@ -506,25 +522,39 @@ function userTurns(messages: AgentMessage[]): number[] {
 }
 
 /**
+ * The id recall_tool_output takes for the images of each user message that has
+ * a timestamp, by index. pi stamps messages to the millisecond without making
+ * the stamp unique, so a message sharing one with earlier user messages also
+ * carries its place among them; the first keeps the bare timestamp. Counting
+ * only earlier messages keeps an id the same as the conversation grows.
+ */
+function attachedImageIds(messages: AgentMessage[]): Map<number, string> {
+  const ids = new Map<number, string>();
+  const seen = new Map<number, number>();
+  for (let m = 0; m < messages.length; m++) {
+    const timestamp = messages[m]?.timestamp;
+    if (messages[m]?.role !== "user" || typeof timestamp !== "number") continue;
+    const ordinal = (seen.get(timestamp) ?? 0) + 1;
+    seen.set(timestamp, ordinal);
+    ids.set(m, `${ATTACHED_IMAGE_ID_PREFIX}${timestamp}${ordinal > 1 ? `-${ordinal}` : ""}`);
+  }
+  return ids;
+}
+
+/**
  * Replaces the images a user attached with notices naming the handle
  * recall_tool_output takes for them, since no call id stands next to them, and
  * reports the bytes it saved.
  */
-function stripAttachedImages(message: AgentMessage, imageTokens: number): number {
+function stripAttachedImages(message: AgentMessage, id: string, imageTokens: number): number {
   const before = messagesBytes([message], imageTokens);
-  message.content = message.content.map((part: any) => {
-    if (part?.type !== "image") return part;
-    const size = (part.data ?? "").length;
-    return { type: "text", text: typeof message.timestamp === "number" ? attachedOmission(size, message.timestamp) : omission(size) };
-  });
+  message.content = message.content.map((part: any) =>
+    part?.type === "image" ? { type: "text", text: `[omitted: ${(part.data ?? "").length}B; recall_tool_output call_id ${id}]` } : part,
+  );
   return before - messagesBytes([message], imageTokens);
 }
 
 export const ATTACHED_IMAGE_ID_PREFIX = "attached-";
-
-function attachedOmission(size: number, timestamp: number): string {
-  return `[omitted: ${size}B; recall_tool_output call_id ${ATTACHED_IMAGE_ID_PREFIX}${timestamp}]`;
-}
 
 /**
  * Whether a fold would buy more than the cache miss it costs.

@@ -148,6 +148,12 @@ describe("recall_tool_output", () => {
     expect(textOf(res)).toBe("Call toolu_x has no recorded output.");
   });
 
+  it("says an attachment id names no image rather than handing back the message", async () => {
+    const entries = [message("a", { role: "user", timestamp: 42, content: [{ type: "text", text: "no picture" }] })];
+    const res = await tools().recall_tool_output.execute("id", { call_id: "attached-42" }, undefined, undefined, { sessionManager: { getEntries: () => entries } });
+    expect(textOf(res)).toBe("No attached image attached-42 in this conversation.");
+  });
+
   it("treats a missing call_id as none given", async () => {
     const res = await tools().recall_tool_output.execute("id", {}, undefined, undefined, { sessionManager: { getEntries: () => [] } });
     expect(textOf(res)).toContain("No call_id given");

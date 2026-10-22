@@ -4,7 +4,7 @@ import type { Message } from "@earendil-works/pi-ai";
 import { searchEntries, type SearchHit } from "./search.js";
 import { formatRecallOutput } from "./format.js";
 import { byteLength } from "./estimate.js";
-import { cutBytes } from "./fold.js";
+import { ATTACHED_IMAGE_ID_PREFIX, cutBytes } from "./fold.js";
 import {
   activeLineageEntryIds,
   findToolCall,
@@ -230,7 +230,7 @@ function lookup(ctx: any, source: SessionSource | undefined, params: any): Recal
   const { entries } = resolveEntries(ctx, source, useCurrent);
   if (!entries) return `No ${useCurrent ? "current" : "root"} session history available.`;
   const found = findToolCall(entries, callId);
-  if (!found) return `No call ${callId} in this conversation.`;
+  if (!found) return callId.startsWith(ATTACHED_IMAGE_ID_PREFIX) ? `No attached image ${callId} in this conversation.` : `No call ${callId} in this conversation.`;
   return found;
 }
 
