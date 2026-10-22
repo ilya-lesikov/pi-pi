@@ -329,19 +329,29 @@ export function fold(
     if (call.tier === Tier.Verbatim && carriesImage(messages[call.resultMessage])) resultsWithImages.set(call.resultMessage, call);
   }
   const attachments = attachedImageIds(messages);
-  for (const [m, id] of attachments) {
-    if (state.hasFoldedAttachment(id) && carriesImage(messages[m])) bytes -= stripAttachedImages(messages[m], id, imageTokens);
+  const foldAttachment = (id: string, replaying: boolean): void => {
+    for (const [m, other] of attachments) {
+      if (other !== id || !carriesImage(messages[m])) continue;
+      bytes -= stripAttachedImages(messages[m], id, imageTokens);
+      if (replaying) continue;
+      imagesFolded++;
+      moved(m);
+    }
+  };
+  for (const id of new Set(attachments.values())) {
+    if (state.hasFoldedAttachment(id)) foldAttachment(id, true);
   }
   // Age is counted in the user's messages that follow an image, which is the
   // order the model reads them in; a timestamp can be older than messages
   // placed before it.
-  const turns = userTurns(messages);
-  const laterTurns = (m: number): number => turns.filter((turn) => turn > m).length;
+  const laterTurns = new Array<number>(messages.length + 1).fill(0);
+  const turns = new Set(userTurns(messages));
+  for (let m = messages.length - 1; m >= 0; m--) laterTurns[m] = laterTurns[m + 1]! + (turns.has(m + 1) ? 1 : 0);
   const agedImages = (olderThan: number): number[] => {
     const aged: number[] = [];
     for (let m = 0; m < messages.length; m++) {
       const attached = messages[m]?.role === "user" && attachments.has(m) && carriesImage(messages[m]);
-      if ((resultsWithImages.has(m) || attached) && laterTurns(m) > olderThan) aged.push(m);
+      if ((resultsWithImages.has(m) || attached) && laterTurns[m]! > olderThan) aged.push(m);
     }
     return aged;
   };
@@ -354,13 +364,17 @@ export function fold(
         bytes -= stripResultImages(messages, call, imageTokens);
         state.strippedImages(call.id);
         resultsWithImages.delete(m);
-      } else {
-        const id = attachments.get(m)!;
-        bytes -= stripAttachedImages(messages[m], id, imageTokens);
-        state.foldedAttachment(id);
+        imagesFolded++;
+        moved(m);
+        continue;
       }
-      imagesFolded++;
-      moved(m);
+      // A newer attachment sharing this one's id folded with it already.
+      if (!carriesImage(messages[m])) continue;
+      // Every attachment under the id folds at once: recall hands them back
+      // together, and one left behind would rewrite the prompt when it aged.
+      const id = attachments.get(m)!;
+      foldAttachment(id, false);
+      state.foldedAttachment(id);
     }
   }
 
@@ -524,19 +538,16 @@ function userTurns(messages: AgentMessage[]): number[] {
 /**
  * The id recall_tool_output takes for the images of each user message that has
  * a timestamp, by index. pi stamps messages to the millisecond without making
- * the stamp unique, so a message sharing one with earlier user messages also
- * carries its place among them; the first keeps the bare timestamp. Counting
- * only earlier messages keeps an id the same as the conversation grows.
+ * the stamp unique, so messages sharing one share the id, and recall hands back
+ * the images of them all; anything that told them apart would have to count
+ * messages, and compaction removes some from the prompt but not from the
+ * session recall reads.
  */
 function attachedImageIds(messages: AgentMessage[]): Map<number, string> {
   const ids = new Map<number, string>();
-  const seen = new Map<number, number>();
   for (let m = 0; m < messages.length; m++) {
     const timestamp = messages[m]?.timestamp;
-    if (messages[m]?.role !== "user" || typeof timestamp !== "number") continue;
-    const ordinal = (seen.get(timestamp) ?? 0) + 1;
-    seen.set(timestamp, ordinal);
-    ids.set(m, `${ATTACHED_IMAGE_ID_PREFIX}${timestamp}${ordinal > 1 ? `-${ordinal}` : ""}`);
+    if (messages[m]?.role === "user" && typeof timestamp === "number") ids.set(m, `${ATTACHED_IMAGE_ID_PREFIX}${timestamp}`);
   }
   return ids;
 }

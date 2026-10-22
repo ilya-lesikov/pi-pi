@@ -93,13 +93,18 @@ describe("findToolCall", () => {
     expect(findToolCall(entries, "attached-7")).toBeUndefined();
   });
 
-  it("tells apart user messages stamped in the same millisecond, and finds no image where none was attached", () => {
+  it("hands back every image attached in the same millisecond, and nothing where none was attached", () => {
     const entries = [
-      { message: { role: "user", timestamp: 42, content: [{ type: "text", text: "first" }] } },
-      { message: { role: "user", timestamp: 42, content: [{ type: "text", text: "second" }, { type: "image", data: "IMG" }] } },
+      { message: { role: "user", timestamp: 42, content: [{ type: "text", text: "first" }, { type: "image", data: "ONE" }] } },
+      { message: { role: "user", timestamp: 42, content: [{ type: "text", text: "plain" }] } },
+      { message: { role: "user", timestamp: 42, content: [{ type: "text", text: "second" }, { type: "image", data: "TWO", mimeType: "image/jpeg" }] } },
+      { message: { role: "user", timestamp: 43, content: [{ type: "text", text: "no picture" }] } },
     ];
-    expect(findToolCall(entries, "attached-42-2")).toEqual({ output: "second", images: [{ data: "IMG", mimeType: "image/png" }] });
-    expect(findToolCall(entries, "attached-42")).toBeUndefined();
-    expect(findToolCall(entries, "attached-42-3")).toBeUndefined();
+    expect(findToolCall(entries, "attached-42")).toEqual({
+      output: "first\nsecond",
+      images: [{ data: "ONE", mimeType: "image/png" }, { data: "TWO", mimeType: "image/jpeg" }],
+    });
+    expect(findToolCall(entries, "attached-43")).toBeUndefined();
+    expect(findToolCall(entries, "attached-42-2")).toBeUndefined();
   });
 });

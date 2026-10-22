@@ -119,22 +119,23 @@ export function findToolCall(entries: any[], callId: string): RecalledCall | und
 }
 
 /**
- * The images of the user message an aged-out attachment notice names: by its
- * timestamp, and by its place among the user messages sharing that timestamp
- * when it is not the first. Undefined unless that message carries an image.
+ * The images of the user messages an aged-out attachment notice names by
+ * their timestamp. pi does not keep timestamps unique, so every user message
+ * stamped in that millisecond that carries an image answers to the id.
  */
 function findAttachedImages(entries: any[], id: string): RecalledCall | undefined {
-  const match = /^(\d+)(?:-(\d+))?$/.exec(id.slice(ATTACHED_IMAGE_ID_PREFIX.length));
-  if (!match) return undefined;
-  const timestamp = Number(match[1]);
-  let ordinal = match[2] === undefined ? 1 : Number(match[2]);
+  const timestamp = Number(id.slice(ATTACHED_IMAGE_ID_PREFIX.length));
+  const outputs: string[] = [];
+  const images: Array<{ data: string; mimeType: string }> = [];
   for (const entry of entries) {
     const message = entry?.message;
-    if (message?.role !== "user" || message.timestamp !== timestamp || --ordinal > 0) continue;
-    const images = imagesOf(message.content);
-    return images.length > 0 ? { output: textOf(message.content), images } : undefined;
+    if (message?.role !== "user" || message.timestamp !== timestamp) continue;
+    const own = imagesOf(message.content);
+    if (own.length === 0) continue;
+    outputs.push(textOf(message.content));
+    images.push(...own);
   }
-  return undefined;
+  return images.length > 0 ? { output: outputs.join("\n"), images } : undefined;
 }
 
 function imagesOf(content: unknown): Array<{ data: string; mimeType: string }> {

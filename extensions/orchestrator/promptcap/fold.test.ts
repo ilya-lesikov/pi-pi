@@ -1009,13 +1009,35 @@ describe("images the conversation has moved past", () => {
     expect(replayed[24].content[1].type).toBe("image");
   });
 
-  it("names each of two attachments stamped in the same millisecond apart", () => {
+  it("names two attachments stamped in the same millisecond by that millisecond alone", () => {
     const messages = sessionOfTurns(8);
     messages.splice(1, 0, { role: "user", content: [{ type: "image", data: "v".repeat(200), mimeType: "image/png" }], timestamp: 1000 });
     fold(messages, 0, roomy, new FoldState());
 
     expect(messages[0].content[1]).toEqual({ type: "text", text: "[omitted: 500B; recall_tool_output call_id attached-1000]" });
-    expect(messages[1].content[0]).toEqual({ type: "text", text: "[omitted: 200B; recall_tool_output call_id attached-1000-2]" });
+    expect(messages[1].content[0]).toEqual({ type: "text", text: "[omitted: 200B; recall_tool_output call_id attached-1000]" });
+  });
+
+  // Recall hands back every image under one id, so one that has not aged yet
+  // folds with the one that has rather than rewriting the prompt later.
+  it("folds attachments sharing a millisecond together, and leaves nothing to rewrite after", () => {
+    const sibling = (): AgentMessage => ({ role: "user", content: [{ type: "image", data: "v".repeat(200), mimeType: "image/png" }], timestamp: 1000 });
+    const state = new FoldState();
+    const messages = sessionOfTurns(8);
+    messages.splice(18, 0, sibling());
+    const out = fold(messages, 0, roomy, state);
+
+    // The sibling is a user message too, so one screenshot more ages out.
+    expect(out.imagesFolded).toBe(7);
+    expect(messages[18].content[0]).toEqual({ type: "text", text: "[omitted: 200B; recall_tool_output call_id attached-1000]" });
+
+    const replayed = sessionOfTurns(9);
+    replayed.splice(18, 0, sibling());
+    const again = fold(replayed, 0, roomy, state);
+
+    expect(again.rewroteFrom).toBe(-1);
+    expect(replayed[0].content[1].type).toBe("text");
+    expect(replayed[18].content[0].type).toBe("text");
   });
 
   it("does not count pi-pi's own continuations as the user's messages", () => {
