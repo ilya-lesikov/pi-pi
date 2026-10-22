@@ -1,7 +1,27 @@
 {
-  "name": "bb-plugin-pi-pi",
+  "name": "@ilya-lesikov/bb-plugin-pi-pi",
   "version": "0.1.0",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ilya-lesikov/pi-pi.git",
+    "directory": "bb"
+  },
+  "keywords": [
+    "bb-plugin",
+    "pi",
+    "pi-pi"
+  ],
   "type": "module",
+  "files": [
+    "dist/",
+    "server.ts",
+    "state.ts",
+    "forms.ts"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "bb": ">=0.46",
     "bbPluginSdk": ">=0.6.65"
@@ -31,6 +51,5 @@
     "hono": "^4.11.9",
     "tailwind-merge": "^3.4.0",
     "typescript": "^5.7.0"
-  },
-  "private": true
+  }
 }

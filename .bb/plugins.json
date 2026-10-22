@@ -1,6 +1,0 @@
-{
-  "$schema": "https://getbb.app/schemas/plugins.schema.json",
-  "schemaVersion": 1,
-  "name": "pi-pi",
-  "plugins": [{ "name": "pi-pi", "source": "./bb" }]
-}
