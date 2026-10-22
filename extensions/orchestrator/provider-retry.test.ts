@@ -1,8 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { ensureProviderRetrySettings, isRequestTooLargeError, isUnrecognizedTransportError, patchRetryPredicate, readProviderRetry } from "./provider-retry.js";
+import { ensureProviderRetrySettings, isRequestTooLargeError, isUnrecognizedTransportError, leaveRetriesTo, patchRetryPredicate, readProviderRetry } from "./provider-retry.js";
 import { PromptGuard, registerPromptGuard } from "./promptcap/guard.js";
 
 describe("provider retry settings", () => {
@@ -68,6 +68,33 @@ describe("pi's retry predicate", () => {
 
     expect(widened._isRetryableError({ stopReason: "error", errorMessage: "429 rate limit" })).toBe(true);
     expect(refused._isRetryableError({ stopReason: "error", errorMessage: "400 bad request" })).toBe(false);
+  });
+
+  it("leaves a failure pi-pi routes around to pi-pi, and the rest to pi", () => {
+    const prototype: any = pi(true);
+    patchRetryPredicate(prototype);
+    leaveRetriesTo((message) => /429/.test(message.errorMessage));
+    try {
+      expect(prototype._isRetryableError({ stopReason: "error", errorMessage: "429 rate limit" })).toBe(false);
+      expect(prototype._isRetryableError({ stopReason: "error", errorMessage: "503 overloaded" })).toBe(true);
+    } finally {
+      leaveRetriesTo(() => false);
+    }
+  });
+
+  // pi reloads extensions without the module cache, while the wrapper on its
+  // prototype stays: the owner registered after a reload has to reach it.
+  it("consults the owner a reloaded copy of the extension registered", async () => {
+    const prototype: any = pi(true);
+    patchRetryPredicate(prototype);
+    vi.resetModules();
+    const reloaded = await import("./provider-retry.js");
+    reloaded.leaveRetriesTo((message) => /429/.test(message.errorMessage));
+    try {
+      expect(prototype._isRetryableError({ stopReason: "error", errorMessage: "429 rate limit" })).toBe(false);
+    } finally {
+      leaveRetriesTo(() => false);
+    }
   });
 
   // The turn the user stopped is marked aborted, not error, and must not come

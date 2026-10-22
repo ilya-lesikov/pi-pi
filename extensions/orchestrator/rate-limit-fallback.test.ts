@@ -15,6 +15,9 @@ import {
   isPolicyBlockError,
   isRateLimitError,
   retryHintMs,
+  takeOverMainRateLimit,
+  takeOverWorkerRateLimit,
+  takenOverByFallback,
 } from "./rate-limit-fallback.js";
 import { clearPauses, forgetLastGood, getPause, isPaused, listPauses, pause, refusalFallbackSpec, resolveSpec, setCatalog } from "./routing.js";
 import { getAgentDefinition } from "./agents/registry.js";
@@ -194,10 +197,114 @@ describe("pause-based rate-limit fallback", () => {
     const ctx = ctxOn(SUB);
     await handleMainRateLimit(orchestrator, ctx, SUB);
     expect(isPaused("claude-sub")).toBe(true);
-    expect(orchestrator.pausedMainRoutes.size).toBe(0);
+    // Staying on the paused model, the request waits it out and resumes there.
+    expect(orchestrator.pausedMainRoutes.get("claude-sub")).toMatchObject({ from: SUB, to: SUB, resume: true });
     expect(orchestrator.routedMainSpec).toBe(SUB);
     expect(pi.sendUserMessage).not.toHaveBeenCalled();
     expect(orchestrator.subSwitchBackTimer).not.toBeNull();
+  });
+
+  // The failure this reproduces: pi retried the refused model for minutes,
+  // and the switch the fallback had already decided on waited for it.
+  describe("taking a rate limit over from pi's retry", () => {
+    const limited = () => ({ role: "assistant", stopReason: "error", errorMessage: "429 rate_limit_error" });
+
+    it("takes a main-session limit over once the session is being moved or will resume", async () => {
+      setCatalog([SUB, COPILOT_OPUS]);
+      const orchestrator = makeOrchestrator();
+      const message = limited();
+      takeOverMainRateLimit(ctxOn(SUB), message, await handleMainRateLimit(orchestrator, ctxOn(SUB), SUB));
+      expect(takenOverByFallback(message)).toBe(true);
+
+      // Already paused: nothing new is set up to carry this request on.
+      const again = limited();
+      takeOverMainRateLimit(ctxOn(SUB), again, await handleMainRateLimit(orchestrator, ctxOn(SUB), SUB));
+      expect(takenOverByFallback(again)).toBe(false);
+    });
+
+    it("leaves a run without a session to return to on pi's retries", async () => {
+      setCatalog([SUB, COPILOT_OPUS]);
+      const orchestrator = makeOrchestrator();
+      const message = limited();
+      takeOverMainRateLimit({ ...ctxOn(SUB), mode: "print" }, message, await handleMainRateLimit(orchestrator, ctxOn(SUB), SUB));
+      expect(takenOverByFallback(message)).toBe(false);
+    });
+
+    it("leaves a limit to pi when automatic fallback is off", async () => {
+      const settings = defaultRoutingSettings();
+      settings.providers.fallback.auto = false;
+      vi.mocked(loadRoutingSettings).mockReturnValue(settings);
+      setCatalog([SUB, COPILOT_OPUS]);
+      const orchestrator = makeOrchestrator();
+      const message = limited();
+      takeOverMainRateLimit(ctxOn(SUB), message, await handleMainRateLimit(orchestrator, ctxOn(SUB), SUB));
+      expect(takenOverByFallback(message)).toBe(false);
+    });
+
+    it("pauses a worker's route on its first limit and takes it over when the worker can move", () => {
+      setCatalog([SUB, COPILOT_OPUS]);
+      const orchestrator = makeOrchestrator();
+      orchestrator.registerAgents();
+      const message = limited();
+      takeOverWorkerRateLimit(orchestrator, { id: "task-1", modelId: SUB, spec: { type: "task" } }, message);
+      expect(isPaused("claude-sub")).toBe(true);
+      expect(takenOverByFallback(message)).toBe(true);
+    });
+
+    // A worker hitting the limit first parks the main session's move; the main
+    // request failing on the same paused route is that move's to recover.
+    it("takes the main session's limit over when a worker's pause already parked its move", async () => {
+      setCatalog([SUB, COPILOT_OPUS]);
+      const orchestrator = makeOrchestrator();
+      orchestrator.lastCtx = { ...ctxOn(SUB), isIdle: () => false };
+      orchestrator.registerAgents();
+      takeOverWorkerRateLimit(orchestrator, { id: "task-1", modelId: SUB, spec: { type: "task" } }, limited());
+      expect(orchestrator.pendingModelSwitches).toHaveLength(1);
+
+      const message = limited();
+      takeOverMainRateLimit(ctxOn(SUB), message, await handleMainRateLimit(orchestrator, ctxOn(SUB), SUB));
+      expect(takenOverByFallback(message)).toBe(true);
+    });
+
+    it("leaves the main session's limit to pi when the parked move would not resume the request", async () => {
+      setCatalog([SUB, COPILOT_OPUS]);
+      const orchestrator = makeOrchestrator();
+      orchestrator.lastCtx = { ...ctxOn(SUB), isIdle: () => false };
+      await demoteUnusableSubscription(orchestrator, ctxOn(SUB), SUB);
+      expect(orchestrator.pendingModelSwitches).toHaveLength(1);
+
+      const message = limited();
+      takeOverMainRateLimit(ctxOn(SUB), message, await handleMainRateLimit(orchestrator, ctxOn(SUB), SUB));
+      expect(takenOverByFallback(message)).toBe(false);
+    });
+
+    it("leaves a worker whose role is pinned to its model on pi's retries, pausing nothing", () => {
+      setCatalog([SUB, COPILOT_OPUS]);
+      const orchestrator = makeOrchestrator();
+      orchestrator.config.agents.subagents.simple.task.model = SUB;
+      orchestrator.registerAgents();
+      const message = limited();
+      takeOverWorkerRateLimit(orchestrator, { id: "task-1", modelId: SUB, spec: { type: "task" } }, message);
+      expect(takenOverByFallback(message)).toBe(false);
+      expect(pauseKeys()).toEqual([]);
+    });
+
+    it("leaves a worker on pi's retries when there is nowhere to move it or it moved once already", () => {
+      setCatalog([SUB]);
+      const orchestrator = makeOrchestrator();
+      orchestrator.registerAgents();
+      const stuck = limited();
+      takeOverWorkerRateLimit(orchestrator, { id: "task-1", modelId: SUB, spec: { type: "task" } }, stuck);
+      expect(takenOverByFallback(stuck)).toBe(false);
+
+      setCatalog([SUB, COPILOT_OPUS]);
+      clearPauses();
+      orchestrator.registerAgents();
+      orchestrator.retriedSubagentIds.add("task-2");
+      const moved = limited();
+      takeOverWorkerRateLimit(orchestrator, { id: "task-2", modelId: SUB, spec: { type: "task" } }, moved);
+      expect(takenOverByFallback(moved)).toBe(false);
+    });
   });
 
   it("tells the user and pauses nothing when automatic fallback is off", async () => {

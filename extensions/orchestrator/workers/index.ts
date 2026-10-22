@@ -21,6 +21,8 @@ export interface WorkerHooks {
   onSettled(record: WorkerRecord): void;
   /** For a failed worker: moves routing if the provider refused it and resumes it there. Resolves whether it was resumed. */
   onProviderFailure(record: WorkerRecord): Promise<boolean>;
+  /** A message a worker finished, as it arrives. */
+  onMessage?(record: WorkerRecord, message: unknown): void;
   onChange(): void;
   /** Sends a custom message into the root session. */
   sendMessage?(message: { customType: string; content: string; display: boolean; details: unknown }): void;
@@ -48,7 +50,10 @@ export function createWorkers(orchestrator: Orchestrator, hooks: WorkerHooks, cr
   const sessionId = ctx()?.sessionManager?.getSessionId?.();
   const transcripts = orchestrator.cwd && sessionId ? new TranscriptStore(orchestrator.cwd, sessionId, (message) => notice(ctx(), message, "warning")) : null;
   const manager = new WorkerManager({
-    onMessage: (record, message) => transcripts?.append(record.id, message),
+    onMessage: (record, message) => {
+      transcripts?.append(record.id, message);
+      hooks.onMessage?.(record, message);
+    },
     createSession: createSession ?? createChildSessionFactory({
       cwd: orchestrator.cwd,
       modelRegistry: () => ctx()?.modelRegistry,

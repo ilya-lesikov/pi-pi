@@ -24,7 +24,7 @@ import { registerImageShrink } from "./image-shrink.js";
 import { checkDuplicateExtensions } from "./duplicate-extension-guard.js";
 import { ensureProvisionDirOnPath, ensureServerForFile, provisionEagerTools } from "./provision/session.js";
 import { installConsoleGuard } from "./console-guard.js";
-import { clearAllPauses, demoteUnusableSubscription, handleMainAuthFailure, handleMainRateLimit, handleMainRefusal, handleSubagentAuthFailure, handleSubagentRateLimit, handleSubscriptionRouteOutage, isAuthError, isModelRefusal, isPolicyBlockError, isRateLimitError } from "./rate-limit-fallback.js";
+import { clearAllPauses, demoteUnusableSubscription, handleMainAuthFailure, handleMainRateLimit, handleMainRefusal, handleSubagentAuthFailure, handleSubagentRateLimit, handleSubscriptionRouteOutage, isAuthError, isModelRefusal, isPolicyBlockError, isRateLimitError, takeOverMainRateLimit, takeOverWorkerRateLimit, takenOverByFallback } from "./rate-limit-fallback.js";
 import { adjudicateCheckIn, adjudicateContinuation } from "./continuation-adjudicator.js";
 import { registerTasks } from "./tasks/index.js";
 import { bashOwnedElsewhere, keepBashOffWhereItWas, registerBashGuard } from "./bash-guard.js";
@@ -37,7 +37,7 @@ import { pruneTranscripts, transcriptRoots } from "./workers/transcripts.js";
 import { HOLD_IDLE_MS, unfinishedSummary, type HoldOutcome } from "./workers/hold.js";
 import { registerWorkerUi } from "./workers/ui.js";
 import type { WorkerRecord } from "./workers/types.js";
-import { ensureProviderRetrySettings, patchRetryPredicate } from "./provider-retry.js";
+import { ensureProviderRetrySettings, leaveRetriesTo, patchRetryPredicate } from "./provider-retry.js";
 import { loadRoutingSettings, noteSubscriptionCredentialAccepted, refreshCodexOAuthToken, refreshCopilotOAuthToken, refreshSubProvider, reviveSubscriptionCredential, setModelRegistry } from "./flant-infra.js";
 import type { Orchestrator } from "./orchestrator.js";
 
@@ -576,6 +576,7 @@ function createWorkerHooks(orchestrator: Orchestrator): WorkerHooks {
       }
     },
     onProviderFailure: (record) => recoverWorkerFromProvider(orchestrator, record),
+    onMessage: (record, message) => takeOverWorkerRateLimit(orchestrator, record, message),
     onChange: () => {},
     sendMessage: (message) => orchestrator.pi.sendMessage(message as any, { triggerTurn: false }),
   };
@@ -706,6 +707,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
     ensureProviderRetrySettings();
     // The ceiling is worth nothing to a status pi does not count as retryable.
     patchRetryPredicate();
+    leaveRetriesTo(takenOverByFallback);
     setModelRegistry((ctx as any).modelRegistry);
     try {
       orchestrator.config = loadConfig(ctx.cwd);
@@ -868,7 +870,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
       && (isRateLimitError(message?.errorMessage) || isProviderOutage(message?.errorMessage) || isAuthError(message?.errorMessage));
     if (!providerFailure) await orchestrator.restoreMainRouting(ctx);
     if (message?.stopReason === "error" && isRateLimitError(message?.errorMessage)) {
-      await handleMainRateLimit(orchestrator, ctx, mainSpecOf(message, ctx), message?.errorMessage);
+      takeOverMainRateLimit(ctx, message, await handleMainRateLimit(orchestrator, ctx, mainSpecOf(message, ctx), message?.errorMessage));
       return;
     }
     if (message?.stopReason === "error" && isProviderOutage(message?.errorMessage)) {

@@ -1,9 +1,10 @@
 import type { Orchestrator } from "./orchestrator.js";
 import { isClaudeSubInUse, loadRoutingSettings, probeSubscriptionCleared, reviveSubscriptionCredential } from "./flant-infra.js";
-import { LLM_API_PROVIDER, clearPauses, describePauseKey, pinnedRoleSpecs, getPause, isPaused, nextPauseMs, pause, pauseKeyForSpec, refusalFallbackSpec, resolveSpec, routeOfConcrete, routePauseKey, splitSpec, unpause, slotRefOfSpec, type Pause } from "./routing.js";
+import { LLM_API_PROVIDER, clearPauses, describePauseKey, isSlotRef, pinnedRoleSpecs, getPause, isPaused, nextPauseMs, pause, pauseKeyForSpec, refusalFallbackSpec, resolveSpec, routeOfConcrete, routePauseKey, splitSpec, unpause, slotRefOfSpec, type Pause } from "./routing.js";
 import { isSubscriptionRouted } from "./usage-tracker.js";
 import { getLogger } from "./log.js";
 import { notice } from "./notices.js";
+import { getAgentDefinition } from "./agents/registry.js";
 
 // `usage limit` and `usage_not_included` are the ChatGPT subscription's own
 // wording: pi's openai-codex provider replaces the HTTP status with a friendly
@@ -108,8 +109,10 @@ async function pauseAndReroute(
   cause: FallbackCause,
   hintMs: number | null,
   resumeRequest = true,
-): Promise<void> {
-  if (isPaused(key)) return;
+): Promise<boolean> {
+  // Paused already, a move parked by whatever paused it is still waiting to
+  // carry the main session off; this failure is that move's to recover.
+  if (isPaused(key)) return origin === "main" && orchestrator.pendingModelSwitches.some((action) => mainMoves.has(action));
   const fallback = fallbackSettings(orchestrator);
   const what = describePauseKey(key);
   const trigger = cause === "auth"
@@ -119,7 +122,7 @@ async function pauseAndReroute(
       : `Rate limit on ${what}`;
   if (!fallback.auto) {
     notice(ctx, `${trigger}. Automatic fallback is off (Settings › Providers).`, "warning");
-    return;
+    return false;
   }
   const probed = key === "claude-sub";
   const entry = pause(key, probed ? null : nextPauseMs(key, fallback.retryAfterMinutes, hintMs), trigger);
@@ -132,12 +135,12 @@ async function pauseAndReroute(
   const mainAffected = origin === "main" || (!!live && isPausedFor(live));
   if (!mainAffected) {
     notice(ctx, `${trigger} on a worker; paused until ${formatUntil(entry)}.${recovery}`, "warning");
-    return;
+    return true;
   }
   // Decided when the switch runs, not now: a worker's failure lands mid-request,
   // and by the time the session is between turns another switch may have
   // moved it, or the user may have picked a model of their own.
-  await orchestrator.runModelSwitchBetweenTurns(async () => {
+  const move = async (): Promise<void> => {
     // The handler's own context when it carries the session's model; a parked
     // switch runs later, against whatever context is current then.
     const switchCtx = ctx?.model ? ctx : orchestrator.lastCtx ?? ctx;
@@ -148,19 +151,25 @@ async function pauseAndReroute(
     const owned = orchestrator.routedMainSpec === current;
     const ref = owned ? orchestrator.config.agents.main.model : slotRefOfSpec(current);
     const next = ref ? resolveSpec(ref) : null;
-    if (!next || next === current) {
-      notice(switchCtx, `${trigger}; nothing else serves ${current}. Waiting until ${formatUntil(entry)}; the request resumes then.${recovery}`, "warning");
+    // Staying put, the request waits the pause out and resumes on the same model.
+    const wait = (): void => {
       orchestrator.mainStatus?.pause(`Rate-limited • waiting until ${formatUntil(entry)}`, entry.until ?? undefined);
       if (resumeRequest) orchestrator.pausedMainRoutes.set(key, { from: current, to: current, owned, resume: true, generation: orchestrator.continuationGeneration });
+    };
+    if (!next || next === current) {
+      notice(switchCtx, `${trigger}; nothing else serves ${current}. Waiting until ${formatUntil(entry)}; the request resumes then.${recovery}`, "warning");
+      wait();
       return;
     }
     try {
       if (!await orchestrator.switchModel(switchCtx, next, thinking(orchestrator))) {
         notice(switchCtx, `${trigger}, but ${next} is unavailable; waiting until ${formatUntil(entry)}.${recovery}`, "error");
+        wait();
         return;
       }
     } catch {
       notice(switchCtx, `${trigger}, but switching to ${next} failed; waiting until ${formatUntil(entry)}.${recovery}`, "error");
+      wait();
       return;
     }
     if (owned) orchestrator.routedMainSpec = next;
@@ -168,8 +177,15 @@ async function pauseAndReroute(
     const paid = splitSpec(next)?.provider === LLM_API_PROVIDER ? " (paid)" : "";
     notice(switchCtx, `${trigger}; switched to ${next}${paid} until ${formatUntil(entry)}.${recovery}`, "warning");
     if (resumeRequest) orchestrator.queueContinuation("[PI-PI] Provider routing changed after a provider failure. Continue the current request.");
-  });
+  };
+  if (resumeRequest) mainMoves.add(move);
+  await orchestrator.runModelSwitchBetweenTurns(move);
+  return true;
 }
+
+// The switches pauseAndReroute parks to move the main session off a paused
+// route that also carry the interrupted request on.
+const mainMoves = new WeakSet<object>();
 
 /** The pause still covering `spec`, so a waiting request can follow it. */
 function routeHolding(spec: string): string | null {
@@ -308,15 +324,59 @@ export async function handleMainRefusal(orchestrator: Orchestrator, ctx: any): P
   orchestrator.queueContinuation(CONTINUE_AFTER_REROUTE, true);
 }
 
+// Failed responses the fallback has taken over, so pi does not retry them.
+const takenOver = new WeakSet<object>();
+
+/**
+ * Whether the fallback has taken over the failure `message` reports. pi
+ * retries a rate limit on the model that refused it, for minutes, and the
+ * session stays busy the whole time — so the move the fallback decided on,
+ * which waits for the session to go idle, would wait for pi to give up.
+ */
+export function takenOverByFallback(message: unknown): boolean {
+  return typeof message === "object" && message !== null && takenOver.has(message);
+}
+
+/**
+ * Hands a main-session rate limit the fallback has a recovery for over to it.
+ * A run without a session to return to — print or JSON mode — ends with the
+ * run, before a parked switch could carry it on, so it keeps pi's retries.
+ */
+export function takeOverMainRateLimit(ctx: any, message: unknown, recovering: boolean): void {
+  if (!recovering || ctx?.mode === "print" || ctx?.mode === "json") return;
+  if (typeof message === "object" && message !== null) takenOver.add(message);
+}
+
+/**
+ * The same for a worker, decided as its failed response arrives: the route
+ * is paused right away rather than once pi's retries run out, and the
+ * failure is taken over only when the worker can then be resumed elsewhere.
+ * A worker whose role is pinned to a model, or one already moved once, keeps
+ * pi's retries.
+ */
+export function takeOverWorkerRateLimit(orchestrator: Orchestrator, record: { id: string; modelId?: string; spec: { type: string } }, message: any): void {
+  if (message?.role !== "assistant" || message.stopReason !== "error" || !isRateLimitError(message.errorMessage)) return;
+  if (!record.modelId || orchestrator.retriedSubagentIds.has(record.id)) return;
+  const ref = getAgentDefinition(record.spec.type)?.ref;
+  if (ref && !isSlotRef(ref)) return;
+  void handleSubagentRateLimit(orchestrator, orchestrator.lastCtx, record.modelId, message.errorMessage);
+  // The pause and the definitions rebuilt around it are in place by now: the
+  // handler gets that far before its first await. A definition nothing serves
+  // is left holding its slot ref, which no session can be moved onto.
+  const target = getAgentDefinition(record.spec.type)?.model;
+  if (target && target !== record.modelId && !isSlotRef(target)) takenOver.add(message);
+}
+
 /**
  * Where a rate limit on `spec` lands: the Claude subscription and ChatGPT
  * accounts as a whole, every other provider per model line.
  */
-export async function handleMainRateLimit(orchestrator: Orchestrator, ctx: any, spec: string, message?: string): Promise<void> {
+/** Resolves whether the session is being moved off `spec`, or will resume on it. */
+export async function handleMainRateLimit(orchestrator: Orchestrator, ctx: any, spec: string, message?: string): Promise<boolean> {
   try { ctx.abort?.(); } catch {}
   const key = pauseKeyForSpec(spec);
-  if (!key) return;
-  await pauseAndReroute(orchestrator, ctx, key, spec, "main", "rate-limit", retryHintMs(message));
+  if (!key) return false;
+  return pauseAndReroute(orchestrator, ctx, key, spec, "main", "rate-limit", retryHintMs(message));
 }
 
 export async function handleSubagentRateLimit(orchestrator: Orchestrator, ctx: any, modelId?: string, message?: string): Promise<void> {

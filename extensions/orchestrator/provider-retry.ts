@@ -115,6 +115,22 @@ function isSpentQuota(message: string): boolean {
 
 const PATCHED = Symbol.for("pi-pi:retry-predicate-patched");
 
+// On the global object rather than in this module: the wrapper installed on
+// pi's prototype outlives a /reload, which loads a fresh copy of this module,
+// and has to consult the owner the reloaded extension registered.
+const HANDOFF = Symbol.for("pi-pi:retry-handoff");
+
+/**
+ * Hands the failures `owner` claims to pi-pi's own routing instead of pi's
+ * retry. pi retries a rate limit on the model that refused it, with backoff,
+ * for minutes, and the session stays busy all that time — so a model switch
+ * pi-pi has already decided on, which waits for the session to go idle, does
+ * not happen until the user interrupts.
+ */
+export function leaveRetriesTo(owner: (message: any) => boolean): void {
+  (globalThis as any)[HANDOFF] = owner;
+}
+
 export type RetryPredicateOutcome = "patched" | "already" | "absent";
 
 /**
@@ -134,6 +150,7 @@ export function patchRetryPredicate(prototype: any = (AgentSession as any)?.prot
   if (prototype[PATCHED]) return "already";
   const original = prototype._isRetryableError;
   prototype._isRetryableError = function (message: any): boolean {
+    if (message?.stopReason === "error" && (globalThis as any)[HANDOFF]?.(message) === true) return false;
     if (message?.stopReason === "error" && isRequestTooLargeError(message?.errorMessage)) {
       // Armed whoever ends up answering: the guard has to know the last prompt
       // was refused for its size even on the reading where pi would have
