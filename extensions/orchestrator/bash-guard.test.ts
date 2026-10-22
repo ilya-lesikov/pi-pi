@@ -67,8 +67,8 @@ describe("bash guard", () => {
   it("tells an agent with bash, and only one, how to run commands that do not exit", () => {
     const withBash = toolsBlock(parseToolNames("read, bash"));
     expect(withBash).toMatch(/in a bash call of its own, in the background/);
-    expect(withBash).toMatch(/`timeout N`/);
-    expect(toolsBlock(parseToolNames("read, grep"))).not.toMatch(/`timeout N`/);
+    expect(withBash).toMatch(/set bash's `timeout` on any command that can take more than a few seconds/);
+    expect(toolsBlock(parseToolNames("read, grep"))).not.toMatch(/bash's `timeout`/);
   });
 
   it("reads the shell command prefix of the session's project, and only while that project is trusted", async () => {

@@ -68,10 +68,10 @@ const TOOL_SEGMENTS: ToolSegment[] = [
       {
         tools: ["bash"],
         text:
-          "- bash and commands that do not exit by themselves: start a server, watcher or `tail -f` in a bash call of its own, in the background " +
-          "with its output in a file (`cmd > /tmp/x.log 2>&1 &`), read the file, and stop it when done. Make scripts exit on their own: close connections and clear timers. " +
-          "Prefix a command that talks to the network or waits on another process with `timeout N`. Give bash an explicit `timeout` for a command that can " +
-          "legitimately run long or print nothing for minutes (a quiet build or install, `sleep`, a `--wait` deploy): without one, bash may stop it after a few minutes with no output, or at a default limit.",
+          "- bash timeouts and commands that do not exit: set bash's `timeout` on any command that can take more than a few seconds, sized to how long it " +
+          "should take with some margin (about 60 for a test run, 600 for a build or install); without one, bash stops a command after a few minutes " +
+          "with no output, or at a default limit. Start a server, watcher or `tail -f` in a bash call of its own, in the background with its output in a file " +
+          "(`cmd > /tmp/x.log 2>&1 &`), read the file, and stop it when done. Make scripts exit on their own: close connections and clear timers.",
       },
     ],
   },
