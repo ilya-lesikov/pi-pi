@@ -329,17 +329,18 @@ export function fold(
     if (call.tier === Tier.Verbatim && carriesImage(messages[call.resultMessage])) resultsWithImages.set(call.resultMessage, call);
   }
   const attachments = attachedImageIds(messages);
-  const foldAttachment = (id: string, replaying: boolean): void => {
-    for (const [m, other] of attachments) {
-      if (other !== id || !carriesImage(messages[m])) continue;
+  const sharing = new Map<string, number[]>();
+  for (const [m, id] of attachments) sharing.set(id, [...(sharing.get(id) ?? []), m]);
+  const foldAttachment = (id: string): void => {
+    for (const m of sharing.get(id) ?? []) {
+      if (!carriesImage(messages[m])) continue;
       bytes -= stripAttachedImages(messages[m], id, imageTokens);
-      if (replaying) continue;
       imagesFolded++;
       moved(m);
     }
   };
-  for (const id of new Set(attachments.values())) {
-    if (state.hasFoldedAttachment(id)) foldAttachment(id, true);
+  for (const [m, id] of attachments) {
+    if (state.hasFoldedAttachment(id) && carriesImage(messages[m])) bytes -= stripAttachedImages(messages[m], id, imageTokens);
   }
   // Age is counted in the user's messages that follow an image, which is the
   // order the model reads them in; a timestamp can be older than messages
@@ -373,7 +374,7 @@ export function fold(
       // Every attachment under the id folds at once: recall hands them back
       // together, and one left behind would rewrite the prompt when it aged.
       const id = attachments.get(m)!;
-      foldAttachment(id, false);
+      foldAttachment(id);
       state.foldedAttachment(id);
     }
   }
