@@ -61,7 +61,6 @@ export function createWorkers(orchestrator: Orchestrator, hooks: WorkerHooks, cr
       toolNames: (spec) => getAgentDefinition(spec.type)?.tools ?? [],
       childExtension: (pi) => hooks.childExtension(pi),
       bashTimeoutSec: () => (config()?.performance?.internals?.workerBashTimeout ?? 0) / 1000,
-      bashSilenceMs: () => config()?.performance?.internals?.bashSilence ?? 0,
       projectTrusted: () => ctx()?.isProjectTrusted?.() ?? false,
     }),
     maxConcurrent: () => config()?.agents?.maxConcurrentSubagents ?? 4,

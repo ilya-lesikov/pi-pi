@@ -11,7 +11,7 @@ const sdk = vi.hoisted(() => ({
 }));
 
 vi.mock("../bash-guard.js", () => ({
-  registerBashGuard: (pi: any, cwd: string, limits: any, options: any) => sdk.guards.push({ pi, cwd, timeoutSec: limits.timeoutSec(), silenceMs: limits.silenceMs(), settings: options?.settings }),
+  registerBashGuard: (pi: any, timeoutSec: () => number) => sdk.guards.push({ pi, timeoutSec: timeoutSec() }),
 }));
 
 vi.mock("@earendil-works/pi-coding-agent", () => {
@@ -100,7 +100,7 @@ function hooks() {
   return { h, calls };
 }
 
-function factoryEnv(overrides: { registry?: any; bashTimeoutSec?: number; bashSilenceMs?: number; projectTrusted?: boolean } = {}, childExtension = vi.fn()) {
+function factoryEnv(overrides: { registry?: any; bashTimeoutSec?: number; projectTrusted?: boolean } = {}, childExtension = vi.fn()) {
   return {
     cwd: "/repo",
     modelRegistry: () => overrides.registry ?? { runtime: { rt: true }, find: (provider: string, id: string) => provider === "p" && id === "m" ? MODEL : undefined },
@@ -108,12 +108,11 @@ function factoryEnv(overrides: { registry?: any; bashTimeoutSec?: number; bashSi
     toolNames: () => ["read", "bash"],
     childExtension,
     bashTimeoutSec: () => overrides.bashTimeoutSec ?? 0,
-    bashSilenceMs: () => overrides.bashSilenceMs ?? 0,
     projectTrusted: () => overrides.projectTrusted ?? true,
   };
 }
 
-function factory(overrides: { registry?: any; bashTimeoutSec?: number; bashSilenceMs?: number; projectTrusted?: boolean } = {}) {
+function factory(overrides: { registry?: any; bashTimeoutSec?: number; projectTrusted?: boolean } = {}) {
   const childExtension = vi.fn();
   const create = createChildSessionFactory(factoryEnv(overrides, childExtension));
   return { create, childExtension };
@@ -160,7 +159,7 @@ describe("createChildSessionFactory", () => {
     expect(calls.filter(([name]) => name === "phase").map(([, phase]) => phase)).toEqual(["loading worker tools", "creating the agent session", "binding extensions"]);
   });
 
-  it("hands one settings manager, trusting the project only as the root session does, to the loader, the session and bash", async () => {
+  it("hands one settings manager, trusting the project only as the root session does, to the loader and the session", async () => {
     for (const trusted of [false, true]) {
       sdk.loaders.length = 0;
       sdk.createOptions.length = 0;
@@ -172,8 +171,6 @@ describe("createChildSessionFactory", () => {
       const [manager] = sdk.settings;
       expect(sdk.loaders[0].options.settingsManager).toBe(manager);
       expect(sdk.createOptions[0].settingsManager).toBe(manager);
-      sdk.loaders[0].options.extensionFactories.find((f: any) => f.name === "pi-pi-worker-bash").factory("pi");
-      expect(sdk.guards[0].settings).toBe(manager);
     }
   });
 
@@ -467,14 +464,14 @@ describe("worker channel tools", () => {
     expect(unanswered.content[0].text).toMatch(/^No answer came/);
   });
 
-  it("gives a worker with bash the guarded bash, with the worker's limits, and none to a worker without bash", async () => {
-    const { create } = factory({ bashTimeoutSec: 120, bashSilenceMs: 90_000 });
+  it("gives a worker with bash the default timeout, and none to a worker without bash", async () => {
+    const { create } = factory({ bashTimeoutSec: 120 });
     const { h } = hooks();
     await create(spec(), h);
     const entry = sdk.loaders[0].options.extensionFactories.find((f: any) => f.name === "pi-pi-worker-bash");
     expect(entry).toBeDefined();
     entry.factory("child-pi");
-    expect(sdk.guards).toEqual([{ pi: "child-pi", cwd: "/repo", timeoutSec: 120, silenceMs: 90_000, settings: sdk.settings[0] }]);
+    expect(sdk.guards).toEqual([{ pi: "child-pi", timeoutSec: 120 }]);
     const readOnly = createChildSessionFactory({ ...factoryEnv(), toolNames: () => ["read"] });
     await readOnly(spec(), h);
     expect(sdk.loaders[1].options.extensionFactories.map((f: any) => f.name)).not.toContain("pi-pi-worker-bash");

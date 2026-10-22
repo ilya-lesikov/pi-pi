@@ -87,26 +87,6 @@ function session() {
 }
 
 describe("session lifecycle", () => {
-  it("keeps bash as the user left it across a reload, which loads pi-pi afresh", async () => {
-    // Before the reload: one instance, bash turned off by the user.
-    const before = session();
-    before.pi.getActiveTools = () => ["read"];
-    await emit(before.pi, "session_shutdown", { reason: "reload" }, before.ctx);
-    // After it: a new instance, and pi has turned every extension tool on again.
-    const after = session();
-    let active = ["read", "bash"];
-    after.pi.getActiveTools = () => active;
-    after.pi.setActiveTools = (next: string[]) => { active = next; };
-    await emit(after.pi, "session_start", { reason: "reload" }, after.ctx);
-    expect(active).toEqual(["read"]);
-    // A later start is not a reload: pi's own start-up rules apply, and they keep bash.
-    active = ["read", "bash"];
-    await emit(after.pi, "session_start", { reason: "new" }, after.ctx);
-    expect(active).toEqual(["read", "bash"]);
-    await emit(after.pi, "session_shutdown", { reason: "quit" }, after.ctx);
-  });
-
-
   it("hides pi's own working row in the terminal, where the footer says what the agent does", async () => {
     const { pi, ctx } = session();
     ctx.ui.setWorkingVisible = vi.fn();

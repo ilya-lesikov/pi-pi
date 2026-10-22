@@ -207,8 +207,6 @@ export interface PiPiConfig {
       workerBashTimeout: DurationValue;
       /** Timeout the main agent's bash call gets when it sets none. 0 disables. */
       bashTimeout: DurationValue;
-      /** A bash call that sets no timeout is stopped after printing nothing for this long. 0 disables. */
-      bashSilence: DurationValue;
       mainTurnStale: DurationValue;
     };
   };
@@ -226,7 +224,6 @@ export interface NormalizedPiPiConfig extends PiPiConfig {
       workerQuestionTimeout: number;
       workerBashTimeout: number;
       bashTimeout: number;
-      bashSilence: number;
       mainTurnStale: number;
     };
   };
@@ -328,7 +325,6 @@ const DEFAULT_CONFIG: PiPiConfig = {
       workerQuestionTimeout: "10m",
       workerBashTimeout: "10m",
       bashTimeout: "10m",
-      bashSilence: "3m",
       mainTurnStale: "10m",
     },
   },
@@ -678,7 +674,7 @@ function validateLsp(value: unknown): void {
   }
 }
 
-const INTERNAL_DURATION_KEYS = ["workerStallWarn", "workerStartTimeout", "workerModelStale", "workerQuestionTimeout", "workerBashTimeout", "bashTimeout", "bashSilence", "mainTurnStale"] as const;
+const INTERNAL_DURATION_KEYS = ["workerStallWarn", "workerStartTimeout", "workerModelStale", "workerQuestionTimeout", "workerBashTimeout", "bashTimeout", "mainTurnStale"] as const;
 
 export const MAX_CONCURRENT_SUBAGENTS_CEILING = 1024;
 

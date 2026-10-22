@@ -101,7 +101,6 @@ const TIMEOUT_ITEMS: Array<{ path: string[]; label: string }> = [
   { path: ["performance", "internals", "workerQuestionTimeout"], label: "Worker question: wait for answer" },
   { path: ["performance", "internals", "workerBashTimeout"], label: "Worker bash default timeout" },
   { path: ["performance", "internals", "bashTimeout"], label: "Bash default timeout" },
-  { path: ["performance", "internals", "bashSilence"], label: "Bash: stop after silent for" },
   { path: ["performance", "internals", "mainTurnStale"], label: "Main turn stale" },
 ];
 

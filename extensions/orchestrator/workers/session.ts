@@ -24,8 +24,6 @@ export interface ChildSessionEnv {
   childExtension: ExtensionFactory;
   /** Default timeout for a child bash call that sets none, in seconds. */
   bashTimeoutSec: () => number;
-  /** How long a child bash call that sets no timeout may print nothing before it is stopped, in ms. */
-  bashSilenceMs: () => number;
   /** Whether the root session trusts the project; an untrusted one's settings are not read. */
   projectTrusted: () => boolean;
 }
@@ -55,7 +53,7 @@ export function createChildSessionFactory(env: ChildSessionEnv) {
         { name: "pi-pi-worker-channel", hidden: true, factory: (pi) => registerChildTools(pi, spec, hooks) },
         // Only for roles that have bash: registering it would hand bash to one that has not.
         ...(env.toolNames(spec).includes("bash")
-          ? [{ name: "pi-pi-worker-bash", hidden: true, factory: (pi: ExtensionAPI) => registerBashGuard(pi, env.cwd, { timeoutSec: env.bashTimeoutSec, silenceMs: env.bashSilenceMs }, { settings: settingsManager }) }]
+          ? [{ name: "pi-pi-worker-bash", hidden: true, factory: (pi: ExtensionAPI) => registerBashGuard(pi, env.bashTimeoutSec) }]
           : []),
       ],
       systemPromptOverride: () => env.systemPrompt(spec),
