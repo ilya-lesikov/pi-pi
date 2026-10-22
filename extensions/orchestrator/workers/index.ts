@@ -9,7 +9,7 @@ import { WorkerManager } from "./manager.js";
 import { createChildSessionFactory } from "./session.js";
 import { paseoStatus, registerWorkerTools } from "./tools.js";
 import { TranscriptStore } from "./transcripts.js";
-import { notice } from "../notices.js";
+import { currentHost, notice } from "../notices.js";
 import type { WorkerEvent, WorkerRecord, WorkerSessionFactory, WorkerSpawnSpec } from "./types.js";
 
 export interface WorkerHooks {
@@ -90,7 +90,9 @@ export function createWorkers(orchestrator: Orchestrator, hooks: WorkerHooks, cr
       const draft = current.ui?.getEditorText?.();
       return typeof draft !== "string" || draft.trim() === "";
     },
-    send: (message, options) => orchestrator.pi.sendMessage(message as any, options as any),
+    // bb shows a custom message as its raw text, and its plugin shows the
+    // workers already; the model gets the update either way.
+    send: (message, options) => orchestrator.pi.sendMessage((currentHost().id === "bb" ? { ...message, display: false } : message) as any, options as any),
     now: () => Date.now(),
   });
   manager.subscribe((event) => onWorkerEvent(event, hooks, delivery, transcripts));

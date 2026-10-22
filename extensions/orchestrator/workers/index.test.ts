@@ -14,6 +14,7 @@ import { registerAgentDefinitions } from "../agents/registry.js";
 import { configureRouting, setCatalog } from "../routing.js";
 import { createWorkers, registerWorkerToolsFor, resumeOnNewRouting, type WorkerHooks } from "./index.js";
 import { WORKER_MESSAGE_TYPE } from "./delivery.js";
+import { attachHost } from "../notices.js";
 import type { WorkerRecord, WorkerSession, WorkerSessionHooks, WorkerSpawnSpec } from "./types.js";
 
 const TRACER_KEY = Symbol.for("pi-pi:tracer");
@@ -152,6 +153,25 @@ describe("createWorkers", () => {
     expect(sent).toHaveLength(1);
     expect(sent[0]!.message.customType).toBe(WORKER_MESSAGE_TYPE);
     expect(sent[0]!.options).toEqual({ triggerTurn: true });
+  });
+
+  it("hides the update from bb, which would show its raw text, while still sending it to the model", async () => {
+    process.env.BB_THREAD_ID = "thr_1";
+    attachHost({ mode: "rpc" });
+    try {
+      const { factory, sessions } = fakeFactory();
+      const { orchestrator: orch, sent } = orchestrator();
+      const { manager } = createWorkers(orch, workerHooks(), factory);
+      manager.spawn(spec());
+      await flush();
+      sessions[0]!.finish();
+      await flush();
+      vi.advanceTimersByTime(300);
+      expect(sent[0]!.message).toMatchObject({ customType: WORKER_MESSAGE_TYPE, display: false });
+    } finally {
+      delete process.env.BB_THREAD_ID;
+      attachHost({ mode: "tui" });
+    }
   });
 
   it("steers a result into a running main turn", async () => {
