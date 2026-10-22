@@ -103,6 +103,12 @@ class HostChannel {
     }
   }
 
+  /** Whether a run is going on, so that a chat message shows now rather than waiting for the next. */
+  runLive(ctx: any): boolean {
+    const current = ctx ?? this.lastCtx;
+    return typeof current?.isIdle === "function" && !current.isIdle();
+  }
+
   private needsChatCopy(): boolean {
     return !this.host.tui && !this.host.headless && (!this.host.notifyVisible || this.host.customMessagesVisible === undefined);
   }
@@ -163,9 +169,12 @@ export function currentHost(): HostProfile {
 
 /** Tells the user something that matters, wherever pi is hosted. */
 export function notice(ctx: any, message: string, level: NoticeLevel = "info"): void {
-  // Whatever is said while pi-pi's bb menu is open, from wherever, shows beside the menu.
-  if (activeMenu()) menuNotify(message, level);
-  else if (channel) channel.notice(ctx, message, level);
+  // Whatever is said while pi-pi's bb menu is open, from wherever, shows beside the menu;
+  // during a run the chat shows it as well, since the status line keeps it only briefly.
+  if (activeMenu()) {
+    menuNotify(message, level);
+    if (channel?.runLive(ctx)) channel.notice(ctx, message, level);
+  } else if (channel) channel.notice(ctx, message, level);
   else if (host.headless) process.stderr.write(`pi-pi: ${message}\n`);
   else ctx?.ui?.notify?.(message, level);
 }

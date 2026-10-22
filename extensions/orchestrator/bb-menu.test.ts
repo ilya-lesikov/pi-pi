@@ -15,7 +15,7 @@ import { encodeQuestions, resetBbForms, type BbForms, type FormOutcome, type For
 import { closeBbMenu, openBbMenu } from "./bb-menu.js";
 import { activeMenu, menuAsk, MenuAborted, menuContext, menuNotices, menuReport } from "./bb-menu-ui.js";
 import { getDefaultConfig, normalizeConfigDurations } from "./config.js";
-import { attachHost, notice } from "./notices.js";
+import { attachHost, notice, registerNotices } from "./notices.js";
 import { Orchestrator } from "./orchestrator.js";
 
 afterAll(() => {
@@ -168,6 +168,27 @@ describe("pi-pi's menu in bb", () => {
     await vi.waitFor(() => expect(shown).toHaveLength(1));
     notice(undefined, "Routing changed", "warning");
     expect(menuNotices().at(-1)).toMatchObject({ text: "Routing changed", level: "warning" });
+    closeBbMenu();
+    await opened.closed;
+  });
+
+  it("copies a notice raised during a run into the chat too, where it stays", async () => {
+    const sendMessage = vi.fn();
+    registerNotices({ sendMessage, on: vi.fn(), registerMessageRenderer: vi.fn() } as any);
+    const orchestrator = makeOrchestrator(cwd);
+    const { forms, shown } = fakeForms([]);
+    resetBbForms(forms);
+    const running = { ...piCtx(), isIdle: () => false };
+    orchestrator.lastCtx = running;
+    attachHost(running);
+    const opened = openBbMenu(orchestrator);
+    await vi.waitFor(() => expect(shown).toHaveLength(1));
+    notice(running, "Switched to the fallback model", "warning");
+    expect(menuNotices().at(-1)).toMatchObject({ text: "Switched to the fallback model" });
+    expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("Switched to the fallback model") }), expect.anything());
+    sendMessage.mockClear();
+    notice(piCtx(), "Idle notice", "info");
+    expect(sendMessage).not.toHaveBeenCalled();
     closeBbMenu();
     await opened.closed;
   });
