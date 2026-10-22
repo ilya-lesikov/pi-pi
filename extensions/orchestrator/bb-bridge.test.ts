@@ -64,7 +64,12 @@ function harness(env: NodeJS.ProcessEnv = { BB_THREAD_ID: "thr_1", BB_THREAD_STO
   };
   const file = join(storage, "pi-pi", "state.json");
   const state = (): BbState => JSON.parse(readFileSync(file, "utf8"));
-  const command = (name: string, body: object) => writeFileSync(join(storage, "pi-pi", "commands", name), JSON.stringify(body));
+  const command = (name: string, body: object) => {
+    const path = join(storage, "pi-pi", "commands", name);
+    writeFileSync(path, JSON.stringify(body));
+    // Written at the faked now, which the bridge measures a command's age against.
+    utimesSync(path, new Date(Date.now()), new Date(Date.now()));
+  };
   const call = (name: string, params: any) => tools.get(name).execute("id", params, undefined, undefined, ctx);
   return { manager, sessions, steered, fire, file, state, command, call, orchestrator, sent, handlers };
 }
