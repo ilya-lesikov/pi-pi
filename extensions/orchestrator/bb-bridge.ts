@@ -94,7 +94,8 @@ export function registerBbBridge(orchestrator: Orchestrator, tasks: TaskFeed, en
   let writtenAt = 0;
   let results: BbCommandResult[] = [];
   let failed = false;
-  let removeWarned = false;
+  // Command files that could not be removed, and so were not run: each is reported once.
+  const unremovable = new Set<string>();
   let sessionStartedAt = 0;
 
   const write = (live: boolean) => {
@@ -149,8 +150,10 @@ export function registerBbBridge(orchestrator: Orchestrator, tasks: TaskFeed, en
       try {
         rmSync(file, { force: true });
       } catch (error: any) {
-        if (!removeWarned) getLogger().warn({ s: "bb", err: error?.message, file }, "removing a bb command file failed");
-        removeWarned = true;
+        if (unremovable.has(name)) continue;
+        unremovable.add(name);
+        getLogger().warn({ s: "bb", err: error?.message, file }, "removing a bb command file failed");
+        if (command?.id) results = [...results, { id: command.id, ok: false, message: "pi-pi could not take this request from its folder, so it did not run it.", at: Date.now() }].slice(-RESULTS_KEPT);
         continue;
       }
       if (!command?.id) continue;

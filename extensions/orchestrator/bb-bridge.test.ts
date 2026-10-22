@@ -105,7 +105,8 @@ describe("bb bridge", () => {
     expect(existsSync(file)).toBe(false);
   });
 
-  it("does not run a command it could not remove, which would run it again on every tick", async () => {
+  // chmod does not stop root from removing the file.
+  it.skipIf(process.getuid?.() === 0)("does not run a command it could not remove, which would run it again on every tick", async () => {
     const { fire, state, manager, command } = harness();
     await fire("session_start");
     const record = manager.spawn(spec);
@@ -120,7 +121,8 @@ describe("bb bridge", () => {
       chmodSync(commands, 0o755);
     }
     expect(stop).not.toHaveBeenCalled();
-    expect(state().commandResults).toEqual([]);
+    // Said once, so the plugin's button does not wait for it forever.
+    expect(state().commandResults).toEqual([expect.objectContaining({ id: "a", ok: false })]);
   });
 
   it("records a command that throws as failed instead of crashing pi", async () => {

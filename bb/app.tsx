@@ -94,7 +94,9 @@ function startPolling(rpc: Rpc, threadId: string, feed: Feed): void {
         }
       }
     }
-    if (feed.listeners.size) setTimeout(tick, Math.min(POLL_MS * 2 ** feed.misses, MAX_POLL_MS));
+    // A state still taken as live keeps the full rate, so a pi that stops answering is shown as such on time.
+    const live = feed.view !== null && feed.view.stale === null;
+    if (feed.listeners.size) setTimeout(tick, live ? POLL_MS : Math.min(POLL_MS * 2 ** feed.misses, MAX_POLL_MS));
     else feed.polling = false;
   };
   void tick();

@@ -120,6 +120,9 @@ describe("pi-pi's menu in bb", () => {
     orchestrator.lastCtx = { ...piCtx(), isIdle: () => false };
     const opened = openBbMenu(orchestrator);
     expect(opened.ok).toBe(true);
+    // The agent is not waiting on the menu: its stall recovery and worker wakes stay on.
+    await vi.waitFor(() => expect(activeMenu()).not.toBeNull());
+    expect(orchestrator.interactivePromptOpen).toBe(false);
     expect(openBbMenu(orchestrator)).toMatchObject({ ok: false, message: "pi-pi's menu is already open." });
     closeBbMenu();
     await opened.closed;

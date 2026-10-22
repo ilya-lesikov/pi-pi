@@ -106,7 +106,8 @@ const TIMEOUT_ITEMS: Array<{ path: string[]; label: string }> = [
 ];
 
 async function selectOption(ctx: any, question: string, options: OptionInput[]): Promise<string | undefined> {
-  const orchestrator = OrchestratorRef.current;
+  // bb's menu sits beside the chat, while the agent may be working: the agent is not waiting on it.
+  const orchestrator = menuOf(ctx) ? null : OrchestratorRef.current;
   if (orchestrator) orchestrator.interactivePromptOpen = true;
   try {
     const result = await askUser(ctx, { question, options, allowFreeform: false, allowComment: false, allowMultiple: false });
@@ -296,8 +297,9 @@ function refreshRuntimeAfterConfigChange(orchestrator: Orchestrator, keyPath: st
     // to a session started on --model.
     if (keyPath[1] === "main" && orchestrator.lastCtx) {
       orchestrator.mainPickedByHand = false;
-      void orchestrator.applyMainAgent(orchestrator.lastCtx).then((ok) => {
-        if (!ok) notice(orchestrator.lastCtx, mainUnavailableMessage(orchestrator), "warning");
+      // Never from inside a live request: the menu can be open while the agent works.
+      void orchestrator.runModelSwitchBetweenTurns(async () => {
+        if (!await orchestrator.applyMainAgent(orchestrator.lastCtx)) notice(orchestrator.lastCtx, mainUnavailableMessage(orchestrator), "warning");
       });
     }
     return;
@@ -1788,7 +1790,8 @@ function sessionStatus(orchestrator: Orchestrator, ctx: any): string {
 
 async function showReportMenu(orchestrator: Orchestrator, ctx: any): Promise<void> {
   const { collectReportFiles, writeReportBundle } = await import("./report.js");
-  orchestrator.interactivePromptOpen = true;
+  const holdsAgent = !menuOf(ctx);
+  if (holdsAgent) orchestrator.interactivePromptOpen = true;
   let note: string | undefined;
   try {
     const res = await askUser(ctx, {
@@ -1800,7 +1803,7 @@ async function showReportMenu(orchestrator: Orchestrator, ctx: any): Promise<voi
     });
     if (res && !isCancel(res) && res.kind === "freeform") note = res.text;
   } finally {
-    orchestrator.interactivePromptOpen = false;
+    if (holdsAgent) orchestrator.interactivePromptOpen = false;
   }
   if (!note || !note.trim()) {
     notice(ctx, "Report cancelled — a note is required.", "info");
