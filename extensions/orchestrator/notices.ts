@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
+import { activeMenu, menuNotify, menuReport } from "./bb-menu-ui.js";
 import { detectHost, HostProfile, PRESENTATION_TYPES } from "./host.js";
 import { getLogger } from "./log.js";
 
@@ -162,7 +163,9 @@ export function currentHost(): HostProfile {
 
 /** Tells the user something that matters, wherever pi is hosted. */
 export function notice(ctx: any, message: string, level: NoticeLevel = "info"): void {
-  if (channel) channel.notice(ctx, message, level);
+  // Whatever is said while pi-pi's bb menu is open, from wherever, shows beside the menu.
+  if (activeMenu()) menuNotify(message, level);
+  else if (channel) channel.notice(ctx, message, level);
   else if (host.headless) process.stderr.write(`pi-pi: ${message}\n`);
   else ctx?.ui?.notify?.(message, level);
 }
@@ -180,14 +183,17 @@ export async function asCommand<T>(run: () => Promise<T>): Promise<T> {
 
 /** Tells the user something about the command they just ran: shown now, never held for a later run. */
 export function commandNotice(ctx: any, message: string, level: NoticeLevel = "info"): void {
-  if (channel) channel.notice(ctx, message, level, true);
+  if (activeMenu()) menuNotify(message, level);
+  else if (channel) channel.notice(ctx, message, level, true);
   else if (host.headless) process.stderr.write(`pi-pi: ${message}\n`);
   else ctx?.ui?.notify?.(message, level);
 }
 
 /** Shows a report the user asked for. */
 export async function report(ctx: any, title: string, text: string, level: NoticeLevel = "info"): Promise<void> {
-  if (channel) await channel.report(ctx, title, text, level);
+  const menu = activeMenu();
+  if (menu) await menuReport(menu, title, text);
+  else if (channel) await channel.report(ctx, title, text, level);
   else if (host.headless) process.stderr.write(`${title}\n${text}\n`);
   else ctx?.ui?.notify?.(`${title}\n${text}`, level);
 }

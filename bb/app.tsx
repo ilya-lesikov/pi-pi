@@ -1,10 +1,11 @@
-// pi-pi's bb plugin frontend: the task card above the composer, the worker
-// chip in its action row, and the worker list the chip opens.
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+// pi-pi's bb plugin frontend: above the composer, a status line, the task
+// card and the worker card.
+import { useCallback, useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import type { FormEvent } from "react";
 import { definePluginApp, useComposer, useRpc } from "@get-bb/plugin-sdk/app";
 import type { rpcContract } from "./server";
 import {
+  formatDuration,
   formatTokens,
   isActive,
   orderWorkers,
@@ -44,6 +45,8 @@ interface View {
   state: BbState;
   stale: Staleness;
   workers: BbWorker[];
+  /** When this reader last saw `heartbeatAt` change, on its own clock. */
+  heartbeatSeenAt: number;
 }
 
 const feeds = new Map<string, Feed>();
@@ -61,17 +64,28 @@ function startPolling(rpc: Rpc, threadId: string, feed: Feed): void {
   feed.polling = true;
   const tick = async () => {
     try {
-      const { state } = await rpc.call("state_get", { threadId });
+      const { state: read, failed } = await rpc.call("state_get", { threadId });
+      // A failed read keeps the last state, aging toward "not responding" as a silent pi would.
+      const state = failed ? feed.view?.state ?? null : read;
       const now = Date.now();
       if (state && state.heartbeatAt !== feed.heartbeat) {
         feed.heartbeat = state.heartbeatAt;
         feed.heartbeatSeenAt = now;
       }
       const stale = state ? staleness(state, now - feed.heartbeatSeenAt) : null;
-      feed.view = state ? { state, stale, workers: shownWorkers(state, stale) } : null;
+      feed.view = state ? { state, stale, workers: shownWorkers(state, stale), heartbeatSeenAt: feed.heartbeatSeenAt } : null;
       for (const listener of feed.listeners) listener();
     } catch {
       // Keep the last snapshot: a reload of the plugin or a dropped connection should not blank the UI.
+      // It still ages toward "not responding", as a failed read does.
+      const view = feed.view;
+      if (view) {
+        const stale = staleness(view.state, Date.now() - feed.heartbeatSeenAt);
+        if (stale !== view.stale) {
+          feed.view = { ...view, stale, workers: shownWorkers(view.state, stale) };
+          for (const listener of feed.listeners) listener();
+        }
+      }
     }
     if (feed.listeners.size) setTimeout(tick, POLL_MS);
     else feed.polling = false;
@@ -110,24 +124,87 @@ function useNow(active: boolean): number {
   return active ? now : Date.now();
 }
 
-// --- the worker list's open/closed state, shared by the chip and the banner ---
+// --- status line -------------------------------------------------------------
 
-let openThread: string | null = null;
-const openListeners = new Set<() => void>();
+const STATUS_ICON: Record<BbState["status"]["level"], { name: string; className: string } | null> = {
+  normal: { name: "LoaderCircle", className: "animate-spin text-foreground" },
+  attention: { name: "CircleHelp", className: "text-amber-500" },
+  alarm: { name: "TriangleAlert", className: "text-destructive" },
+  idle: null,
+};
 
-function setOpenThread(next: string | null): void {
-  openThread = next;
-  for (const listener of openListeners) listener();
+// How long a notice from pi-pi's menu, or the answer to opening it, stays on the line.
+const NOTICE_MS = 8000;
+
+function StatusLine() {
+  const threadId = useThreadId();
+  const view = usePiPiState(threadId);
+  const rpc = useRpc<typeof rpcContract>();
+  const [opening, setOpening] = useState<{ id: string; sentAt: number } | { error: string; sentAt: number } | null>(null);
+  const now = useNow(!!view);
+  if (!threadId || !view) return null;
+  const { state, stale } = view;
+  // Older pi-pi writes no status; the line waits for one that does.
+  if (!state.status) return null;
+  const status = state.status;
+  // Ages on pi's clock up to the last heartbeat, then on ours: the two machines' clocks may differ.
+  const age = (at: number) => state.heartbeatAt - at + now - view.heartbeatSeenAt;
+  const notice = (state.notices ?? []).filter((entry) => age(entry.at) < NOTICE_MS).at(-1);
+  // Only a refusal is worth showing; an opened menu shows itself.
+  const refusal = !opening || now - opening.sentAt >= NOTICE_MS ? undefined
+    : "error" in opening ? opening.error
+      : state.commandResults.find((result) => result.id === opening.id && !result.ok)?.message;
+  const icon = stale ? null : STATUS_ICON[status.level];
+  const elapsed = status.level === "idle" ? "" : formatDuration(age(status.since));
+  const text = stale ? (stale === "ended" ? "pi's session has ended" : "pi is not responding") : [status.text, elapsed, status.suffix].filter(Boolean).join(" • ");
+  const openMenu = async () => {
+    const sentAt = Date.now();
+    try {
+      const { id } = await rpc.call("menu_open", { threadId });
+      setOpening({ id, sentAt });
+    } catch (cause) {
+      setOpening({ error: cause instanceof Error ? cause.message : String(cause), sentAt });
+    }
+  };
+  return (
+    <div className="flex min-w-0 items-center gap-1.5 px-1 text-xs">
+      {icon ? <Icon name={icon.name} className={cn("size-3.5 shrink-0", icon.className)} /> : null}
+      <span className={cn("min-w-0 flex-1 truncate", stale || status.level === "alarm" ? "text-destructive" : status.level === "idle" ? "text-muted-foreground" : "text-foreground")}>{text}</span>
+      {refusal ? <span className="min-w-0 truncate text-destructive" title={refusal}>{refusal}</span> : null}
+      {notice ? (
+        <span className={cn("min-w-0 truncate", notice.level === "error" ? "text-destructive" : notice.level === "warning" ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground")} title={notice.text}>
+          {notice.text}
+        </span>
+      ) : null}
+      <button
+        type="button"
+        disabled={stale !== null}
+        onClick={() => void openMenu()}
+        title="Open pi-pi's menu: status, workers, usage, settings"
+        className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded px-1 text-muted-foreground hover:bg-state-hover hover:text-foreground disabled:cursor-default disabled:opacity-60"
+      >
+        <Icon name="Settings" className="size-3.5" />
+        pi-pi {state.piPiVersion}
+      </button>
+    </div>
+  );
 }
 
-function useOpenThread(): string | null {
-  return useSyncExternalStore(
-    (listener) => {
-      openListeners.add(listener);
-      return () => openListeners.delete(listener);
-    },
-    () => openThread,
-    () => openThread,
+// --- card header, shared by the task and worker cards ---------------------------
+
+function CardHeader({ title, summary, expanded, onToggle, children }: { title: string; summary: string; expanded: boolean; onToggle: () => void; children?: ReactNode }) {
+  return (
+    <button
+      type="button"
+      aria-expanded={expanded}
+      onClick={onToggle}
+      className="flex min-h-8 w-full min-w-0 cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-xs text-muted-foreground hover:bg-state-hover"
+    >
+      <span className="shrink-0 font-medium text-foreground">{title}</span>
+      <span className="min-w-0 flex-1 truncate">{summary}</span>
+      {children}
+      <Icon name="ChevronDown" className={cn("size-3.5 shrink-0 transition-transform", expanded && "rotate-180")} />
+    </button>
   );
 }
 
@@ -148,16 +225,7 @@ function TaskCard() {
   const headline = `${summary.done}/${summary.total} complete${summary.current ? ` · ${summary.current}` : ""}`;
   return (
     <div className="min-h-8 overflow-hidden">
-      <button
-        type="button"
-        aria-expanded={expanded}
-        onClick={() => setExpanded((open) => !open)}
-        className="flex min-h-8 w-full min-w-0 cursor-pointer items-center gap-1.5 px-3 py-1.5 text-xs text-foreground hover:bg-background/80"
-      >
-        <Icon name="ListTodo" className="size-3.5 shrink-0" />
-        <span className="min-w-0 flex-1 truncate text-left">{headline}</span>
-        <Icon name="ChevronDown" className={cn("size-3.5 shrink-0 transition-transform", expanded && "rotate-180")} />
-      </button>
+      <CardHeader title="Tasks" summary={headline} expanded={expanded} onToggle={() => setExpanded((open) => !open)} />
       {expanded ? (
         <ul className="max-h-40 space-y-1 overflow-y-auto px-2.5 pb-2 pt-1">
           {state.tasks.map((task) => {
@@ -179,38 +247,6 @@ function TaskCard() {
   );
 }
 
-// --- worker chip ---------------------------------------------------------------
-
-function WorkerChip() {
-  const threadId = useThreadId();
-  const workers = usePiPiState(threadId)?.workers;
-  const open = useOpenThread();
-  if (!threadId || !workers || workers.length === 0) return null;
-  const running = workers.filter(isActive).length;
-  const asking = workers.some((worker) => worker.question);
-  const isOpen = open === threadId;
-  const label = running ? `${running}/${workers.length}` : String(workers.length);
-  return (
-    <button
-      type="button"
-      onClick={() => setOpenThread(isOpen ? null : threadId)}
-      aria-expanded={isOpen}
-      aria-label="pi-pi workers"
-      title={`${running} of ${workers.length} workers running${asking ? ", one is asking you something" : ""} — click for detail`}
-      className={cn(
-        "inline-flex h-[22px] cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-full border px-2 text-[11px] tabular-nums",
-        asking ? "border-amber-500/60 bg-amber-500/15 text-amber-600 dark:text-amber-400"
-          : running ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-            : "border-border text-muted-foreground",
-        isOpen && "bg-state-active",
-      )}
-    >
-      <Icon name={asking ? "CircleHelp" : "Bot"} className="size-3.5" />
-      {label}
-    </button>
-  );
-}
-
 // --- worker list -----------------------------------------------------------------
 
 const STATE_ICON: Record<WorkerState, { name: string; className: string }> = {
@@ -223,50 +259,42 @@ const STATE_ICON: Record<WorkerState, { name: string; className: string }> = {
   done: { name: "Check", className: "text-emerald-500" },
 };
 
-function WorkerPanel() {
+function WorkerCard() {
   const threadId = useThreadId();
-  const open = useOpenThread();
-  const view = usePiPiState(open !== null && open === threadId ? threadId : null);
-  const [expanded, setExpanded] = useState<string | null>(null);
-  const now = useNow(open !== null && open === threadId);
+  const view = usePiPiState(threadId);
+  const [selected, setSelected] = useState<string | null>(null);
+  // Unset until the user folds or unfolds it: open while any worker is at work.
+  const [chosen, setChosen] = useState<boolean | null>(null);
+  const workers = view ? orderWorkers(view.workers) : [];
+  const running = workers.filter(isActive).length;
+  const expanded = chosen ?? running > 0;
+  const now = useNow(expanded && running > 0);
 
-  if (!threadId || open !== threadId || !view) return null;
+  if (!threadId || !view || workers.length === 0) return null;
   const { state, stale } = view;
-  const workers = orderWorkers(view.workers);
+  const asking = workers.filter((worker) => worker.question).length;
+  const summary = [`${running} running`, `${workers.length} total`, ...(asking ? [`${asking} asking`] : [])].join(" · ");
   return (
-    <div
-      className="max-h-80 overflow-y-auto text-xs"
-      onKeyDown={(event) => {
-        // Escape in a half-written message keeps it; anywhere else in the list it closes the list.
-        if (event.key !== "Escape" || event.defaultPrevented) return;
-        if (event.target instanceof HTMLInputElement && event.target.value) return;
-        setOpenThread(null);
-      }}
-    >
-      <div className="sticky top-0 flex items-center gap-2 bg-popover px-3 py-1.5 text-muted-foreground">
-        <span className="font-medium text-foreground">Workers</span>
-        <span>{workers.filter(isActive).length} running · {workers.length} total</span>
-        {stale ? <span className="text-destructive">{stale === "ended" ? "pi's session has ended" : "pi is not responding"}</span> : null}
-        <span className="flex-1" />
-        <button type="button" className="cursor-pointer hover:text-foreground" aria-label="Close" onClick={() => setOpenThread(null)}>
-          <Icon name="X" className="size-3.5" />
-        </button>
-      </div>
-      {workers.length === 0 ? <div className="px-3 pb-2 text-muted-foreground">No workers in this session.</div> : null}
-      <ul>
-        {workers.map((worker) => (
-          <WorkerRow
-            key={worker.id}
-            threadId={threadId}
-            worker={worker}
-            state={state}
-            now={now}
-            readOnly={stale !== null}
-            expanded={expanded === worker.id}
-            onToggle={() => setExpanded((current) => (current === worker.id ? null : worker.id))}
-          />
-        ))}
-      </ul>
+    <div className="min-h-8 overflow-hidden">
+      <CardHeader title="Workers" summary={summary} expanded={expanded} onToggle={() => setChosen(!expanded)}>
+        {stale ? <span className="shrink-0 text-destructive">{stale === "ended" ? "pi's session has ended" : "pi is not responding"}</span> : null}
+      </CardHeader>
+      {expanded ? (
+        <ul className="max-h-80 overflow-y-auto text-xs">
+          {workers.map((worker) => (
+            <WorkerRow
+              key={worker.id}
+              threadId={threadId}
+              worker={worker}
+              state={state}
+              now={now}
+              readOnly={stale !== null}
+              expanded={selected === worker.id}
+              onToggle={() => setSelected((current) => (current === worker.id ? null : worker.id))}
+            />
+          ))}
+        </ul>
+      ) : null}
     </div>
   );
 }
@@ -391,9 +419,9 @@ export default definePluginApp((app) => {
     id: "pi-pi",
     scopes: ["thread"],
     banners: [
+      { id: "pi-pi-status", chrome: "bare", component: StatusLine },
       { id: "pi-pi-tasks", chrome: "card", component: TaskCard },
-      { id: "pi-pi-workers", chrome: "card", component: WorkerPanel },
+      { id: "pi-pi-workers", chrome: "card", component: WorkerCard },
     ],
-    actions: [{ id: "pi-pi-workers", component: WorkerChip }],
   });
 });

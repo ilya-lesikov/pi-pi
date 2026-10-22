@@ -24,7 +24,9 @@ export interface FormQuestion {
 export type FormSpec =
   | { version: 1; kind: "ask"; questions: FormQuestion[] }
   | { version: 1; kind: "confirm"; question: string; detail?: string; danger: boolean }
-  | { version: 1; kind: "worker-question"; workerId: string; workerLabel: string; questionId: string; question: string };
+  | { version: 1; kind: "worker-question"; workerId: string; workerLabel: string; questionId: string; question: string }
+  | { version: 1; kind: "input"; question: string; placeholder?: string; prefill?: string; multiline: boolean }
+  | { version: 1; kind: "report"; text: string };
 
 /** One question's answer; `selections` are option titles. */
 export type FormAnswer =
@@ -35,4 +37,6 @@ export type FormValue =
   | { kind: "ask"; answers: FormAnswer[] }
   | { kind: "confirm"; decision: "yes" | "no"; comment?: string }
   | { kind: "answer"; text: string }
-  | { kind: "decline"; note?: string };
+  | { kind: "decline"; note?: string }
+  | { kind: "input"; text: string }
+  | { kind: "closed" };

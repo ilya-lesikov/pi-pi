@@ -35,7 +35,12 @@ const formSchema: z.ZodType<FormSpec> = z.discriminatedUnion("kind", [
   }),
   z.object({ version: z.literal(FORM_VERSION), kind: z.literal("confirm"), question: text(4000).min(1), detail: text(4000).optional(), danger: z.boolean() }),
   z.object({ version: z.literal(FORM_VERSION), kind: z.literal("worker-question"), workerId: text(200).min(1), workerLabel: text(500).min(1), questionId: text(300).min(1), question: text(20_000).min(1) }),
+  z.object({ version: z.literal(FORM_VERSION), kind: z.literal("input"), question: text(4000).min(1), placeholder: text(500).optional(), prefill: text(50_000).optional(), multiline: z.boolean() }),
+  z.object({ version: z.literal(FORM_VERSION), kind: z.literal("report"), text: text(55_000) }),
 ]);
+
+// The form kinds this plugin shows; pi asks before relying on the newer ones.
+const FORM_KINDS = ["ask", "confirm", "worker-question", "input", "report"] as const;
 
 type Settled = { state: "submitted"; value: FormValue } | { state: "cancelled"; reason: string };
 
@@ -52,7 +57,8 @@ export const rpcContract = defineRpcContract({
   state_get: {
     input: threadInput,
     // Validated by pi-pi's writer; the plugin only checks the version it understands.
-    output: z.object({ state: z.custom<BbState>().nullable() }),
+    // `failed`: the file could not be read this time; the last state read still stands.
+    output: z.object({ state: z.custom<BbState>().nullable(), failed: z.boolean().optional() }),
   },
   form_open: {
     input: formInput.extend({ session: z.string().uuid(), title: text(160).min(1), form: z.unknown(), timeoutMs: z.number().int().positive().max(MAX_TIMEOUT_MS).optional() }),
@@ -64,6 +70,8 @@ export const rpcContract = defineRpcContract({
   },
   form_cancel: { input: formInput, output: z.object({ ok: z.literal(true) }) },
   form_cancel_session: { input: threadInput.extend({ exceptSession: z.string().uuid() }), output: z.object({ cancelled: z.number() }) },
+  capabilities: { input: threadInput, output: z.object({ kinds: z.array(z.string()) }) },
+  menu_open: { input: threadInput, output: z.object({ id: z.string() }) },
   command_send: {
     input: threadInput.extend({
       workerId: z.string().min(1).max(200),
@@ -84,6 +92,37 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
     const location = { hostId, dir: `${storageRootPath.replace(/\/+$/, "")}/pi-pi` };
     locations.set(threadId, location);
     return location;
+  };
+
+  // A read that fails (a busy daemon, a machine briefly offline) must not read
+  // as "no state", which takes the cards down until the next poll; counted, so
+  // the log says how often it happens.
+  let readFailures = 0;
+  let loggedAt = 0;
+  const readFailed = (error: unknown) => {
+    readFailures++;
+    // At most every few seconds: a machine that stays offline fails every poll.
+    if (Date.now() - loggedAt > 10_000) {
+      loggedAt = Date.now();
+      bb.log.warn(`reading pi-pi's state failed (${readFailures} so far): ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return { state: null, failed: true };
+  };
+
+  const sendCommand = async (threadId: string, command: BbCommand) => {
+    const { hostId, dir } = await locate(threadId);
+    const name = `${Date.now()}-${command.id}.json`;
+    // Written aside and moved in, so pi never reads half a command.
+    const temp = `${dir}/commands/${name}.tmp`;
+    await bb.sdk.files.write({ hostId, path: temp, content: JSON.stringify(command), createParents: true });
+    try {
+      await bb.sdk.files.move({ hostId, sourcePath: temp, destinationPath: `${dir}/commands/${name}` });
+    } catch (error) {
+      // pi never picks up a .tmp, so nothing else would ever remove it.
+      await bb.sdk.files.remove({ hostId, path: temp }).catch(() => {});
+      throw error;
+    }
+    return { id: command.id };
   };
 
   const forms = new Map<string, LiveForm>();
@@ -168,35 +207,23 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
       let location: { hostId: string; dir: string };
       try {
         location = await locate(threadId);
-      } catch {
-        return { state: null };
+      } catch (error) {
+        return readFailed(error);
       }
       try {
         const file = await bb.sdk.files.read({ hostId: location.hostId, path: `${location.dir}/state.json` });
         if (file.contentEncoding !== "utf8") return { state: null };
         const state = JSON.parse(file.content) as BbState;
         return { state: state?.version === 1 ? state : null };
-      } catch {
-        // No file yet (not a pi-pi thread, or nothing written), or a machine offline.
-        return { state: null };
-      }
-    },
-    command_send: async ({ threadId, workerId, action, text }) => {
-      const { hostId, dir } = await locate(threadId);
-      const command: BbCommand = { id: randomUUID(), workerId, action, ...(text !== undefined ? { text } : {}) };
-      const name = `${Date.now()}-${command.id}.json`;
-      // Written aside and moved in, so pi never reads half a command.
-      const temp = `${dir}/commands/${name}.tmp`;
-      await bb.sdk.files.write({ hostId, path: temp, content: JSON.stringify(command), createParents: true });
-      try {
-        await bb.sdk.files.move({ hostId, sourcePath: temp, destinationPath: `${dir}/commands/${name}` });
       } catch (error) {
-        // pi never picks up a .tmp, so nothing else would ever remove it.
-        await bb.sdk.files.remove({ hostId, path: temp }).catch(() => {});
-        throw error;
+        // No file: not a pi-pi thread, or nothing written yet. bb's daemon says "Path does not exist" with code ENOENT.
+        if ((error as { code?: unknown })?.code === "ENOENT" || /does not exist|not[ _-]?found|ENOENT|no such file/i.test(error instanceof Error ? error.message : String(error))) return { state: null };
+        return readFailed(error);
       }
-      return { id: command.id };
     },
+    command_send: async ({ threadId, workerId, action, text }) => sendCommand(threadId, { id: randomUUID(), workerId, action, ...(text !== undefined ? { text } : {}) }),
+    capabilities: async () => ({ kinds: [...FORM_KINDS] }),
+    menu_open: async ({ threadId }) => sendCommand(threadId, { id: randomUUID(), action: "menu" }),
   });
 }
 
@@ -204,6 +231,8 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
 const LABEL_CHARS = 80;
 
 function labels(spec: FormSpec): { pending: string; completed: string } {
+  if (spec.kind === "report") return { pending: "Report", completed: "Closed" };
+  if (spec.kind === "input") return { pending: "Waiting for your input", completed: "Entered" };
   if (spec.kind === "worker-question") return { pending: clip(`${spec.workerLabel} asks you`, LABEL_CHARS), completed: clip(`Answered ${spec.workerLabel}`, LABEL_CHARS) };
   if (spec.kind === "confirm") return { pending: "Waiting for your decision", completed: "Decided" };
   return { pending: "Waiting for your answer", completed: "Answered" };
@@ -212,6 +241,8 @@ function labels(spec: FormSpec): { pending: string; completed: string } {
 function describe(spec: FormSpec, value: FormValue): { title: string; detail?: string } {
   if (value.kind === "decline") return { title: "Declined", ...(value.note ? { detail: value.note } : {}) };
   if (value.kind === "confirm") return { title: value.decision === "yes" ? "Yes" : "No", ...(value.comment ? { detail: value.comment } : {}) };
+  if (value.kind === "closed") return { title: "Closed" };
+  if (value.kind === "input") return { title: "Entered" };
   if (value.kind === "answer") return { title: clip(`Answered ${spec.kind === "worker-question" ? spec.workerLabel : ""}`.trim(), LABEL_CHARS), detail: value.text };
   const questions = spec.kind === "ask" ? spec.questions : [];
   const lines = value.answers.map((answer, i) => {

@@ -1,5 +1,6 @@
 import { Editor, Key, matchesKey, truncateToWidth, wrapTextWithAnsi, type Component, type Focusable, type KeybindingsManager, type TUI } from "@earendil-works/pi-tui";
 import { fitLine } from "../host.js";
+import { menuAsk, menuOf } from "../bb-menu-ui.js";
 import { currentHost, notice } from "../notices.js";
 
 export interface QuestionOption { title: string; description?: string }
@@ -150,6 +151,20 @@ export async function askQuestion(ctx: AskContext, opts: AskOptions & SequenceOp
   const { signal } = opts;
   if (signal?.aborted) return cancel("signal");
   const q = toQuestion(opts);
+  const menu = menuOf(ctx);
+  if (menu) {
+    const answer = await menuAsk(menu, {
+      question: q.question,
+      ...(q.header ? { header: q.header } : {}),
+      ...(q.detail ? { detail: q.detail } : {}),
+      options: q.options,
+      ...(q.recommended >= 0 ? { recommended: q.options[q.recommended]!.title } : {}),
+      allowMultiple: q.allowMultiple,
+      allowFreeform: q.allowFreeform,
+      allowComment: q.commentEntry,
+    });
+    return answer ?? cancel("user");
+  }
   if (ctx.mode === undefined || ctx.mode === "tui") {
     const result = await showComponent(ctx.ui, q, opts);
     if (signal?.aborted) return cancel("signal");

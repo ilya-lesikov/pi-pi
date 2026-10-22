@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "util";
+import { menuOf } from "./bb-menu-ui.js";
 import { join } from "path";
 import { askUser, isCancel } from "./ask/index.js";
 import { migrateConfigLayer } from "./config-migration.js";
@@ -1856,7 +1857,7 @@ export async function showPpMenu(orchestrator: Orchestrator, ctx: any): Promise<
   }
   // bb waits for a model run after every prompt, and /pp starts none; on a
   // host pi-pi cannot identify it may be the same. Said before the menu opens.
-  const mayStayBusy = ctx?.mode === "rpc" && currentHost().settlesCommandOnlyPrompt !== true;
+  const mayStayBusy = ctx?.mode === "rpc" && currentHost().settlesCommandOnlyPrompt !== true && !menuOf(ctx);
   if (mayStayBusy) commandNotice(ctx, "/pp: this app may stay busy after the menu closes; press Stop if it does.", "warning");
   for (;;) {
     const choice = await selectOption(ctx, mayStayBusy ? "/pp · session control panel (press Stop afterwards if the app stays busy)" : "/pp · session control panel", [

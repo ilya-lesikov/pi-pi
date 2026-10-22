@@ -27,7 +27,9 @@ export interface FormQuestion {
 export type FormSpec =
   | { version: 1; kind: "ask"; questions: FormQuestion[] }
   | { version: 1; kind: "confirm"; question: string; detail?: string; danger: boolean }
-  | { version: 1; kind: "worker-question"; workerId: string; workerLabel: string; questionId: string; question: string };
+  | { version: 1; kind: "worker-question"; workerId: string; workerLabel: string; questionId: string; question: string }
+  | { version: 1; kind: "input"; question: string; placeholder?: string; prefill?: string; multiline: boolean }
+  | { version: 1; kind: "report"; text: string };
 
 export type FormAnswer =
   | { kind: "selection"; selections: string[]; other?: string; comment?: string }
@@ -37,7 +39,9 @@ export type FormValue =
   | { kind: "ask"; answers: FormAnswer[] }
   | { kind: "confirm"; decision: "yes" | "no"; comment?: string }
   | { kind: "answer"; text: string }
-  | { kind: "decline"; note?: string };
+  | { kind: "decline"; note?: string }
+  | { kind: "input"; text: string }
+  | { kind: "closed" };
 
 /** submitted: the user answered; cancelled: dismissed (by them or bb); unavailable: nothing was shown, use the dialogs. */
 export type FormOutcome =
@@ -94,6 +98,8 @@ export class BbForms {
   private readonly open = new Map<string, (text: string) => void>();
   private asking = 0;
   private askEndedAt = 0;
+  private kinds: Set<string> | null = null;
+  private kindsRetryAt = 0;
 
   constructor(private readonly env: BbFormsEnv) {
     this.fetch = env.fetch ?? fetch;
@@ -106,15 +112,17 @@ export class BbForms {
    * in the chat meanwhile into the form's value; without it the message
    * reaches the agent as usual.
    */
-  async ask(spec: FormSpec, options: { title: string; signal?: AbortSignal; timeoutMs?: number; onTyped?: (text: string) => FormValue }): Promise<FormOutcome> {
+  async ask(spec: FormSpec, options: { title: string; signal?: AbortSignal; timeoutMs?: number; onTyped?: (text: string) => FormValue; fromMenu?: boolean }): Promise<FormOutcome> {
     const { signal } = options;
+    if (signal?.aborted) return { outcome: "cancelled", reason: "signal" };
     if (this.now() < this.unavailableUntil) return { outcome: "unavailable" };
     if (JSON.stringify(spec).length > MAX_FORM_BYTES) return { outcome: "unavailable" };
     const formId = randomUUID();
     const open = { threadId: this.env.threadId, session: this.session, formId, title: options.title, form: spec, ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}) };
     const cancel = () => void this.call("form_cancel", { threadId: this.env.threadId, formId }).catch(() => {});
     // Counted from before the open, so no worker form slips in while this one is on its way.
-    const agentAsks = spec.kind !== "worker-question";
+    // The user's own menu is not the agent asking: workers' questions are not held back for it.
+    const agentAsks = spec.kind !== "worker-question" && !options.fromMenu;
     if (agentAsks) this.asking++;
     const done = () => {
       if (!agentAsks) return;
@@ -185,6 +193,26 @@ export class BbForms {
       this.open.delete(formId);
       done();
     }
+  }
+
+  /**
+   * Whether the plugin can show every one of `kinds`; null when it could not
+   * be asked. An answer is remembered, since the plugin changes only with an
+   * upgrade; a plugin too old to answer is asked again a little later.
+   */
+  async supports(kinds: ReadonlyArray<FormSpec["kind"]>): Promise<boolean | null> {
+    if (!this.kinds || (this.kinds.size === 0 && this.now() >= this.kindsRetryAt)) {
+      try {
+        const { kinds: known } = await this.call<{ kinds: string[] }>("capabilities", { threadId: this.env.threadId });
+        this.kinds = new Set(known);
+      } catch (error) {
+        // A plugin without the method is too old; anything else is an outage, asked again next time.
+        if (!(error instanceof Unavailable && error.notInstalled) && !/unknown_method|unknown method/i.test((error as Error).message)) return null;
+        this.kinds = new Set();
+        this.kindsRetryAt = this.now() + UNAVAILABLE_FOR_MS;
+      }
+    }
+    return kinds.every((kind) => this.kinds!.has(kind));
   }
 
   /** True while an ask_user or confirm form is up: the agent is asking the user something itself. */
@@ -258,6 +286,47 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
     }
     signal?.addEventListener("abort", done, { once: true });
   });
+}
+
+// The plugin's limits (bb/server.ts), with room to spare for a marker.
+const LIMITS = { title: 300, description: 1500, question: 3800, header: 190 };
+
+/**
+ * Fits questions to what the plugin accepts without losing which option was
+ * picked: answers come back as the titles shown, so a title cut to fit, or
+ * two that come out the same once cut, are mapped back to the originals.
+ */
+export function encodeQuestions(questions: FormQuestion[]): { questions: FormQuestion[]; decode(answers: FormAnswer[]): FormAnswer[] } {
+  const originals: Array<Map<string, string>> = [];
+  const encoded = questions.map((question) => {
+    const byLabel = new Map<string, string>();
+    originals.push(byLabel);
+    const label = (title: string): string => {
+      const base = clip(title, LIMITS.title);
+      let shown = base;
+      for (let n = 2; byLabel.has(shown) && byLabel.get(shown) !== title; n++) shown = `${clip(title, LIMITS.title - String(n).length - 3)} (${n})`;
+      byLabel.set(shown, title);
+      return shown;
+    };
+    const options = question.options.map((option) => ({ title: label(option.title), ...(option.description ? { description: clip(option.description, LIMITS.description) } : {}) }));
+    const { recommended: _recommended, ...rest } = question;
+    const recommended = [...byLabel].find(([, title]) => title === question.recommended)?.[0];
+    return {
+      ...rest,
+      question: clip(question.question, LIMITS.question),
+      ...(question.header ? { header: clip(question.header, LIMITS.header) } : {}),
+      options,
+      ...(recommended !== undefined ? { recommended } : {}),
+    };
+  });
+  return {
+    questions: encoded,
+    decode: (answers) => answers.map((answer, i) => answer.kind === "selection" ? { ...answer, selections: answer.selections.map((shown) => originals[i]?.get(shown) ?? shown) } : answer),
+  };
+}
+
+function clip(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
 let forms: BbForms | null | undefined;

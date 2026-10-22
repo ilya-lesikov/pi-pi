@@ -1,7 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import { Text } from "@earendil-works/pi-tui";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { bbForms, type FormAnswer } from "../bb-forms.js";
+import { bbForms, encodeQuestions, type FormAnswer } from "../bb-forms.js";
 import { detectHost, fitLine } from "../host.js";
 import { askQuestion, formatOptionList, formatResponse, isCancel, isNavigate, normalizeOptions, reviewAnswers, type AskResponse, type CancelReason, type QuestionOption } from "./ui.js";
 
@@ -286,7 +286,8 @@ async function askViaBbForm(ctx: any, items: AskItem[], multi: boolean, signal: 
     allowComment: item.allowComment !== false,
   }));
   onUpdate?.({ content: text("Waiting for user input..."), details: { ...shown[0]!, response: null, cancelled: false } });
-  const outcome = await forms.ask({ version: 1, kind: "ask", questions }, {
+  const encoded = encodeQuestions(questions);
+  const outcome = await forms.ask({ version: 1, kind: "ask", questions: encoded.questions }, {
     title: fitLine(shown[0]!.header || (multi ? `${items.length} questions` : items[0]!.question), 160),
     signal,
     // A reply typed in the chat answers the form's first question; the rest stay unanswered.
@@ -307,7 +308,7 @@ async function askViaBbForm(ctx: any, items: AskItem[], multi: boolean, signal: 
       : cancelledResult(cancelled, false, [cancelled], 0, 1);
   }
   if (outcome.value.kind !== "ask") return undefined;
-  const given = outcome.value.answers;
+  const given = encoded.decode(outcome.value.answers);
   const answers: AskToolDetails[] = shown.map((entry, i) => {
     const response = toResponse(given[i]);
     return response ? { ...entry, response, cancelled: false, status: "answered" } : { ...entry, response: null, cancelled: true, cancelReason: "user", status: "cancelled" };

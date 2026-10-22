@@ -1,8 +1,8 @@
-// pi-pi's forms in bb's composer: ask_user's questions, confirm, and a worker's
-// question. Modelled on bb's own question form, so it reads and answers the
+// pi-pi's forms in bb's composer: ask_user's questions, confirm, a worker's
+// question, and /pp's text inputs and reports. Modelled on bb's own question form, so it reads and answers the
 // same way; bb draws the card around it, with the title and its own Cancel.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
 import { experimental_useQuestionFormHost, type ExperimentalQuestionShortcut, type PluginPendingInteractionProps } from "@get-bb/plugin-sdk/app";
 import { FORM_VERSION, type FormAnswer, type FormQuestion, type FormSpec, type FormValue } from "./forms";
 import { Button } from "@/components/ui/button";
@@ -46,7 +46,7 @@ export function PiPiForm({ interaction, submit, cancel }: PluginPendingInteracti
     return (
       <div className="space-y-2 text-xs text-muted-foreground">
         <p>This form needs a newer pi-pi bb plugin. Cancel, and the agent will ask in plain text.</p>
-        <Button type="button" size="sm" variant="outline" onClick={() => void dismiss()}>Cancel</Button>
+        <Button type="button" size="sm" className="h-7" variant="outline" onClick={() => void dismiss()}>Cancel</Button>
       </div>
     );
   }
@@ -56,6 +56,8 @@ export function PiPiForm({ interaction, submit, cancel }: PluginPendingInteracti
       {spec.kind === "ask" ? <AskForm questions={spec.questions} onSubmit={send} onCancel={dismiss} /> : null}
       {spec.kind === "confirm" ? <ConfirmForm spec={spec} onSubmit={send} onCancel={dismiss} /> : null}
       {spec.kind === "worker-question" ? <WorkerQuestionForm spec={spec} onSubmit={send} onCancel={dismiss} /> : null}
+      {spec.kind === "input" ? <InputForm spec={spec} onSubmit={send} onCancel={dismiss} /> : null}
+      {spec.kind === "report" ? <ReportForm spec={spec} onSubmit={send} /> : null}
       {error ? <p className="mt-2 text-destructive">{error}</p> : null}
     </fieldset>
   );
@@ -160,7 +162,7 @@ function AskForm({ questions, onSubmit, onCancel }: { questions: FormQuestion[];
       className="-m-1 flex min-h-0 flex-col rounded-md p-1 text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
     >
       {questions.length > 1 ? (
-        <div className="mb-2 flex items-center gap-2">
+        <div className="mb-1 flex items-center gap-2">
           <div role="tablist" aria-label="Questions" className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
             {questions.map((entry, i) => (
               <button
@@ -173,7 +175,7 @@ function AskForm({ questions, onSubmit, onCancel }: { questions: FormQuestion[];
                 }}
                 aria-selected={i === index}
                 title={entry.question}
-                className={cn("h-7 shrink-0 rounded-md px-2", i === index ? "bg-muted text-foreground" : "hover:bg-state-hover")}
+                className={cn("h-6 shrink-0 rounded-md px-2", i === index ? "bg-muted text-foreground" : "hover:bg-state-hover")}
               >
                 <span className="flex max-w-[200px] items-center gap-1">
                   {answered(drafts[i]!) ? <Icon name="Check" className="size-3 shrink-0" aria-label="answered" /> : null}
@@ -185,9 +187,11 @@ function AskForm({ questions, onSubmit, onCancel }: { questions: FormQuestion[];
           <span className="shrink-0">{index + 1} of {questions.length}</span>
         </div>
       ) : null}
-      <div className="whitespace-pre-wrap break-words font-medium text-foreground">{question.question}</div>
-      {question.allowMultiple ? <div className="mt-0.5">Choose any that apply.</div> : null}
-      <div role={question.allowMultiple ? "group" : "radiogroup"} aria-label={question.question} className="mt-1 space-y-0.5">
+      <div className="whitespace-pre-wrap break-words font-medium text-foreground">
+        {question.question}
+        {question.allowMultiple ? <span className="font-normal text-muted-foreground"> (any that apply)</span> : null}
+      </div>
+      <div role={question.allowMultiple ? "group" : "radiogroup"} aria-label={question.question} className="mt-1">
         {question.options.map((option, i) => (
           <Choice
             key={option.title}
@@ -207,23 +211,20 @@ function AskForm({ questions, onSubmit, onCancel }: { questions: FormQuestion[];
       {draft.otherSelected ? (
         <TextArea autoFocus={focusOther} value={draft.otherText} placeholder={question.options.length ? "Type your own answer…" : "Type your answer…"} label="Your answer" onChange={(otherText) => update((entry) => ({ ...entry, otherText }))} onSubmit={next} />
       ) : null}
-      {question.allowComment && question.options.length ? (
-        draft.commentOpen ? (
-          <TextArea value={draft.comment} placeholder="Optional comment for the agent…" label="Comment" onChange={(comment) => update((entry) => ({ ...entry, comment }))} onSubmit={next} />
-        ) : (
-          <button type="button" className="mt-2 cursor-pointer text-left hover:text-foreground" onClick={() => update((entry) => ({ ...entry, commentOpen: true }))}>
-            + Add a comment
-          </button>
-        )
+      {question.allowComment && question.options.length && draft.commentOpen ? (
+        <TextArea value={draft.comment} placeholder="Optional comment for the agent…" label="Comment" onChange={(comment) => update((entry) => ({ ...entry, comment }))} onSubmit={next} />
       ) : null}
-      <div className="mt-3 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1">
-          <Button type="button" size="sm" variant="ghost" onClick={onCancel}>Cancel</Button>
-          <Button type="button" size="sm" variant="ghost" onClick={() => setDeclining(true)}>Cancel with a reason</Button>
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-3">
+          <LinkButton onClick={onCancel}>Cancel</LinkButton>
+          <LinkButton onClick={() => setDeclining(true)}>Cancel with a reason</LinkButton>
+          {question.allowComment && question.options.length && !draft.commentOpen ? (
+            <LinkButton onClick={() => update((entry) => ({ ...entry, commentOpen: true }))}>+ Add a comment</LinkButton>
+          ) : null}
         </div>
         <div className="flex items-center gap-2">
-          {index > 0 ? <Button type="button" size="sm" variant="outline" onClick={() => { setFocusOther(false); setIndex(index - 1); }}>Back</Button> : null}
-          <Button type="button" size="sm" disabled={!answered(draft)} onClick={next}>
+          {index > 0 ? <Button type="button" size="sm" className="h-7" variant="outline" onClick={() => { setFocusOther(false); setIndex(index - 1); }}>Back</Button> : null}
+          <Button type="button" size="sm" className="h-7" disabled={!answered(draft)} onClick={next}>
             {last ? (ready ? "Submit answer" : "Next unanswered") : "Next"}
           </Button>
         </div>
@@ -263,22 +264,17 @@ function ConfirmForm({ spec, onSubmit, onCancel }: { spec: Extract<FormSpec, { k
       <div className="whitespace-pre-wrap break-words font-medium text-foreground">{spec.question}</div>
       {spec.detail ? <div className="mt-1 whitespace-pre-wrap break-words text-muted-foreground">{spec.detail}</div> : null}
       {spec.danger ? (
-        <div className="mt-2 flex items-center gap-1.5 text-destructive">
+        <div className="mt-1 flex items-center gap-1.5 text-destructive">
           <Icon name="TriangleAlert" className="size-3.5" />
           Destructive or hard to undo.
         </div>
       ) : null}
-      {commentOpen ? (
-        <TextArea autoFocus value={comment} placeholder="Optional comment for the agent…" label="Comment" onChange={setComment} />
-      ) : (
-        <button type="button" className="mt-2 cursor-pointer text-left text-muted-foreground hover:text-foreground" onClick={() => setCommentOpen(true)}>
-          + Add a comment
-        </button>
-      )}
-      <div className="mt-3 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1">
-          <Button type="button" size="sm" variant="ghost" onClick={onCancel}>Cancel</Button>
-          <Button type="button" size="sm" variant="ghost" onClick={() => setDeclining(true)}>Cancel with a reason</Button>
+      {commentOpen ? <TextArea autoFocus value={comment} placeholder="Optional comment for the agent…" label="Comment" onChange={setComment} /> : null}
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-3 text-muted-foreground">
+          <LinkButton onClick={onCancel}>Cancel</LinkButton>
+          <LinkButton onClick={() => setDeclining(true)}>Cancel with a reason</LinkButton>
+          {commentOpen ? null : <LinkButton onClick={() => setCommentOpen(true)}>+ Add a comment</LinkButton>}
         </div>
         <div className="flex items-center gap-2">
           {order.map((decision, i) => (
@@ -313,9 +309,54 @@ function WorkerQuestionForm({ spec, onSubmit, onCancel }: { spec: Extract<FormSp
       <div className="mt-1 max-h-60 overflow-y-auto whitespace-pre-wrap break-words text-foreground">{spec.question}</div>
       <TextArea value={text} placeholder="Your answer for the worker…" label="Answer" onChange={setText} onSubmit={send} />
       <div className="mt-1 text-muted-foreground">The agent sees this question too.</div>
-      <div className="mt-3 flex items-center justify-between gap-2">
-        <Button type="button" size="sm" variant="ghost" onClick={onCancel}>Leave it to the agent</Button>
-        <Button type="button" size="sm" disabled={!text.trim()} onClick={send}>Send answer</Button>
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <LinkButton onClick={onCancel}>Leave it to the agent</LinkButton>
+        <Button type="button" size="sm" className="h-7" disabled={!text.trim()} onClick={send}>Send answer</Button>
+      </div>
+    </div>
+  );
+}
+
+// --- a value to type, and a report to read: /pp's screens ----------------------------
+
+function InputForm({ spec, onSubmit, onCancel }: { spec: Extract<FormSpec, { kind: "input" }>; onSubmit: (value: FormValue) => void; onCancel: () => void }) {
+  const [text, setText] = useState(spec.prefill ?? "");
+  const send = () => onSubmit({ kind: "input", text });
+  return (
+    <div>
+      <div className="whitespace-pre-wrap break-words font-medium text-foreground">{spec.question}</div>
+      {spec.multiline ? (
+        <TextArea autoFocus value={text} placeholder={spec.placeholder ?? ""} label={spec.question} onChange={setText} onSubmit={send} />
+      ) : (
+        <input
+          autoFocus
+          aria-label={spec.question}
+          value={text}
+          placeholder={spec.placeholder ?? ""}
+          autoComplete="off"
+          onChange={(event) => setText(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+            event.preventDefault();
+            send();
+          }}
+          className="mt-1.5 block h-7 w-full rounded-md border border-border bg-surface-raised px-2.5 text-xs text-foreground placeholder:text-muted-foreground focus-visible:border-ring/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/40"
+        />
+      )}
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <LinkButton onClick={onCancel}>Cancel</LinkButton>
+        <Button type="button" size="sm" className="h-7" onClick={send}>OK</Button>
+      </div>
+    </div>
+  );
+}
+
+function ReportForm({ spec, onSubmit }: { spec: Extract<FormSpec, { kind: "report" }>; onSubmit: (value: FormValue) => void }) {
+  return (
+    <div>
+      <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-snug text-foreground">{spec.text}</pre>
+      <div className="mt-2 flex justify-end">
+        <Button type="button" size="sm" className="h-7" autoFocus onClick={() => onSubmit({ kind: "closed" })}>Close</Button>
       </div>
     </div>
   );
@@ -329,11 +370,20 @@ function DeclineNote({ onBack, onSubmit }: { onBack: () => void; onSubmit: (note
     <div>
       <div className="font-medium text-foreground">Why? The agent gets your reason.</div>
       <TextArea autoFocus value={note} placeholder="Optional reason…" label="Reason" onChange={setNote} onSubmit={() => onSubmit(note.trim())} />
-      <div className="mt-3 flex items-center justify-between gap-2">
-        <Button type="button" size="sm" variant="ghost" onClick={onBack}>Back</Button>
-        <Button type="button" size="sm" variant="outline" onClick={() => onSubmit(note.trim())}>Cancel the question</Button>
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <LinkButton onClick={onBack}>Back</LinkButton>
+        <Button type="button" size="sm" className="h-7" variant="outline" onClick={() => onSubmit(note.trim())}>Cancel the question</Button>
       </div>
     </div>
+  );
+}
+
+/** A secondary action as plain text, so the row of them stays one line high. */
+function LinkButton({ onClick, children }: { onClick: () => void; children: ReactNode }) {
+  return (
+    <button type="button" onClick={onClick} className="cursor-pointer whitespace-nowrap text-muted-foreground hover:text-foreground">
+      {children}
+    </button>
   );
 }
 
@@ -353,7 +403,7 @@ function Choice({ checked, multi, label, description, recommended, shortcut, onS
       aria-checked={checked}
       aria-keyshortcuts={shortcut?.ariaKeyshortcuts}
       onClick={onSelect}
-      className={cn("flex w-full items-start gap-2.5 rounded-md px-2.5 py-1.5 text-left transition-colors", checked ? "bg-surface-selected" : "hover:bg-state-hover")}
+      className={cn("flex w-full items-start gap-2 rounded-md px-2 py-1 text-left transition-colors", checked ? "bg-surface-selected" : "hover:bg-state-hover")}
     >
       <span className={cn("mt-px flex size-4 shrink-0 items-center justify-center border", multi ? "rounded" : "rounded-full", checked ? "border-primary bg-primary text-primary-foreground" : "border-input")}>
         {checked ? <Icon name="Check" className="size-3" /> : null}
@@ -363,7 +413,7 @@ function Choice({ checked, multi, label, description, recommended, shortcut, onS
           {label}
           {recommended ? <span className="ml-1.5 rounded bg-muted px-1 py-px text-[10px] uppercase tracking-wide text-muted-foreground">recommended</span> : null}
         </span>
-        {description ? <span className="mt-0.5 block whitespace-pre-wrap break-words leading-snug text-muted-foreground">{description}</span> : null}
+        {description ? <span className="block whitespace-pre-wrap break-words text-[11px] leading-tight text-muted-foreground">{description}</span> : null}
       </span>
       {shortcut ? <kbd className="shrink-0 font-normal text-subtle-foreground">{shortcut.label}</kbd> : null}
     </button>
@@ -382,7 +432,7 @@ function TextArea({ value, placeholder, label, autoFocus, onChange, onSubmit }: 
     <textarea
       aria-label={label}
       value={value}
-      rows={2}
+      rows={1}
       autoFocus={autoFocus}
       autoComplete="off"
       placeholder={placeholder}
@@ -393,7 +443,7 @@ function TextArea({ value, placeholder, label, autoFocus, onChange, onSubmit }: 
         event.preventDefault();
         onSubmit();
       }}
-      className="mt-2 block max-h-40 min-h-[60px] w-full resize-y rounded-md border border-border bg-surface-raised px-3 py-2 text-xs leading-relaxed text-foreground placeholder:text-muted-foreground focus-visible:border-ring/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/40"
+      className="mt-1.5 block max-h-40 min-h-[36px] w-full resize-y rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-xs leading-relaxed text-foreground placeholder:text-muted-foreground focus-visible:border-ring/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/40"
     />
   );
 }

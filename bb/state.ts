@@ -7,6 +7,11 @@ export interface BbState {
   pid: number;
   live: boolean;
   heartbeatAt: number;
+  piPiVersion: string;
+  /** `since` is on pi's clock, as `heartbeatAt` is. */
+  status: { text: string; level: "normal" | "attention" | "alarm" | "idle"; since: number; suffix?: string };
+  /** What pi-pi said while its menu was open; `at` is on pi's clock. */
+  notices: Array<{ id: string; text: string; level: "info" | "warning" | "error"; at: number }>;
   tasks: Array<{ id: string; subject: string; status: string; activeForm?: string }>;
   workers: BbWorker[];
   commandResults: Array<{ id: string; ok: boolean; message: string; at: number }>;
@@ -34,12 +39,9 @@ export interface BbWorker {
   error?: string;
 }
 
-export interface BbCommand {
-  id: string;
-  workerId: string;
-  action: "stop" | "kill" | "message";
-  text?: string;
-}
+export type BbCommand =
+  | { id: string; workerId: string; action: "stop" | "kill" | "message"; text?: string }
+  | { id: string; action: "menu" };
 
 /** pi rewrites the file at least every few seconds while its session lives. */
 const STALE_MS = 15_000;

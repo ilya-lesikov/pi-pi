@@ -116,6 +116,17 @@ describe("bb forms", () => {
     seen = [];
     await forms.ask({ version: 1, kind: "worker-question", workerId: "w", workerLabel: "w", questionId: "q", question: "?" }, { title: "w asks" });
     expect(seen.every((busy) => !busy)).toBe(true);
+    // The user browsing pi-pi's menu is not the agent asking either.
+    seen = [];
+    await forms.ask(ask, { title: "Pick", fromMenu: true });
+    expect(seen.every((busy) => !busy)).toBe(true);
+  });
+
+  it("tells a plugin too old to list its forms from one it could not ask", async () => {
+    const old = plugin(() => ({ state: "pending" }), { missing: true });
+    expect(await old.forms.supports(["input"])).toBe(false);
+    const down = new BbForms({ serverUrl: "http://bb.test", threadId: "thr_1", fetch: vi.fn(async () => { throw new Error("ECONNREFUSED"); }) as any });
+    expect(await down.supports(["input"])).toBeNull();
   });
 
   it("keeps a reply typed while a poll was out, rather than losing it to the form's answer", async () => {

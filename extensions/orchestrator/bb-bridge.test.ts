@@ -1,13 +1,16 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BbState as PluginState } from "../../bb/state.js";
 import { registerBbBridge, type BbState } from "./bb-bridge.js";
+import { closeBbMenu, openBbMenu } from "./bb-menu.js";
 import { resetBbForms, type BbForms, type FormOutcome } from "./bb-forms.js";
 import { registerTasks } from "./tasks/index.js";
 import { WorkerManager } from "./workers/manager.js";
 import type { WorkerSession, WorkerSessionHooks } from "./workers/types.js";
+
+vi.mock("./bb-menu.js", () => ({ openBbMenu: vi.fn(() => ({ ok: false, message: "pi-pi's menu opens while the agent is idle." })), closeBbMenu: vi.fn() }));
 
 let storage: string;
 
@@ -119,6 +122,43 @@ describe("bb bridge", () => {
     await call("TaskCreate", { subject: "Write tests", description: "", activeForm: "Writing tests" });
     await call("TaskUpdate", { taskId: "1", status: "in_progress" });
     expect(state().tasks).toEqual([{ id: "1", subject: "Write tests", status: "in_progress", activeForm: "Writing tests" }]);
+  });
+
+  it("opens pi-pi's menu on the plugin's command, and takes it down when a run starts or the session ends", async () => {
+    const { fire, state, command } = harness();
+    await fire("session_start");
+    command("1-m.json", { id: "m", action: "menu" });
+    vi.advanceTimersByTime(500);
+    expect(openBbMenu).toHaveBeenCalled();
+    expect(state().commandResults).toEqual([expect.objectContaining({ id: "m", ok: false, message: "pi-pi's menu opens while the agent is idle." })]);
+    // A click left from before this session is not a request now.
+    vi.mocked(openBbMenu).mockClear();
+    command("2-old.json", { id: "old", action: "menu" });
+    utimesSync(join(storage, "pi-pi", "commands", "2-old.json"), new Date(0), new Date(0));
+    vi.advanceTimersByTime(500);
+    expect(openBbMenu).not.toHaveBeenCalled();
+    expect(state().commandResults.at(-1)).toMatchObject({ id: "old", ok: false });
+    vi.mocked(closeBbMenu).mockClear();
+    await fire("agent_start");
+    await fire("session_shutdown");
+    expect(closeBbMenu).toHaveBeenCalledTimes(2);
+  });
+
+  it("mirrors the version and what the main agent is doing, without the idle clock", async () => {
+    const { fire, state, orchestrator } = harness();
+    let status: any = { text: "Running bash", level: "normal", since: 1000 };
+    orchestrator.mainStatus = { current: () => status };
+    await fire("session_start");
+    expect(state()).toMatchObject({ piPiVersion: expect.stringMatching(/^\d+\.\d+\.\d+/), status: { text: "Running bash", level: "normal", since: 1000 } });
+
+    status = { text: "Idle • done 5s ago", level: "idle", since: 2000 };
+    vi.advanceTimersByTime(500);
+    expect(state().status).toEqual({ text: "Idle", level: "idle", since: 2000 });
+
+    // The terminal's key means nothing in bb.
+    status = { text: "No response", level: "alarm", since: 3000, suffix: "esc to interrupt" };
+    vi.advanceTimersByTime(500);
+    expect(state().status).toEqual({ text: "No response", level: "alarm", since: 3000 });
   });
 
   it("mirrors workers on its tick, and marks the state dead when the session ends", async () => {

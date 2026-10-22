@@ -1,8 +1,12 @@
-import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { bbForms, type BbForms } from "./bb-forms.js";
+import { closeBbMenu, openBbMenu } from "./bb-menu.js";
+import { menuNotices, type MenuNotice } from "./bb-menu-ui.js";
+import { resolvePackageVersion } from "./custom-footer.js";
 import { detectHost, fitLine } from "./host.js";
 import { getLogger } from "./log.js";
+import type { MainStatus } from "./main-status.js";
 import type { Orchestrator } from "./orchestrator.js";
 import type { TaskFeed } from "./tasks/index.js";
 import type { WorkerManager } from "./workers/manager.js";
@@ -19,6 +23,9 @@ const QUESTION_FORM_DELAY_MS = 12_000;
 const QUESTION_FORM_RETRY_MS = 30_000;
 const BB_ANSWER_TYPE = "pp-bb-answer";
 const RESULT_CHARS = 2000;
+// A request to open the menu older than this is left over, not the user's click now.
+const MENU_COMMAND_MAX_AGE_MS = 15_000;
+const VERSION = resolvePackageVersion();
 
 /** What the pi-pi bb plugin reads; bump `version` on an incompatible change. */
 export interface BbState {
@@ -27,9 +34,15 @@ export interface BbState {
   /** False once the session that wrote it has shut down. */
   live: boolean;
   heartbeatAt: number;
+  /** pi-pi's package version. */
+  piPiVersion: string;
+  /** What the main agent is doing, as the footer's first line says it; `since` is on pi's clock, as `heartbeatAt` is. */
+  status: MainStatus;
   tasks: Array<{ id: string; subject: string; status: string; activeForm?: string }>;
   workers: BbWorker[];
   commandResults: BbCommandResult[];
+  /** What pi-pi said while its menu was open; `at` is on pi's clock. */
+  notices: MenuNotice[];
 }
 
 export interface BbWorker {
@@ -54,12 +67,9 @@ export interface BbWorker {
   error?: string;
 }
 
-export interface BbCommand {
-  id: string;
-  workerId: string;
-  action: "stop" | "kill" | "message";
-  text?: string;
-}
+export type BbCommand =
+  | { id: string; workerId: string; action: "stop" | "kill" | "message"; text?: string }
+  | { id: string; action: "menu" };
 
 export interface BbCommandResult {
   id: string;
@@ -84,15 +94,19 @@ export function registerBbBridge(orchestrator: Orchestrator, tasks: TaskFeed, en
   let writtenAt = 0;
   let results: BbCommandResult[] = [];
   let failed = false;
+  let sessionStartedAt = 0;
 
   const write = (live: boolean) => {
     const state: Omit<BbState, "heartbeatAt"> = {
       version: 1,
       pid: process.pid,
       live,
+      piPiVersion: VERSION,
+      status: bbStatus(orchestrator),
       tasks: tasks.current().tasks.map((task) => ({ id: task.id, subject: task.subject, status: task.status, ...(task.activeForm ? { activeForm: task.activeForm } : {}) })),
       workers: (orchestrator.workers?.list() ?? []).map(toBbWorker),
       commandResults: results,
+      notices: menuNotices(),
     };
     const json = JSON.stringify(state);
     const now = Date.now();
@@ -122,6 +136,11 @@ export function registerBbBridge(orchestrator: Orchestrator, tasks: TaskFeed, en
     for (const name of names) {
       const file = join(commandsDir, name);
       let command: BbCommand | undefined;
+      let age = 0;
+      try {
+        const written = statSync(file).mtimeMs;
+        age = written < sessionStartedAt ? Infinity : Date.now() - written;
+      } catch {}
       try {
         command = JSON.parse(readFileSync(file, "utf8"));
       } catch {}
@@ -130,7 +149,13 @@ export function registerBbBridge(orchestrator: Orchestrator, tasks: TaskFeed, en
       if (!command?.id) continue;
       let outcome: { ok: boolean; message: string };
       try {
-        outcome = runCommand(orchestrator.workers, command);
+        if (command.action !== "menu") outcome = runCommand(orchestrator.workers, command);
+        // A click left from before this session started, or from a while ago, is not a request now.
+        else if (age > MENU_COMMAND_MAX_AGE_MS) outcome = { ok: false, message: "Ignored an old request to open pi-pi's menu." };
+        else {
+          const { ok, message } = openBbMenu(orchestrator);
+          outcome = { ok, message };
+        }
       } catch (error: any) {
         outcome = { ok: false, message: `Failed: ${error?.message ?? String(error)}` };
       }
@@ -219,6 +244,8 @@ export function registerBbBridge(orchestrator: Orchestrator, tasks: TaskFeed, en
     // bb puts the variable in every shell the agent runs too; a pi started there
     // (in the terminal, or with -p) must not take over the thread's own file.
     if (detectHost(ctx?.mode, env).id !== "bb") return;
+    closeBbMenu();
+    sessionStartedAt = Date.now();
     results = [];
     forms = bbForms(env);
     await forms?.cancelStale();
@@ -228,7 +255,10 @@ export function registerBbBridge(orchestrator: Orchestrator, tasks: TaskFeed, en
     }
     tick();
   });
+  // The menu runs only while the agent is idle, and only in the session it was opened in.
+  orchestrator.pi.on("agent_start", async () => closeBbMenu());
   orchestrator.pi.on("session_shutdown", async () => {
+    closeBbMenu();
     if (timer) clearInterval(timer);
     timer = null;
     for (const form of questionForms.values()) form.controller.abort();
@@ -247,7 +277,7 @@ export function registerBbBridge(orchestrator: Orchestrator, tasks: TaskFeed, en
   });
 }
 
-function runCommand(manager: WorkerManager | null, command: BbCommand): { ok: boolean; message: string } {
+function runCommand(manager: WorkerManager | null, command: Extract<BbCommand, { workerId: string }>): { ok: boolean; message: string } {
   const record = manager?.get(command.workerId);
   if (!manager || !record) return { ok: false, message: "That worker is no longer retained." };
   const name = record.spec.type;
@@ -290,6 +320,16 @@ function toBbWorker(record: WorkerRecord): BbWorker {
     ...(record.result ? { result: { status: record.result.status, summary: record.result.summary, body: clip(record.result.body, RESULT_CHARS) } } : {}),
     ...(record.error ? { error: record.error } : {}),
   };
+}
+
+/** The footer's status, without its idle "done 5s ago", which would rewrite the file every second for nothing. */
+function bbStatus(orchestrator: Orchestrator): MainStatus {
+  const status = orchestrator.mainStatus?.current();
+  if (!status) return { text: "Idle", level: "idle", since: 0 };
+  if (status.level === "idle") return { text: "Idle", level: "idle", since: status.since };
+  // "esc to interrupt" is the terminal's key; bb has a Stop button.
+  const { suffix: _suffix, ...shown } = status;
+  return shown;
 }
 
 function clip(text: string, max: number): string {
