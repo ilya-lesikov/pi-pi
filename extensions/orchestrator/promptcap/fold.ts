@@ -330,7 +330,11 @@ export function fold(
   }
   const attachments = attachedImageIds(messages);
   const sharing = new Map<string, number[]>();
-  for (const [m, id] of attachments) sharing.set(id, [...(sharing.get(id) ?? []), m]);
+  for (const [m, id] of attachments) {
+    const bucket = sharing.get(id);
+    if (bucket) bucket.push(m);
+    else sharing.set(id, [m]);
+  }
   const foldAttachment = (id: string): void => {
     for (const m of sharing.get(id) ?? []) {
       if (!carriesImage(messages[m])) continue;
