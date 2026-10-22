@@ -24,6 +24,7 @@
     "test:watch": "vitest",
     "test:package": "bash scripts/test-package.sh",
     "test:all": "vitest run && bash scripts/test-package.sh",
+    "release:bb-plugin": "bash scripts/release-bb-plugin.sh",
     "coverage": "vitest run --coverage"
   },
   "pi": {

@@ -108,11 +108,15 @@ Every worker's conversation is written as it happens to `.pp/workers/<session>/<
 
 ## bb
 
-bb does not show pi's panels, so pi-pi ships a bb plugin in `bb/` that shows them in the thread instead, above the composer: a status line with what the main agent is doing and a **pi-pi menu** button, the task checklist as a card, and a worker card (`running · total · asking`, open while any worker runs). The worker card lists each worker's state, current step, question, result or error; clicking a worker shows its task, latest output and result, with Send (a steer, an answer, or more work for a finished one), Stop and Kill (asks to confirm). Install it once from a checkout:
+bb does not show pi's panels, so pi-pi ships a bb plugin in `bb/` that shows them in the thread instead, above the composer: a status line with what the main agent is doing and a **pi-pi menu** button, the task checklist as a card, and a worker card (`running · total · asking`, open while any worker runs). The worker card lists each worker's state, current step, question, result or error; clicking a worker shows its task, latest output and result, with Send (a steer, an answer, or more work for a finished one), Stop and Kill (asks to confirm). Install it from this repository's releases, alongside the pi package:
 
 ```
-cd bb && npm install && bb plugin build . && bb plugin install .
+bb plugin install git:github.com/ilya-lesikov/pi-pi@^0.1 --tag-prefix bb-plugin- --plugin pi-pi
 ```
+
+bb builds it on install, and `bb plugin outdated` and `bb plugin update pi-pi` pick up new releases within that range. To run it from a checkout instead, for development: `cd bb && npm install && bb plugin build . && bb plugin install .`.
+
+A release is a `bb-plugin-vX.Y.Z` tag. Bump `version` in `bb/package.json`, commit, and run `npm run release:bb-plugin`, which builds the committed plugin from a fresh clone the way bb's install does and tags it; then push the commit and the tag.
 
 Under bb, pi-pi writes the list and its workers to `pi-pi/state.json` in the thread's storage directory (`$BB_THREAD_STORAGE`), and the plugin's buttons come back as files in `pi-pi/commands/` next to it, which pi-pi runs within half a second. bb stops pi when you press Stop and a while after a run ends, and starts it again with your next message; while pi is not running the status line says so, the task list stops showing work in progress, workers show as stopped, and their buttons go away. When pi stops updating the file without ending, the status line says it is not responding.
 
