@@ -294,6 +294,8 @@ async function askViaBbForm(ctx: any, items: AskItem[], multi: boolean, signal: 
     onTyped: (typed) => ({ kind: "ask", answers: [{ kind: "freeform", text: typed }] }),
   });
   if (outcome.outcome === "unavailable") return undefined;
+  const also = outcome.outcome === "submitted" && outcome.alsoTyped ? `\nAfter answering, the user also wrote in the chat: "${outcome.alsoTyped}"` : "";
+  const withAlso = (result: ReturnType<typeof cancelledResult>) => (also ? { ...result, content: text(`${result.content[0]!.text}${also}`) } : result);
   if (outcome.outcome === "cancelled" || outcome.value.kind === "decline") {
     const note = outcome.outcome === "submitted" && outcome.value.kind === "decline" ? outcome.value.note : undefined;
     // Anything but the user's own cancel or the tool's abort is bb taking the form down: not the user's choice.
@@ -304,8 +306,8 @@ async function askViaBbForm(ctx: any, items: AskItem[], multi: boolean, signal: 
     }
     // The form is cancelled as a whole, so no question in it was answered.
     return multi
-      ? { content: text(`User cancelled the form with all ${items.length} questions.${note ? ` Their reason: "${note}".` : ""} ${CANCELLED_GUIDANCE}`), details: { ...cancelled, answers: shown.map((entry) => ({ ...entry, response: null, cancelled: true, cancelReason: reason, status: "cancelled" as const })) } }
-      : cancelledResult(cancelled, false, [cancelled], 0, 1);
+      ? { content: text(`User cancelled the form with all ${items.length} questions.${note ? ` Their reason: "${note}".` : ""} ${CANCELLED_GUIDANCE}${also}`), details: { ...cancelled, answers: shown.map((entry) => ({ ...entry, response: null, cancelled: true, cancelReason: reason, status: "cancelled" as const })) } }
+      : withAlso(cancelledResult(cancelled, false, [cancelled], 0, 1));
   }
   if (outcome.value.kind !== "ask") return undefined;
   const given = encoded.decode(outcome.value.answers);
@@ -315,12 +317,12 @@ async function askViaBbForm(ctx: any, items: AskItem[], multi: boolean, signal: 
   });
   if (!multi) {
     const only = answers[0]!;
-    return only.response ? { content: text(`User answered: ${formatResponse(only.response)}`), details: only } : cancelledResult(only, false, [only], 0, 1);
+    return only.response ? { content: text(`User answered: ${formatResponse(only.response)}${also}`), details: only } : withAlso(cancelledResult(only, false, [only], 0, 1));
   }
   // A reply typed in the chat answers only the first; say which went unanswered rather than inventing answers.
   const summary = answers.map((answer, i) => `${i + 1}. ${answer.question}: ${outcomeText(answer)}`).join("\n");
   const unanswered = answers.some((answer) => !answer.response);
-  return { content: text(`User answered:\n${summary}${unanswered ? "\nThey replied in the chat instead of answering every question; ask the rest in prose if you still need them." : ""}`), details: { ...answers[answers.length - 1]!, answers } };
+  return { content: text(`User answered:\n${summary}${unanswered ? "\nThey replied in the chat instead of answering every question; ask the rest in prose if you still need them." : ""}${also}`), details: { ...answers[answers.length - 1]!, answers } };
 }
 
 function toResponse(answer: FormAnswer | undefined): AskResponse | null {

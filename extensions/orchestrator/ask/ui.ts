@@ -303,11 +303,11 @@ async function askViaDialogs(ctx: AskContext, q: Question, opts: SequenceOptions
     // Done goes first, where it is seen, and a host that answers with the first entry can still finish.
     const head = several && count > 0 ? [done] : [];
     let picked = await pick(d, `${prefix}${typingNote}${state}${q.question}`, [...head, ...labels], extras);
+    if (signal?.aborted) return cancel("signal");
     if (typeof picked === "number") {
       if (picked < head.length) return selection(chosenNames.slice(0, checked.size), comment, other);
       picked -= head.length;
     }
-    if (signal?.aborted) return cancel("signal");
     if (picked === undefined) return null;
     // A host that answers with the bare title rather than the label it was shown.
     if (typeof picked === "string") {

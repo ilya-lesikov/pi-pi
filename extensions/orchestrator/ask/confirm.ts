@@ -14,6 +14,8 @@ interface ConfirmDetails {
   decision: Decision;
   comment?: string;
   note?: string;
+  /** A message the user sent in the chat after deciding in bb's form. */
+  alsoTyped?: string;
 }
 
 const DESCRIPTION = "Put one yes/no decision to the user and wait for it: permission before you change something, or any answer that is 'go ahead' or 'don't'. Write the question in the user's language and say exactly what you are about to do, so the answer is informed. Set danger for anything destructive or hard to undo. You get back yes, no, or that the user dismissed it, plus any comment. For anything with more than two answers use ask_user.";
@@ -65,11 +67,12 @@ async function confirmViaBbForm(ctx: any, base: { question: string; danger: bool
     // Not the user's decision: bb or the connection took the form down.
     return { ...base, decision: "unanswered", note: outcome.reason };
   }
+  const alsoTyped = outcome.outcome === "submitted" && outcome.alsoTyped ? { alsoTyped: outcome.alsoTyped } : {};
   if (outcome.outcome === "submitted" && outcome.value.kind === "confirm") {
-    return { ...base, decision: outcome.value.decision, ...(outcome.value.comment?.trim() ? { comment: outcome.value.comment.trim() } : {}) };
+    return { ...base, decision: outcome.value.decision, ...(outcome.value.comment?.trim() ? { comment: outcome.value.comment.trim() } : {}), ...alsoTyped };
   }
   const note = outcome.outcome === "submitted" && outcome.value.kind === "decline" ? outcome.value.note : undefined;
-  return { ...base, decision: "dismissed", ...(note ? { note } : {}) };
+  return { ...base, decision: "dismissed", ...(note ? { note } : {}), ...alsoTyped };
 }
 
 export function registerConfirm(pi: ExtensionAPI): void {
@@ -122,7 +125,8 @@ export function registerConfirm(pi: ExtensionAPI): void {
           details = { ...base, decision: signal?.aborted ? "dismissed" : yes ? "yes" : "no" };
         }
       }
-      return { content: text(resultFor(details)), details };
+      const result = resultFor(details);
+      return { content: text(details.alsoTyped ? `${result}\nAfter deciding, the user also wrote in the chat: "${details.alsoTyped}"` : result), details };
     },
     renderCall(args: any, theme) {
       return new Text(theme.fg("toolTitle", theme.bold("confirm ")) + theme.fg("muted", fitLine(String(args.question ?? ""), 80)), 0, 0);

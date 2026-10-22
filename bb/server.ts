@@ -16,6 +16,10 @@ const LEASE_MS = 20_000;
 // retrying through an outage, so an answer given before one is not asked again.
 const SETTLED_KEPT_MS = 240_000;
 const MAX_TIMEOUT_MS = 7 * 24 * 60 * 60 * 1000;
+// bb's limit on a form's payload, in bytes.
+const MAX_PAYLOAD_BYTES = 64 * 1024;
+// How long an open waits to hear whether bb refused the form outright.
+const REFUSAL_WAIT_MS = 1000;
 
 const text = (max: number) => z.string().max(max);
 const optionSchema = z.object({ title: text(500).min(1), description: text(2000).optional() });
@@ -155,15 +159,19 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
   // per-thread cancel can touch forms a caller did not open.
   bb.rpc.register(rpcContract, {
     form_open: async ({ threadId, formId, session, title, form, timeoutMs }) => {
-      // Idempotent: pi retries an open whose response it lost, and reopens one bb took down.
+      // Idempotent: pi reopens a form bb took down, under the same id.
       const existing = forms.get(formId);
+      if (existing && existing.threadId !== threadId) throw new Error("Unsupported form: the form belongs to another thread");
       if (existing && !existing.settled) return { ok: true as const };
       const parsed = formSchema.safeParse(form);
       if (!parsed.success) throw new Error(`Unsupported form: ${parsed.error.issues[0]?.message ?? "invalid"}`);
       const spec = parsed.data;
+      // bb counts the payload in bytes; the schema's limits are in characters.
+      if (Buffer.byteLength(JSON.stringify(spec)) > MAX_PAYLOAD_BYTES) throw new Error("Unsupported form: too large for bb");
+      if (!title.trim()) throw new Error("Unsupported form: empty title");
       const live: LiveForm = { threadId, session, controller: new AbortController(), polledAt: Date.now() };
       forms.set(formId, live);
-      void bb.ui
+      const shown = bb.ui
         .requestInput(
           {
             threadId,
@@ -177,21 +185,35 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
           { signal: live.controller.signal },
         )
         .then(
-          (result) => settle(live, result.outcome === "submitted" ? { state: "submitted", value: result.value as FormValue } : { state: "cancelled", reason: result.reason }),
-          (error) => settle(live, { state: "cancelled", reason: `failed: ${error instanceof Error ? error.message : String(error)}` }),
+          (result) => {
+            settle(live, result.outcome === "submitted" ? { state: "submitted", value: result.value as FormValue } : { state: "cancelled", reason: result.reason });
+            return true;
+          },
+          (error) => {
+            const reason = error instanceof Error ? error.message : String(error);
+            bb.log.warn(`bb could not show pi-pi's form ${formId} in thread ${threadId}: ${reason}`);
+            settle(live, { state: "cancelled", reason: `failed: ${reason}` });
+            return false;
+          },
         );
+      // bb refuses a form it cannot show at once; failing the open lets pi ask with bb's own dialogs instead.
+      const refused = await Promise.race([shown.then((ok) => !ok), new Promise<false>((resolve) => setTimeout(resolve, REFUSAL_WAIT_MS, false))]);
+      if (refused) {
+        forms.delete(formId);
+        throw new Error(`Unsupported form: bb could not show it (${live.settled?.state === "cancelled" ? live.settled.reason : "failed"})`);
+      }
       return { ok: true as const };
     },
-    form_poll: async ({ formId }) => {
+    form_poll: async ({ threadId, formId }) => {
       const form = forms.get(formId);
-      if (!form) return { state: "unknown" as const };
+      if (!form || form.threadId !== threadId) return { state: "unknown" as const };
       form.polledAt = Date.now();
       if (!form.settled) return { state: "pending" as const };
       return form.settled.state === "submitted" ? { state: "submitted" as const, value: form.settled.value } : { state: "cancelled" as const, reason: form.settled.reason };
     },
-    form_cancel: async ({ formId }) => {
+    form_cancel: async ({ threadId, formId }) => {
       const form = forms.get(formId);
-      if (form) settle(form, { state: "cancelled", reason: "request-aborted-by-pi" });
+      if (form?.threadId === threadId) settle(form, { state: "cancelled", reason: "request-aborted-by-pi" });
       return { ok: true as const };
     },
     form_cancel_session: async ({ threadId, exceptSession }) => {

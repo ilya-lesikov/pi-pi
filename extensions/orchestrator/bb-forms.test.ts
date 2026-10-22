@@ -129,13 +129,37 @@ describe("bb forms", () => {
     expect(await down.supports(["input"])).toBeNull();
   });
 
-  it("keeps a reply typed while a poll was out, rather than losing it to the form's answer", async () => {
+  it("keeps the form's answer when it was submitted before a reply was typed, and passes the reply along", async () => {
     const { forms } = plugin(() => {
       forms.takeTyped("typed it");
-      return { state: "submitted", value: { kind: "decline" } };
+      return { state: "submitted", value: { kind: "ask", answers: [{ kind: "selection", selections: ["B"] }] } };
+    });
+    const outcome = await forms.ask(ask, { title: "Pick", onTyped: (text) => ({ kind: "ask", answers: [{ kind: "freeform", text }] }) });
+    expect(outcome).toEqual({ outcome: "submitted", value: { kind: "ask", answers: [{ kind: "selection", selections: ["B"] }] }, alsoTyped: "typed it" });
+  });
+
+  it("answers with a reply typed while the form is still pending", async () => {
+    const { forms } = plugin((_call, polls) => {
+      if (polls === 1) forms.takeTyped("typed it");
+      return { state: "pending" };
     });
     const outcome = await forms.ask(ask, { title: "Pick", onTyped: (text) => ({ kind: "ask", answers: [{ kind: "freeform", text }] }) });
     expect(outcome).toEqual({ outcome: "submitted", value: { kind: "ask", answers: [{ kind: "freeform", text: "typed it" }] } });
+  });
+
+  it("does not return an answer that arrived after the tool call was aborted", async () => {
+    const controller = new AbortController();
+    const { forms } = plugin(() => {
+      controller.abort();
+      return { state: "submitted", value: { kind: "confirm", decision: "yes" } };
+    });
+    expect(await forms.ask(ask, { title: "Pick", signal: controller.signal })).toEqual({ outcome: "cancelled", reason: "signal" });
+  });
+
+  it("does not take a handler's not_found for a missing plugin", async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ ok: false, error: { code: "not_found", message: "no such thread" } }), { status: 404 }));
+    const forms = new BbForms({ serverUrl: "http://bb.test", threadId: "thr_1", fetch: fetch as any, sleep: async () => {} });
+    expect(await forms.supports(["input"])).toBeNull();
   });
 
   it("takes only the first reply typed in the chat; the next one is the agent's", async () => {
@@ -298,6 +322,19 @@ describe("ask_user and confirm under bb", () => {
       });
       const { run } = tools(forms);
       expect(text(await run("confirm", { question: "Go?" }))).toMatch(expected);
+    }
+  });
+
+  it("tells the model about a message typed after the form was submitted, with the form's answer", async () => {
+    for (const [tool, params, value, expected] of [
+      ["confirm", { question: "Go?" }, { kind: "confirm", decision: "yes" }, /^User confirmed: yes\.\nAfter deciding, the user also wrote in the chat: "and then deploy"$/],
+      ["ask_user", { question: "Pick", options: ["A", "B"] }, { kind: "ask", answers: [{ kind: "selection", selections: ["B"] }] }, /^User answered: B\nAfter answering, the user also wrote in the chat: "and then deploy"$/],
+    ] as const) {
+      const { forms } = plugin(() => {
+        forms.takeTyped("and then deploy");
+        return { state: "submitted", value };
+      });
+      expect(text(await tools(forms).run(tool, params))).toMatch(expected);
     }
   });
 });

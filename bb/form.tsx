@@ -1,6 +1,6 @@
 // pi-pi's forms in bb's composer: ask_user's questions, confirm, a worker's
 // question, and /pp's text inputs and reports. Modelled on bb's own question form, so it reads and answers the
-// same way; bb draws the card around it, with the title and its own Cancel.
+// same way; bb draws the card around it, with the title.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import { experimental_useQuestionFormHost, type ExperimentalQuestionShortcut, type PluginPendingInteractionProps } from "@get-bb/plugin-sdk/app";
@@ -141,7 +141,8 @@ function AskForm({ questions, onSubmit, onCancel }: { questions: FormQuestion[];
     return host.registerChoiceHandler((choice) => {
       const title = choices[choice];
       if (title === undefined) return false;
-      if (title === OTHER && question.allowFreeform) chooseOther();
+      // By position: a real option may be titled "Other…" too.
+      if (choice === question.options.length) chooseOther();
       else toggle(title);
       root.current?.focus();
       return true;
@@ -211,14 +212,14 @@ function AskForm({ questions, onSubmit, onCancel }: { questions: FormQuestion[];
       {draft.otherSelected ? (
         <TextArea autoFocus={focusOther} value={draft.otherText} placeholder={question.options.length ? "Type your own answer…" : "Type your answer…"} label="Your answer" onChange={(otherText) => update((entry) => ({ ...entry, otherText }))} onSubmit={next} />
       ) : null}
-      {question.allowComment && question.options.length && draft.commentOpen ? (
+      {question.allowComment && question.options.length > 0 && draft.commentOpen ? (
         <TextArea value={draft.comment} placeholder="Optional comment for the agent…" label="Comment" onChange={(comment) => update((entry) => ({ ...entry, comment }))} onSubmit={next} />
       ) : null}
       <div className="mt-2 flex items-center justify-between gap-2">
         <div className="flex items-center gap-3">
           <LinkButton onClick={onCancel}>Cancel</LinkButton>
           <LinkButton onClick={() => setDeclining(true)}>Cancel with a reason</LinkButton>
-          {question.allowComment && question.options.length && !draft.commentOpen ? (
+          {question.allowComment && question.options.length > 0 && !draft.commentOpen ? (
             <LinkButton onClick={() => update((entry) => ({ ...entry, commentOpen: true }))}>+ Add a comment</LinkButton>
           ) : null}
         </div>

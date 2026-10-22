@@ -43,9 +43,12 @@ export type FormValue =
   | { kind: "input"; text: string }
   | { kind: "closed" };
 
-/** submitted: the user answered; cancelled: dismissed (by them or bb); unavailable: nothing was shown, use the dialogs. */
+/**
+ * submitted: the user answered; cancelled: dismissed (by them or bb); unavailable: nothing was shown, use the dialogs.
+ * `alsoTyped` is a message the user sent in the chat after they had already submitted the form: it is theirs, not the answer.
+ */
 export type FormOutcome =
-  | { outcome: "submitted"; value: FormValue }
+  | { outcome: "submitted"; value: FormValue; alsoTyped?: string }
   | { outcome: "cancelled"; reason: string }
   | { outcome: "unavailable" };
 
@@ -131,11 +134,13 @@ export class BbForms {
     };
     // Listening from before the open: the plugin shows the form before the open returns.
     let typed: FormValue | undefined;
+    let typedText: string | undefined;
     if (options.onTyped) {
       const onTyped = options.onTyped;
       // Taken by the first reply only: a later one is the agent's.
       this.open.set(formId, (text) => {
         this.open.delete(formId);
+        typedText = text;
         typed = onTyped(text);
       });
     }
@@ -155,31 +160,34 @@ export class BbForms {
     try {
       let reopens = 0;
       let failingSince: number | null = null;
+      const answerTyped = (): FormOutcome => {
+        cancel();
+        return { outcome: "submitted", value: typed! };
+      };
       for (;;) {
         if (signal?.aborted) {
           cancel();
           return { outcome: "cancelled", reason: "signal" };
-        }
-        if (typed) {
-          cancel();
-          return { outcome: "submitted", value: typed };
         }
         let result: PollResult;
         try {
           result = await this.call("form_poll", { threadId: this.env.threadId, formId });
           failingSince = null;
         } catch {
+          // Whether the form was submitted first cannot be told now; the reply taken from the chat must not be lost.
+          if (typed) return answerTyped();
           failingSince ??= this.now();
           if (this.now() - failingSince > OUTAGE_MS) return { outcome: "cancelled", reason: "unreachable" };
           await this.sleep(POLL_MS * 3, signal);
           continue;
         }
-        // A reply typed while this poll was out was already taken from the chat: it wins, or it would be lost.
-        if (typed) {
+        if (signal?.aborted) {
           cancel();
-          return { outcome: "submitted", value: typed };
+          return { outcome: "cancelled", reason: "signal" };
         }
-        if (result.state === "submitted") return { outcome: "submitted", value: result.value };
+        // Submitted before the reply was typed: the form's answer stands, and the reply goes along with it.
+        if (result.state === "submitted") return { outcome: "submitted", value: result.value, ...(typedText !== undefined ? { alsoTyped: typedText } : {}) };
+        if (typed) return answerTyped();
         if (result.state === "cancelled" && !REOPEN_REASONS.has(result.reason)) return { outcome: "cancelled", reason: result.reason };
         if (result.state === "unknown" || result.state === "cancelled") {
           if (++reopens > REOPENS) return { outcome: "cancelled", reason: "unreachable" };
@@ -262,10 +270,10 @@ export class BbForms {
       } catch (error) {
         throw new Unavailable((error as Error).message);
       }
-      // No such plugin, or one too old to have the method.
-      if (response.status === 404) throw new Unavailable("pi-pi's bb plugin is not installed", true);
       // Under the same deadline: a body that never finishes would hold the form's loop.
       payload = (await response.json().catch(() => null)) as typeof payload;
+      // No such plugin, or one too old to have the method; a handler's own not_found is neither.
+      if (response.status === 404 && payload?.error?.code !== "not_found") throw new Unavailable("pi-pi's bb plugin is not installed", true);
     } finally {
       clearTimeout(timer);
     }
