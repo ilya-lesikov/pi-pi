@@ -156,7 +156,8 @@ export function registerBbBridge(orchestrator: Orchestrator, tasks: TaskFeed, en
         if (command?.id) results = [...results, { id: command.id, ok: false, message: "pi-pi could not take this request from its folder, so it did not run it.", at: Date.now() }].slice(-RESULTS_KEPT);
         continue;
       }
-      if (!command?.id) continue;
+      // Already answered as not run: removing it later must not run it after all.
+      if (unremovable.delete(name) || !command?.id) continue;
       let outcome: { ok: boolean; message: string };
       try {
         if (command.action !== "menu") outcome = runCommand(orchestrator.workers, command);

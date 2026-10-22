@@ -120,6 +120,8 @@ describe("bb bridge", () => {
     } finally {
       chmodSync(commands, 0o755);
     }
+    // Answered as not run, so it is not run once it can be removed either.
+    vi.advanceTimersByTime(500);
     expect(stop).not.toHaveBeenCalled();
     // Said once, so the plugin's button does not wait for it forever.
     expect(state().commandResults).toEqual([expect.objectContaining({ id: "a", ok: false })]);
