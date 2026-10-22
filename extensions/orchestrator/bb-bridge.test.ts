@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -101,7 +101,26 @@ describe("bb bridge", () => {
   it("leaves the thread's file alone in a pi started from one of the thread's shells", async () => {
     const { fire, file } = harness(undefined, "tui");
     await fire("session_start");
+    await fire("session_shutdown");
     expect(existsSync(file)).toBe(false);
+  });
+
+  it("does not run a command it could not remove, which would run it again on every tick", async () => {
+    const { fire, state, manager, command } = harness();
+    await fire("session_start");
+    const record = manager.spawn(spec);
+    await flush();
+    const stop = vi.spyOn(manager, "stop");
+    command("1-a.json", { id: "a", workerId: record.id, action: "stop" });
+    const commands = join(storage, "pi-pi", "commands");
+    chmodSync(commands, 0o555);
+    try {
+      vi.advanceTimersByTime(1500);
+    } finally {
+      chmodSync(commands, 0o755);
+    }
+    expect(stop).not.toHaveBeenCalled();
+    expect(state().commandResults).toEqual([]);
   });
 
   it("records a command that throws as failed instead of crashing pi", async () => {
@@ -247,6 +266,8 @@ describe("bb bridge", () => {
       expect(await answer).toBe("main");
       // The parent learns it was answered, so it does not answer again.
       expect(sent[0]!.message.content).toContain(`The user answered ${record.id}'s question in bb: "main"`);
+      // bb would show the instruction to the agent as raw text in the chat.
+      expect(sent[0]!.message.display).toBe(false);
     });
 
     it("waits a little before asking while the parent's turn runs, since the agent usually answers first", async () => {

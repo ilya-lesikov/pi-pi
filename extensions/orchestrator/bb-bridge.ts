@@ -94,6 +94,7 @@ export function registerBbBridge(orchestrator: Orchestrator, tasks: TaskFeed, en
   let writtenAt = 0;
   let results: BbCommandResult[] = [];
   let failed = false;
+  let removeWarned = false;
   let sessionStartedAt = 0;
 
   const write = (live: boolean) => {
@@ -138,14 +139,20 @@ export function registerBbBridge(orchestrator: Orchestrator, tasks: TaskFeed, en
       let command: BbCommand | undefined;
       let age = 0;
       try {
-        const written = statSync(file).mtimeMs;
-        age = written < sessionStartedAt ? Infinity : Date.now() - written;
+        const mtime = statSync(file).mtimeMs;
+        age = mtime < sessionStartedAt ? Infinity : Date.now() - mtime;
       } catch {}
       try {
         command = JSON.parse(readFileSync(file, "utf8"));
       } catch {}
-      // Removed before it runs: a command that throws must not run again on the next tick.
-      try { rmSync(file, { force: true }); } catch {}
+      // Removed before it runs, and not run unless removed: it would run again on every tick.
+      try {
+        rmSync(file, { force: true });
+      } catch (error: any) {
+        if (!removeWarned) getLogger().warn({ s: "bb", err: error?.message, file }, "removing a bb command file failed");
+        removeWarned = true;
+        continue;
+      }
       if (!command?.id) continue;
       let outcome: { ok: boolean; message: string };
       try {
@@ -228,7 +235,7 @@ export function registerBbBridge(orchestrator: Orchestrator, tasks: TaskFeed, en
     const record = manager.get(workerId);
     const steer = orchestrator.mainTurnInFlight || orchestrator.holdingRun;
     orchestrator.pi.sendMessage(
-      { customType: BB_ANSWER_TYPE, content: `The user answered ${workerId}'s question in bb: "${answer}". It has the answer; do not answer it again.`, display: true, details: { workerId, questionId: question.id, type: record?.spec.type } },
+      { customType: BB_ANSWER_TYPE, content: `The user answered ${workerId}'s question in bb: "${answer}". It has the answer; do not answer it again.`, display: false, details: { workerId, questionId: question.id, type: record?.spec.type } },
       { deliverAs: steer ? "steer" : "nextTurn", triggerTurn: false },
     );
     return true;
@@ -246,7 +253,6 @@ export function registerBbBridge(orchestrator: Orchestrator, tasks: TaskFeed, en
     if (detectHost(ctx?.mode, env).id !== "bb") return;
     closeBbMenu();
     sessionStartedAt = Date.now();
-    results = [];
     forms = bbForms(env);
     await forms?.cancelStale();
     if (!timer) {
@@ -258,8 +264,10 @@ export function registerBbBridge(orchestrator: Orchestrator, tasks: TaskFeed, en
   // The menu runs only while the agent is idle, and only in the session it was opened in.
   orchestrator.pi.on("agent_start", async () => closeBbMenu());
   orchestrator.pi.on("session_shutdown", async () => {
+    // Only the session that took the thread's file over may mark it ended.
+    if (!timer) return;
     closeBbMenu();
-    if (timer) clearInterval(timer);
+    clearInterval(timer);
     timer = null;
     for (const form of questionForms.values()) form.controller.abort();
     questionForms.clear();
