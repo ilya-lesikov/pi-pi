@@ -14,6 +14,7 @@ import {
   isModelRefusal,
   isPolicyBlockError,
   isRateLimitError,
+  claimWorkerTakeover,
   retryHintMs,
   takeOverMainRateLimit,
   takeOverWorkerRateLimit,
@@ -246,9 +247,13 @@ describe("pause-based rate-limit fallback", () => {
       const orchestrator = makeOrchestrator();
       orchestrator.registerAgents();
       const message = limited();
-      takeOverWorkerRateLimit(orchestrator, { id: "task-1", modelId: SUB, spec: { type: "task" } }, message);
+      const record = { id: "task-1", modelId: SUB, spec: { type: "task" } };
+      takeOverWorkerRateLimit(orchestrator, record, message);
       expect(isPaused("claude-sub")).toBe(true);
       expect(takenOverByFallback(message)).toBe(true);
+      // Its recovery is owed the retry pi gave up, once.
+      expect(claimWorkerTakeover(record)).toBe(true);
+      expect(claimWorkerTakeover(record)).toBe(false);
     });
 
     // A worker hitting the limit first parks the main session's move; the main

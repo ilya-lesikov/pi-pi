@@ -10,6 +10,7 @@ import { listLayeredSkills } from "./skills-manifest.js";
 import { createUsageTracker } from "./usage-tracker.js";
 import initExtension from "./index.js";
 import { listAgentDefinitions } from "./agents/registry.js";
+import { takenOverByFallback } from "./rate-limit-fallback.js";
 
 const ORCHESTRATOR_KEY = Symbol.for("pi-pi:orchestrator-initialized");
 
@@ -57,25 +58,25 @@ async function spawnThroughTool(pi: any, orchestrator: Orchestrator, params: Rec
 }
 
 /** A root session with event handlers registered and workers backed by scripted sessions. */
-function workerHarness() {
+function workerHarness(session: { setModel?: (spec: string) => Promise<boolean>; lastError?: () => string | undefined } = {}) {
   const pi = makePi();
   const orchestrator = new Orchestrator(pi);
   orchestrator.config = normalizeConfigDurations(getDefaultConfig());
-  const sessions: Array<{ hooks: any; finish(text: string): void; disposed: boolean }> = [];
+  const sessions: Array<{ hooks: any; finish(text: string): void; disposed: boolean; runs: string[] }> = [];
   orchestrator.workerSessionFactory = async (_spec, hooks) => {
     let resolve: () => void = () => {};
     let text = "";
-    const entry = { hooks, disposed: false, finish(next: string) { text = next; resolve(); } };
+    const entry = { hooks, disposed: false, runs: [] as string[], finish(next: string) { text = next; resolve(); } };
     sessions.push(entry);
     return {
-      run: () => new Promise<void>((done) => { resolve = done; }),
+      run: (prompt: string) => { entry.runs.push(prompt); return new Promise<void>((done) => { resolve = done; }); },
       steer() {},
       interruptTool: () => false,
       abort() {},
       dispose() { entry.disposed = true; },
-      setModel: async () => true,
+      setModel: session.setModel ?? (async () => true),
       lastAssistantText: () => text,
-      lastError: () => undefined,
+      lastError: session.lastError ?? (() => undefined),
       contextPercent: () => undefined,
       transcript: () => [],
     };
@@ -842,6 +843,67 @@ describe("session-first core", () => {
     await new Promise((resolve) => setTimeout(resolve, 1300));
     expect(rpc.pi.sendMessage).not.toHaveBeenCalledWith(expect.objectContaining({ customType: "pi-pi-worker" }), { triggerTurn: true });
     await emit(rpc.pi, "session_shutdown", {}, rpc.ctx);
+  });
+
+  // A worker's limit is taken from pi's retry on the strength of a move that
+  // has not happened yet; when that move fails, the worker must still get the
+  // retry it gave up rather than be reported failed.
+  it.each([
+    ["throws", async () => { throw new Error("No API key for github-copilot/claude-opus-4.5"); }],
+    ["finds no model", async () => false],
+  ])("retries a rate-limited worker in place when the move it was taken over for %s", async (_case, refuse) => {
+    const SUB = "pp-flant-anthropic-sub/sub/claude-opus-4-8";
+    const COPILOT = "github-copilot/claude-opus-4.5";
+    setCatalog([SUB, COPILOT]);
+    vi.useFakeTimers();
+    try {
+      let error: string | undefined = "429 rate_limit_error retry-after: 3";
+      const setModel = vi.fn(refuse);
+      const { pi, orchestrator, sessions } = workerHarness({ setModel, lastError: () => error });
+      orchestrator.registerAgents();
+      const record = orchestrator.workers!.spawn(workerSpec({ type: "task", model: SUB }));
+      await vi.advanceTimersByTimeAsync(0);
+      const limited = { role: "assistant", stopReason: "error", errorMessage: error, content: [] };
+      sessions[0]!.hooks.onMessage(limited);
+      expect(takenOverByFallback(limited)).toBe(true);
+      sessions[0]!.finish("");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(setModel).toHaveBeenCalledWith(COPILOT);
+      expect(sessions[0]!.runs).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(sessions[0]!.runs).toHaveLength(2);
+      expect(record.modelId).toBe(SUB);
+      expect(record.status).toBe("running");
+      error = undefined;
+      sessions[0]!.finish("done");
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(record.status).toBe("completed");
+      expect(pi.sendMessage).not.toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("429") }), expect.anything());
+    } finally {
+      vi.useRealTimers();
+      resetRouting();
+    }
+  });
+
+  it("reports a rate-limited worker failed when it kept pi's retries and still could not move", async () => {
+    const SUB = "pp-flant-anthropic-sub/sub/claude-opus-4-8";
+    const COPILOT = "github-copilot/claude-opus-4.5";
+    setCatalog([SUB, COPILOT]);
+    vi.useFakeTimers();
+    try {
+      const setModel = vi.fn(async () => false);
+      const { orchestrator, sessions } = workerHarness({ setModel, lastError: () => "429 rate_limit_error" });
+      orchestrator.registerAgents();
+      const record = orchestrator.workers!.spawn(workerSpec({ type: "task", model: SUB }));
+      await vi.advanceTimersByTimeAsync(0);
+      sessions[0]!.finish("");
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(sessions[0]!.runs).toHaveLength(1);
+      expect(record.status).toBe("failed");
+    } finally {
+      vi.useRealTimers();
+      resetRouting();
+    }
   });
 
   it("does not hold a turn that ended in an error or with tool calls", async () => {

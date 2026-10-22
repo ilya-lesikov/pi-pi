@@ -24,7 +24,7 @@ import { registerImageShrink } from "./image-shrink.js";
 import { checkDuplicateExtensions } from "./duplicate-extension-guard.js";
 import { ensureProvisionDirOnPath, ensureServerForFile, provisionEagerTools } from "./provision/session.js";
 import { installConsoleGuard } from "./console-guard.js";
-import { clearAllPauses, demoteUnusableSubscription, handleMainAuthFailure, handleMainRateLimit, handleMainRefusal, handleSubagentAuthFailure, handleSubagentRateLimit, handleSubscriptionRouteOutage, isAuthError, isModelRefusal, isPolicyBlockError, isRateLimitError, takeOverMainRateLimit, takeOverWorkerRateLimit, takenOverByFallback } from "./rate-limit-fallback.js";
+import { claimWorkerTakeover, clearAllPauses, demoteUnusableSubscription, handleMainAuthFailure, handleMainRateLimit, handleMainRefusal, handleSubagentAuthFailure, handleSubagentRateLimit, handleSubscriptionRouteOutage, isAuthError, isModelRefusal, isPolicyBlockError, isRateLimitError, retryHintMs, takeOverMainRateLimit, takeOverWorkerRateLimit, takenOverByFallback } from "./rate-limit-fallback.js";
 import { adjudicateCheckIn, adjudicateContinuation } from "./continuation-adjudicator.js";
 import { registerTasks } from "./tasks/index.js";
 import { bashOwnedElsewhere, keepBashOffWhereItWas, registerBashGuard } from "./bash-guard.js";
@@ -32,7 +32,7 @@ import { registerBbBridge } from "./bb-bridge.js";
 import { registerAskUser, registerConfirm } from "./ask/index.js";
 import { LspManager } from "./lsp/manager.js";
 import { editDiagnostics, registerLspTool, registerLspWarmup } from "./lsp/tool.js";
-import { createWorkers, registerWorkerToolsFor, resumeOnNewRouting, WORKER_MESSAGE_TYPE, type WorkerHooks, recoveringWorkers } from "./workers/index.js";
+import { createWorkers, registerWorkerToolsFor, resumeInPlace, resumeOnNewRouting, WORKER_MESSAGE_TYPE, type WorkerHooks, recoveringWorkers } from "./workers/index.js";
 import { pruneTranscripts, transcriptRoots } from "./workers/transcripts.js";
 import { HOLD_IDLE_MS, unfinishedSummary, type HoldOutcome } from "./workers/hold.js";
 import { registerWorkerUi } from "./workers/ui.js";
@@ -589,6 +589,7 @@ function createWorkerHooks(orchestrator: Orchestrator): WorkerHooks {
 async function recoverWorkerFromProvider(orchestrator: Orchestrator, record: WorkerRecord): Promise<boolean> {
   const error = record.error;
   const ctx = orchestrator.lastCtx;
+  const takenOver = claimWorkerTakeover(record) && isRateLimitError(error);
   let moved = false;
   if (isRateLimitError(error)) {
     await handleSubagentRateLimit(orchestrator, ctx, record.modelId, error);
@@ -601,11 +602,27 @@ async function recoverWorkerFromProvider(orchestrator: Orchestrator, record: Wor
   }
   const workers = orchestrator.workers;
   if (!moved || !workers) return false;
-  return resumeOnNewRouting(workers, record, orchestrator.retriedSubagentIds, async (_record, spec) => {
-    const session = workers.sessionOf(record.id);
-    return !!session && await session.setModel(spec);
-  });
+  try {
+    if (await resumeOnNewRouting(workers, record, orchestrator.retriedSubagentIds, async (_record, spec) => {
+      const session = workers.sessionOf(record.id);
+      return !!session && await session.setModel(spec);
+    })) return true;
+  } catch (failure: any) {
+    if (!takenOver) throw failure;
+    getLogger().warn({ s: "agents", id: record.id, err: failure?.message }, "moving a rate-limited worker failed");
+  }
+  // The limit was taken from pi's retry on the promise of a move that did not
+  // happen, so the worker gets that retry back instead of failing outright.
+  if (!takenOver) return false;
+  const delay = Math.min(retryHintMs(error) ?? LIMIT_RETRY_DELAY_MS, MAX_LIMIT_RETRY_DELAY_MS);
+  await new Promise((resolve) => setTimeout(resolve, delay).unref?.());
+  return resumeInPlace(workers, record, orchestrator.retriedSubagentIds);
 }
+
+// pi's own first backoff; the ceiling stays inside the time the worker's
+// failure is held for this decision.
+const LIMIT_RETRY_DELAY_MS = 2_000;
+const MAX_LIMIT_RETRY_DELAY_MS = 20_000;
 
 // Confirm the stored subscription credential still works before the session
 // sends anything real. Deliberately not awaited by session_start: it is a

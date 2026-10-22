@@ -12,7 +12,7 @@ vi.mock("./session.js", () => ({
 import { getDefaultConfig } from "../config.js";
 import { registerAgentDefinitions } from "../agents/registry.js";
 import { configureRouting, setCatalog } from "../routing.js";
-import { createWorkers, registerWorkerToolsFor, resumeOnNewRouting, type WorkerHooks } from "./index.js";
+import { createWorkers, registerWorkerToolsFor, resumeInPlace, resumeOnNewRouting, type WorkerHooks } from "./index.js";
 import { WORKER_MESSAGE_TYPE } from "./delivery.js";
 import { attachHost } from "../notices.js";
 import type { WorkerRecord, WorkerSession, WorkerSessionHooks, WorkerSpawnSpec } from "./types.js";
@@ -361,6 +361,25 @@ describe("resumeOnNewRouting", () => {
     const setModel = vi.fn(async () => true);
     expect(await resumeOnNewRouting(manager, record, new Set(), setModel)).toBe(false);
     expect(setModel).not.toHaveBeenCalled();
+  });
+});
+
+describe("resumeInPlace", () => {
+  it("resumes a failed worker on the model it failed on, once", async () => {
+    const { factory, sessions } = fakeFactory();
+    const { orchestrator: orch } = orchestrator();
+    const { manager } = createWorkers(orch, workerHooks(), factory);
+    const record = manager.spawn(spec());
+    await flush();
+    sessions[0]!.fail(new Error("429 rate limited"));
+    await flush();
+    const retried = new Set<string>();
+    expect(resumeInPlace(manager, record, retried)).toBe(true);
+    expect(record.modelId).toBe("p/m");
+    expect(record.status).not.toBe("failed");
+    expect(sessions[0]!.setModel).not.toHaveBeenCalled();
+    record.status = "failed";
+    expect(resumeInPlace(manager, record, retried)).toBe(false);
   });
 });
 

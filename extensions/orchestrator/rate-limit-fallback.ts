@@ -364,7 +364,20 @@ export function takeOverWorkerRateLimit(orchestrator: Orchestrator, record: { id
   // handler gets that far before its first await. A definition nothing serves
   // is left holding its slot ref, which no session can be moved onto.
   const target = getAgentDefinition(record.spec.type)?.model;
-  if (target && target !== record.modelId && !isSlotRef(target)) takenOver.add(message);
+  if (!target || target === record.modelId || isSlotRef(target)) return;
+  takenOver.add(message);
+  takenOverWorkers.add(record);
+}
+
+// Workers whose last rate limit was taken from pi's retry, until their recovery claims it.
+const takenOverWorkers = new WeakSet<object>();
+
+/**
+ * Whether the rate limit `record` failed on was taken from pi's retry, which
+ * leaves its recovery owing it the retry pi would have made. Clears the mark.
+ */
+export function claimWorkerTakeover(record: object): boolean {
+  return takenOverWorkers.delete(record);
 }
 
 /**

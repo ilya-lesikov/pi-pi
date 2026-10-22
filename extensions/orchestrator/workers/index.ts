@@ -216,6 +216,20 @@ export async function resumeOnNewRouting(manager: WorkerManager, record: WorkerR
   return manager.resume(record.id, RESUME_AFTER_REROUTE);
 }
 
+const RESUME_AFTER_LIMIT = "[PI-PI] Your last request was rate-limited and is being retried on the same model. Everything above is your own work — continue from where you stopped. Do not start over and do not repeat work you already finished.";
+
+/**
+ * Resumes a rate-limited worker on the model that refused it, as pi's own
+ * retry would have. Counts as the worker's one move, so a limit it hits again
+ * stays with pi's retries.
+ */
+export function resumeInPlace(manager: WorkerManager, record: WorkerRecord, retried: Set<string>): boolean {
+  if (retried.has(record.id) || record.status !== "failed") return false;
+  retried.add(record.id);
+  getTracer()?.traceSubagent(record.id, "subagent_retried", { from: record.modelId, to: record.modelId });
+  return manager.resume(record.id, RESUME_AFTER_LIMIT);
+}
+
 function systemPromptFor(spec: WorkerSpawnSpec, cwd: string): string {
   const definition = getAgentDefinition(spec.type);
   return [
