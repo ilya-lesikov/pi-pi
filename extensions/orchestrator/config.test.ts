@@ -70,6 +70,8 @@ describe("validateConfig", () => {
     expect(() => validateConfig({ promptcap: { maxPromptTokens: 10 } })).toThrow("config.promptcap.maxPromptTokens");
     expect(() => validateConfig({ promptcap: { contextWindow: 10 } })).toThrow("config.promptcap.contextWindow");
     expect(() => validateConfig({ promptcap: { perModel: { m: { maxPromptTokens: 1 } } } })).toThrow("config.promptcap.perModel.m.maxPromptTokens");
+    expect(() => validateConfig({ promptcap: { imageTurnsLowWater: 1.5 } })).toThrow("config.promptcap.imageTurnsLowWater must be an integer");
+    expect(() => validateConfig({ promptcap: { imageTurnsCeiling: 0 } })).toThrow("config.promptcap.imageTurnsCeiling");
   });
 
   it("defaults every provider on, in subscription-first order, and validates the sections", () => {

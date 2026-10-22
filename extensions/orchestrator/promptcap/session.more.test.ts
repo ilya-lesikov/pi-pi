@@ -83,4 +83,13 @@ describe("findToolCall", () => {
   it("returns an empty output for a result without content", () => {
     expect(findToolCall([{ message: { role: "toolResult", toolCallId: "c2" } }], "c2")).toEqual({ output: "" });
   });
+
+  it("hands back the images of the user message an aged-out attachment notice names", () => {
+    const entries = [
+      { message: { role: "user", timestamp: 41, content: [{ type: "image", data: "OLD" }] } },
+      { message: { role: "user", timestamp: 42, content: [{ type: "text", text: "look" }, { type: "image", data: "IMG", mimeType: "image/jpeg" }] } },
+    ];
+    expect(findToolCall(entries, "attached-42")).toEqual({ output: "look", images: [{ data: "IMG", mimeType: "image/jpeg" }] });
+    expect(findToolCall(entries, "attached-7")).toBeUndefined();
+  });
 });

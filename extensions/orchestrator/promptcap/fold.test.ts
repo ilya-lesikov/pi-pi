@@ -774,6 +774,12 @@ describe("limitsFor", () => {
     expect(imageLowWater).toBe(50_000);
   });
 
+  it("holds the image turns low-water mark at half the ceiling", () => {
+    expect(limitsFor(settings(), "m", 0)).toMatchObject({ imageTurnsCeiling: 6, imageTurnsLowWater: 3 });
+    expect(limitsFor(settings({ imageTurnsCeiling: 4, imageTurnsLowWater: 9 }), "m", 0)).toMatchObject({ imageTurnsCeiling: 4, imageTurnsLowWater: 2 });
+    expect(limitsFor(settings({ imageTurnsCeiling: 6, imageTurnsLowWater: 1.5 }), "m", 0)).toMatchObject({ imageTurnsLowWater: 1 });
+  });
+
   it("matches a per-model override on the bare id", () => {
     const { ceiling } = limitsFor(settings({ perModel: { "claude-opus-4-8": { maxPromptTokens: 42_000 } } }), "anthropic/claude-opus-4-8", 0);
     expect(ceiling).toBe(42_000);
@@ -849,7 +855,7 @@ describe("the image budget", () => {
     ]);
   });
 
-  it("counts an image a user attached but never takes it", () => {
+  it("counts an image a user attached without taking it for its bytes", () => {
     const messages: AgentMessage[] = [
       { role: "user", content: [{ type: "text", text: "look" }, { type: "image", data: "u".repeat(4000), mimeType: "image/png" }] },
       call("t0", "read", { path: "/a.png" }),
@@ -916,6 +922,84 @@ describe("the image budget", () => {
     expect(messages[2].content[0].text).toBe("[omitted: 1000B]");
     expect(out.imagesFolded).toBe(3);
     expect(out.imageBytes).toBe(2000);
+  });
+});
+
+/**
+ * `n` user turns, each asking for one screenshot; the first also attaches an
+ * image of its own. Turn `i` is messages 3i (user), 3i+1 (call), 3i+2 (result).
+ */
+const sessionOfTurns = (n: number): AgentMessage[] => {
+  const messages: AgentMessage[] = [];
+  for (let i = 0; i < n; i++) {
+    const attached = i === 0 ? [{ type: "image", data: "u".repeat(500), mimeType: "image/png" }] : [];
+    messages.push({ role: "user", content: [{ type: "text", text: `step ${i}` }, ...attached], timestamp: 1000 + 10 * i });
+    messages.push({ ...call(`t${i}`, "read", { path: `/shot${i}.png` }), timestamp: 1000 + 10 * i + 1 });
+    messages.push({ ...screenshot(`t${i}`, 100), timestamp: 1000 + 10 * i + 2 });
+  }
+  return messages;
+};
+
+describe("images the conversation has moved past", () => {
+  it("leaves images alone until one falls more user messages behind than the ceiling", () => {
+    const messages = sessionOfTurns(7);
+    const before = JSON.parse(JSON.stringify(messages));
+    const out = fold(messages, 0, roomy, new FoldState());
+
+    expect(out.imagesFolded).toBe(0);
+    expect(messages).toEqual(before);
+  });
+
+  it("folds every image older than the low-water mark, attached ones included, however small the payload", () => {
+    const messages = sessionOfTurns(8);
+    const out = fold(messages, 0, roomy, new FoldState());
+
+    expect(out.imagesFolded).toBe(5);
+    expect(out.imageBytes).toBe(400);
+    expect(messages[0].content).toEqual([
+      { type: "text", text: "step 0" },
+      { type: "text", text: "[omitted: 500B; recall_tool_output call_id attached-1000]" },
+    ]);
+    expect(messages[11].content[0]).toEqual({ type: "text", text: "[omitted: 100B]" });
+    // The newest three user messages back and the turn in progress keep theirs.
+    expect(messages[14].content[0].type).toBe("image");
+    expect(messages[23].content[0].type).toBe("image");
+    expect(out.rewroteFrom).toBe(0);
+  });
+
+  it("keeps aged images folded on the next request without rewriting anything", () => {
+    const state = new FoldState();
+    fold(sessionOfTurns(8), 0, roomy, state);
+
+    const replayed = sessionOfTurns(9);
+    const out = fold(replayed, 0, roomy, state);
+
+    expect(out.imagesFolded).toBe(0);
+    expect(out.rewroteFrom).toBe(-1);
+    expect(replayed[0].content[1].type).toBe("text");
+    expect(replayed[11].content[0].type).toBe("text");
+    expect(replayed[14].content[0].type).toBe("image");
+  });
+
+  // pi can compact in the middle of a turn, keeping a call and its result
+  // while the user message that opened the turn goes into the summary.
+  it("replays the same folds after compaction removes the user message they were measured from", () => {
+    const state = new FoldState();
+    fold(sessionOfTurns(8), 0, roomy, state);
+
+    const compacted = sessionOfTurns(9).slice(13);
+    const out = fold(compacted, 0, roomy, state);
+
+    expect(out.rewroteFrom).toBe(-1);
+    expect(compacted[1].content[0].type).toBe("image");
+  });
+
+  it("does not count pi-pi's own continuations as the user's messages", () => {
+    const messages = sessionOfTurns(7);
+    messages.push({ role: "user", content: [{ type: "text", text: "[PI-PI] Continue the current request." }], timestamp: 2000 });
+    const out = fold(messages, 0, roomy, new FoldState());
+
+    expect(out.imagesFolded).toBe(0);
   });
 });
 

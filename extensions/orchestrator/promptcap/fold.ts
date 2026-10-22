@@ -1,5 +1,5 @@
 import { byteLength, DEFAULT_IMAGE_TOKENS, messagesBytes, toolCallBytes, BYTES_PER_TOKEN } from "./estimate.js";
-import { DEFAULT_IMAGE_BYTES_CEILING, DEFAULT_IMAGE_BYTES_LOW_WATER, OVERFLOW_MARGIN } from "./limits.js";
+import { DEFAULT_IMAGE_BYTES_CEILING, DEFAULT_IMAGE_BYTES_LOW_WATER, DEFAULT_IMAGE_TURNS_CEILING, DEFAULT_IMAGE_TURNS_LOW_WATER, OVERFLOW_MARGIN } from "./limits.js";
 
 export type AgentMessage = Record<string, any>;
 
@@ -97,6 +97,14 @@ export interface Limits {
    * Absent means {@link DEFAULT_IMAGE_BYTES_LOW_WATER}.
    */
   imageLowWater?: number;
+  /**
+   * How many of the user's messages an image may fall behind before every
+   * image older than {@link imageTurnsLowWater} folds. Absent means
+   * {@link DEFAULT_IMAGE_TURNS_CEILING}.
+   */
+  imageTurnsCeiling?: number;
+  /** Absent means {@link DEFAULT_IMAGE_TURNS_LOW_WATER}. */
+  imageTurnsLowWater?: number;
 }
 
 /**
@@ -189,6 +197,13 @@ export class FoldState {
    * again would come back and move the prefix it sits in.
    */
   private imagesStripped = new Set<string>();
+  /**
+   * Every image in a message older than this timestamp has folded for its
+   * age. Measured on each message's own timestamp rather than on a position,
+   * because pi's compaction renumbers the conversation and can remove the user
+   * message the fold was measured from while keeping what came after it.
+   */
+  agedImagesBefore: number | undefined;
 
   tierOf(callId: string): Tier {
     return this.tiers.get(callId) ?? Tier.Verbatim;
@@ -217,6 +232,7 @@ export class FoldState {
   clear(): void {
     this.tiers.clear();
     this.imagesStripped.clear();
+    this.agedImagesBefore = undefined;
     this.reasoningThrough = 0;
   }
 
@@ -294,12 +310,49 @@ export function fold(
   // theirs as they are chosen.
   bytes += dropLineReserve(messages, calls.filter((call) => call.tier >= Tier.Drop));
 
+  // Images fold for their age before their bytes are weighed, and those a user
+  // attached fold with the rest: an old screenshot is stale wherever it came
+  // from, and keeping it costs its payload on every request until the session
+  // ends.
+  let imagesFolded = 0;
+  const resultsWithImages = new Map<number, Call>();
+  for (const call of calls) {
+    if (call.tier === Tier.Verbatim && carriesImage(messages[call.resultMessage])) resultsWithImages.set(call.resultMessage, call);
+  }
+  const foldAged = (before: number, replaying: boolean): void => {
+    for (let m = 0; m < messages.length; m++) {
+      if (!(messages[m]?.timestamp < before)) continue;
+      const call = resultsWithImages.get(m);
+      if (call) {
+        bytes -= stripResultImages(messages, call, imageTokens);
+        resultsWithImages.delete(m);
+      } else if (messages[m]?.role === "user" && carriesImage(messages[m])) bytes -= stripAttachedImages(messages[m], imageTokens);
+      else continue;
+      if (replaying) continue;
+      imagesFolded++;
+      moved(m);
+    }
+  };
+  const turns = userTurns(messages);
+  if (state.agedImagesBefore !== undefined) foldAged(state.agedImagesBefore, true);
+  const oldestImage = messages.findIndex((message, m) => resultsWithImages.has(m) || (message?.role === "user" && carriesImage(message)));
+  const turnsCeiling = limits.imageTurnsCeiling ?? DEFAULT_IMAGE_TURNS_CEILING;
+  if (oldestImage >= 0 && turns.filter((m) => m > oldestImage).length > turnsCeiling) {
+    const keep = Math.min(limits.imageTurnsLowWater ?? DEFAULT_IMAGE_TURNS_LOW_WATER, turnsCeiling - 1);
+    // Without a timestamp the fold could not be replayed on the next request,
+    // and folding afresh each time would rewrite the prompt every turn.
+    const before = messages[turns[turns.length - keep - 1]!]?.timestamp;
+    if (typeof before === "number") {
+      foldAged(before, false);
+      state.agedImagesBefore = before;
+    }
+  }
+
   // The image budget is settled before the token one, and outside the question
   // of whether folding pays for itself. That question is asked in tokens, and
   // in tokens an image is worth almost nothing; what is at stake here is the
   // size of the request body, which a provider rejects outright rather than
   // bills for.
-  let imagesFolded = 0;
   let imageBytes = imagePayloadBytes(messages);
   // A call already dropped still stands in `messages`: it is removed in one
   // pass at the end, once every tier is settled. Its images are therefore
@@ -429,6 +482,48 @@ function stripResultImages(messages: AgentMessage[], call: Call, imageTokens: nu
     part?.type === "image" ? { type: "text", text: omission((part.data ?? "").length) } : part,
   );
   return before - messagesBytes([result], imageTokens);
+}
+
+function carriesImage(message: AgentMessage | undefined): boolean {
+  return Array.isArray(message?.content) && message.content.some((part: any) => part?.type === "image");
+}
+
+/**
+ * The user's own messages, by index. pi-pi's automatic continuations arrive as
+ * user messages too, and an autonomous run sending one after another would
+ * otherwise age the screenshot it is working from out of the prompt.
+ */
+function userTurns(messages: AgentMessage[]): number[] {
+  const turns: number[] = [];
+  for (let m = 0; m < messages.length; m++) {
+    const message = messages[m];
+    if (message?.role !== "user") continue;
+    const text = typeof message.content === "string" ? message.content : message.content?.find?.((part: any) => part?.type === "text")?.text;
+    if (typeof text === "string" && text.startsWith("[PI-PI]")) continue;
+    turns.push(m);
+  }
+  return turns;
+}
+
+/**
+ * Replaces the images a user attached with notices naming the handle
+ * recall_tool_output takes for them, since no call id stands next to them, and
+ * reports the bytes it saved.
+ */
+function stripAttachedImages(message: AgentMessage, imageTokens: number): number {
+  const before = messagesBytes([message], imageTokens);
+  message.content = message.content.map((part: any) => {
+    if (part?.type !== "image") return part;
+    const size = (part.data ?? "").length;
+    return { type: "text", text: typeof message.timestamp === "number" ? attachedOmission(size, message.timestamp) : omission(size) };
+  });
+  return before - messagesBytes([message], imageTokens);
+}
+
+export const ATTACHED_IMAGE_ID_PREFIX = "attached-";
+
+function attachedOmission(size: number, timestamp: number): string {
+  return `[omitted: ${size}B; recall_tool_output call_id ${ATTACHED_IMAGE_ID_PREFIX}${timestamp}]`;
 }
 
 /**

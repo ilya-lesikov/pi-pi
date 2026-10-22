@@ -71,6 +71,15 @@ export const OVERFLOW_MARGIN = 1.15;
 export const DEFAULT_IMAGE_BYTES_CEILING = 3_500_000;
 export const DEFAULT_IMAGE_BYTES_LOW_WATER = 1_750_000;
 
+// How many of the user's messages an image may fall behind before it folds,
+// whatever the payload, and how many a fold keeps. A screenshot taken several
+// requests ago describes a screen that is gone; under the byte ceiling it would
+// otherwise be re-sent with every turn for the rest of the session. The gap
+// between the two makes a fold land every few user messages rather than on
+// every one, since each costs a cache miss.
+export const DEFAULT_IMAGE_TURNS_CEILING = 6;
+export const DEFAULT_IMAGE_TURNS_LOW_WATER = 3;
+
 export interface PromptcapModelSettings {
   /**
    * The ceiling applied when no window is known.
@@ -141,6 +150,18 @@ export interface PromptcapSettings extends PromptcapModelSettings {
    * held below it.
    */
   imageBytesLowWater?: number;
+  /**
+   * How many of the user's messages an image, attached or returned by a tool,
+   * may fall behind before the old ones fold. Absent means
+   * {@link DEFAULT_IMAGE_TURNS_CEILING}.
+   */
+  imageTurnsCeiling?: number;
+  /**
+   * How many of the user's messages back a fold over that ceiling keeps images
+   * for. Absent means {@link DEFAULT_IMAGE_TURNS_LOW_WATER}; held at or below
+   * half the ceiling for the same reason as the byte one.
+   */
+  imageTurnsLowWater?: number;
   /**
    * Overrides keyed by the model spec a turn asks for, matched on either the
    * full `provider/id` or the bare id.
@@ -259,5 +280,13 @@ export function limitsFor(
   // for rather than taken at its word.
   const imageLowWater = Math.min(configuredLowWater, Math.floor(imageCeiling / 2));
 
-  return { ceiling, lowWater, urgent, imageCeiling, imageLowWater };
+  const imageTurnsCeiling = settings.imageTurnsCeiling && settings.imageTurnsCeiling >= 1
+    ? Math.floor(settings.imageTurnsCeiling)
+    : DEFAULT_IMAGE_TURNS_CEILING;
+  const configuredTurnsLowWater = typeof settings.imageTurnsLowWater === "number" && settings.imageTurnsLowWater >= 0
+    ? Math.floor(settings.imageTurnsLowWater)
+    : DEFAULT_IMAGE_TURNS_LOW_WATER;
+  const imageTurnsLowWater = Math.min(configuredTurnsLowWater, Math.floor(imageTurnsCeiling / 2));
+
+  return { ceiling, lowWater, urgent, imageCeiling, imageLowWater, imageTurnsCeiling, imageTurnsLowWater };
 }

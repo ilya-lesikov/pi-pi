@@ -1,5 +1,6 @@
 import { readFileSync } from "fs";
 import type { Message } from "@earendil-works/pi-ai";
+import { ATTACHED_IMAGE_ID_PREFIX } from "./fold.js";
 
 export interface RenderedEntry {
   index: number;
@@ -99,6 +100,7 @@ function onTheWire(id: string): string {
 }
 
 export function findToolCall(entries: any[], callId: string): RecalledCall | undefined {
+  if (callId.startsWith(ATTACHED_IMAGE_ID_PREFIX)) return findAttachedImages(entries, Number(callId.slice(ATTACHED_IMAGE_ID_PREFIX.length)));
   let found: RecalledCall | undefined;
   for (const entry of entries) {
     const message = entry?.message;
@@ -110,13 +112,28 @@ export function findToolCall(entries: any[], callId: string): RecalledCall | und
       continue;
     }
     if (message.role !== "toolResult" || !sameCall(message.toolCallId, callId)) continue;
-    const parts = Array.isArray(message.content) ? message.content : [];
-    const images = parts
-      .filter((part: any) => part?.type === "image" && typeof part.data === "string")
-      .map((part: any) => ({ data: part.data, mimeType: part.mimeType ?? "image/png" }));
+    const images = imagesOf(message.content);
     found = { ...found, output: textOf(message.content), ...(images.length > 0 && { images }) };
   }
   return found;
+}
+
+/** The images of the user message an aged-out attachment notice names by its timestamp. */
+function findAttachedImages(entries: any[], timestamp: number): RecalledCall | undefined {
+  for (const entry of entries) {
+    const message = entry?.message;
+    if (message?.role !== "user" || message.timestamp !== timestamp) continue;
+    const images = imagesOf(message.content);
+    return { output: textOf(message.content), ...(images.length > 0 && { images }) };
+  }
+  return undefined;
+}
+
+function imagesOf(content: unknown): Array<{ data: string; mimeType: string }> {
+  if (!Array.isArray(content)) return [];
+  return content
+    .filter((part: any) => part?.type === "image" && typeof part.data === "string")
+    .map((part: any) => ({ data: part.data, mimeType: part.mimeType ?? "image/png" }));
 }
 
 export function clip(text: string, max = 200): string {

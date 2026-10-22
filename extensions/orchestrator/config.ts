@@ -100,6 +100,13 @@ export interface PromptcapConfig extends PromptcapModelConfig {
    *  half the ceiling, so a fold lands every few captures rather than on
    *  every turn. */
   imageBytesLowWater?: number;
+  /** How many of the user's messages an image, attached or returned by a
+   *  tool, may fall behind before the old ones fold, whatever their size
+   *  (default 6). */
+  imageTurnsCeiling?: number;
+  /** How many of the user's messages back such a fold keeps images for
+   *  (default 3); held at or below half the ceiling. */
+  imageTurnsLowWater?: number;
   /** Per-model overrides keyed by model id, bare or provider-prefixed. */
   perModel: Record<string, PromptcapModelConfig>;
 }
@@ -367,6 +374,13 @@ function validatePromptcap(value: unknown): void {
   ensureNumberInRange(c.imageTokens, "config.promptcap.imageTokens", 1, 10_000_000);
   ensureNumberInRange(c.imageBytesCeiling, "config.promptcap.imageBytesCeiling", 1024, 64 * 1024 * 1024);
   ensureNumberInRange(c.imageBytesLowWater, "config.promptcap.imageBytesLowWater", 0, 64 * 1024 * 1024);
+  for (const key of ["imageTurnsCeiling", "imageTurnsLowWater"] as const) {
+    const value = c[key];
+    const min = key === "imageTurnsCeiling" ? 1 : 0;
+    if (value !== undefined && (typeof value !== "number" || !Number.isInteger(value) || value < min || value > 10_000)) {
+      throw new Error(`config.promptcap.${key} must be an integer between ${min} and 10000`);
+    }
+  }
   // Excludes both ends: at 0 a fold would aim at the floor and strip every
   // call it has, and at 1 it would aim at the ceiling it just crossed and fire
   // again on the next request.
