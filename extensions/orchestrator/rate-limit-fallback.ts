@@ -152,12 +152,13 @@ async function pauseAndReroute(
     const switchCtx = ctx?.model ? ctx : orchestrator.lastCtx ?? ctx;
     const current = liveSpec(switchCtx) || spec;
     // The request this move carries on, unless the user has sent another since
-    // or another move already carried it on: it is resumed once.
+    // (checked when it resumes, past any await) or a move parked for the same
+    // interruption already carried it on.
     const request = owedRequests.get(move) ?? parkedIn;
-    const resumes = resumeRequest && request === orchestrator.continuationGeneration && resumedRequests.get(orchestrator) !== request;
     const resume = (): boolean => {
-      if (resumes) resumedRequests.set(orchestrator, request);
-      return resumes;
+      if (!resumeRequest || settledMoves.has(move) || request !== orchestrator.continuationGeneration) return false;
+      for (const action of orchestrator.pendingModelSwitches) if (mainMoves.has(action)) settledMoves.add(action);
+      return true;
     };
     if (!isPausedFor(current)) {
       // The pause ran out while this was parked, and its expiry found nothing
@@ -211,8 +212,8 @@ const mainMoves = new WeakSet<object>();
 // The main request each of those moves stopped, by its generation.
 const owedRequests = new WeakMap<object, number>();
 
-// The last request a move carried on, per session, so no other move resends it.
-const resumedRequests = new WeakMap<Orchestrator, number>();
+// Moves still parked when another move carried their request on: they must not resend it.
+const settledMoves = new WeakSet<object>();
 
 /** The pause still covering `spec`, so a waiting request can follow it. */
 function routeHolding(spec: string): string | null {

@@ -688,6 +688,47 @@ describe("pause-based rate-limit fallback", () => {
     }
   });
 
+  it("does not resume a request the user replaced while its move was switching models", async () => {
+    vi.useFakeTimers();
+    try {
+      const LLM_OPUS = "pp-flant-openai/claude-opus-4-8";
+      setCatalog([COPILOT_OPUS, LLM_OPUS]);
+      const pi = makePi();
+      const orchestrator = makeOrchestrator(pi);
+      orchestrator.routedMainSpec = COPILOT_OPUS;
+      orchestrator.switchModel = vi.fn(async () => {
+        orchestrator.resetContinuation();
+        return true;
+      });
+      orchestrator.lastCtx = idleCtxOn(COPILOT_OPUS);
+      await handleMainRateLimit(orchestrator, orchestrator.lastCtx, COPILOT_OPUS, "429 retry-after: 600");
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(orchestrator.switchModel).toHaveBeenCalled();
+      expect(pi.sendUserMessage).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resumes the same request again after a second interruption", async () => {
+    vi.useFakeTimers();
+    try {
+      setCatalog([COPILOT_OPUS]);
+      const orchestrator = makeOrchestrator(makePi());
+      orchestrator.routedMainSpec = COPILOT_OPUS;
+      orchestrator.switchModel = vi.fn(async () => true);
+      orchestrator.lastCtx = idleCtxOn(COPILOT_OPUS);
+      await handleMainRateLimit(orchestrator, orchestrator.lastCtx, COPILOT_OPUS, "429 retry-after: 1");
+      expect(orchestrator.pausedMainRoutes.size).toBe(1);
+      orchestrator.pausedMainRoutes.clear();
+      clearPauses();
+      await handleMainRateLimit(orchestrator, orchestrator.lastCtx, COPILOT_OPUS, "429 retry-after: 1");
+      expect([...orchestrator.pausedMainRoutes.values()]).toEqual([expect.objectContaining({ resume: true })]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not resume a request the user replaced while its move was parked, pause or not", async () => {
     vi.useFakeTimers();
     try {
