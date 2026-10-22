@@ -113,13 +113,11 @@ describe("pi-pi's menu in bb", () => {
     expect(activeMenu()).toBeNull();
   });
 
-  it("opens only while the agent is idle, and once", async () => {
+  it("opens while the agent works too, as /pp does in the terminal, and once", async () => {
     const orchestrator = makeOrchestrator(cwd);
     resetBbForms(fakeForms([]).forms);
+    orchestrator.mainTurnInFlight = true;
     orchestrator.lastCtx = { ...piCtx(), isIdle: () => false };
-    expect(openBbMenu(orchestrator)).toMatchObject({ ok: false, message: "pi-pi's menu opens while the agent is idle." });
-
-    orchestrator.lastCtx = piCtx();
     const opened = openBbMenu(orchestrator);
     expect(opened.ok).toBe(true);
     expect(openBbMenu(orchestrator)).toMatchObject({ ok: false, message: "pi-pi's menu is already open." });

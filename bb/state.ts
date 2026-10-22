@@ -7,11 +7,12 @@ export interface BbState {
   pid: number;
   live: boolean;
   heartbeatAt: number;
-  piPiVersion: string;
+  /** Absent from files an older pi-pi wrote, as are `status` and `notices`. */
+  piPiVersion?: string;
   /** `since` is on pi's clock, as `heartbeatAt` is. */
-  status: { text: string; level: "normal" | "attention" | "alarm" | "idle"; since: number; suffix?: string };
+  status?: { text: string; level: "normal" | "attention" | "alarm" | "idle"; since: number; suffix?: string };
   /** What pi-pi said while its menu was open; `at` is on pi's clock. */
-  notices: Array<{ id: string; text: string; level: "info" | "warning" | "error"; at: number }>;
+  notices?: Array<{ id: string; text: string; level: "info" | "warning" | "error"; at: number }>;
   tasks: Array<{ id: string; subject: string; status: string; activeForm?: string }>;
   workers: BbWorker[];
   commandResults: Array<{ id: string; ok: boolean; message: string; at: number }>;
@@ -80,10 +81,19 @@ export function staleness(state: BbState, heartbeatAgeMs: number): Staleness {
   return heartbeatAgeMs > STALE_MS ? "unresponsive" : null;
 }
 
+/**
+ * The time now on pi's clock, as best this reader can tell: pi's last
+ * heartbeat plus how long ago this reader saw it. Timestamps in the file are
+ * on pi's clock, and pi may run on a machine whose clock differs.
+ */
+export function piNow(state: BbState, heartbeatSeenAt: number, now: number): number {
+  return state.heartbeatAt + now - heartbeatSeenAt;
+}
+
 /** Workers as they can be shown: with pi gone, nothing of theirs is still running or asking. */
 export function shownWorkers(state: BbState, stale: Staleness): BbWorker[] {
   if (!stale) return state.workers;
-  const reason = stale === "ended" ? "pi's session ended" : "pi is not responding";
+  const reason = stale === "ended" ? "pi stopped" : "pi is not responding";
   return state.workers.map((worker) => {
     if (!isActive(worker)) return worker;
     const { question: _question, step: _step, ...rest } = worker;

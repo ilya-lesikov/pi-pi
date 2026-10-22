@@ -9,17 +9,14 @@ let open: AbortController | null = null;
 
 /**
  * Opens /pp in bb's composer, drawn by pi-pi's plugin, and returns at once:
- * the menu runs on its own, for as long as the user keeps it open. Only while
- * the agent is idle: a run that starts takes it down, so a setting never
- * changes under a turn, and the menu's forms never compete with the agent's.
+ * the menu runs on its own, for as long as the user keeps it open. It opens
+ * while the agent works too, as /pp does in the terminal: bb stops pi soon
+ * after a run ends, and on Stop, so a menu kept for idle pi would rarely open.
  */
 export function openBbMenu(orchestrator: Orchestrator, ctx: any = orchestrator.lastCtx): { ok: boolean; message: string; closed?: Promise<void> } {
   if (open) return { ok: false, message: "pi-pi's menu is already open." };
   const forms = bbForms();
   if (!ctx || !forms) return { ok: false, message: "pi-pi is still starting; try again in a moment." };
-  if (orchestrator.mainTurnInFlight || orchestrator.holdingRun || ctx.isIdle?.() === false) {
-    return { ok: false, message: "pi-pi's menu opens while the agent is idle." };
-  }
   const controller = new AbortController();
   open = controller;
   const session: MenuSession = { forms, signal: controller.signal };

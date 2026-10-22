@@ -261,8 +261,6 @@ export function registerBbBridge(orchestrator: Orchestrator, tasks: TaskFeed, en
     }
     tick();
   });
-  // The menu runs only while the agent is idle, and only in the session it was opened in.
-  orchestrator.pi.on("agent_start", async () => closeBbMenu());
   orchestrator.pi.on("session_shutdown", async () => {
     // Only the session that took the thread's file over may mark it ended.
     if (!timer) return;

@@ -10,7 +10,7 @@ import { registerTasks } from "./tasks/index.js";
 import { WorkerManager } from "./workers/manager.js";
 import type { WorkerSession, WorkerSessionHooks } from "./workers/types.js";
 
-vi.mock("./bb-menu.js", () => ({ openBbMenu: vi.fn(() => ({ ok: false, message: "pi-pi's menu opens while the agent is idle." })), closeBbMenu: vi.fn() }));
+vi.mock("./bb-menu.js", () => ({ openBbMenu: vi.fn(() => ({ ok: false, message: "pi-pi's menu is already open." })), closeBbMenu: vi.fn() }));
 
 let storage: string;
 
@@ -143,13 +143,13 @@ describe("bb bridge", () => {
     expect(state().tasks).toEqual([{ id: "1", subject: "Write tests", status: "in_progress", activeForm: "Writing tests" }]);
   });
 
-  it("opens pi-pi's menu on the plugin's command, and takes it down when a run starts or the session ends", async () => {
+  it("opens pi-pi's menu on the plugin's command, keeps it through a run, and takes it down when the session ends", async () => {
     const { fire, state, command } = harness();
     await fire("session_start");
     command("1-m.json", { id: "m", action: "menu" });
     vi.advanceTimersByTime(500);
     expect(openBbMenu).toHaveBeenCalled();
-    expect(state().commandResults).toEqual([expect.objectContaining({ id: "m", ok: false, message: "pi-pi's menu opens while the agent is idle." })]);
+    expect(state().commandResults).toEqual([expect.objectContaining({ id: "m", ok: false, message: "pi-pi's menu is already open." })]);
     // A click left from before this session is not a request now.
     vi.mocked(openBbMenu).mockClear();
     command("2-old.json", { id: "old", action: "menu" });
@@ -159,8 +159,9 @@ describe("bb bridge", () => {
     expect(state().commandResults.at(-1)).toMatchObject({ id: "old", ok: false });
     vi.mocked(closeBbMenu).mockClear();
     await fire("agent_start");
+    expect(closeBbMenu).not.toHaveBeenCalled();
     await fire("session_shutdown");
-    expect(closeBbMenu).toHaveBeenCalledTimes(2);
+    expect(closeBbMenu).toHaveBeenCalledTimes(1);
   });
 
   it("mirrors the version and what the main agent is doing, without the idle clock", async () => {

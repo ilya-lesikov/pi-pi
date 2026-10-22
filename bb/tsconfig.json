@@ -23,6 +23,7 @@
   "include": [
     "server.ts",
     "state.ts",
+    "state.test.ts",
     "forms.ts",
     "form.tsx",
     "app.tsx",

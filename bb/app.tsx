@@ -9,6 +9,7 @@ import {
   formatTokens,
   isActive,
   orderWorkers,
+  piNow,
   shownWorkers,
   staleness,
   taskSummary,
@@ -30,6 +31,8 @@ import { PiPiForm } from "./form";
 type Rpc = ReturnType<typeof useRpc<typeof rpcContract>>;
 
 const POLL_MS = 1000;
+// A thread with no state to read (not pi-pi's, or its machine unreachable) is asked less and less often, up to this.
+const MAX_POLL_MS = 10_000;
 
 // --- one poll per thread, shared by every surface showing it -----------------
 
@@ -37,6 +40,8 @@ interface Feed {
   view: View | null;
   listeners: Set<() => void>;
   polling: boolean;
+  /** Polls in a row that read no state. */
+  misses: number;
   heartbeat: number | null;
   heartbeatSeenAt: number;
 }
@@ -54,7 +59,7 @@ const feeds = new Map<string, Feed>();
 function feedFor(threadId: string): Feed {
   let feed = feeds.get(threadId);
   if (!feed) {
-    feed = { view: null, listeners: new Set(), polling: false, heartbeat: null, heartbeatSeenAt: 0 };
+    feed = { view: null, listeners: new Set(), polling: false, misses: 0, heartbeat: null, heartbeatSeenAt: 0 };
     feeds.set(threadId, feed);
   }
   return feed;
@@ -65,6 +70,7 @@ function startPolling(rpc: Rpc, threadId: string, feed: Feed): void {
   const tick = async () => {
     try {
       const { state: read, failed } = await rpc.call("state_get", { threadId });
+      feed.misses = read ? 0 : feed.misses + 1;
       // A failed read keeps the last state, aging toward "not responding" as a silent pi would.
       const state = failed ? feed.view?.state ?? null : read;
       const now = Date.now();
@@ -76,6 +82,7 @@ function startPolling(rpc: Rpc, threadId: string, feed: Feed): void {
       feed.view = state ? { state, stale, workers: shownWorkers(state, stale), heartbeatSeenAt: feed.heartbeatSeenAt } : null;
       for (const listener of feed.listeners) listener();
     } catch {
+      feed.misses++;
       // Keep the last snapshot: a reload of the plugin or a dropped connection should not blank the UI.
       // It still ages toward "not responding", as a failed read does.
       const view = feed.view;
@@ -87,7 +94,7 @@ function startPolling(rpc: Rpc, threadId: string, feed: Feed): void {
         }
       }
     }
-    if (feed.listeners.size) setTimeout(tick, POLL_MS);
+    if (feed.listeners.size) setTimeout(tick, Math.min(POLL_MS * 2 ** feed.misses, MAX_POLL_MS));
     else feed.polling = false;
   };
   void tick();
@@ -126,7 +133,7 @@ function useNow(active: boolean): number {
 
 // --- status line -------------------------------------------------------------
 
-const STATUS_ICON: Record<BbState["status"]["level"], { name: string; className: string } | null> = {
+const STATUS_ICON: Record<NonNullable<BbState["status"]>["level"], { name: string; className: string } | null> = {
   normal: { name: "LoaderCircle", className: "animate-spin text-foreground" },
   attention: { name: "CircleHelp", className: "text-amber-500" },
   alarm: { name: "TriangleAlert", className: "text-destructive" },
@@ -147,8 +154,7 @@ function StatusLine() {
   // Older pi-pi writes no status; the line waits for one that does.
   if (!state.status) return null;
   const status = state.status;
-  // Ages on pi's clock up to the last heartbeat, then on ours: the two machines' clocks may differ.
-  const age = (at: number) => state.heartbeatAt - at + now - view.heartbeatSeenAt;
+  const age = (at: number) => piNow(state, view.heartbeatSeenAt, now) - at;
   const notice = (state.notices ?? []).filter((entry) => age(entry.at) < NOTICE_MS).at(-1);
   // Only a refusal is worth showing; an opened menu shows itself.
   const refusal = !opening || now - opening.sentAt >= NOTICE_MS ? undefined
@@ -156,9 +162,15 @@ function StatusLine() {
       : state.commandResults.find((result) => result.id === opening.id && !result.ok)?.message;
   const icon = stale ? null : STATUS_ICON[status.level];
   const elapsed = status.level === "idle" ? "" : formatDuration(age(status.since));
-  const text = stale ? (stale === "ended" ? "pi's session has ended" : "pi is not responding") : [status.text, elapsed, status.suffix].filter(Boolean).join(" • ");
+  // bb stops pi on Stop and a while after a run ends, and starts it again with the next message: not an error.
+  const text = stale ? (stale === "ended" ? "pi isn't running; it starts with your next message" : "pi is not responding") : [status.text, elapsed, status.suffix].filter(Boolean).join(" • ");
   const openMenu = async () => {
     const sentAt = Date.now();
+    // Nobody would read the request: pi-pi's menu lives in pi.
+    if (stale) {
+      setOpening({ error: stale === "ended" ? "pi-pi's menu needs pi running: send a message, then open it." : "pi is not responding; try again in a moment.", sentAt });
+      return;
+    }
     try {
       const { id } = await rpc.call("menu_open", { threadId });
       setOpening({ id, sentAt });
@@ -169,7 +181,7 @@ function StatusLine() {
   return (
     <div className="flex min-w-0 items-center gap-1.5 px-1 text-xs">
       {icon ? <Icon name={icon.name} className={cn("size-3.5 shrink-0", icon.className)} /> : null}
-      <span className={cn("min-w-0 flex-1 truncate", stale || status.level === "alarm" ? "text-destructive" : status.level === "idle" ? "text-muted-foreground" : "text-foreground")}>{text}</span>
+      <span className={cn("min-w-0 flex-1 truncate", stale === "unresponsive" || (!stale && status.level === "alarm") ? "text-destructive" : stale || status.level === "idle" ? "text-muted-foreground" : "text-foreground")}>{text}</span>
       {refusal ? <span className="min-w-0 truncate text-destructive" title={refusal}>{refusal}</span> : null}
       {notice ? (
         <span className={cn("min-w-0 truncate", notice.level === "error" ? "text-destructive" : notice.level === "warning" ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground")} title={notice.text}>
@@ -178,13 +190,12 @@ function StatusLine() {
       ) : null}
       <button
         type="button"
-        disabled={stale !== null}
         onClick={() => void openMenu()}
-        title="Open pi-pi's menu: status, workers, usage, settings"
-        className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded px-1 text-muted-foreground hover:bg-state-hover hover:text-foreground disabled:cursor-default disabled:opacity-60"
+        title={`pi-pi${state.piPiVersion ? ` ${state.piPiVersion}` : ""} menu: status, workers, models, usage, settings`}
+        className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded border border-border px-1.5 py-0.5 font-medium text-foreground hover:bg-state-hover"
       >
-        <Icon name="Settings" className="size-3.5" />
-        pi-pi {state.piPiVersion}
+        <Icon name="SlidersHorizontal" fallback="Settings" className="size-3.5" />
+        pi-pi menu
       </button>
     </div>
   );
@@ -218,19 +229,22 @@ const TASK_ICON: Record<string, { name: string; className: string }> = {
 
 function TaskCard() {
   const threadId = useThreadId();
-  const state = usePiPiState(threadId)?.state;
+  const view = usePiPiState(threadId);
+  const state = view?.state;
   const [expanded, setExpanded] = useState(true);
   const summary = state ? taskSummary(state.tasks) : null;
-  if (!state || !summary) return null;
-  const headline = `${summary.done}/${summary.total} complete${summary.current ? ` · ${summary.current}` : ""}`;
+  if (!view || !state || !summary) return null;
+  // The list as pi left it: nothing on it is being worked on while pi is not running.
+  const stale = view.stale !== null;
+  const headline = `${summary.done}/${summary.total} complete${summary.current && !stale ? ` · ${summary.current}` : ""}`;
   return (
     <div className="min-h-8 overflow-hidden">
       <CardHeader title="Tasks" summary={headline} expanded={expanded} onToggle={() => setExpanded((open) => !open)} />
       {expanded ? (
         <ul className="max-h-40 space-y-1 overflow-y-auto px-2.5 pb-2 pt-1">
           {state.tasks.map((task) => {
-            const icon = TASK_ICON[task.status] ?? TASK_ICON.pending!;
-            const active = task.status === "in_progress";
+            const active = task.status === "in_progress" && !stale;
+            const icon = (task.status === "in_progress" && stale ? TASK_ICON.pending : TASK_ICON[task.status]) ?? TASK_ICON.pending!;
             return (
               <li key={task.id} className={cn("flex min-w-0 items-start gap-2 text-xs", active ? "text-foreground" : "text-muted-foreground", task.status === "completed" && "line-through")}>
                 <Icon name={icon.name} className={cn("mt-0.5 size-3.5 shrink-0", icon.className)} />
@@ -268,16 +282,17 @@ function WorkerCard() {
   const workers = view ? orderWorkers(view.workers) : [];
   const running = workers.filter(isActive).length;
   const expanded = chosen ?? running > 0;
-  const now = useNow(expanded && running > 0);
+  const tick = useNow(expanded && running > 0);
 
   if (!threadId || !view || workers.length === 0) return null;
   const { state, stale } = view;
+  const now = piNow(state, view.heartbeatSeenAt, tick);
   const asking = workers.filter((worker) => worker.question).length;
   const summary = [`${running} running`, `${workers.length} total`, ...(asking ? [`${asking} asking`] : [])].join(" · ");
   return (
     <div className="min-h-8 overflow-hidden">
       <CardHeader title="Workers" summary={summary} expanded={expanded} onToggle={() => setChosen(!expanded)}>
-        {stale ? <span className="shrink-0 text-destructive">{stale === "ended" ? "pi's session has ended" : "pi is not responding"}</span> : null}
+        {stale ? <span className={cn("shrink-0", stale === "ended" ? "text-muted-foreground" : "text-destructive")}>{stale === "ended" ? "pi isn't running" : "pi is not responding"}</span> : null}
       </CardHeader>
       {expanded ? (
         <ul className="max-h-80 overflow-y-auto text-xs">

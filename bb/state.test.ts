@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { shownWorkers, staleness, taskSummary, workerActivity, type BbState, type BbWorker } from "./state.js";
+import { piNow, shownWorkers, staleness, taskSummary, workerActivity, workerElapsed, type BbState, type BbWorker } from "./state.js";
 
 function worker(overrides: Partial<BbWorker> = {}): BbWorker {
   return { id: "explore-1", type: "explore", description: "d", prompt: "p", status: "running", model: "m", createdAt: 0, startedAt: 0, lastEventAt: 5000, silent: false, toolUses: 0, tokens: 0, outputTail: "", ...overrides };
@@ -24,7 +24,15 @@ describe("bb plugin state", () => {
     expect(shownWorkers(current, null)).toBe(current.workers);
     const shown = shownWorkers(current, "ended");
     expect(shown.map((entry) => [entry.status, entry.question, entry.settledAt])).toEqual([["stopped", undefined, 5000], ["stopped", undefined, 5000], ["completed", undefined, 9000]]);
-    expect(shown.map((entry) => workerActivity(entry, 0))).toEqual(["pi's session ended", "pi's session ended", "found it"]);
+    expect(shown.map((entry) => workerActivity(entry, 0))).toEqual(["pi stopped", "pi stopped", "found it"]);
+  });
+
+  it("times workers on pi's clock, which may differ from the reader's", () => {
+    // pi's clock is an hour behind the reader's: its last heartbeat, at 10s on its clock, was seen 2s ago.
+    const hourAhead = 3_600_000;
+    const now = piNow(state({ heartbeatAt: 10_000 }), hourAhead + 20_000, hourAhead + 22_000);
+    expect(now).toBe(12_000);
+    expect(workerElapsed(worker({ startedAt: 2000 }), now)).toBe("10s");
   });
 
   it("summarizes the checklist only while something is left to do", () => {
