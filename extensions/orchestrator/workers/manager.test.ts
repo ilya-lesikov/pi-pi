@@ -436,6 +436,48 @@ describe("WorkerManager — current step", () => {
   });
 });
 
+describe("WorkerManager — provider recovery", () => {
+  async function failed() {
+    const { factory, sessions } = fakeFactory();
+    const workers = manager(factory);
+    const record = workers.spawn(spec());
+    await flush();
+    sessions[0]!.failRun(new Error("429"));
+    await flush();
+    return { workers, record, session: sessions[0]! };
+  }
+
+  // A message resumes the worker itself; the recovery has nothing left to cancel,
+  // and stopping the running worker must stop it.
+  it("ends the recovery when the worker is resumed, so a stop then acts on the running worker", async () => {
+    const { workers, record, session } = await failed();
+    const cancelled = vi.fn();
+    workers.beginRecovery(record.id, cancelled);
+    expect(workers.send(record.id, "go on")).toBe("resumed");
+    await flush();
+    expect(record.status).toBe("running");
+    expect(workers.recovering(record.id)).toBe(false);
+    expect(cancelled).toHaveBeenCalledTimes(1);
+    expect(workers.stop(record.id)).toBe(true);
+    expect(session.steers.at(-1)).toContain("asked you to stop");
+    expect(workers.kill(record.id)).toBe(true);
+    expect(record.status).toBe("killed");
+  });
+
+  it("tells the recovery once when a stop, a kill or killAll cancels it", async () => {
+    const { workers, record } = await failed();
+    for (const cancel of [() => workers.stop(record.id), () => workers.kill(record.id), () => { workers.killAll(); return true; }]) {
+      const cancelled = vi.fn();
+      workers.beginRecovery(record.id, cancelled);
+      expect(cancel()).toBe(true);
+      expect(cancelled).toHaveBeenCalledTimes(1);
+      expect(workers.recovering(record.id)).toBe(false);
+      expect(record.status).toBe("failed");
+    }
+    expect(workers.stop(record.id)).toBe(false);
+  });
+});
+
 describe("WorkerManager — lifecycle", () => {
   it("queues beyond the concurrency limit and starts the next on settle", async () => {
     const { factory, sessions } = fakeFactory();

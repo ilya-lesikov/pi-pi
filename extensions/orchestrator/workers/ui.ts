@@ -436,8 +436,9 @@ export class WorkerViewer implements Component {
     }
     if (matchesKey(data, "x") && active) {
       if (this.armed === "stop") {
+        const retrying = !ACTIVE_STATUSES.has(this.record!.status);
         this.manager.stop(this.id);
-        this.notice = "Asked to wrap up; killed in a minute if it does not.";
+        this.notice = retrying ? "Failed; its retry was cancelled." : "Asked to wrap up; killed in a minute if it does not.";
         this.armed = null;
       } else {
         this.armed = "stop";
@@ -447,8 +448,9 @@ export class WorkerViewer implements Component {
     }
     if (matchesKey(data, "shift+k") && active) {
       if (this.armed === "kill") {
+        const retrying = !ACTIVE_STATUSES.has(this.record!.status);
         this.manager.kill(this.id);
-        this.notice = "Killed.";
+        this.notice = retrying ? "Failed; its retry was cancelled." : "Killed.";
         this.armed = null;
       } else {
         this.armed = "kill";
@@ -522,7 +524,7 @@ export class WorkerViewer implements Component {
     if (this.composer) {
       lines.push(row(`${th.fg("accent", this.composer.mode === "answer" ? "answer ›" : "steer ›")} ${this.composer.input.render(inner - 9)[0] ?? ""}`));
     } else {
-      const active = ACTIVE_STATUSES.has(record.status);
+      const active = ACTIVE_STATUSES.has(record.status) || this.manager.recovering(record.id);
       const keys = [
         record.question ? "Enter answer" : active ? "Enter steer" : "Enter follow-up",
         ...(active ? ["i interrupt tool", this.armed === "stop" ? th.fg("warning", "x again to STOP") : "x stop", this.armed === "kill" ? th.fg("error", "K again to KILL") : "K kill"] : []),
@@ -715,12 +717,14 @@ export class WorkerPicker implements Component {
     } else if (matchesKey(data, "i") && active) {
       this.notice = this.manager.interruptTool(record.id) ? "Interrupted the current tool call." : "No tool call in progress.";
     } else if (matchesKey(data, "s") && active) {
+      const retrying = !ACTIVE_STATUSES.has(record.status);
       this.manager.stop(record.id);
-      this.notice = `Asked ${record.spec.type} to wrap up; killed in a minute if it does not.`;
+      this.notice = retrying ? `${record.spec.type} failed; its retry was cancelled.` : `Asked ${record.spec.type} to wrap up; killed in a minute if it does not.`;
     } else if (matchesKey(data, "k") && active) {
       if (armed) {
+        const retrying = !ACTIVE_STATUSES.has(record.status);
         this.manager.kill(record.id);
-        this.notice = `Killed ${record.spec.type}.`;
+        this.notice = retrying ? `${record.spec.type} failed; its retry was cancelled.` : `Killed ${record.spec.type}.`;
       } else {
         this.armedId = record.id;
         this.notice = `Press k again to kill ${record.spec.type}.`;
@@ -766,7 +770,7 @@ export class WorkerPicker implements Component {
     } else {
       if (this.notice) footer.push(truncateToWidth(th.fg("warning", `  ${this.notice}`), width));
       const answer = selected.question ? "m answer" : "m message";
-      const actions = ACTIVE_STATUSES.has(selected.status) ? [answer, "i interrupt", "s stop", "k kill"] : [answer];
+      const actions = ACTIVE_STATUSES.has(selected.status) ? [answer, "i interrupt", "s stop", "k kill"] : this.manager.recovering(selected.id) ? [answer, "s stop", "k kill"] : [answer];
       footer.push(truncateToWidth(th.fg("dim", `  ↑↓ select · enter output · ${actions.join(" · ")} · esc back`), width));
     }
     // A long list scrolls to keep the selected worker in view; the picker,

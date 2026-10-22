@@ -174,14 +174,27 @@ function onWorkerEvent(event: WorkerEvent, manager: WorkerManager, hooks: Worker
       // Held until the routing decision: a worker resumed on another provider
       // has nothing to report yet. Bounded, so a decision that never comes
       // still lets the failure through.
-      manager.beginRecovery(record.id);
+      // A stop or a kill ends it at once, as does a resume from elsewhere: the
+      // failure goes out now, or the resumed run reports for itself.
+      let deadline: ReturnType<typeof setTimeout> | undefined;
+      let cancel!: () => void;
+      const cancelled = new Promise<boolean>((resolve) => {
+        cancel = () => {
+          // Nothing holds the parent for it from here on.
+          recovering.delete(record.id);
+          clearTimeout(deadline);
+          resolve(false);
+        };
+      });
+      manager.beginRecovery(record.id, cancel);
       const decision = hooks.onProviderFailure(record).catch((error: any) => {
         getLogger().error({ s: "agents", id: record.id, err: error?.message }, "worker failure handling failed");
         return false;
       });
-      const timeout = new Promise<boolean>((resolve) => { setTimeout(() => resolve(false), RECOVERY_DECISION_MS).unref?.(); });
+      const timeout = new Promise<boolean>((resolve) => { deadline = setTimeout(() => resolve(false), RECOVERY_DECISION_MS); deadline.unref?.(); });
       recovering.add(record.id);
-      void Promise.race([decision, timeout]).then((resumed) => {
+      void Promise.race([decision, timeout, cancelled]).then((resumed) => {
+        clearTimeout(deadline);
         recovering.delete(record.id);
         // A decision still under way past the deadline must not resume a
         // worker whose failure goes out now.
@@ -213,11 +226,12 @@ export async function resumeOnNewRouting(manager: WorkerManager, record: WorkerR
   const target = getAgentDefinition(record.spec.type)?.model;
   if (!target || target === record.modelId) return false;
   if (!await setModel(record, target)) return false;
+  if (!manager.recovering(record.id)) return false;
   retried.add(record.id);
   getTracer()?.traceSubagent(record.id, "subagent_retried", { from: record.modelId, to: target });
   record.modelId = target;
   record.spec = { ...record.spec, model: target };
-  if (!manager.recovering(record.id)) return false;
+  manager.endRecovery(record.id);
   return manager.resume(record.id, RESUME_AFTER_REROUTE);
 }
 
@@ -232,6 +246,7 @@ export function resumeInPlace(manager: WorkerManager, record: WorkerRecord, retr
   if (retried.has(record.id) || record.status !== "failed" || !manager.recovering(record.id)) return false;
   retried.add(record.id);
   getTracer()?.traceSubagent(record.id, "subagent_retried", { from: record.modelId, to: record.modelId });
+  manager.endRecovery(record.id);
   return manager.resume(record.id, RESUME_AFTER_LIMIT);
 }
 

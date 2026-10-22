@@ -237,6 +237,26 @@ describe("bb bridge", () => {
     expect(state().commandResults.at(-1)).toMatchObject({ id: "e", ok: true });
   });
 
+  it("says a Stop or Kill of a worker waiting on its retry cancelled that retry", async () => {
+    const { fire, state, manager, command, sessions } = harness();
+    await fire("session_start");
+    const record = manager.spawn(spec);
+    await flush();
+    sessions[0]!.finish();
+    await flush();
+    record.status = "failed";
+    manager.beginRecovery(record.id, () => {});
+    command("1-a.json", { id: "a", workerId: record.id, action: "stop" });
+    vi.advanceTimersByTime(500);
+    manager.beginRecovery(record.id, () => {});
+    command("2-b.json", { id: "b", workerId: record.id, action: "kill" });
+    vi.advanceTimersByTime(500);
+    expect(state().commandResults.map(({ id, ok, message }) => ({ id, ok, message }))).toEqual([
+      { id: "a", ok: true, message: "explore failed; its retry was cancelled." },
+      { id: "b", ok: true, message: "explore failed; its retry was cancelled." },
+    ]);
+  });
+
   it("drops a command file it cannot parse instead of retrying it forever", async () => {
     const { fire, state } = harness();
     await fire("session_start");

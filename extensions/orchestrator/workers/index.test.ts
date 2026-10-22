@@ -12,7 +12,7 @@ vi.mock("./session.js", () => ({
 import { getDefaultConfig } from "../config.js";
 import { registerAgentDefinitions } from "../agents/registry.js";
 import { configureRouting, setCatalog } from "../routing.js";
-import { createWorkers, registerWorkerToolsFor, resumeInPlace, resumeOnNewRouting, type WorkerHooks } from "./index.js";
+import { createWorkers, recoveringWorkers, registerWorkerToolsFor, resumeInPlace, resumeOnNewRouting, type WorkerHooks } from "./index.js";
 import { WORKER_MESSAGE_TYPE } from "./delivery.js";
 import { attachHost } from "../notices.js";
 import type { WorkerRecord, WorkerSession, WorkerSessionHooks, WorkerSpawnSpec } from "./types.js";
@@ -304,6 +304,24 @@ describe("createWorkers", () => {
       expect(sent).toHaveLength(1);
     });
 
+    // A stop or a kill takes the pending retry back: the failure goes out now,
+    // and nothing holds the parent for it any more.
+    it.each(["stop", "kill"] as const)("is reported at once when a %s cancels its recovery", async (how) => {
+      const { sent, record, manager } = await failed(() => new Promise<boolean>(() => {}));
+      expect(recoveringWorkers()).toBe(1);
+      manager[how](record.id);
+      expect(recoveringWorkers()).toBe(0);
+      await vi.advanceTimersByTimeAsync(300);
+      expect(sent).toHaveLength(1);
+    });
+
+    it("leaves nothing recovering once its manager shuts down", async () => {
+      const { manager } = await failed(() => new Promise<boolean>(() => {}));
+      manager.shutdown();
+      expect(recoveringWorkers()).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
     it("is reported once the routing decision takes too long", async () => {
       const { sent } = await failed(() => new Promise<boolean>(() => {}));
       vi.advanceTimersByTime(29_000);
@@ -324,7 +342,7 @@ describe("resumeOnNewRouting", () => {
     sessions[0]!.fail(new Error("refused"));
     await flush();
     // As the recovery that calls it would: the stub hook already decided.
-    manager.beginRecovery(record.id);
+    manager.beginRecovery(record.id, () => {});
     return { manager, record };
   }
 
@@ -369,8 +387,13 @@ describe("resumeOnNewRouting", () => {
     const { manager, record } = await failedWorker();
     registerAgentDefinitions([definition("explore", { model: "p/n" })]);
     const setModel = vi.fn(async () => { manager.kill(record.id); return true; });
-    expect(await resumeOnNewRouting(manager, record, new Set(), setModel)).toBe(false);
+    const retried = new Set<string>();
+    expect(await resumeOnNewRouting(manager, record, retried, setModel)).toBe(false);
     expect(record.status).toBe("failed");
+    // Nothing moved it: it is not counted as moved, nor recorded on the new model.
+    expect(retried.has(record.id)).toBe(false);
+    expect(record.modelId).toBe("p/m");
+    expect(record.spec.model).toBe("p/m");
   });
 });
 
@@ -385,7 +408,7 @@ describe("resumeInPlace", () => {
     await flush();
     const retried = new Set<string>();
     expect(resumeInPlace(manager, record, new Set())).toBe(false);
-    manager.beginRecovery(record.id);
+    manager.beginRecovery(record.id, () => {});
     expect(resumeInPlace(manager, record, retried)).toBe(true);
     expect(record.modelId).toBe("p/m");
     expect(record.status).not.toBe("failed");

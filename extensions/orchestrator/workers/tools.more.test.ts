@@ -129,12 +129,27 @@ describe("worker tools — more", () => {
     await flush();
     const record = manager.get("explore-1")!;
     record.status = "failed";
-    manager.beginRecovery(record.id);
+    manager.beginRecovery(record.id, () => {});
     expect(text(await call("agent_stop", { id: "all" }))).toBe("explore-1: failed; it will not be retried.");
     expect(manager.recovering(record.id)).toBe(false);
-    manager.beginRecovery(record.id);
+    manager.beginRecovery(record.id, () => {});
     expect(text(await call("agent_stop", { id: "explore-1", mode: "kill" }))).toBe("explore-1: failed; it will not be retried.");
     expect(manager.recovering(record.id)).toBe(false);
+    manager.shutdown();
+  });
+
+  it("treats a worker resumed out of its recovery as the running worker it is, listed once", async () => {
+    const { manager, call, spawn, sessions } = setup();
+    await spawn();
+    await flush();
+    sessions[0]!.finish("");
+    await flush();
+    const record = manager.get("explore-1")!;
+    record.status = "failed";
+    manager.beginRecovery(record.id, () => {});
+    expect(manager.send(record.id, "more")).toBe("resumed");
+    await flush();
+    expect(text(await call("agent_stop", { id: "all" }))).toBe("explore-1: asked to wrap up; killed in a minute if it does not.");
     manager.shutdown();
   });
 

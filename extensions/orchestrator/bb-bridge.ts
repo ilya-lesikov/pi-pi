@@ -10,7 +10,7 @@ import type { MainStatus } from "./main-status.js";
 import type { Orchestrator } from "./orchestrator.js";
 import type { TaskFeed } from "./tasks/index.js";
 import type { WorkerManager } from "./workers/manager.js";
-import type { WorkerRecord } from "./workers/types.js";
+import { ACTIVE_STATUSES, type WorkerRecord } from "./workers/types.js";
 
 const TICK_MS = 500;
 // Rewritten at least this often while the session lives, so a reader can tell a crashed pi from an idle one.
@@ -291,6 +291,10 @@ function runCommand(manager: WorkerManager | null, command: Extract<BbCommand, {
   const record = manager?.get(command.workerId);
   if (!manager || !record) return { ok: false, message: "That worker is no longer retained." };
   const name = record.spec.type;
+  if ((command.action === "stop" || command.action === "kill") && !ACTIVE_STATUSES.has(record.status) && manager.recovering(record.id)) {
+    manager.stop(record.id);
+    return { ok: true, message: `${name} failed; its retry was cancelled.` };
+  }
   if (command.action === "stop") {
     return manager.stop(record.id) ? { ok: true, message: `Asked ${name} to wrap up; killed in a minute if it does not.` } : { ok: false, message: `${name} is not running.` };
   }

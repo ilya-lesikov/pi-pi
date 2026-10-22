@@ -667,6 +667,49 @@ describe("pause-based rate-limit fallback", () => {
     }
   });
 
+  it("resumes a request two parked moves both stopped once, not once per move", async () => {
+    vi.useFakeTimers();
+    try {
+      setCatalog([SUB, DIRECT, COPILOT_OPUS]);
+      const pi = makePi();
+      const orchestrator = makeOrchestrator(pi);
+      orchestrator.routedMainSpec = SUB;
+      orchestrator.switchModel = vi.fn(async () => true);
+      let idle = false;
+      orchestrator.lastCtx = { ...ctxOn(SUB), isIdle: () => idle };
+      await handleMainRateLimit(orchestrator, orchestrator.lastCtx, SUB);
+      await handleSubscriptionRouteOutage(orchestrator, orchestrator.lastCtx, SUB, "main");
+      expect(orchestrator.pendingModelSwitches).toHaveLength(2);
+      idle = true;
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not resume a request the user replaced while its move was parked, pause or not", async () => {
+    vi.useFakeTimers();
+    try {
+      const LLM_OPUS = "pp-flant-openai/claude-opus-4-8";
+      setCatalog([COPILOT_OPUS, LLM_OPUS]);
+      const pi = makePi();
+      const orchestrator = makeOrchestrator(pi);
+      orchestrator.routedMainSpec = COPILOT_OPUS;
+      orchestrator.switchModel = vi.fn(async () => true);
+      let idle = false;
+      orchestrator.lastCtx = { ...ctxOn(COPILOT_OPUS), isIdle: () => idle };
+      await handleMainRateLimit(orchestrator, orchestrator.lastCtx, COPILOT_OPUS, "429 retry-after: 600");
+      orchestrator.resetContinuation();
+      idle = true;
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(orchestrator.switchModel).toHaveBeenCalled();
+      expect(pi.sendUserMessage).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("leaves the main model alone when the limit hit a worker on another provider", async () => {
     setCatalog([SUB, "github-copilot/gpt-6-astra", "pp-flant-openai/gpt-6-astra"]);
     const orchestrator = makeOrchestrator();

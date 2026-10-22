@@ -665,6 +665,24 @@ describe("WorkerViewer", () => {
     expect(text().at(-2)).not.toContain("STOP");
   });
 
+  // A failed worker waiting on its retry takes Stop and Kill, which cancel
+  // that retry; it says so rather than claiming to wrap up or kill a session.
+  it("offers Stop and Kill for a worker waiting on its retry, and says they cancel it", async () => {
+    for (const [key, keys] of [["x", "xx"], ["K", "KK"]] as const) {
+      const { manager, record, viewer, text, sessions } = open();
+      await flush();
+      sessions[0]!.finish();
+      await flush();
+      record.status = "failed";
+      manager.beginRecovery(record.id, () => {});
+      expect(text(200).at(-2)).toContain("x stop · K kill");
+      for (const ch of keys) viewer.handleInput(ch);
+      expect(manager.recovering(record.id)).toBe(false);
+      expect(text(200).at(-2)).toContain("Failed; its retry was cancelled.");
+      void key;
+    }
+  });
+
   it("scrolls the transcript and follows new output only from the bottom", async () => {
     const { sessions, viewer, text, tui, record } = open(12);
     await flush();
@@ -804,6 +822,22 @@ describe("WorkerPicker (alt+w)", () => {
     picker.handleInput("k");
     expect(b.status).toBe("killed");
     expect(a.status).toBe("running");
+  });
+
+  it("offers Stop and Kill for a worker waiting on its retry, and says they cancel it", async () => {
+    for (const keys of ["s", "kk"]) {
+      const { manager, sessions, picker } = open();
+      const record = manager.spawn(spec());
+      await flush();
+      sessions[0]!.finish();
+      await flush();
+      record.status = "failed";
+      manager.beginRecovery(record.id, () => {});
+      expect(plain(picker.render(120).at(-1)!)).toContain("s stop · k kill");
+      for (const ch of keys) picker.handleInput(ch);
+      expect(manager.recovering(record.id)).toBe(false);
+      expect(plain(picker.render(120).at(-2)!)).toContain("explore failed; its retry was cancelled.");
+    }
   });
 
   it("fits the overlay's height with the overflow markers and the message box showing", async () => {

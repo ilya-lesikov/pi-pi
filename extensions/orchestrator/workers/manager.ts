@@ -65,8 +65,8 @@ export class WorkerManager {
   private readonly queue: string[] = [];
   private readonly listeners = new Set<(event: WorkerEvent) => void>();
   private readonly waiters = new Set<() => void>();
-  /** Failed workers a provider recovery may still resume; a stop or a kill takes that back. */
-  private readonly recoveries = new Set<string>();
+  /** Failed workers a provider recovery may still resume, with what ends it early; a stop, a kill or a resume takes that back. */
+  private readonly recoveries = new Map<string, () => void>();
   private ticker: ReturnType<typeof setInterval> | null = null;
   private counter = 0;
   private readonly now: () => number;
@@ -161,13 +161,24 @@ export class WorkerManager {
     return this.resume(record.id, message) ? "resumed" : "gone";
   }
 
-  /** Marks a failed worker as one a provider recovery may resume, until it ends or a stop or kill cancels it. */
-  beginRecovery(id: string): void {
-    this.recoveries.add(id);
+  /**
+   * Marks a failed worker as one a provider recovery may resume, until it ends.
+   * A stop, a kill or a resume from elsewhere ends it early and calls `cancelled`.
+   */
+  beginRecovery(id: string, cancelled: () => void): void {
+    this.recoveries.set(id, cancelled);
   }
 
   endRecovery(id: string): void {
     this.recoveries.delete(id);
+  }
+
+  private cancelRecovery(id: string): boolean {
+    const cancelled = this.recoveries.get(id);
+    if (!cancelled) return false;
+    this.recoveries.delete(id);
+    cancelled();
+    return true;
   }
 
   /** Whether a recovery begun for the worker may still resume it. */
@@ -177,6 +188,7 @@ export class WorkerManager {
 
   /** Re-runs a settled worker in its existing session. */
   resume(id: string, prompt: string): boolean {
+    this.cancelRecovery(id);
     const record = this.records.get(id);
     const live = this.live.get(id);
     if (!record || !live?.session || ACTIVE_STATUSES.has(record.status)) return false;
@@ -224,7 +236,7 @@ export class WorkerManager {
    */
   stop(id: string, reason: WorkerStatus = "stopped"): boolean {
     const record = this.get(id);
-    if (record && this.recoveries.delete(record.id)) return true;
+    if (record && !ACTIVE_STATUSES.has(record.status) && this.cancelRecovery(record.id)) return true;
     if (!record || !ACTIVE_STATUSES.has(record.status)) return false;
     const live = this.live.get(record.id)!;
     if (record.status === "queued") {
@@ -250,7 +262,7 @@ export class WorkerManager {
   /** Hard stop: settles the record now and tears the session down without waiting on it. */
   kill(id: string, reason: WorkerStatus = "killed", detail?: string): boolean {
     const record = this.get(id);
-    if (record && this.recoveries.delete(record.id)) return true;
+    if (record && !ACTIVE_STATUSES.has(record.status) && this.cancelRecovery(record.id)) return true;
     if (!record || !ACTIVE_STATUSES.has(record.status)) return false;
     const live = this.live.get(record.id)!;
     live.epoch++;
@@ -263,7 +275,7 @@ export class WorkerManager {
   }
 
   killAll(): void {
-    this.recoveries.clear();
+    for (const id of [...this.recoveries.keys()]) this.cancelRecovery(id);
     for (const record of this.list()) {
       if (ACTIVE_STATUSES.has(record.status)) this.kill(record.id, "killed", "the parent session ended");
     }

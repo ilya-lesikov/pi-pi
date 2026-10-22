@@ -145,16 +145,25 @@ async function pauseAndReroute(
   // Decided when the switch runs, not now: a worker's failure lands mid-request,
   // and by the time the session is between turns another switch may have
   // moved it, or the user may have picked a model of their own.
+  const parkedIn = orchestrator.continuationGeneration;
   const move = async (): Promise<void> => {
     // The handler's own context when it carries the session's model; a parked
     // switch runs later, against whatever context is current then.
     const switchCtx = ctx?.model ? ctx : orchestrator.lastCtx ?? ctx;
     const current = liveSpec(switchCtx) || spec;
+    // The request this move carries on, unless the user has sent another since
+    // or another move already carried it on: it is resumed once.
+    const request = owedRequests.get(move) ?? parkedIn;
+    const resumes = resumeRequest && request === orchestrator.continuationGeneration && resumedRequests.get(orchestrator) !== request;
+    const resume = (): boolean => {
+      if (resumes) resumedRequests.set(orchestrator, request);
+      return resumes;
+    };
     if (!isPausedFor(current)) {
       // The pause ran out while this was parked, and its expiry found nothing
       // of this move's to resume: a request taken from pi's retry for it
-      // resumes here, unless the user has sent another since.
-      if (owedRequests.get(move) === orchestrator.continuationGeneration) orchestrator.queueContinuation("[PI-PI] The provider limit cleared. Continue the current request.");
+      // resumes here.
+      if (owedRequests.has(move) && resume()) orchestrator.queueContinuation("[PI-PI] The provider limit cleared. Continue the current request.");
       return;
     }
     // A session pi-pi routed follows its configured model; one the user picked
@@ -165,7 +174,7 @@ async function pauseAndReroute(
     // Staying put, the request waits the pause out and resumes on the same model.
     const wait = (): void => {
       orchestrator.mainStatus?.pause(`Rate-limited • waiting until ${formatUntil(entry)}`, entry.until ?? undefined);
-      if (resumeRequest) orchestrator.pausedMainRoutes.set(key, { from: current, to: current, owned, resume: true, generation: orchestrator.continuationGeneration });
+      if (resume()) orchestrator.pausedMainRoutes.set(key, { from: current, to: current, owned, resume: true, generation: request });
     };
     if (!next || next === current) {
       notice(switchCtx, `${trigger}; nothing else serves ${current}. Waiting until ${formatUntil(entry)}; the request resumes then.${recovery}`, "warning");
@@ -187,7 +196,7 @@ async function pauseAndReroute(
     orchestrator.pausedMainRoutes.set(key, { from: current, to: next, owned, resume: false, generation: orchestrator.continuationGeneration });
     const paid = splitSpec(next)?.provider === LLM_API_PROVIDER ? " (paid)" : "";
     notice(switchCtx, `${trigger}; switched to ${next}${paid} until ${formatUntil(entry)}.${recovery}`, "warning");
-    if (resumeRequest) orchestrator.queueContinuation("[PI-PI] Provider routing changed after a provider failure. Continue the current request.");
+    if (resume()) orchestrator.queueContinuation("[PI-PI] Provider routing changed after a provider failure. Continue the current request.");
   };
   if (resumeRequest) mainMoves.add(move);
   if (resumeRequest && origin === "main") owedRequests.set(move, orchestrator.continuationGeneration);
@@ -201,6 +210,9 @@ const mainMoves = new WeakSet<object>();
 
 // The main request each of those moves stopped, by its generation.
 const owedRequests = new WeakMap<object, number>();
+
+// The last request a move carried on, per session, so no other move resends it.
+const resumedRequests = new WeakMap<Orchestrator, number>();
 
 /** The pause still covering `spec`, so a waiting request can follow it. */
 function routeHolding(spec: string): string | null {
