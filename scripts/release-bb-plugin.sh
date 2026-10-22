@@ -39,6 +39,21 @@ if [ -n "$(npm view "${NAME}@${VERSION}" version 2>/dev/null)" ]; then
   exit 1
 fi
 
+# bb's command line, not the desktop app: the AppImage on PATH as `bb` takes a
+# command, does nothing with it, and exits 0. bb sets BB_CLI in its threads and
+# writes a launcher for its command line into its data directory.
+BB=""
+for candidate in "${BB_CLI:-}" "${BB_DATA_DIR:-$HOME/.bb}/bin/bb" "$(command -v bb || true)"; do
+  if [ -n "$candidate" ] && [ -x "$candidate" ] && "$candidate" --version 2>/dev/null | grep -Eq '^[0-9]+\.[0-9]+'; then
+    BB="$candidate"
+    break
+  fi
+done
+if [ -z "$BB" ]; then
+  echo "ERROR: bb's command line not found: set BB_CLI to it (bb writes one to ~/.bb/bin/bb)." >&2
+  exit 1
+fi
+
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -47,7 +62,11 @@ git clone -q . "$WORK/repo"
 (
   cd "$WORK/repo/bb"
   npm ci --ignore-scripts --no-audit --no-fund >/dev/null
-  bb plugin build . >/dev/null
+  "$BB" plugin build . >/dev/null
+  if [ ! -f dist/app.js ] || [ ! -f dist/server.js ]; then
+    echo "ERROR: '$BB plugin build' left no dist/app.js or dist/server.js." >&2
+    exit 1
+  fi
   npm pack --pack-destination "$WORK" >/dev/null
 )
 TARBALL="$(ls "$WORK"/*.tgz)"
