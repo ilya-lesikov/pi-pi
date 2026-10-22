@@ -1,7 +1,7 @@
 import { realpathSync } from "node:fs";
 import { dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createBashToolDefinition, getAgentDir, parseArgs, SettingsManager, type BashToolInput, type ExtensionAPI, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { createBashToolDefinition, DEFAULT_MAX_BYTES, formatSize, getAgentDir, parseArgs, SettingsManager, type BashToolDetails, type BashToolInput, type ExtensionAPI, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 
 /**
  * pi's bash waits on a command forever unless the call sets a timeout, so a
@@ -79,6 +79,7 @@ export function registerBashGuard(pi: ExtensionAPI, cwd: string, limits: BashGua
       let silent = false;
       let settled = false;
       let output = "";
+      let details: BashToolDetails | undefined;
       let timer: ReturnType<typeof setTimeout> | undefined;
       let deadline: ReturnType<typeof setTimeout> | undefined;
       let grace: ReturnType<typeof setTimeout> | undefined;
@@ -86,8 +87,13 @@ export function registerBashGuard(pi: ExtensionAPI, cwd: string, limits: BashGua
       // pi kills only the command's process group and then waits for its output
       // to end: a process that moved to a session of its own and keeps printing
       // holds that wait open, so a stopped command returns after a grace anyway.
+      // pi goes on writing that process's output to its full-output file until
+      // it exits; nothing outside pi can stop that.
       const giveUpAfterGrace = (status: string) => {
-        grace ??= setTimeout(() => giveUp(new Error(`${output ? `${output}\n\n` : ""}${status}`)), SETTLE_GRACE_MS);
+        grace ??= setTimeout(() => {
+          const text = output + truncationNotice(details);
+          giveUp(new Error(`${text ? `${text}\n\n` : ""}${status}`));
+        }, SETTLE_GRACE_MS);
       };
       const onStop = () => giveUpAfterGrace("Command aborted");
       if (stop.signal.aborted) onStop();
@@ -111,6 +117,7 @@ export function registerBashGuard(pi: ExtensionAPI, cwd: string, limits: BashGua
             // Each update carries output; the first, empty one only says it started.
             if (update.content.length) {
               output = update.content.map((part: any) => part.text ?? "").join("");
+              details = update.details;
               arm();
             }
             onUpdate?.(update);
@@ -185,6 +192,19 @@ function real(path: string): string {
   } catch {
     return path;
   }
+}
+
+// pi's own notice for truncated output, as far as an update's details tell it:
+// they lack the size of a partly shown last line.
+function truncationNotice(details: BashToolDetails | undefined): string {
+  const truncation = details?.truncation;
+  if (!truncation?.truncated) return "";
+  const path = details?.fullOutputPath;
+  const startLine = truncation.totalLines - truncation.outputLines + 1;
+  const endLine = truncation.totalLines;
+  if (truncation.lastLinePartial) return `\n\n[Showing last ${formatSize(truncation.outputBytes)} of line ${endLine}. Full output: ${path}]`;
+  if (truncation.truncatedBy === "lines") return `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines}. Full output: ${path}]`;
+  return `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${formatSize(DEFAULT_MAX_BYTES)} limit). Full output: ${path}]`;
 }
 
 function seconds(ms: number): string {

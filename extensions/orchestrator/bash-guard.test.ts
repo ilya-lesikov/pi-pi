@@ -78,6 +78,32 @@ describe("bash guard", () => {
     }
   }, 15_000);
 
+  it.skipIf(spawnSync("setsid", ["true"]).status !== 0)("names the full output's file when it returns truncated output without waiting for pi", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pp-guard-setsid-"));
+    const pidFile = join(root, "pid");
+    let fullOutput: string | undefined;
+    try {
+      const { run } = bash({ timeoutSec: 1, silenceMs: 60_000 });
+      const result = await run({ command: `seq 1 5000; setsid sh -c 'echo $$ > ${pidFile}; while :; do echo tick; sleep 0.02; done'; true` });
+      expect(result.ok).toBe(false);
+      const notice = /\n\n\[Showing lines (\d+)-(\d+) of (\d+)\. Full output: (\S+)\]\n\nCommand timed out after 1 seconds$/.exec(result.text);
+      expect(notice).not.toBeNull();
+      const [, start, end, total, path] = notice!;
+      fullOutput = path;
+      expect(Number(end)).toBe(Number(total));
+      expect(Number(start)).toBeGreaterThan(1);
+      expect(readFileSync(path, "utf8")).toMatch(/^1\n2\n3\n/);
+    } finally {
+      if (existsSync(pidFile)) {
+        try {
+          process.kill(Number(readFileSync(pidFile, "utf8")), "SIGKILL");
+        } catch {}
+      }
+      if (fullOutput) rmSync(fullOutput, { force: true });
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
   it("reports a user's abort as an abort, not as silence", async () => {
     const { run } = bash({ silenceMs: 60_000 });
     const controller = new AbortController();
