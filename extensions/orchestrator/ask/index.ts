@@ -294,7 +294,7 @@ async function askViaBbForm(ctx: any, items: AskItem[], multi: boolean, signal: 
     onTyped: (typed) => ({ kind: "ask", answers: [{ kind: "freeform", text: typed }] }),
   });
   if (outcome.outcome === "unavailable") return undefined;
-  const also = outcome.outcome === "submitted" && outcome.alsoTyped ? `\nAfter answering, the user also wrote in the chat: "${outcome.alsoTyped}"` : "";
+  const also = outcome.alsoTyped ? `\nAfterwards, the user also wrote in the chat: "${outcome.alsoTyped}"` : "";
   const withAlso = (result: ReturnType<typeof cancelledResult>) => (also ? { ...result, content: text(`${result.content[0]!.text}${also}`) } : result);
   if (outcome.outcome === "cancelled" || outcome.value.kind === "decline") {
     const note = outcome.outcome === "submitted" && outcome.value.kind === "decline" ? outcome.value.note : undefined;

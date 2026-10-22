@@ -67,7 +67,7 @@ async function confirmViaBbForm(ctx: any, base: { question: string; danger: bool
     // Not the user's decision: bb or the connection took the form down.
     return { ...base, decision: "unanswered", note: outcome.reason };
   }
-  const alsoTyped = outcome.outcome === "submitted" && outcome.alsoTyped ? { alsoTyped: outcome.alsoTyped } : {};
+  const alsoTyped = outcome.alsoTyped ? { alsoTyped: outcome.alsoTyped } : {};
   if (outcome.outcome === "submitted" && outcome.value.kind === "confirm") {
     return { ...base, decision: outcome.value.decision, ...(outcome.value.comment?.trim() ? { comment: outcome.value.comment.trim() } : {}), ...alsoTyped };
   }

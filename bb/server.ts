@@ -2,7 +2,7 @@
 // storage directory and drops worker commands next to it. Both go through
 // bb's file API on the machine that owns the thread, so remote machines work too.
 import { randomUUID } from "node:crypto";
-import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
+import { defineRpcContract, experimental_PluginRpcRefusal, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import { FORM_VERSION, RENDERER_ID, type FormSpec, type FormValue } from "./forms";
 import type { BbCommand, BbState } from "./state";
@@ -86,6 +86,11 @@ export const rpcContract = defineRpcContract({
   },
 });
 
+// A form this plugin or bb cannot show: an expected refusal, not a plugin failure. pi matches the message's prefix.
+function unsupported(reason: string): experimental_PluginRpcRefusal {
+  return new experimental_PluginRpcRefusal({ code: "invalid", message: `Unsupported form: ${reason}` });
+}
+
 export default async function plugin(bb: BbPluginApi): Promise<void> {
   // A thread's storage directory never moves while the thread exists.
   const locations = new Map<string, { hostId: string; dir: string }>();
@@ -161,14 +166,14 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
     form_open: async ({ threadId, formId, session, title, form, timeoutMs }) => {
       // Idempotent: pi reopens a form bb took down, under the same id.
       const existing = forms.get(formId);
-      if (existing && existing.threadId !== threadId) throw new Error("Unsupported form: the form belongs to another thread");
+      if (existing && existing.threadId !== threadId) throw unsupported("the form belongs to another thread");
       if (existing && !existing.settled) return { ok: true as const };
       const parsed = formSchema.safeParse(form);
-      if (!parsed.success) throw new Error(`Unsupported form: ${parsed.error.issues[0]?.message ?? "invalid"}`);
+      if (!parsed.success) throw unsupported(parsed.error.issues[0]?.message ?? "invalid");
       const spec = parsed.data;
       // bb counts the payload in bytes; the schema's limits are in characters.
-      if (Buffer.byteLength(JSON.stringify(spec)) > MAX_PAYLOAD_BYTES) throw new Error("Unsupported form: too large for bb");
-      if (!title.trim()) throw new Error("Unsupported form: empty title");
+      if (Buffer.byteLength(JSON.stringify(spec)) > MAX_PAYLOAD_BYTES) throw unsupported("too large for bb");
+      if (!title.trim()) throw unsupported("empty title");
       const live: LiveForm = { threadId, session, controller: new AbortController(), polledAt: Date.now() };
       forms.set(formId, live);
       const shown = bb.ui
@@ -197,10 +202,12 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
           },
         );
       // bb refuses a form it cannot show at once; failing the open lets pi ask with bb's own dialogs instead.
-      const refused = await Promise.race([shown.then((ok) => !ok), new Promise<false>((resolve) => setTimeout(resolve, REFUSAL_WAIT_MS, false))]);
+      let wait: ReturnType<typeof setTimeout> | undefined;
+      const refused = await Promise.race([shown.then((ok) => !ok), new Promise<false>((resolve) => (wait = setTimeout(resolve, REFUSAL_WAIT_MS, false)))]);
+      clearTimeout(wait);
       if (refused) {
         forms.delete(formId);
-        throw new Error(`Unsupported form: bb could not show it (${live.settled?.state === "cancelled" ? live.settled.reason : "failed"})`);
+        throw unsupported(`bb could not show it (${live.settled?.state === "cancelled" ? live.settled.reason : "failed"})`);
       }
       return { ok: true as const };
     },

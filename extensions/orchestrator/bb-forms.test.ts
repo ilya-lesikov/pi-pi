@@ -138,6 +138,31 @@ describe("bb forms", () => {
     expect(outcome).toEqual({ outcome: "submitted", value: { kind: "ask", answers: [{ kind: "selection", selections: ["B"] }] }, alsoTyped: "typed it" });
   });
 
+  it("keeps the user's cancel when a reply was typed after it, and passes the reply along", async () => {
+    const { forms } = plugin(() => {
+      forms.takeTyped("yes");
+      return { state: "cancelled", reason: "user" };
+    });
+    const outcome = await forms.ask(ask, { title: "Pick", onTyped: () => ({ kind: "confirm", decision: "yes" }) });
+    expect(outcome).toEqual({ outcome: "cancelled", reason: "user", alsoTyped: "yes" });
+  });
+
+  it("does not answer with a typed reply once the tool call was aborted, even when the poll failed", async () => {
+    const controller = new AbortController();
+    const fetch = vi.fn(async (url: string) => {
+      const method = String(url).split("/").pop()!;
+      if (method === "form_poll") {
+        forms.takeTyped("B");
+        controller.abort();
+        throw new Error("connection reset");
+      }
+      return new Response(JSON.stringify({ ok: true, result: { ok: true } }), { status: 200 });
+    });
+    const forms: BbForms = new BbForms({ serverUrl: "http://bb.test", threadId: "thr_1", fetch: fetch as any, sleep: async () => {} });
+    const outcome = await forms.ask(ask, { title: "Pick", signal: controller.signal, onTyped: (text) => ({ kind: "ask", answers: [{ kind: "freeform", text }] }) });
+    expect(outcome).toEqual({ outcome: "cancelled", reason: "signal" });
+  });
+
   it("answers with a reply typed while the form is still pending", async () => {
     const { forms } = plugin((_call, polls) => {
       if (polls === 1) forms.takeTyped("typed it");
@@ -328,7 +353,7 @@ describe("ask_user and confirm under bb", () => {
   it("tells the model about a message typed after the form was submitted, with the form's answer", async () => {
     for (const [tool, params, value, expected] of [
       ["confirm", { question: "Go?" }, { kind: "confirm", decision: "yes" }, /^User confirmed: yes\.\nAfter deciding, the user also wrote in the chat: "and then deploy"$/],
-      ["ask_user", { question: "Pick", options: ["A", "B"] }, { kind: "ask", answers: [{ kind: "selection", selections: ["B"] }] }, /^User answered: B\nAfter answering, the user also wrote in the chat: "and then deploy"$/],
+      ["ask_user", { question: "Pick", options: ["A", "B"] }, { kind: "ask", answers: [{ kind: "selection", selections: ["B"] }] }, /^User answered: B\nAfterwards, the user also wrote in the chat: "and then deploy"$/],
     ] as const) {
       const { forms } = plugin(() => {
         forms.takeTyped("and then deploy");

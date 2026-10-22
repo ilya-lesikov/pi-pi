@@ -45,11 +45,11 @@ export type FormValue =
 
 /**
  * submitted: the user answered; cancelled: dismissed (by them or bb); unavailable: nothing was shown, use the dialogs.
- * `alsoTyped` is a message the user sent in the chat after they had already submitted the form: it is theirs, not the answer.
+ * `alsoTyped` is a message the user sent in the chat after they had already submitted or cancelled the form: it is theirs, not the answer.
  */
 export type FormOutcome =
   | { outcome: "submitted"; value: FormValue; alsoTyped?: string }
-  | { outcome: "cancelled"; reason: string }
+  | { outcome: "cancelled"; reason: string; alsoTyped?: string }
   | { outcome: "unavailable" };
 
 type PollResult =
@@ -119,7 +119,7 @@ export class BbForms {
     const { signal } = options;
     if (signal?.aborted) return { outcome: "cancelled", reason: "signal" };
     if (this.now() < this.unavailableUntil) return { outcome: "unavailable" };
-    if (JSON.stringify(spec).length > MAX_FORM_BYTES) return { outcome: "unavailable" };
+    if (Buffer.byteLength(JSON.stringify(spec)) > MAX_FORM_BYTES) return { outcome: "unavailable" };
     const formId = randomUUID();
     const open = { threadId: this.env.threadId, session: this.session, formId, title: options.title, form: spec, ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}) };
     const cancel = () => void this.call("form_cancel", { threadId: this.env.threadId, formId }).catch(() => {});
@@ -154,7 +154,7 @@ export class BbForms {
       // The plugin may have shown it before the response was lost.
       if (!(error instanceof Rejected) && !(error instanceof Unavailable && error.notInstalled)) cancel();
       // A reply already taken from the chat is the answer; the dialogs would ask again for nothing.
-      if (typed) return { outcome: "submitted", value: typed };
+      if (typed && !signal?.aborted) return { outcome: "submitted", value: typed };
       return { outcome: "unavailable" };
     }
     try {
@@ -175,7 +175,7 @@ export class BbForms {
           failingSince = null;
         } catch {
           // Whether the form was submitted first cannot be told now; the reply taken from the chat must not be lost.
-          if (typed) return answerTyped();
+          if (typed && !signal?.aborted) return answerTyped();
           failingSince ??= this.now();
           if (this.now() - failingSince > OUTAGE_MS) return { outcome: "cancelled", reason: "unreachable" };
           await this.sleep(POLL_MS * 3, signal);
@@ -186,7 +186,10 @@ export class BbForms {
           return { outcome: "cancelled", reason: "signal" };
         }
         // Submitted before the reply was typed: the form's answer stands, and the reply goes along with it.
-        if (result.state === "submitted") return { outcome: "submitted", value: result.value, ...(typedText !== undefined ? { alsoTyped: typedText } : {}) };
+        const alsoTyped = typedText !== undefined ? { alsoTyped: typedText } : {};
+        if (result.state === "submitted") return { outcome: "submitted", value: result.value, ...alsoTyped };
+        // Likewise the user's own cancel: a "yes" typed after it must not turn it into an approval.
+        if (result.state === "cancelled" && result.reason === "user") return { outcome: "cancelled", reason: "user", ...alsoTyped };
         if (typed) return answerTyped();
         if (result.state === "cancelled" && !REOPEN_REASONS.has(result.reason)) return { outcome: "cancelled", reason: result.reason };
         if (result.state === "unknown" || result.state === "cancelled") {

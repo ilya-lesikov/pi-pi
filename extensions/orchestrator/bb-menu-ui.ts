@@ -126,7 +126,7 @@ function buildPage(q: MenuQuestion, question: string, start: number, size: numbe
     allowComment: q.allowComment,
   };
   const encoded = encodeQuestions([wire]);
-  return { more, remaining, encoded, bytes: JSON.stringify(encoded.questions).length };
+  return { more, remaining, encoded, bytes: Buffer.byteLength(JSON.stringify(encoded.questions)) };
 }
 
 /** Typed text; null when the user dismissed it. */
@@ -152,14 +152,14 @@ export async function menuReport(session: MenuSession, title: string, text: stri
   await show(session, { version: 1, kind: "report", text: fitReport(text) }, title);
 }
 
-/** The report cut, visibly, to what fits a form once serialized: quotes and line breaks count twice there. */
+/** The report cut, visibly, to what fits a form once serialized: quotes and line breaks count twice there, and bb counts bytes. */
 function fitReport(text: string): string {
-  if (JSON.stringify(text).length <= FORM_BUDGET) return text;
+  if (Buffer.byteLength(JSON.stringify(text)) <= FORM_BUDGET) return text;
   let keep = text.length;
   for (;;) {
     keep = Math.floor(keep * 0.9);
     const shown = `${text.slice(0, keep)}\n\n… ${text.length - keep} more characters not shown.`;
-    if (JSON.stringify(shown).length <= FORM_BUDGET) return shown;
+    if (Buffer.byteLength(JSON.stringify(shown)) <= FORM_BUDGET) return shown;
   }
 }
 
