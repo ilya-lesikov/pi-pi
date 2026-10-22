@@ -30,6 +30,7 @@ export interface BashGuardOptions {
 
 // pi throttles bash's output updates to 100ms; a shorter limit would stop a command that is printing.
 const MIN_SILENCE_MS = 1000;
+const SETTLE_GRACE_MS = 3000;
 
 /**
  * Registered when the extension loads, not at session start: pi keeps the
@@ -68,16 +69,32 @@ export function registerBashGuard(pi: ExtensionAPI, cwd: string, limits: BashGua
       const timeoutSec = limits.timeoutSec();
       const configured = limits.silenceMs();
       const silenceMs = configured > 0 ? Math.max(configured, MIN_SILENCE_MS) : 0;
+      if (timeoutSec <= 0 && silenceMs <= 0) return base.execute(toolCallId, params, signal, onUpdate, ctx);
       const guarded = timeoutSec > 0 ? { ...params, timeout: timeoutSec } : params;
-      if (silenceMs <= 0) return base.execute(toolCallId, guarded, signal, onUpdate, ctx);
 
       const stop = new AbortController();
       const onAbort = () => stop.abort();
       if (signal?.aborted) stop.abort();
       else signal?.addEventListener("abort", onAbort, { once: true });
       let silent = false;
+      let settled = false;
+      let output = "";
       let timer: ReturnType<typeof setTimeout> | undefined;
+      let deadline: ReturnType<typeof setTimeout> | undefined;
+      let grace: ReturnType<typeof setTimeout> | undefined;
+      let giveUp!: (error: Error) => void;
+      // pi kills only the command's process group and then waits for its output
+      // to end: a process that moved to a session of its own and keeps printing
+      // holds that wait open, so a stopped command returns after a grace anyway.
+      const giveUpAfterGrace = (status: string) => {
+        grace ??= setTimeout(() => giveUp(new Error(`${output ? `${output}\n\n` : ""}${status}`)), SETTLE_GRACE_MS);
+      };
+      const onStop = () => giveUpAfterGrace("Command aborted");
+      if (stop.signal.aborted) onStop();
+      else stop.signal.addEventListener("abort", onStop, { once: true });
+      if (timeoutSec > 0) deadline = setTimeout(() => giveUpAfterGrace(`Command timed out after ${timeoutSec} seconds`), timeoutSec * 1000);
       const arm = () => {
+        if (silenceMs <= 0) return;
         if (timer) clearTimeout(timer);
         timer = setTimeout(() => {
           silent = true;
@@ -87,23 +104,35 @@ export function registerBashGuard(pi: ExtensionAPI, cwd: string, limits: BashGua
       };
       arm();
       try {
-        return await base.execute(toolCallId, guarded, stop.signal, (update: any) => {
-          // Each update carries output; the first, empty one only says it started.
-          if (update.content.length) arm();
-          onUpdate?.(update);
-        }, ctx);
+        return await new Promise((resolve, reject) => {
+          giveUp = reject;
+          base.execute(toolCallId, guarded, stop.signal, (update: any) => {
+            if (settled) return;
+            // Each update carries output; the first, empty one only says it started.
+            if (update.content.length) {
+              output = update.content.map((part: any) => part.text ?? "").join("");
+              arm();
+            }
+            onUpdate?.(update);
+          }, ctx).then(resolve, reject);
+        });
       } catch (error) {
         // Only the abort the silence caused: a timeout or another failure keeps pi's own wording.
         if (!silent || signal?.aborted || !(error instanceof Error) || !/(^|\n)Command aborted$/.test(error.message)) throw error;
         const text = error.message.replace(/\n*Command aborted$/, "");
         throw new Error(
-          `${text ? `${text}\n\n` : ""}Command stopped: it printed nothing for ${seconds(silenceMs)}, and was killed with everything it started. ` +
+          `${text ? `${text}\n\n` : ""}Command stopped: it printed nothing for ${seconds(silenceMs)}, and its process group was killed; ` +
+            "anything it started in a session of its own may still be running. " +
             "Check for partial results it may have left before rerunning. If it should run that long, rerun it with an explicit `timeout`; " +
             "if it is a server or watcher, start it in a bash call of its own, in the background with its output in a file.",
         );
       } finally {
+        settled = true;
         if (timer) clearTimeout(timer);
+        if (deadline) clearTimeout(deadline);
+        if (grace) clearTimeout(grace);
         signal?.removeEventListener("abort", onAbort);
+        stop.signal.removeEventListener("abort", onStop);
       }
     },
   } as ToolDefinition<any, any, any>);

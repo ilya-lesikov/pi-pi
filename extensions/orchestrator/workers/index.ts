@@ -60,7 +60,7 @@ export function createWorkers(orchestrator: Orchestrator, hooks: WorkerHooks, cr
       systemPrompt: (spec) => systemPromptFor(spec, orchestrator.cwd),
       toolNames: (spec) => getAgentDefinition(spec.type)?.tools ?? [],
       childExtension: (pi) => hooks.childExtension(pi),
-      bashTimeoutSec: () => Math.round((config()?.performance?.internals?.workerBashTimeout ?? 0) / 1000),
+      bashTimeoutSec: () => (config()?.performance?.internals?.workerBashTimeout ?? 0) / 1000,
       bashSilenceMs: () => config()?.performance?.internals?.bashSilence ?? 0,
       projectTrusted: () => ctx()?.isProjectTrusted?.() ?? false,
     }),

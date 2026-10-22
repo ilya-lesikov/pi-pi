@@ -647,7 +647,7 @@ export function registerEventHandlers(orchestrator: Orchestrator): void {
   registerAskUser(pi);
   registerConfirm(pi);
   registerBashGuard(pi, process.cwd(), {
-    timeoutSec: () => Math.round((orchestrator.config?.performance?.internals?.bashTimeout ?? 0) / 1000),
+    timeoutSec: () => (orchestrator.config?.performance?.internals?.bashTimeout ?? 0) / 1000,
     silenceMs: () => orchestrator.config?.performance?.internals?.bashSilence ?? 0,
   });
   registerLspTool(pi, () => orchestrator.lsp);

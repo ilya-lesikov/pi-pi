@@ -115,7 +115,10 @@ describe("createWorkers", () => {
     expect(env.modelRegistry()).toBe(ctx.modelRegistry);
     expect(env.toolNames(spec())).toEqual(["read", "grep"]);
     expect(env.toolNames(spec({ type: "nobody" }))).toEqual([]);
-    expect(env.bashTimeoutSec()).toBe(90);
+    expect(env.bashTimeoutSec()).toBe(90.4);
+    // Under half a second is still a timeout, not none.
+    orch.config.performance.internals.workerBashTimeout = 300;
+    expect(env.bashTimeoutSec()).toBe(0.3);
     orch.config = null;
     expect(env.bashTimeoutSec()).toBe(0);
     const prompt = env.systemPrompt(spec());

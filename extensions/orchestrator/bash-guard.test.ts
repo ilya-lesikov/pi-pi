@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -26,7 +27,7 @@ describe("bash guard", () => {
     const result = await run({ command: "echo started; sleep 30" });
     expect(Date.now() - started).toBeLessThan(5000);
     expect(result.ok).toBe(false);
-    expect(result.text).toMatch(/^started\n\nCommand stopped: it printed nothing for 1 s, and was killed/);
+    expect(result.text).toMatch(/^started\n\nCommand stopped: it printed nothing for 1 s, and its process group was killed/);
     expect(result.text).toContain("rerun it with an explicit `timeout`");
   });
 
@@ -55,6 +56,27 @@ describe("bash guard", () => {
     expect(result.ok).toBe(false);
     expect(result.text).toMatch(/^hi\n+Command timed out after 1 seconds$/);
   });
+
+  it.skipIf(spawnSync("setsid", ["true"]).status !== 0)("returns soon after a timeout though a process in a session of its own keeps printing", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pp-guard-setsid-"));
+    const pidFile = join(root, "pid");
+    try {
+      const { run } = bash({ timeoutSec: 1, silenceMs: 60_000 });
+      const started = Date.now();
+      // The trailing `true` keeps bash from exec'ing setsid, which would then stay in pi's process group.
+      const result = await run({ command: `setsid sh -c 'echo $$ > ${pidFile}; while :; do echo tick; sleep 0.02; done'; true` });
+      expect(Date.now() - started).toBeLessThan(8000);
+      expect(result.ok).toBe(false);
+      expect(result.text).toMatch(/^tick\n[\s\S]*\n\nCommand timed out after 1 seconds$/);
+    } finally {
+      if (existsSync(pidFile)) {
+        try {
+          process.kill(Number(readFileSync(pidFile, "utf8")), "SIGKILL");
+        } catch {}
+      }
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 15_000);
 
   it("reports a user's abort as an abort, not as silence", async () => {
     const { run } = bash({ silenceMs: 60_000 });
