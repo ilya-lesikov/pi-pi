@@ -23,7 +23,7 @@ describe("MainStatusTracker", () => {
     fire("message_update", { assistantMessageEvent: { type: "text_delta" } });
     expect(tracker.current().text).toBe("Writing the answer");
     fire("tool_execution_start", { toolCallId: "1", toolName: "bash", args: { command: "npx vitest run\n  extensions" } });
-    expect(tracker.current().text).toBe("Running bash: npx vitest run extensions");
+    expect(tracker.current().text).toBe("Running bash");
     fire("tool_execution_end", { toolCallId: "1", toolName: "bash" });
     expect(tracker.current().text).toBe("Waiting for claude-opus-4-5");
     advance(120_000);
@@ -98,7 +98,7 @@ describe("MainStatusTracker", () => {
     fire("tool_execution_start", { toolCallId: "1", toolName: "bash", args: { command: "make" } });
     fire("ui_prompt_start", { kind: "confirm" });
     fire("ui_prompt_end", { kind: "confirm" });
-    expect(tracker.current().text).toBe("Running bash: make");
+    expect(tracker.current().text).toBe("Running bash");
   });
 
   it("stays on the user while a dialog outlives the tool that opened it", () => {
@@ -119,7 +119,7 @@ describe("MainStatusTracker", () => {
     fire("tool_execution_start", { toolCallId: "1", toolName: "bash", args: { command: "make" } });
     expect(tracker.current().text).toBe("Waiting for your answer");
     fire("ui_prompt_end", { kind: "confirm" });
-    expect(tracker.current().text).toBe("Running bash: make");
+    expect(tracker.current().text).toBe("Running bash");
   });
 
   it("keeps waiting while a second dialog is open after the first one's end arrives late", () => {
@@ -174,9 +174,9 @@ describe("footer status line", () => {
     const { tracker, fire } = tracked();
     setFooterStatus(tracker);
     fire("agent_start");
-    fire("tool_execution_start", { toolCallId: "1", toolName: "bash", args: { command: "npx vitest run extensions/orchestrator" } });
+    fire("tool_execution_start", { toolCallId: "1", toolName: "playwright_browser_take_full_page_screenshot", args: { fullPage: true } });
     const wide = render(140)[0]!;
-    expect(wide).toMatch(/^⠋ Running bash: npx vitest run extensions\/orchestrator • 0s +\/home\/u\/git\/github\.com\/acme\/pi-pi \(main\)$/);
+    expect(wide).toMatch(/^⠋ Running playwright_browser_take_full_page_screenshot • 0s +\/home\/u\/git\/github\.com\/acme\/pi-pi \(main\)$/);
     expect(wide).toHaveLength(140);
     expect(render(100)[0]).toMatch(/ \/home\/…\/acme\/pi-pi \(main\)$/);
     expect(render(70)[0]).toMatch(/• 0s +pi-pi \(main\)$/);

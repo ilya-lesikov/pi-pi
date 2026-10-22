@@ -138,11 +138,11 @@ export class MainStatusTracker {
       if (name === "ask_user" || name === "confirm") return this.set({ kind: "waiting_user", since: this.now() });
       if (this.state.kind === "waiting_user") {
         // What the dialog covers moves on; it shows again when the dialog closes.
-        if (this.underneath) this.underneath = { kind: "tool", since: this.now(), label: this.tools.size === 1 ? toolLabel(name, event?.args) : `${this.tools.size} tools` };
+        if (this.underneath) this.underneath = { kind: "tool", since: this.now(), label: this.tools.size === 1 ? name : `${this.tools.size} tools` };
         return;
       }
       if (this.state.kind === "tool" && this.tools.size > 1) return this.set({ kind: "tool", since: this.state.since, label: `${this.tools.size} tools` });
-      this.set({ kind: "tool", since: this.now(), label: toolLabel(name, event?.args) });
+      this.set({ kind: "tool", since: this.now(), label: name });
     });
     on("tool_execution_update", () => this.activity());
     on("tool_execution_end", (event) => {
@@ -223,16 +223,4 @@ export class MainStatusTracker {
 
 function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? "" : "s"}`;
-}
-
-function toolLabel(name: string, args: any): string {
-  const detail = name === "bash" && typeof args?.command === "string" ? args.command
-    : typeof args?.path === "string" ? args.path
-    : typeof args?.filePath === "string" ? args.filePath
-    : typeof args?.pattern === "string" ? args.pattern
-    : typeof args?.query === "string" ? args.query
-    : typeof args?.description === "string" ? args.description
-    : "";
-  const flat = String(detail).replace(/\s+/g, " ").trim();
-  return flat ? `${name}: ${flat}` : name;
 }
