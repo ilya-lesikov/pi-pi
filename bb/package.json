@@ -23,8 +23,8 @@
     "access": "public"
   },
   "engines": {
-    "bb": ">=0.46",
-    "bbPluginSdk": ">=0.6.65"
+    "bb": ">=0.46.1",
+    "bbPluginSdk": ">=0.6.49"
   },
   "bb": {
     "name": "pi-pi",
@@ -40,7 +40,7 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@get-bb/plugin-sdk": "0.6.65",
+    "@get-bb/plugin-sdk": "0.6.49",
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",

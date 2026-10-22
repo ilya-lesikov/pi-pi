@@ -2,7 +2,7 @@
 // storage directory and drops worker commands next to it. Both go through
 // bb's file API on the machine that owns the thread, so remote machines work too.
 import { randomUUID } from "node:crypto";
-import { defineRpcContract, experimental_PluginRpcRefusal, type BbPluginApi } from "@get-bb/plugin-sdk";
+import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import { FORM_VERSION, RENDERER_ID, type FormSpec, type FormValue } from "./forms";
 import type { BbCommand, BbState } from "./state";
@@ -86,9 +86,13 @@ export const rpcContract = defineRpcContract({
   },
 });
 
-// A form this plugin or bb cannot show: an expected refusal, not a plugin failure. pi matches the message's prefix.
-function unsupported(reason: string): experimental_PluginRpcRefusal {
-  return new experimental_PluginRpcRefusal({ code: "invalid", message: `Unsupported form: ${reason}` });
+// A form this plugin or bb cannot show: an expected refusal, not a plugin
+// failure; pi matches the message's prefix. The SDK's
+// experimental_PluginRpcRefusal built by hand, since stable bb's SDK lacks the
+// class: a newer bb answers with the refusal, an older one reports the
+// handler's error, with the same message.
+function unsupported(reason: string): Error {
+  return Object.assign(new Error(`Unsupported form: ${reason}`), { [Symbol.for("@get-bb/plugin-sdk/rpc-refusal")]: true, code: "invalid" });
 }
 
 export default async function plugin(bb: BbPluginApi): Promise<void> {
