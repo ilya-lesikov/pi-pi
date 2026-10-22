@@ -7,10 +7,11 @@ const sdk = vi.hoisted(() => ({
   loadErrors: [] as any[],
   createOptions: [] as any[],
   guards: [] as any[],
+  settings: [] as any[],
 }));
 
 vi.mock("../bash-guard.js", () => ({
-  registerBashGuard: (pi: any, cwd: string, limits: any) => sdk.guards.push({ pi, cwd, timeoutSec: limits.timeoutSec(), silenceMs: limits.silenceMs() }),
+  registerBashGuard: (pi: any, cwd: string, limits: any, options: any) => sdk.guards.push({ pi, cwd, timeoutSec: limits.timeoutSec(), silenceMs: limits.silenceMs(), settings: options?.settings }),
 }));
 
 vi.mock("@earendil-works/pi-coding-agent", () => {
@@ -23,7 +24,13 @@ vi.mock("@earendil-works/pi-coding-agent", () => {
     DefaultResourceLoader,
     getAgentDir: () => "/agent",
     SessionManager: { inMemory: (cwd: string) => ({ inMemory: cwd }) },
-    SettingsManager: { create: () => ({}) },
+    SettingsManager: {
+      create: (cwd: string, agentDir: string, options: any) => {
+        const manager = { cwd, agentDir, projectTrusted: options?.projectTrusted };
+        sdk.settings.push(manager);
+        return manager;
+      },
+    },
     createAgentSession: async (options: any) => {
       sdk.createOptions.push(options);
       const session = fakeSession(options.tools);
@@ -128,6 +135,7 @@ beforeEach(() => {
   sdk.sessions.length = 0;
   sdk.createOptions.length = 0;
   sdk.guards.length = 0;
+  sdk.settings.length = 0;
   sdk.loadErrors = [];
 });
 
@@ -150,6 +158,23 @@ describe("createChildSessionFactory", () => {
     expect(options.tools).toEqual(["read", "bash", "submit_result", "report_progress", "ask_parent"]);
     expect(sdk.sessions[0].name).toBe("explore: look around");
     expect(calls.filter(([name]) => name === "phase").map(([, phase]) => phase)).toEqual(["loading worker tools", "creating the agent session", "binding extensions"]);
+  });
+
+  it("hands one settings manager, trusting the project only as the root session does, to the loader, the session and bash", async () => {
+    for (const trusted of [false, true]) {
+      sdk.loaders.length = 0;
+      sdk.createOptions.length = 0;
+      sdk.guards.length = 0;
+      sdk.settings.length = 0;
+      const { create } = factory({ projectTrusted: trusted });
+      await create(spec(), hooks().h);
+      expect(sdk.settings).toEqual([{ cwd: "/repo", agentDir: "/agent", projectTrusted: trusted }]);
+      const [manager] = sdk.settings;
+      expect(sdk.loaders[0].options.settingsManager).toBe(manager);
+      expect(sdk.createOptions[0].settingsManager).toBe(manager);
+      sdk.loaders[0].options.extensionFactories.find((f: any) => f.name === "pi-pi-worker-bash").factory("pi");
+      expect(sdk.guards[0].settings).toBe(manager);
+    }
   });
 
   it("falls back to the registry's available list when it has no direct lookup", async () => {
@@ -449,7 +474,7 @@ describe("worker channel tools", () => {
     const entry = sdk.loaders[0].options.extensionFactories.find((f: any) => f.name === "pi-pi-worker-bash");
     expect(entry).toBeDefined();
     entry.factory("child-pi");
-    expect(sdk.guards).toEqual([{ pi: "child-pi", cwd: "/repo", timeoutSec: 120, silenceMs: 90_000 }]);
+    expect(sdk.guards).toEqual([{ pi: "child-pi", cwd: "/repo", timeoutSec: 120, silenceMs: 90_000, settings: sdk.settings[0] }]);
     const readOnly = createChildSessionFactory({ ...factoryEnv(), toolNames: () => ["read"] });
     await readOnly(spec(), h);
     expect(sdk.loaders[1].options.extensionFactories.map((f: any) => f.name)).not.toContain("pi-pi-worker-bash");

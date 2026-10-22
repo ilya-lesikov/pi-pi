@@ -43,6 +43,8 @@ export function createChildSessionFactory(env: ChildSessionEnv) {
     const loader = new DefaultResourceLoader({
       cwd: env.cwd,
       agentDir,
+      // Its own would trust the project: an untrusted one's settings would still pick packages to resolve and install.
+      settingsManager,
       noExtensions: true,
       noSkills: true,
       noPromptTemplates: true,
